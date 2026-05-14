@@ -1,0 +1,1 @@
+"""Ditto test suite."""
