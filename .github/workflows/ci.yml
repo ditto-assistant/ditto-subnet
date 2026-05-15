@@ -37,3 +37,91 @@ jobs:
 
       - name: pytest
         run: uv run pytest
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: |
+            go/go.sum
+            harness/go-template/go.sum
+
+      - name: gofmt + go vet
+        run: make go-lint
+
+      - name: go test
+        run: make go-test
+
+  harness:
+    runs-on: ubuntu-latest
+    needs: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/go-template/go.mod
+          cache: true
+          cache-dependency-path: |
+            go/go.sum
+            harness/go-template/go.sum
+
+      - name: harness build
+        run: make harness-build
+
+      - name: docker build harness image
+        run: docker build harness/go-template -t ditto-harness:ci
+
+  parity-smoke:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, go]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install Python deps
+        run: uv sync --group dev
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: Emit Go parity envelope
+        working-directory: go
+        run: go run ./cmd/parity-smoke > /tmp/go.json
+
+      - name: Emit Python parity envelope
+        run: uv run python -m ditto.bench.runner._parity_smoke > /tmp/py.json
+
+      - name: Structural diff (Go vs Python)
+        run: |
+          python - <<'PY'
+          import json, sys
+          go = json.load(open("/tmp/go.json"))
+          py = json.load(open("/tmp/py.json"))
+          if go != py:
+              import difflib
+              go_s = json.dumps(go, indent=2, sort_keys=True).splitlines()
+              py_s = json.dumps(py, indent=2, sort_keys=True).splitlines()
+              for line in difflib.unified_diff(go_s, py_s, fromfile="go", tofile="py", lineterm=""):
+                  print(line)
+              sys.exit(1)
+          print("parity OK")
+          PY
