@@ -15,6 +15,24 @@ from ditto.bench.runner.scoring import (
 )
 
 
+def test_score_retrieval_stamps_visibility() -> None:
+    """``visibility`` flows from inputs to the resulting Score for aggregation."""
+    inputs = RetrievalScoreInputs(
+        case=RetrievalCase(
+            id="x",
+            category=RetrievalCategory.SINGLE_NEEDLE_RECENT,
+            query="q",
+            user_fixture_id="u",
+            expected_pair_ids=["a"],
+        ),
+        retrieval=RetrievalScore(ndcg_5=1.0, mrr=1.0, recall_5=1.0, needle_hit=True),
+        latency_ms=10,
+        budget_latency_ms=1000,
+        visibility="private",
+    )
+    assert score_retrieval(inputs).visibility == "private"
+
+
 def test_score_retrieval_abstain_correct_credits_full_component() -> None:
     """A stale/abstain case with both signals gets full abstain_contradiction credit."""
     inputs = RetrievalScoreInputs(

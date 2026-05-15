@@ -49,10 +49,16 @@ type RetrievalScore struct {
 // The case shape is intentionally flattened to primitive fields so this
 // package has no dependency on any fixture loader; the validator pipeline
 // fills them in from whatever case struct it loaded.
+//
+// Visibility carries the partition bucket the case was drawn from
+// ("public" | "private" | "canary"). It is stamped onto the resulting
+// Score so downstream aggregators can split a miner's public-vs-canary
+// mean for memorisation detection.
 type CoreScoreInputs struct {
 	CaseID           string
 	Category         string
 	Domain           string
+	Visibility       string
 	NumExpectedTools int
 
 	Tool ToolCallScore
@@ -64,9 +70,12 @@ type CoreScoreInputs struct {
 // RetrievalScoreInputs is the data a validator collects per DittoRetrieval
 // challenge. JudgeScore is meaningful only when JudgePresent is true (i.e.
 // the challenge asked for a grounded final answer and a judge model ran).
+// Visibility, like in CoreScoreInputs, is the partition bucket the case
+// was drawn from and is stamped onto the resulting Score.
 type RetrievalScoreInputs struct {
 	CaseID              string
 	Category            string
+	Visibility          string
 	NumExpectedPairIDs  int
 	NumForbiddenPairIDs int
 	ExpectNoTools       bool
@@ -122,6 +131,7 @@ func ScoreCore(in CoreScoreInputs) Score {
 		CaseID:        in.CaseID,
 		Category:      in.Category,
 		Domain:        in.Domain,
+		Visibility:    in.Visibility,
 		Mechanism:     MechanismCore,
 		Score:         composite,
 		Breakdown: map[string]float64{
@@ -202,6 +212,7 @@ func ScoreRetrieval(in RetrievalScoreInputs) Score {
 		SchemaVersion: SchemaVersion,
 		CaseID:        in.CaseID,
 		Category:      in.Category,
+		Visibility:    in.Visibility,
 		Mechanism:     MechanismRetrieval,
 		Score:         composite,
 		Breakdown: map[string]float64{

@@ -101,6 +101,23 @@ def test_latency_component_matches_go_reference() -> None:
     assert 0.7 < mid < 0.8, f"expected ~0.75 mid-range, got {mid}"
 
 
+def test_score_core_stamps_visibility() -> None:
+    """``visibility`` flows from inputs to the resulting Score for aggregation."""
+    inputs = CoreScoreInputs(
+        case=ToolCallCase(
+            id="x",
+            category="",
+            prompt="",
+            expected_tools=[ExpectedToolCall(name="t")],
+        ),
+        tool=ToolCallScore(name_f1=1.0, arg_f1=1.0),
+        latency_ms=100,
+        budget_latency_ms=1000,
+        visibility="canary",
+    )
+    assert score_core(inputs).visibility == "canary"
+
+
 def test_score_core_is_clamped_to_unit_interval() -> None:
     """Composite is always within [0, 1] even with degenerate inputs."""
     inputs = CoreScoreInputs(

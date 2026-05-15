@@ -66,12 +66,19 @@ class RetrievalScore:
 
 @dataclass(slots=True)
 class CoreScoreInputs:
-    """Per-case observations the validator collects for a DittoCore challenge."""
+    """Per-case observations the validator collects for a DittoCore challenge.
+
+    ``visibility`` carries the partition bucket the case was drawn from
+    (``"public" | "private" | "canary"``) and is stamped onto the resulting
+    :class:`Score` so downstream aggregators can split a miner's
+    public-vs-canary mean for memorisation detection.
+    """
 
     case: ToolCallCase
     tool: ToolCallScore
     latency_ms: int = 0
     budget_latency_ms: int = 0
+    visibility: str = ""
 
 
 @dataclass(slots=True)
@@ -80,6 +87,8 @@ class RetrievalScoreInputs:
 
     ``judge_score`` is only meaningful when ``judge_present`` is True (i.e.
     the challenge had ``include_answer=true`` and a judge model was run).
+    ``visibility`` is the partition bucket the case was drawn from; it is
+    stamped onto the resulting :class:`Score`.
     """
 
     case: RetrievalCase
@@ -90,6 +99,7 @@ class RetrievalScoreInputs:
     latency_ms: int = 0
     budget_latency_ms: int = 0
     mcp_parity_score: float = 0.0
+    visibility: str = ""
 
 
 @dataclass(slots=True)
@@ -196,6 +206,7 @@ def score_core(inputs: CoreScoreInputs) -> Score:
         score=composite,
         category=inputs.case.category,
         domain=inputs.case.domain,
+        visibility=inputs.visibility,
         breakdown={
             "tool_selection_f1": selection,
             "arg_quality_f1": inputs.tool.arg_f1,
@@ -269,6 +280,7 @@ def score_retrieval(inputs: RetrievalScoreInputs) -> Score:
         mechanism=Mechanism.RETRIEVAL,
         score=composite,
         category=inputs.case.category,
+        visibility=inputs.visibility,
         breakdown={
             "evidence_metrics": evidence,
             "grounded_answer": grounded,

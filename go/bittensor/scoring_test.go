@@ -154,6 +154,34 @@ func TestScoreRetrieval_MCPParityBelowGateNote(t *testing.T) {
 	}
 }
 
+func TestScoreCore_StampsVisibility(t *testing.T) {
+	in := CoreScoreInputs{
+		CaseID:           "x",
+		Visibility:       "canary",
+		NumExpectedTools: 1,
+		Tool:             ToolCallScore{NameF1: 1.0, ArgF1: 1.0},
+		LatencyMs:        100, BudgetLatencyMs: 1000,
+	}
+	s := ScoreCore(in)
+	if s.Visibility != "canary" {
+		t.Fatalf("expected Visibility=canary, got %q", s.Visibility)
+	}
+}
+
+func TestScoreRetrieval_StampsVisibility(t *testing.T) {
+	in := RetrievalScoreInputs{
+		CaseID:             "x",
+		Visibility:         "private",
+		NumExpectedPairIDs: 1,
+		Retrieval:          RetrievalScore{NDCG5: 1.0, MRR: 1.0, Recall5: 1.0, NeedleHit: true},
+		LatencyMs:          10, BudgetLatencyMs: 1000,
+	}
+	s := ScoreRetrieval(in)
+	if s.Visibility != "private" {
+		t.Fatalf("expected Visibility=private, got %q", s.Visibility)
+	}
+}
+
 func TestLatencyComponent(t *testing.T) {
 	if v := latencyComponent(100, 1000); v != 1.0 {
 		t.Fatalf("latency below budget should yield 1.0, got %v", v)
