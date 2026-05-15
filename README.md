@@ -19,6 +19,7 @@ ditto/
   tests/bench/    Parity tests: keep Python ↔ Go scorer + anti-gaming in lockstep
 go/
   bittensor/      Canonical Go types, scorer, anti-gaming (production validator)
+  chain/          Go port of ditto/chain/: Pylon HTTP client + substrate gap
 harness/
   go-template/    Self-contained reference miner harness (Dockerfile + stubs)
 ```
