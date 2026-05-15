@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test py-test go-test go-lint harness-build validator-build validator-smoke parity-smoke
+.PHONY: lint format typecheck test py-test go-test go-lint harness-build harness-baseline-build validator-build validator-smoke parity-smoke
 
 lint:
 	uv run ruff format --check .
@@ -21,16 +21,23 @@ py-test:
 
 go-test:
 	cd go && go test ./...
+	cd harness/go-template-baseline && go test ./...
 
 go-lint:
-	@echo "==> gofmt -d go harness/go-template"
-	@diff=$$(gofmt -d go harness/go-template 2>&1); \
+	@echo "==> gofmt -d go harness/go-template harness/go-template-baseline"
+	@diff=$$(gofmt -d go harness/go-template harness/go-template-baseline 2>&1); \
 	if [ -n "$$diff" ]; then echo "$$diff"; exit 1; fi
 	cd go && go vet ./...
 	cd harness/go-template && go vet ./...
+	cd harness/go-template-baseline && go vet ./...
 
 harness-build:
 	cd harness/go-template && go build ./...
+
+# Build the reference baseline harness binary. The Dockerfile build is
+# orthogonal; this target just confirms the Go module compiles.
+harness-baseline-build:
+	cd harness/go-template-baseline && go build ./...
 
 # Build the production-shaped validator binary. Outputs to bin/ at the
 # repo root so the file is easy to find and gitignored as a build

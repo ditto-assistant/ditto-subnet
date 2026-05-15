@@ -1,0 +1,10 @@
+.git
+.github
+**/.gocache
+**/go-build
+**/*.test
+**/testdata
+ditto/bench/fixtures
+ditto/tests
+out
+bin
