@@ -20,3 +20,7 @@ htmlcov/
 # Env files
 .env
 .env.local
+
+# Build / run artefacts
+bin/
+out/

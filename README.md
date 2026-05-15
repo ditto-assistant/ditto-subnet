@@ -20,6 +20,8 @@ ditto/
 go/
   bittensor/      Canonical Go types, scorer, anti-gaming (production validator)
   chain/          Go port of ditto/chain/: Pylon HTTP client + substrate gap
+  cmd/
+    parity-smoke/ Emits the JSON envelope CI diffs against the Python twin
 harness/
   go-template/    Self-contained reference miner harness (Dockerfile + stubs)
 ```
