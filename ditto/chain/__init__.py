@@ -4,7 +4,7 @@ Validator and platform code goes through this module rather than calling
 Pylon or bittensor directly. Isolates the chain library's choice from
 every consumer.
 
-The miner CLI is a deliberate exception (per the locked architecture) — it
+The miner CLI is a deliberate exception (per the locked architecture): it
 uses raw bittensor SDK to submit ``Balances.transfer_keep_alive`` for upload
 payment, because Pylon does not expose balance transfers and the CLI is a
 short-lived process that does not need a Pylon container.
