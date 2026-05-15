@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/heyditto/ditto-subnet/ditto/bench/schemas/challenge_request.schema.json",
+  "title": "DittoBench ChallengeRequest",
+  "description": "JSON payload validators write to the miner harness stdin, one per line. Mirrors bittensor.ChallengeRequest in go/bittensor/types.go.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "challenge_id",
+    "mechanism",
+    "case_id",
+    "validator_seed",
+    "issued_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "dittobench/1",
+      "description": "Wire-schema version. Must equal ditto.bench.SCHEMA_VERSION."
+    },
+    "challenge_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Validator-chosen opaque ID; not the fixture case ID. Re-issued per challenge."
+    },
+    "mechanism": {
+      "type": "string",
+      "enum": ["ditto_core", "ditto_retrieval"],
+      "description": "Which on-chain mechanism this case scores."
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Fixture ID; may be the canary paraphrase of a public case."
+    },
+    "category": {
+      "type": "string",
+      "description": "Coverage-matrix category for stratified reporting."
+    },
+    "domain": {
+      "type": "string",
+      "description": "DittoCore-only user-facing domain bucket; absent for ditto_retrieval."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "DittoCore prompt; absent for ditto_retrieval."
+    },
+    "tool_schemas": {
+      "type": "array",
+      "description": "Canonical Ditto chat v2 tool schemas; the harness MUST NOT introduce other tools.",
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "parameters"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "parameters": { "type": "object" }
+        }
+      }
+    },
+    "stm_context": {
+      "type": "array",
+      "description": "STM turns injected into the conversation history.",
+      "items": {
+        "type": "object",
+        "required": ["role", "content"],
+        "additionalProperties": false,
+        "properties": {
+          "role": { "type": "string", "enum": ["user", "assistant", "system"] },
+          "content": { "type": "string" }
+        }
+      }
+    },
+    "query": {
+      "type": "string",
+      "description": "DittoRetrieval query; absent for ditto_core."
+    },
+    "k": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Top-K for retrieval; the harness returns at most k evidence IDs."
+    },
+    "user_fixture_id": {
+      "type": "string",
+      "description": "Seeded fixture user the retrieval query targets."
+    },
+    "fixture_bundle": {
+      "type": "string",
+      "description": "Optional content-addressed handle (e.g. ipfs://...) for the seeded corpus."
+    },
+    "include_answer": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, the harness must produce a final_answer in addition to evidence_ids."
+    },
+    "validator_seed": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16,128}$",
+      "description": "Per-challenge randomness; the harness MUST echo this back unchanged."
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp the challenge was issued."
+    },
+    "deadline_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 8000,
+      "description": "Hard wall-clock budget in milliseconds. Responses received after this are scored as zero."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mechanism": { "const": "ditto_core" } } },
+      "then": { "required": ["prompt"] }
+    },
+    {
+      "if": { "properties": { "mechanism": { "const": "ditto_retrieval" } } },
+      "then": { "required": ["query", "user_fixture_id"] }
+    }
+  ]
+}

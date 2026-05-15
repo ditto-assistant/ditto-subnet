@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/heyditto/ditto-subnet/ditto/bench/schemas/miner_response.schema.json",
+  "title": "DittoBench MinerResponse",
+  "description": "JSON payload the miner harness writes to stdout, one per challenge, in request order. Mirrors bittensor.MinerResponse in go/bittensor/types.go.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "challenge_id",
+    "validator_seed"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "dittobench/1"
+    },
+    "challenge_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Must equal ChallengeRequest.challenge_id."
+    },
+    "miner_hotkey": {
+      "type": "string",
+      "description": "SS58-encoded miner hotkey (optional but recommended for auditing)."
+    },
+    "validator_seed": {
+      "type": "string",
+      "description": "Must equal ChallengeRequest.validator_seed. Lost or duplicated seeds are protocol violations."
+    },
+    "tool_calls": {
+      "type": "array",
+      "description": "Tool-call trace for ditto_core challenges. Order matters; each call records the 1-indexed hop.",
+      "items": {
+        "type": "object",
+        "required": ["hop", "name", "args"],
+        "additionalProperties": false,
+        "properties": {
+          "hop": { "type": "integer", "minimum": 1 },
+          "name": { "type": "string" },
+          "args": {
+            "type": "string",
+            "description": "Raw JSON arguments exactly as the underlying LLM produced them; the validator parses."
+          }
+        }
+      }
+    },
+    "evidence_ids": {
+      "type": "array",
+      "description": "Ranked evidence pair IDs for ditto_retrieval challenges; best first.",
+      "items": { "type": "string" }
+    },
+    "final_answer": {
+      "type": "string",
+      "description": "Optional grounded answer; required when ChallengeRequest.include_answer is true."
+    },
+    "tool_score": {
+      "type": "object",
+      "description": "Optional harness-provided tool-call scoring envelope. Validators are not required to trust this; production validators recompute from tool_calls. Present only as a fast-path for the contributor stub runner.",
+      "additionalProperties": false,
+      "properties": {
+        "name_f1": { "type": "number", "minimum": 0, "maximum": 1 },
+        "arg_f1": { "type": "number", "minimum": 0, "maximum": 1 },
+        "trajectory_penalty": { "type": "number", "minimum": 0, "maximum": 1 },
+        "abstain_correct": { "type": "boolean" }
+      }
+    },
+    "retrieval_score": {
+      "type": "object",
+      "description": "Optional harness-provided retrieval IR envelope. Same trust caveat as tool_score.",
+      "additionalProperties": false,
+      "properties": {
+        "ndcg_5": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mrr": { "type": "number", "minimum": 0, "maximum": 1 },
+        "recall_5": { "type": "number", "minimum": 0, "maximum": 1 },
+        "needle_hit": { "type": "boolean" },
+        "abstain_correct": { "type": "boolean" },
+        "contradiction_pass": { "type": "boolean" }
+      }
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "total_latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "first_token_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "prompt_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "output_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "estimated_cost_usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "refusal": {
+      "type": "string",
+      "description": "Structured refusal signal. When set, the validator scores zero for this case only and does not penalise other mechanisms.",
+      "examples": ["mechanism_unsupported", "budget_exceeded", "fixture_unavailable"]
+    }
+  }
+}

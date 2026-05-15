@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/heyditto/ditto-subnet/ditto/bench/schemas/score.schema.json",
+  "title": "DittoBench Score",
+  "description": "Per-case score record the validator emits after grading a MinerResponse. Mirrors bittensor.Score in go/bittensor/types.go.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_id",
+    "mechanism",
+    "score",
+    "graded_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "dittobench/1"
+    },
+    "challenge_id": {
+      "type": "string"
+    },
+    "mechanism": {
+      "type": "string",
+      "enum": ["ditto_core", "ditto_retrieval"]
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "visibility": {
+      "type": "string",
+      "enum": ["public", "private", "canary", ""],
+      "description": "Stamped by the validator after grading; miners never see this in a request."
+    },
+    "category": {
+      "type": "string"
+    },
+    "domain": {
+      "type": "string",
+      "description": "DittoCore-only domain bucket."
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "0..1 final case score after weighting."
+    },
+    "breakdown": {
+      "type": "object",
+      "description": "Per-component score map. Keys match the components in scoring.md.",
+      "additionalProperties": { "type": "number" }
+    },
+    "notes": {
+      "type": "array",
+      "description": "Structured forensic flags (e.g. mcp_parity_below_gate, timeout_or_refusal).",
+      "items": { "type": "string" }
+    },
+    "graded_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

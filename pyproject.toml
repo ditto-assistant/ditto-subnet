@@ -31,6 +31,11 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["ditto"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"ditto/bench/fixtures" = "ditto/bench/fixtures"
+"ditto/bench/schemas" = "ditto/bench/schemas"
+"ditto/bench/docs" = "ditto/bench/docs"
+
 # ─── Ruff ────────────────────────────────────────────────────────────────────
 
 [tool.ruff]
