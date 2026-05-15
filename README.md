@@ -26,8 +26,11 @@ harness/
   go-template/    Self-contained reference miner harness (Dockerfile + stubs)
 ```
 
-The Go validator binary and the Python contributor runner agree byte-for-byte
-through the parity tests in `ditto/tests/bench/`.
+The Go validator binary is the canonical scorer; the Python contributor
+runner mirrors it for fast iteration and is kept honest by the parity
+tests in `ditto/tests/bench/`. See [`ARCHITECTURE.md`](ARCHITECTURE.md)
+for the full Go-canonical / Python-reference contract and where new work
+should land.
 
 ## Quickstart
 
@@ -67,9 +70,17 @@ for the full template walkthrough.
 # Run the full local suite (Python + Go parity tests).
 make test
 
-# Drive a candidate image end-to-end against the public split. Real
-# validators add their own private/canary splits via the secret-driven
-# partition helpers in ditto/bench/runner/antigaming.py.
+# Subnet validators run the Go binary, which commits weights to chain.
+go build -o bin/validator ./go/cmd/validator
+./bin/validator \
+  --image <miner-image> \
+  --mechanism all \
+  --visibility all \
+  --seed <validator-secret> \
+  --report out/report.json
+
+# Or use the Python CLI for fast contributor iteration (does NOT commit
+# weights to chain; see ARCHITECTURE.md).
 uv run python -m ditto.bench.runner \
   --image <miner-image> \
   --mechanism all \

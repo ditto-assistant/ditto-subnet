@@ -1,9 +1,17 @@
 """CLI entry point for ``python -m ditto.bench.runner``.
 
 Loads public fixtures, drives a miner harness Docker image over stdio,
-scores responses with the Python port of the canonical scorer, and writes a
-report JSON file. This is the contributor-facing fast-feedback loop; the
-on-chain validator runs the same protocol with stricter sandboxing.
+scores responses with the Python port of the canonical scorer, and writes
+a report JSON file.
+
+.. warning::
+
+   This is the **contributor-facing debugger**, not the on-chain
+   validator. Subnet validators run the Go binary at
+   ``go/cmd/validator``; this CLI does not commit weights to chain. See
+   ``ARCHITECTURE.md`` at the repo root for the Go-canonical /
+   Python-reference contract. If the numbers here disagree with the Go
+   scorer, the Go scorer wins and this is the bug.
 
 Example::
 
