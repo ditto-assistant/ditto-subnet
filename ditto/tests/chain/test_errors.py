@@ -1,4 +1,11 @@
-"""Unit tests for ditto.chain.errors."""
+"""Unit tests for ditto.chain.errors.
+
+Scope is convention enforcement: every chain-layer error must inherit
+``ChainError`` (so consumers can write a single ``except ChainError``) and
+every subclass must carry the ``"This can happen when:"`` docstring bullet
+list (so future maintainers know the failure modes). Tests of Python
+exception machinery itself are intentionally absent.
+"""
 
 from __future__ import annotations
 
@@ -11,33 +18,25 @@ from ditto.chain.errors import (
     ExtrinsicNotFoundError,
 )
 
-
-class TestChainErrorHierarchy:
-    def test_chain_error_is_exception(self):
-        assert issubclass(ChainError, Exception)
-
-    @pytest.mark.parametrize(
-        "subclass",
-        [ChainConnectionError, ExtrinsicNotFoundError, ChainTimeoutError],
-    )
-    def test_subclasses_inherit_chain_error(self, subclass):
-        assert issubclass(subclass, ChainError)
-
-    def test_can_be_raised_and_caught_as_chain_error(self):
-        with pytest.raises(ChainError):
-            raise ChainConnectionError("pylon down")
-
-    def test_error_message_preserved(self):
-        with pytest.raises(ChainConnectionError) as info:
-            raise ChainConnectionError("pylon down")
-        assert "pylon down" in str(info.value)
+CHAIN_ERROR_SUBCLASSES = [
+    ChainConnectionError,
+    ChainTimeoutError,
+    ExtrinsicNotFoundError,
+]
 
 
-class TestChainErrorDocstrings:
-    @pytest.mark.parametrize(
-        "subclass",
-        [ChainConnectionError, ExtrinsicNotFoundError, ChainTimeoutError],
-    )
-    def test_subclass_has_this_can_happen_when(self, subclass):
-        assert subclass.__doc__ is not None
-        assert "This can happen when" in subclass.__doc__
+@pytest.mark.parametrize("subclass", CHAIN_ERROR_SUBCLASSES)
+def test_subclass_inherits_chain_error(subclass: type[Exception]) -> None:
+    """Single ``except ChainError`` must catch every chain-layer failure."""
+    assert issubclass(subclass, ChainError)
+
+
+@pytest.mark.parametrize("subclass", CHAIN_ERROR_SUBCLASSES)
+def test_subclass_documents_failure_modes(subclass: type[Exception]) -> None:
+    """Each subclass must list its specific failure modes in its docstring.
+
+    This is a convention check - new subclasses added without the bullet list
+    fail here, forcing the author to document when the error can fire.
+    """
+    assert subclass.__doc__ is not None
+    assert "This can happen when" in subclass.__doc__

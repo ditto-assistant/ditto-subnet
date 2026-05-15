@@ -111,6 +111,67 @@ class TestChainClientLifecycle:
         with pytest.raises(RuntimeError):
             await client.get_latest_block()
 
+    @pytest.mark.usefixtures("install_pylon_module")
+    async def test_aenter_open_access_only_passes_correct_kwargs(self):
+        """Open-access-only config must not leak identity kwargs into ``AsyncConfig``.
+        Real Pylon validates that identity_name/identity_token come as a pair."""
+        import pylon_client.artanis as artanis
+
+        config = ChainConfig(
+            pylon_url="http://pylon:8000",
+            netuid=118,
+            open_access_token="open-tok",
+        )
+        async with ChainClient(config):
+            pass
+        artanis.AsyncConfig.assert_called_once_with(
+            address="http://pylon:8000",
+            open_access_token="open-tok",
+        )
+
+    @pytest.mark.usefixtures("install_pylon_module")
+    async def test_aenter_identity_only_passes_correct_kwargs(self):
+        """Identity-only config must not pass an empty ``open_access_token``
+        (Pylon treats empty string as a real but invalid token)."""
+        import pylon_client.artanis as artanis
+
+        config = ChainConfig(
+            pylon_url="http://pylon:8000",
+            netuid=118,
+            identity_name="validator",
+            identity_token="id-tok",
+        )
+        async with ChainClient(config):
+            pass
+        artanis.AsyncConfig.assert_called_once_with(
+            address="http://pylon:8000",
+            identity_name="validator",
+            identity_token="id-tok",
+        )
+
+    @pytest.mark.usefixtures("install_pylon_module")
+    async def test_aenter_both_modes_passes_all_kwargs(self):
+        """Both auth modes set: ``AsyncConfig`` receives all three tokens.
+        Real Pylon supports this for processes that read open-access AND
+        also write under an identity."""
+        import pylon_client.artanis as artanis
+
+        config = ChainConfig(
+            pylon_url="http://pylon:8000",
+            netuid=118,
+            open_access_token="open-tok",
+            identity_name="validator",
+            identity_token="id-tok",
+        )
+        async with ChainClient(config):
+            pass
+        artanis.AsyncConfig.assert_called_once_with(
+            address="http://pylon:8000",
+            open_access_token="open-tok",
+            identity_name="validator",
+            identity_token="id-tok",
+        )
+
 
 class TestGetRecentNeurons:
     async def test_returns_neuron_info_list(self, install_pylon_module: AsyncMock):

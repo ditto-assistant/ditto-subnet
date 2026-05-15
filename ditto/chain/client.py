@@ -28,6 +28,7 @@ _LOCAL_WS_URL = "ws://127.0.0.1:9944"
 
 # --- substrate ``System.Events`` identifiers we filter on ---
 
+_APPLY_EXTRINSIC_PHASE = "ApplyExtrinsic"
 _SYSTEM_MODULE = "System"
 _EXTRINSIC_SUCCESS_EVENT = "ExtrinsicSuccess"
 _EXTRINSIC_FAILED_EVENT = "ExtrinsicFailed"
@@ -64,14 +65,15 @@ class ChainClient:
         """Open the underlying Pylon client connection."""
         from pylon_client.artanis import AsyncConfig, AsyncPylonClient
 
+        kwargs: dict[str, str] = {"address": self._config.pylon_url}
+        if self._config.open_access_token:
+            kwargs["open_access_token"] = self._config.open_access_token
+        if self._config.identity_name and self._config.identity_token:
+            kwargs["identity_name"] = self._config.identity_name
+            kwargs["identity_token"] = self._config.identity_token
+
         try:
-            self._pylon = AsyncPylonClient(
-                AsyncConfig(
-                    address=self._config.pylon_url,
-                    identity_name=self._config.identity_name,
-                    identity_token=self._config.identity_token,
-                )
-            )
+            self._pylon = AsyncPylonClient(AsyncConfig(**kwargs))
             await self._pylon.__aenter__()
         except Exception as e:
             raise ChainConnectionError(
@@ -255,16 +257,19 @@ class ChainClient:
             ) from e
 
         for record in _iter_event_records(events):
-            phase = record.get("phase") or {}
-            applied = phase.get("ApplyExtrinsic")
-            if applied is None or int(applied) != extrinsic_index:
+            # Each record from async-substrate-interface is a flat dict with
+            # ``phase`` (str), ``extrinsic_idx`` (int | None), ``module_id``,
+            # ``event_id``, plus nested ``event`` data we don't need here.
+            if record.get("phase") != _APPLY_EXTRINSIC_PHASE:
                 continue
-            event = record.get("event") or {}
-            module_id = event.get("module_id") or event.get("module")
-            event_id = event.get("event_id") or event.get("name")
-            if module_id == _SYSTEM_MODULE and event_id == _EXTRINSIC_SUCCESS_EVENT:
+            if record.get("extrinsic_idx") != extrinsic_index:
+                continue
+            if record.get("module_id") != _SYSTEM_MODULE:
+                continue
+            event_id = record.get("event_id")
+            if event_id == _EXTRINSIC_SUCCESS_EVENT:
                 return True
-            if module_id == _SYSTEM_MODULE and event_id == _EXTRINSIC_FAILED_EVENT:
+            if event_id == _EXTRINSIC_FAILED_EVENT:
                 return False
 
         raise ExtrinsicNotFoundError(
