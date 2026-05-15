@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test py-test go-test go-lint harness-build harness-baseline-build validator-build validator-smoke parity-smoke
+.PHONY: lint format typecheck test py-test go-test go-lint harness-build harness-baseline-build validator-build validator-smoke parity-smoke baseline-bench
 
 lint:
 	uv run ruff format --check .
@@ -77,3 +77,18 @@ parity-smoke:
 	@python3 -c 'import json,sys; a=json.load(open("/tmp/ditto-parity-go.json")); b=json.load(open("/tmp/ditto-parity-py.json")); sys.exit(0 if a==b else 1)' \
 	  || (echo "parity-smoke: Go and Python diverged" && exit 1)
 	@echo "parity-smoke: OK"
+
+# Regenerate harness/go-template-baseline/BASELINE.md against the
+# current fixture corpus. Builds the baseline binary, runs the
+# validator self-test pipeline over the public split, writes the
+# resulting mean scores + manifest hash into BASELINE.md.
+#
+# This target intentionally does NOT push the baseline image to a
+# registry — credentials live in CI. Run it locally to refresh the
+# in-repo baseline scores; a separate CI release job mirrors the image
+# digest into BASELINE.md when a release tag is cut.
+baseline-bench: validator-build harness-baseline-build
+	mkdir -p out/baseline-bench
+	cd go && go build -o ../bin/ditto-echo-harness ./cmd/echo-harness
+	@echo "==> rendering BASELINE.md from current fixtures"
+	@scripts/render-baseline.sh out/baseline-bench harness/go-template-baseline/BASELINE.md
