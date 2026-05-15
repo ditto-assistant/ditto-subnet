@@ -16,7 +16,10 @@ class ChainConfig:
     """
 
     pylon_url: str
-    """HTTP URL for the Pylon container (e.g. ``http://pylon:8080``)."""
+    """HTTP URL for the Pylon container (e.g. ``http://pylon:8080``).
+
+    Passed to Pylon SDK as ``AsyncConfig.address``.
+    """
 
     identity_name: str
     """Pylon identity name used to authenticate this client."""
@@ -25,7 +28,12 @@ class ChainConfig:
     """Pylon identity token paired with ``identity_name``."""
 
     netuid: int
-    """Bittensor subnet netuid this client operates against (Ditto is 118)."""
+    """Bittensor subnet netuid this client operates against (Ditto is 118).
+
+    Pylon binds netuid at the service level rather than per call, so this
+    is informational on the client side. Kept here so consumers have a
+    single source for "what subnet are we on".
+    """
 
     subtensor_network: str = "finney"
     """Subtensor network identifier passed to async-substrate-interface.
@@ -36,7 +44,7 @@ class ChainConfig:
     """
 
     archive_blocks_cutoff: int = 300
-    """Number of recent blocks served from the live node; older blocks go to the archive.
+    """Recent-block window served from the live node; older blocks go to archive.
 
     Mirrors Pylon's default. Reads for blocks older than ``current - cutoff``
     automatically fall back to an archive node inside Pylon.
@@ -45,7 +53,14 @@ class ChainConfig:
 
 @dataclass(frozen=True)
 class NeuronInfo:
-    """A neuron registered on the subnet at a point in time."""
+    """A neuron registered on the subnet at a point in time.
+
+    Mirrors the subset of Pylon's :class:`pylon_client.artanis.Neuron` that
+    Ditto's validator and platform code actually use. Extra Pylon fields
+    (``rank``, ``trust``, ``consensus``, ``emission``, ``last_update``,
+    ``pruning_score``, etc.) are deliberately omitted until a consumer
+    needs them.
+    """
 
     hotkey: str
     """SS58-encoded hotkey address."""
@@ -57,39 +72,64 @@ class NeuronInfo:
     """Subnet-local UID assigned at registration."""
 
     stake: float
-    """Alpha stake on this neuron's hotkey, in TAO units."""
+    """Stake on this neuron's hotkey, in TAO units."""
 
     axon_info: dict[str, Any] = field(default_factory=dict)
     """Raw axon metadata as returned by Pylon (ip, port, version)."""
 
-    registered_at_block: int = 0
-    """Block number at which this hotkey was registered on the subnet."""
+    is_active: bool = False
+    """Whether the neuron is currently marked active on the metagraph."""
+
+    validator_permit: bool = False
+    """Whether this hotkey holds a validator permit and may call ``put_weights``."""
 
     @classmethod
-    def from_pylon(cls, raw: Any) -> NeuronInfo:
-        """Build a :class:`NeuronInfo` from a Pylon-shaped neuron object.
+    def from_pylon(cls, raw: Any, hotkey: str | None = None) -> NeuronInfo:
+        """Build a :class:`NeuronInfo` from a Pylon ``Neuron``.
 
-        Tolerant of missing fields and ``None`` values — defaults are applied
-        so partial responses still produce a well-formed dataclass.
+        Args:
+            raw: Pylon ``Neuron`` object.
+            hotkey: Hotkey override. ``GetNeuronsResponse.neurons`` is a
+                ``dict[Hotkey, Neuron]`` and Pylon's ``Neuron.hotkey`` field
+                duplicates the dict key, but callers iterating ``.items()``
+                can pass the key here as the authoritative value.
         """
         return cls(
-            hotkey=str(getattr(raw, "hotkey", "") or ""),
+            hotkey=str(hotkey if hotkey is not None else getattr(raw, "hotkey", "")),
             coldkey=str(getattr(raw, "coldkey", "") or ""),
             uid=int(getattr(raw, "uid", 0) or 0),
             stake=float(getattr(raw, "stake", 0.0) or 0.0),
-            axon_info=dict(getattr(raw, "axon_info", {}) or {}),
-            registered_at_block=int(getattr(raw, "registered_at_block", 0) or 0),
+            axon_info=_axon_info_to_dict(getattr(raw, "axon_info", None)),
+            is_active=bool(getattr(raw, "active", False)),
+            validator_permit=bool(getattr(raw, "validator_permit", False)),
         )
+
+
+def _axon_info_to_dict(axon: Any) -> dict[str, Any]:
+    """Flatten a Pylon ``AxonInfo`` (Pydantic model) into a plain dict.
+
+    Returns an empty dict for ``None`` or unrecognised shapes.
+    """
+    if axon is None:
+        return {}
+    if isinstance(axon, dict):
+        return dict(axon)
+    dump = getattr(axon, "model_dump", None)
+    if callable(dump):
+        return dict(dump())
+    return {}
 
 
 @dataclass(frozen=True)
 class ExtrinsicInfo:
     """A single extrinsic at a known ``(block_number, extrinsic_index)``.
 
-    ``succeeded`` is ``None`` when the extrinsic has been fetched but its
-    success status has not been resolved yet. ``ChainClient.get_extrinsic``
-    populates ``succeeded`` automatically by reading ``system.Events`` at the
-    matching block, so callers do not need to make two calls.
+    Pylon's ``Extrinsic`` response does NOT include the block hash, so
+    ``succeeded`` cannot be auto-resolved from a ``get_extrinsic`` call
+    alone. Callers that already hold the block hash (typical for miner
+    upload-payment verification, where the hash comes back from
+    ``transfer_keep_alive`` finalisation) should call
+    :meth:`ChainClient.check_extrinsic_success` separately.
     """
 
     block_number: int
@@ -98,6 +138,9 @@ class ExtrinsicInfo:
     extrinsic_index: int
     """Zero-based index of the extrinsic within the block."""
 
+    extrinsic_hash: str
+    """Hash of the extrinsic itself (NOT the block hash)."""
+
     call_module: str
     """Pallet name the call targets (e.g. ``Balances``)."""
 
@@ -105,64 +148,96 @@ class ExtrinsicInfo:
     """Call function within the pallet (e.g. ``transfer_keep_alive``)."""
 
     call_args: dict[str, Any] = field(default_factory=dict)
-    """Decoded call arguments as returned by Pylon."""
+    """Decoded call arguments flattened to ``{name: value}``.
+
+    Pylon returns a ``list[ExtrinsicCallArg]`` with ``name``, ``type``,
+    ``value`` per arg; we drop the type info and keep the name → value
+    mapping for caller convenience. Order is not preserved.
+    """
 
     signer_address: str = ""
-    """SS58-encoded address of the signer."""
+    """SS58-encoded address of the signer (empty for unsigned extrinsics)."""
 
     succeeded: bool | None = None
     """Whether ``system.ExtrinsicSuccess`` was emitted for this extrinsic.
 
-    ``None`` if the success check has not been run or could not be resolved,
-    ``True`` on ``ExtrinsicSuccess``, ``False`` on ``ExtrinsicFailed``.
+    Populated by :meth:`ChainClient.check_extrinsic_success`. Stays ``None``
+    if the check has not been run.
     """
 
     @classmethod
     def from_pylon(
         cls,
         raw: Any,
-        block_number: int,
-        extrinsic_index: int,
         succeeded: bool | None = None,
     ) -> ExtrinsicInfo:
-        """Build an :class:`ExtrinsicInfo` from a Pylon-shaped extrinsic object.
+        """Build an :class:`ExtrinsicInfo` from a Pylon ``Extrinsic``.
 
         Args:
-            raw: Pylon response object exposing ``call.call_module``,
-                ``call.call_function``, ``call.call_args``, and ``address``.
-            block_number: Block the extrinsic was found in (Pylon's response
-                does not include it; caller passes the value used in the lookup).
-            extrinsic_index: Index within the block.
-            succeeded: Pre-resolved success status from ``check_extrinsic_success``.
+            raw: Pylon ``Extrinsic`` response (block_number, extrinsic_index,
+                extrinsic_hash, address, call all present on the response itself).
+            succeeded: Pre-resolved success status from
+                :meth:`ChainClient.check_extrinsic_success`, when the caller
+                holds the block hash.
         """
-        call = getattr(raw, "call", raw)
+        call = getattr(raw, "call", None)
         return cls(
-            block_number=block_number,
-            extrinsic_index=extrinsic_index,
+            block_number=int(getattr(raw, "block_number", 0) or 0),
+            extrinsic_index=int(getattr(raw, "extrinsic_index", 0) or 0),
+            extrinsic_hash=str(getattr(raw, "extrinsic_hash", "") or ""),
             call_module=str(getattr(call, "call_module", "") or ""),
             call_function=str(getattr(call, "call_function", "") or ""),
-            call_args=dict(getattr(call, "call_args", {}) or {}),
+            call_args=_call_args_to_dict(getattr(call, "call_args", None)),
             signer_address=str(getattr(raw, "address", "") or ""),
             succeeded=succeeded,
         )
 
 
+def _call_args_to_dict(args: Any) -> dict[str, Any]:
+    """Flatten a list of ``ExtrinsicCallArg`` into ``{name: value}``.
+
+    Tolerates ``None``, an already-flattened dict, or a list of either
+    ``ExtrinsicCallArg`` instances or plain dicts.
+    """
+    if args is None:
+        return {}
+    if isinstance(args, dict):
+        return dict(args)
+    if isinstance(args, list):
+        out: dict[str, Any] = {}
+        for arg in args:
+            if isinstance(arg, dict):
+                name = arg.get("name")
+                value = arg.get("value")
+            else:
+                name = getattr(arg, "name", None)
+                value = getattr(arg, "value", None)
+            if name is not None:
+                out[str(name)] = value
+        return out
+    return {}
+
+
 @dataclass(frozen=True)
 class BlockInfo:
-    """A block on the chain identified by number, hash, and timestamp."""
+    """A block on the chain identified by number, hash, and timestamp.
+
+    Maps onto Pylon's ``BlockInfoBag`` (the response shape of
+    ``get_latest_block_info``).
+    """
 
     number: int
-    """Block number."""
+    """Block number counting from genesis (block 0)."""
 
     hash: str
     """Block hash as a hex string (with or without the ``0x`` prefix per Pylon)."""
 
     timestamp: int = 0
-    """Unix timestamp in seconds at which the block was produced (best-effort)."""
+    """Unix timestamp in seconds at which the block was produced."""
 
     @classmethod
     def from_pylon(cls, raw: Any) -> BlockInfo:
-        """Build a :class:`BlockInfo` from a Pylon-shaped block object."""
+        """Build a :class:`BlockInfo` from a Pylon ``BlockInfoBag`` / ``Block``."""
         return cls(
             number=int(getattr(raw, "number", 0) or 0),
             hash=str(getattr(raw, "hash", "") or ""),

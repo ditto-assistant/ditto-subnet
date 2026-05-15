@@ -11,9 +11,12 @@ requires-python = ">=3.11,<3.14"
 authors = [{ name = "heyDitto" }]
 dependencies = [
     "bittensor>=10.2.1",
-    "pylon-client",
+    "bittensor-pylon-client",
     "async-substrate-interface",
 ]
+
+[tool.uv.sources]
+bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
 
 [dependency-groups]
 dev = [

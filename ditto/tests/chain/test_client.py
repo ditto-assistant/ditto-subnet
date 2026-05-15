@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,41 +19,71 @@ from ditto.tests.chain.conftest import make_event_record
 
 
 def make_chain_config(**overrides: Any) -> ChainConfig:
-    defaults: dict[str, Any] = dict(
-        pylon_url="http://pylon:8080",
-        identity_name="validator",
-        identity_token="token",
-        netuid=118,
-    )
+    defaults: dict[str, Any] = {
+        "pylon_url": "http://pylon:8080",
+        "identity_name": "validator",
+        "identity_token": "token",
+        "netuid": 118,
+    }
     defaults.update(overrides)
     return ChainConfig(**defaults)
 
 
 def make_pylon_neuron(**overrides: Any) -> MagicMock:
-    """Build a Pylon-shaped neuron object suitable for the adapter."""
-    defaults: dict[str, Any] = dict(
-        hotkey="5HK1",
-        coldkey="5CK1",
-        uid=0,
-        stake=2.5,
-        axon_info={"ip": "1.2.3.4"},
-        registered_at_block=100,
-    )
+    """Build a Pylon ``Neuron``-shaped object (only the fields we read)."""
+    defaults: dict[str, Any] = {
+        "hotkey": "5HK1",
+        "coldkey": "5CK1",
+        "uid": 0,
+        "stake": 2.5,
+        "axon_info": {"ip": "1.2.3.4"},
+        "active": True,
+        "validator_permit": True,
+    }
     defaults.update(overrides)
     return MagicMock(**defaults)
 
 
+def make_neurons_response(neurons: dict[str, MagicMock]) -> MagicMock:
+    """Mirror ``GetNeuronsResponse`` (``.block`` + ``.neurons`` dict)."""
+    return MagicMock(
+        block=MagicMock(number=1, hash="0xblock"),
+        neurons=neurons,
+    )
+
+
+def make_pylon_extrinsic_arg(name: str, value: Any) -> MagicMock:
+    """Build a Pylon ``ExtrinsicCallArg``-shaped object.
+
+    ``MagicMock(name=...)`` sets the mock's repr name not the ``.name``
+    attribute, so we assign after construction.
+    """
+    arg = MagicMock()
+    arg.name = name
+    arg.type = "u64"
+    arg.value = value
+    return arg
+
+
 def make_pylon_extrinsic(**overrides: Any) -> MagicMock:
-    """Build a Pylon-shaped extrinsic object suitable for the adapter."""
+    """Build a Pylon ``Extrinsic``-shaped response."""
     call = MagicMock(
         call_module=overrides.pop("call_module", "Balances"),
         call_function=overrides.pop("call_function", "transfer_keep_alive"),
-        call_args=overrides.pop("call_args", {"value": 1000}),
+        call_args=overrides.pop(
+            "call_args",
+            [
+                make_pylon_extrinsic_arg("dest", "5Recipient"),
+                make_pylon_extrinsic_arg("value", 1000),
+            ],
+        ),
     )
-    defaults: dict[str, Any] = dict(
-        block_hash=overrides.pop("block_hash", "0xabc"),
-        address=overrides.pop("address", "5Signer"),
-    )
+    defaults: dict[str, Any] = {
+        "block_number": overrides.pop("block_number", 100),
+        "extrinsic_index": overrides.pop("extrinsic_index", 7),
+        "extrinsic_hash": overrides.pop("extrinsic_hash", "0xext"),
+        "address": overrides.pop("address", "5Signer"),
+    }
     defaults.update(overrides)
     return MagicMock(call=call, **defaults)
 
@@ -64,11 +95,13 @@ class TestChainClientLifecycle:
         install_pylon_module.__aexit__.assert_awaited()
 
     async def test_aenter_wraps_failure(self, monkeypatch: pytest.MonkeyPatch):
-        import sys
-
-        module = MagicMock()
-        module.AsyncPylonClient = MagicMock(side_effect=ConnectionError("nope"))
-        monkeypatch.setitem(sys.modules, "pylon_client", module)
+        artanis = MagicMock()
+        artanis.AsyncPylonClient = MagicMock(side_effect=ConnectionError("nope"))
+        artanis.AsyncConfig = MagicMock(side_effect=lambda **kw: MagicMock(**kw))
+        parent = MagicMock()
+        parent.artanis = artanis
+        monkeypatch.setitem(sys.modules, "pylon_client", parent)
+        monkeypatch.setitem(sys.modules, "pylon_client.artanis", artanis)
         with pytest.raises(ChainConnectionError):
             async with ChainClient(make_chain_config()):
                 pass
@@ -81,23 +114,28 @@ class TestChainClientLifecycle:
 
 class TestGetRecentNeurons:
     async def test_returns_neuron_info_list(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_recent_neurons.return_value = [
-            make_pylon_neuron()
-        ]
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response({"5HK1": make_pylon_neuron()})
+        )
         async with ChainClient(make_chain_config()) as client:
             neurons = await client.get_recent_neurons(118)
         assert len(neurons) == 1
         assert neurons[0].hotkey == "5HK1"
         assert neurons[0].stake == 2.5
-        assert neurons[0].registered_at_block == 100
+        assert neurons[0].is_active is True
+        assert neurons[0].validator_permit is True
 
-    async def test_timeout_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_recent_neurons.side_effect = (
-            TimeoutError()
+    async def test_dict_key_overrides_neuron_hotkey(
+        self, install_pylon_module: AsyncMock
+    ):
+        # Pylon sets the dict key authoritative; we mirror that in from_pylon.
+        neuron = make_pylon_neuron(hotkey="5INNER")
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response({"5KEY": neuron})
         )
         async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainTimeoutError):
-                await client.get_recent_neurons(118)
+            neurons = await client.get_recent_neurons(118)
+        assert neurons[0].hotkey == "5KEY"
 
     async def test_generic_error_wrapped(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_recent_neurons.side_effect = (
@@ -107,11 +145,19 @@ class TestGetRecentNeurons:
             with pytest.raises(ChainConnectionError):
                 await client.get_recent_neurons(118)
 
+    async def test_timeout_error_wrapped(self, install_pylon_module: AsyncMock):
+        install_pylon_module.v1.open_access.get_recent_neurons.side_effect = (
+            TimeoutError()
+        )
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainTimeoutError):
+                await client.get_recent_neurons(118)
+
 
 class TestGetLatestBlock:
     async def test_returns_block_info(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_latest_block.return_value = MagicMock(
-            number=4242, hash="0xdead", timestamp=1700000000
+        install_pylon_module.v1.open_access.get_latest_block_info.return_value = (
+            MagicMock(number=4242, hash="0xdead", timestamp=1700000000)
         )
         async with ChainClient(make_chain_config()) as client:
             block = await client.get_latest_block()
@@ -120,7 +166,7 @@ class TestGetLatestBlock:
         assert block.timestamp == 1700000000
 
     async def test_timeout_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_latest_block.side_effect = (
+        install_pylon_module.v1.open_access.get_latest_block_info.side_effect = (
             TimeoutError()
         )
         async with ChainClient(make_chain_config()) as client:
@@ -129,49 +175,22 @@ class TestGetLatestBlock:
 
 
 class TestGetExtrinsic:
-    async def test_populates_succeeded_true(
-        self,
-        install_pylon_module: AsyncMock,
-        install_substrate_module: AsyncMock,
-    ):
+    async def test_returns_extrinsic_info(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_extrinsic.return_value = (
             make_pylon_extrinsic()
-        )
-        install_substrate_module.query.return_value = MagicMock(
-            value=[make_event_record(7, event_id="ExtrinsicSuccess")]
         )
         async with ChainClient(make_chain_config()) as client:
             ext = await client.get_extrinsic(block_number=100, extrinsic_index=7)
         assert ext.block_number == 100
         assert ext.extrinsic_index == 7
+        assert ext.extrinsic_hash == "0xext"
         assert ext.call_module == "Balances"
         assert ext.call_function == "transfer_keep_alive"
-        assert ext.call_args == {"value": 1000}
+        assert ext.call_args == {"dest": "5Recipient", "value": 1000}
         assert ext.signer_address == "5Signer"
-        assert ext.succeeded is True
-
-    async def test_populates_succeeded_false_on_failed_event(
-        self,
-        install_pylon_module: AsyncMock,
-        install_substrate_module: AsyncMock,
-    ):
-        install_pylon_module.v1.open_access.get_extrinsic.return_value = (
-            make_pylon_extrinsic()
-        )
-        install_substrate_module.query.return_value = MagicMock(
-            value=[make_event_record(7, event_id="ExtrinsicFailed")]
-        )
-        async with ChainClient(make_chain_config()) as client:
-            ext = await client.get_extrinsic(block_number=100, extrinsic_index=7)
-        assert ext.succeeded is False
-
-    async def test_not_found_raises_typed_error(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_extrinsic.side_effect = RuntimeError(
-            "404 not found"
-        )
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ExtrinsicNotFoundError):
-                await client.get_extrinsic(block_number=100, extrinsic_index=7)
+        # succeeded is intentionally None: Pylon does not expose block_hash,
+        # so the caller must invoke check_extrinsic_success separately.
+        assert ext.succeeded is None
 
     async def test_timeout_wrapped(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_extrinsic.side_effect = TimeoutError()
@@ -179,47 +198,51 @@ class TestGetExtrinsic:
             with pytest.raises(ChainTimeoutError):
                 await client.get_extrinsic(block_number=100, extrinsic_index=7)
 
-    async def test_substrate_failure_leaves_succeeded_none(
-        self,
-        install_pylon_module: AsyncMock,
-        install_substrate_module: AsyncMock,
-    ):
-        install_pylon_module.v1.open_access.get_extrinsic.return_value = (
-            make_pylon_extrinsic()
+    async def test_generic_error_wrapped(self, install_pylon_module: AsyncMock):
+        install_pylon_module.v1.open_access.get_extrinsic.side_effect = RuntimeError(
+            "boom"
         )
-        install_substrate_module.query.side_effect = RuntimeError("substrate down")
         async with ChainClient(make_chain_config()) as client:
-            ext = await client.get_extrinsic(block_number=100, extrinsic_index=7)
-        assert ext.succeeded is None
-        assert ext.call_module == "Balances"
+            with pytest.raises(ChainConnectionError):
+                await client.get_extrinsic(block_number=100, extrinsic_index=7)
+
+    async def test_pylon_not_found_raises_typed(self, install_pylon_module: AsyncMock):
+        # Pylon raises a typed PylonNotFound; conftest installs a stand-in class.
+        import pylon_client.artanis as artanis
+
+        install_pylon_module.v1.open_access.get_extrinsic.side_effect = (
+            artanis.PylonNotFound("not here")
+        )
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ExtrinsicNotFoundError):
+                await client.get_extrinsic(block_number=100, extrinsic_index=7)
 
 
 class TestPutWeights:
     async def test_calls_pylon_identity(self, install_pylon_module: AsyncMock):
         async with ChainClient(make_chain_config()) as client:
             await client.put_weights({"5HK1": 1.0})
-        install_pylon_module.identity.put_weights.assert_awaited_once_with(
-            weights={"5HK1": 1.0}
+        install_pylon_module.v1.identity.put_weights.assert_awaited_once_with(
+            {"5HK1": 1.0}
         )
 
     async def test_timeout_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.identity.put_weights.side_effect = TimeoutError()
+        install_pylon_module.v1.identity.put_weights.side_effect = TimeoutError()
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainTimeoutError):
                 await client.put_weights({"5HK1": 1.0})
 
     async def test_generic_error_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.identity.put_weights.side_effect = RuntimeError("boom")
+        install_pylon_module.v1.identity.put_weights.side_effect = RuntimeError("boom")
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainConnectionError):
                 await client.put_weights({"5HK1": 1.0})
 
 
+@pytest.mark.usefixtures("install_pylon_module")
 class TestCheckExtrinsicSuccess:
     async def test_returns_true_on_success_event(
-        self,
-        install_pylon_module: AsyncMock,
-        install_substrate_module: AsyncMock,
+        self, install_substrate_module: AsyncMock
     ):
         install_substrate_module.query.return_value = MagicMock(
             value=[make_event_record(3, event_id="ExtrinsicSuccess")]
@@ -229,9 +252,7 @@ class TestCheckExtrinsicSuccess:
         assert ok is True
 
     async def test_returns_false_on_failed_event(
-        self,
-        install_pylon_module: AsyncMock,
-        install_substrate_module: AsyncMock,
+        self, install_substrate_module: AsyncMock
     ):
         install_substrate_module.query.return_value = MagicMock(
             value=[make_event_record(3, event_id="ExtrinsicFailed")]
@@ -241,9 +262,7 @@ class TestCheckExtrinsicSuccess:
         assert ok is False
 
     async def test_index_mismatch_raises_not_found(
-        self,
-        install_pylon_module: AsyncMock,
-        install_substrate_module: AsyncMock,
+        self, install_substrate_module: AsyncMock
     ):
         install_substrate_module.query.return_value = MagicMock(
             value=[make_event_record(9, event_id="ExtrinsicSuccess")]
@@ -253,9 +272,7 @@ class TestCheckExtrinsicSuccess:
                 await client.check_extrinsic_success("0xhash", 3)
 
     async def test_unrelated_event_then_match(
-        self,
-        install_pylon_module: AsyncMock,
-        install_substrate_module: AsyncMock,
+        self, install_substrate_module: AsyncMock
     ):
         install_substrate_module.query.return_value = MagicMock(
             value=[
@@ -267,11 +284,7 @@ class TestCheckExtrinsicSuccess:
             ok = await client.check_extrinsic_success("0xhash", 3)
         assert ok is True
 
-    async def test_timeout_wrapped(
-        self,
-        install_pylon_module: AsyncMock,
-        install_substrate_module: AsyncMock,
-    ):
+    async def test_timeout_wrapped(self, install_substrate_module: AsyncMock):
         install_substrate_module.query.side_effect = TimeoutError()
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainTimeoutError):

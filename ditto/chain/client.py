@@ -1,4 +1,4 @@
-"""ChainClient — async context manager wrapping Pylon and substrate-interface."""
+"""ChainClient: async context manager wrapping Pylon and substrate-interface."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 from ditto.chain.errors import (
     ChainConnectionError,
-    ChainError,
     ChainTimeoutError,
     ExtrinsicNotFoundError,
 )
@@ -16,7 +15,7 @@ from ditto.chain.models import BlockInfo, ChainConfig, ExtrinsicInfo, NeuronInfo
 if TYPE_CHECKING:
     from types import TracebackType
 
-    from pylon_client import AsyncPylonClient
+    from pylon_client.artanis import AsyncPylonClient
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +38,21 @@ class ChainClient:
 
     Holds an :class:`AsyncPylonClient` for the duration of the ``async with``
     block. Methods cover the chain interactions Ditto's validator and platform
-    need: neuron discovery, block + extrinsic reads, weight setting. Extrinsic
-    success / failure detection — which Pylon does not surface — is layered on
-    via a small ``async-substrate-interface`` event read inside
-    :meth:`check_extrinsic_success`.
+    need: neuron discovery, latest block, extrinsic lookup, weight setting.
+
+    Extrinsic success / failure detection is the one Pylon gap: Pylon's
+    ``Extrinsic`` response carries the call data but no ``ExtrinsicSuccess``
+    /``ExtrinsicFailed`` event status, and the block-hash needed to read
+    events is not in the response either. :meth:`check_extrinsic_success`
+    fills the gap via a small ``async-substrate-interface`` read, but the
+    caller must supply the block hash (typically obtained from extrinsic
+    finalisation on the submitter side).
 
     Usage:
         async with ChainClient(config) as client:
             block = await client.get_latest_block()
             ext = await client.get_extrinsic(block.number, 0)
-            if ext.succeeded:
-                ...
+            ok = await client.check_extrinsic_success(block.hash, 0)
     """
 
     def __init__(self, config: ChainConfig) -> None:
@@ -59,13 +62,15 @@ class ChainClient:
 
     async def __aenter__(self) -> ChainClient:
         """Open the underlying Pylon client connection."""
-        from pylon_client import AsyncPylonClient
+        from pylon_client.artanis import AsyncConfig, AsyncPylonClient
 
         try:
             self._pylon = AsyncPylonClient(
-                url=self._config.pylon_url,
-                identity_name=self._config.identity_name,
-                identity_token=self._config.identity_token,
+                AsyncConfig(
+                    address=self._config.pylon_url,
+                    identity_name=self._config.identity_name,
+                    identity_token=self._config.identity_token,
+                )
             )
             await self._pylon.__aenter__()
         except Exception as e:
@@ -92,9 +97,7 @@ class ChainClient:
     def _ensure_pylon(self) -> AsyncPylonClient:
         """Return the active Pylon client; raise if used outside ``async with``."""
         if self._pylon is None:
-            raise RuntimeError(
-                "ChainClient used outside its async context manager"
-            )
+            raise RuntimeError("ChainClient used outside its async context manager")
         return self._pylon
 
     # --- Neuron discovery ---
@@ -109,103 +112,75 @@ class ChainClient:
             One :class:`NeuronInfo` per registered neuron on the subnet.
 
         Raises:
-            ChainConnectionError: When Pylon is unreachable.
-            ChainTimeoutError: When the request exceeds the timeout.
+            ChainConnectionError: When Pylon is unreachable or returns an error.
+            ChainTimeoutError: When the request exceeds the configured timeout.
         """
         pylon = self._ensure_pylon()
         try:
-            raw = await pylon.v1.open_access.get_recent_neurons(netuid=netuid)
-        except TimeoutError as e:
-            raise ChainTimeoutError(
-                f"get_recent_neurons(netuid={netuid}) timed out"
-            ) from e
+            response = await pylon.v1.open_access.get_recent_neurons(netuid)
         except Exception as e:
-            raise ChainConnectionError(
-                f"get_recent_neurons(netuid={netuid}) failed: {e}"
+            raise _translate_pylon_error(
+                e, f"get_recent_neurons(netuid={netuid})"
             ) from e
-        return [NeuronInfo.from_pylon(n) for n in raw]
+        return [
+            NeuronInfo.from_pylon(neuron, hotkey=hotkey)
+            for hotkey, neuron in response.neurons.items()
+        ]
 
     # --- Block + extrinsic reads ---
 
     async def get_latest_block(self) -> BlockInfo:
-        """Fetch the most recent block from Pylon.
+        """Fetch the most recent block info from Pylon.
+
+        Wraps Pylon's ``get_latest_block_info`` which returns a
+        ``BlockInfoBag`` (number + hash + timestamp).
 
         Raises:
-            ChainConnectionError: When Pylon is unreachable.
-            ChainTimeoutError: When the request exceeds the timeout.
+            ChainConnectionError: When Pylon is unreachable or returns an error.
+            ChainTimeoutError: When the request exceeds the configured timeout.
         """
         pylon = self._ensure_pylon()
         try:
-            raw = await pylon.v1.open_access.get_latest_block()
-        except TimeoutError as e:
-            raise ChainTimeoutError("get_latest_block timed out") from e
+            response = await pylon.v1.open_access.get_latest_block_info()
         except Exception as e:
-            raise ChainConnectionError(f"get_latest_block failed: {e}") from e
-        return BlockInfo.from_pylon(raw)
+            raise _translate_pylon_error(e, "get_latest_block_info") from e
+        return BlockInfo.from_pylon(response)
 
     async def get_extrinsic(
         self, block_number: int, extrinsic_index: int
     ) -> ExtrinsicInfo:
-        """Fetch an extrinsic by ``(block_number, extrinsic_index)`` with success status.
+        """Fetch an extrinsic by ``(block_number, extrinsic_index)``.
 
-        Internally calls :meth:`check_extrinsic_success` so callers receive an
-        :class:`ExtrinsicInfo` with ``succeeded`` already populated. If the
-        success check itself fails, ``succeeded`` stays ``None`` and a warning
-        is logged — the caller can decide whether to retry the check directly.
+        The returned :class:`ExtrinsicInfo` has ``succeeded=None``. Pylon's
+        response does not include the block hash, so success-event lookup
+        cannot be performed from this call alone. Callers that hold the
+        block hash should call :meth:`check_extrinsic_success` separately
+        and replace ``succeeded`` on a new :class:`ExtrinsicInfo` if needed.
 
         Args:
             block_number: Block number containing the extrinsic.
             extrinsic_index: Zero-based index of the extrinsic within the block.
 
         Returns:
-            :class:`ExtrinsicInfo` with ``succeeded`` populated when resolvable.
+            :class:`ExtrinsicInfo` populated from Pylon's response with
+            ``succeeded=None``.
 
         Raises:
-            ChainConnectionError: When Pylon is unreachable.
-            ChainTimeoutError: When the Pylon request exceeds the timeout.
-            ExtrinsicNotFoundError: When no extrinsic exists at the given index.
+            ExtrinsicNotFoundError: When no extrinsic exists at the index.
+            ChainConnectionError: When Pylon is unreachable or returns an error.
+            ChainTimeoutError: When the request exceeds the configured timeout.
         """
         pylon = self._ensure_pylon()
         try:
-            raw = await pylon.v1.open_access.get_extrinsic(
-                block_number=block_number,
-                extrinsic_index=extrinsic_index,
+            response = await pylon.v1.open_access.get_extrinsic(
+                block_number, extrinsic_index
             )
-        except TimeoutError as e:
-            raise ChainTimeoutError(
-                f"get_extrinsic(block={block_number}, idx={extrinsic_index}) timed out"
-            ) from e
         except Exception as e:
-            msg = str(e).lower()
-            if "not found" in msg or "404" in msg:
-                raise ExtrinsicNotFoundError(
-                    f"no extrinsic at block={block_number}, idx={extrinsic_index}"
-                ) from e
-            raise ChainConnectionError(
-                f"get_extrinsic(block={block_number}, idx={extrinsic_index}) "
-                f"failed: {e}"
+            raise _translate_pylon_error(
+                e,
+                f"get_extrinsic(block={block_number}, idx={extrinsic_index})",
             ) from e
-
-        block_hash = str(getattr(raw, "block_hash", "") or "")
-        succeeded: bool | None = None
-        if block_hash:
-            try:
-                succeeded = await self.check_extrinsic_success(
-                    block_hash, extrinsic_index
-                )
-            except ChainError:
-                logger.warning(
-                    "could not resolve success status for extrinsic "
-                    f"(block={block_number}, idx={extrinsic_index}); leaving as None",
-                    exc_info=True,
-                )
-
-        return ExtrinsicInfo.from_pylon(
-            raw,
-            block_number=block_number,
-            extrinsic_index=extrinsic_index,
-            succeeded=succeeded,
-        )
+        return ExtrinsicInfo.from_pylon(response)
 
     # --- Weight setting ---
 
@@ -217,19 +192,20 @@ class ChainClient:
 
         Args:
             weights: Mapping from hotkey SS58 to weight in [0, 1]. Sum need
-                not equal 1; Pylon normalizes.
+                not equal 1; Pylon normalises. Hotkey and Weight are
+                ``NewType`` aliases over ``str`` and ``float`` in Pylon, so
+                plain values are accepted at runtime.
 
         Raises:
-            ChainConnectionError: When Pylon is unreachable.
-            ChainTimeoutError: When the request exceeds the timeout.
+            ChainConnectionError: When Pylon is unreachable, returns an error,
+                or rejects the call (e.g. no validator permit).
+            ChainTimeoutError: When the request exceeds the configured timeout.
         """
         pylon = self._ensure_pylon()
         try:
-            await pylon.identity.put_weights(weights=weights)
-        except TimeoutError as e:
-            raise ChainTimeoutError("put_weights timed out") from e
+            await pylon.v1.identity.put_weights(weights)
         except Exception as e:
-            raise ChainConnectionError(f"put_weights failed: {e}") from e
+            raise _translate_pylon_error(e, "put_weights") from e
         logger.info(
             f"put_weights submitted for netuid={self._config.netuid} "
             f"with {len(weights)} entries"
@@ -246,7 +222,8 @@ class ChainClient:
         events; this method fills that gap via ``async-substrate-interface``.
 
         Args:
-            block_hash: Block hash containing the extrinsic.
+            block_hash: Block hash containing the extrinsic. Typically
+                obtained from extrinsic finalisation on the submitter side.
             extrinsic_index: Zero-based index of the extrinsic within the block.
 
         Returns:
@@ -254,17 +231,15 @@ class ChainClient:
             ``False`` on ``ExtrinsicFailed``.
 
         Raises:
-            ChainConnectionError: When the substrate node is unreachable.
-            ChainTimeoutError: When the events query exceeds its timeout.
             ExtrinsicNotFoundError: When neither success nor failure event is
                 found for ``extrinsic_index`` at the block.
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the events query exceeds its timeout.
         """
         from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(
-                url=self._substrate_url()
-            ) as substrate:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
                 events = await substrate.query(
                     module=_SYSTEM_MODULE,
                     storage_function="Events",
@@ -272,13 +247,11 @@ class ChainClient:
                 )
         except TimeoutError as e:
             raise ChainTimeoutError(
-                f"check_extrinsic_success({block_hash}, {extrinsic_index}) "
-                "timed out"
+                f"check_extrinsic_success({block_hash}, {extrinsic_index}) timed out"
             ) from e
         except Exception as e:
             raise ChainConnectionError(
-                f"check_extrinsic_success({block_hash}, {extrinsic_index}) "
-                f"failed: {e}"
+                f"check_extrinsic_success({block_hash}, {extrinsic_index}) failed: {e}"
             ) from e
 
         for record in _iter_event_records(events):
@@ -309,6 +282,34 @@ class ChainClient:
         if network == "local":
             return _LOCAL_WS_URL
         return network
+
+
+def _translate_pylon_error(exc: Exception, op: str) -> Exception:
+    """Map a Pylon SDK exception to a ``ChainError`` subclass.
+
+    Imports Pylon's exception module lazily so unit tests that stub
+    ``pylon_client`` via ``sys.modules`` do not need the real types.
+    Falls back to :class:`ChainConnectionError` when the SDK is not
+    importable or the exception is not a Pylon type.
+    """
+    try:
+        from pylon_client.artanis import (
+            PylonClosed,
+            PylonNotFound,
+            PylonTimeoutException,
+        )
+    except Exception:
+        return ChainConnectionError(f"{op} failed: {exc}")
+
+    if isinstance(exc, PylonNotFound):
+        return ExtrinsicNotFoundError(f"{op} not found: {exc}")
+    if isinstance(exc, PylonTimeoutException):
+        return ChainTimeoutError(f"{op} timed out: {exc}")
+    if isinstance(exc, PylonClosed):
+        return ChainConnectionError(f"{op} on closed client: {exc}")
+    if isinstance(exc, TimeoutError):
+        return ChainTimeoutError(f"{op} timed out: {exc}")
+    return ChainConnectionError(f"{op} failed: {exc}")
 
 
 def _iter_event_records(events: Any) -> list[dict[str, Any]]:

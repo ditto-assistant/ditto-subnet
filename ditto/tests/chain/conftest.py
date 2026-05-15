@@ -13,21 +13,24 @@ import pytest
 def mock_pylon() -> AsyncMock:
     """Build an AsyncMock that mimics ``AsyncPylonClient``.
 
-    Tests can override individual methods on
-    ``mock_pylon.v1.open_access.<method>`` or ``mock_pylon.identity.<method>``.
+    Mirrors the real path: ``client.v1.open_access.<method>`` and
+    ``client.v1.identity.<method>``. Tests can override individual
+    methods on the fixture before entering ``async with``.
     """
     pylon = AsyncMock()
     pylon.__aenter__.return_value = pylon
     pylon.__aexit__.return_value = None
     pylon.v1 = MagicMock()
     pylon.v1.open_access = MagicMock()
-    pylon.v1.open_access.get_recent_neurons = AsyncMock(return_value=[])
-    pylon.v1.open_access.get_latest_block = AsyncMock(
+    pylon.v1.open_access.get_recent_neurons = AsyncMock(
+        return_value=MagicMock(neurons={}, block=MagicMock(number=0, hash="0x00"))
+    )
+    pylon.v1.open_access.get_latest_block_info = AsyncMock(
         return_value=MagicMock(number=0, hash="0x00", timestamp=0)
     )
     pylon.v1.open_access.get_extrinsic = AsyncMock()
-    pylon.identity = MagicMock()
-    pylon.identity.put_weights = AsyncMock(return_value=None)
+    pylon.v1.identity = MagicMock()
+    pylon.v1.identity.put_weights = AsyncMock(return_value=None)
     return pylon
 
 
@@ -42,11 +45,21 @@ def mock_substrate() -> AsyncMock:
 
 
 @pytest.fixture
-def install_pylon_module(monkeypatch: pytest.MonkeyPatch, mock_pylon: AsyncMock) -> AsyncMock:
-    """Install a fake ``pylon_client`` module whose ``AsyncPylonClient`` returns the mock."""
-    module = MagicMock()
-    module.AsyncPylonClient = MagicMock(return_value=mock_pylon)
-    monkeypatch.setitem(sys.modules, "pylon_client", module)
+def install_pylon_module(
+    monkeypatch: pytest.MonkeyPatch, mock_pylon: AsyncMock
+) -> AsyncMock:
+    """Install a fake ``pylon_client.artanis`` module returning ``mock_pylon``."""
+    artanis = MagicMock()
+    artanis.AsyncPylonClient = MagicMock(return_value=mock_pylon)
+    artanis.AsyncConfig = MagicMock(side_effect=lambda **kwargs: MagicMock(**kwargs))
+    # Typed exception stand-ins for _translate_pylon_error fallback path.
+    artanis.PylonNotFound = type("PylonNotFound", (Exception,), {})
+    artanis.PylonTimeoutException = type("PylonTimeoutException", (Exception,), {})
+    artanis.PylonClosed = type("PylonClosed", (Exception,), {})
+    parent = MagicMock()
+    parent.artanis = artanis
+    monkeypatch.setitem(sys.modules, "pylon_client", parent)
+    monkeypatch.setitem(sys.modules, "pylon_client.artanis", artanis)
     return mock_pylon
 
 
@@ -54,7 +67,7 @@ def install_pylon_module(monkeypatch: pytest.MonkeyPatch, mock_pylon: AsyncMock)
 def install_substrate_module(
     monkeypatch: pytest.MonkeyPatch, mock_substrate: AsyncMock
 ) -> AsyncMock:
-    """Install a fake ``async_substrate_interface`` module whose class returns the mock."""
+    """Install a fake ``async_substrate_interface`` module."""
     module = MagicMock()
     module.AsyncSubstrateInterface = MagicMock(return_value=mock_substrate)
     monkeypatch.setitem(sys.modules, "async_substrate_interface", module)
