@@ -21,6 +21,7 @@ from typing import Any
 from ditto.bench import SCHEMA_VERSION
 from ditto.bench.loader.cases import RetrievalCase, ToolCallCase
 from ditto.bench.loader.taxonomy import Mechanism, RetrievalCategory
+from ditto.bench.runner.antigaming import memorisation_discount
 
 
 @dataclass(slots=True)
@@ -214,6 +215,121 @@ def score_core(inputs: CoreScoreInputs) -> Score:
             "latency_score": latency_score,
         },
     )
+
+
+@dataclass(slots=True)
+class DiscountOpts:
+    """Knobs for :func:`aggregate_with_discount`.
+
+    Defaults mirror ``DefaultDiscountOpts`` in ``go/bittensor/aggregate.go``
+    and the example fractions in ``docs/anti_gaming.md``. Validators MAY
+    override per-subnet policy but the defaults are what the public
+    anti-gaming doc promises miners; changes that raise ``gap_threshold``
+    or lower ``max_discount`` should be announced in advance.
+    """
+
+    gap_threshold: float = 0.10
+    gap_ceiling: float = 0.30
+    max_discount: float = 0.50
+
+
+@dataclass(slots=True)
+class MinerAggregate:
+    """Per-miner roll-up produced by :func:`aggregate_with_discount`."""
+
+    hotkey: str
+    public_mean: float = 0.0
+    canary_mean: float = 0.0
+    public_samples: int = 0
+    canary_samples: int = 0
+    private_mean: float = 0.0
+    private_samples: int = 0
+    discount: float = 1.0
+    weight: float = 0.0
+
+
+def aggregate_with_discount(
+    scores: list[Score],
+    hotkey_by_challenge: dict[str, str],
+    mechanism: Mechanism,
+    opts: DiscountOpts | None = None,
+) -> tuple[dict[str, float], list[MinerAggregate]]:
+    """Group scores by hotkey, apply memorisation discount, normalise weights.
+
+    Mirrors ``bittensor.AggregateWithDiscount`` in
+    ``go/bittensor/aggregate.go``. Returns ``(weights, details)`` where
+    ``weights`` is the normalised hotkey -> weight map ready to commit to
+    chain, and ``details`` lets the validator dashboard expose the
+    per-miner public/canary means and discount for audit.
+
+    Scores whose ``challenge_id`` is absent from ``hotkey_by_challenge``
+    are skipped silently (the validator already records the dropped
+    challenges elsewhere). Visibility values other than ``"canary"`` or
+    ``"private"`` are treated as public.
+    """
+    opts = opts or DiscountOpts()
+
+    @dataclass(slots=True)
+    class _Bucket:
+        public_sum: float = 0.0
+        canary_sum: float = 0.0
+        private_sum: float = 0.0
+        public_count: int = 0
+        canary_count: int = 0
+        private_count: int = 0
+
+    buckets: dict[str, _Bucket] = {}
+    for s in scores:
+        hotkey = hotkey_by_challenge.get(s.challenge_id, "")
+        if not hotkey:
+            continue
+        b = buckets.setdefault(hotkey, _Bucket())
+        if s.visibility == "canary":
+            b.canary_sum += s.score
+            b.canary_count += 1
+        elif s.visibility == "private":
+            b.private_sum += s.score
+            b.private_count += 1
+        else:
+            b.public_sum += s.score
+            b.public_count += 1
+
+    details: list[MinerAggregate] = []
+    weights: dict[str, float] = {}
+    total = 0.0
+    for hotkey, b in buckets.items():
+        ma = MinerAggregate(hotkey=hotkey)
+        if b.public_count > 0:
+            ma.public_mean = b.public_sum / b.public_count
+            ma.public_samples = b.public_count
+        if b.canary_count > 0:
+            ma.canary_mean = b.canary_sum / b.canary_count
+            ma.canary_samples = b.canary_count
+        if b.private_count > 0:
+            ma.private_mean = b.private_sum / b.private_count
+            ma.private_samples = b.private_count
+        ma.discount = memorisation_discount(
+            ma.public_mean,
+            ma.canary_mean,
+            ma.canary_samples,
+            gap_threshold=opts.gap_threshold,
+            gap_ceiling=opts.gap_ceiling,
+            max_discount=opts.max_discount,
+        )
+        ma.weight = ma.public_mean * ma.discount
+        total += ma.weight
+        weights[hotkey] = ma.weight
+        details.append(ma)
+
+    if total > 0:
+        for hotkey in weights:
+            weights[hotkey] = weights[hotkey] / total
+
+    # ``mechanism`` is accepted so the public signature matches the Go
+    # reference (AggregateWeights.Mechanism is stamped by the validator
+    # when serialising; this helper returns just the weight map).
+    _ = mechanism
+    return weights, details
 
 
 def score_retrieval(inputs: RetrievalScoreInputs) -> Score:

@@ -138,3 +138,80 @@ def test_normalise_prompt_for_canary_check_collapses_whitespace() -> None:
     """Normalisation lowercases, drops punctuation, and collapses spaces."""
     assert normalise_prompt_for_canary_check("  Hello,  WORLD!!!  ") == "hello world"
 
+
+def test_aggregate_with_discount_penalises_memorising_miner() -> None:
+    """Mirror of ``TestAggregateWithDiscount_PenalisesMemorisingMiner`` in Go.
+
+    Two miners share an identical public mean but only miner A's canary
+    mean tracks it. Miner B (canary collapsed) must end up with strictly
+    lower normalised weight.
+    """
+    from ditto.bench.loader.taxonomy import Mechanism
+    from ditto.bench.runner.scoring import Score, aggregate_with_discount
+
+    def _score(cid: str, visibility: str, value: float) -> Score:
+        return Score(
+            schema_version="dittobench/1",
+            case_id=cid,
+            mechanism=Mechanism.CORE,
+            score=value,
+            challenge_id=cid,
+            visibility=visibility,
+        )
+
+    scores = [
+        _score("a1", "public", 0.90),
+        _score("a2", "public", 0.90),
+        _score("a3", "canary", 0.88),
+        _score("a4", "canary", 0.89),
+        _score("b1", "public", 0.90),
+        _score("b2", "public", 0.90),
+        _score("b3", "canary", 0.30),
+        _score("b4", "canary", 0.30),
+    ]
+    hk = {
+        "a1": "A",
+        "a2": "A",
+        "a3": "A",
+        "a4": "A",
+        "b1": "B",
+        "b2": "B",
+        "b3": "B",
+        "b4": "B",
+    }
+    weights, details = aggregate_with_discount(scores, hk, Mechanism.CORE)
+    assert set(weights) == {"A", "B"}
+    assert abs(sum(weights.values()) - 1.0) < 1e-6
+    assert weights["A"] > weights["B"], (
+        f"memorising miner B should be penalised: {weights}"
+    )
+    by_hk = {d.hotkey: d for d in details}
+    assert by_hk["A"].discount == 1.0
+    assert by_hk["B"].discount < 1.0
+
+
+def test_aggregate_with_discount_ignores_unmapped_challenges() -> None:
+    """Scores whose challenge_id is absent from the map are dropped silently."""
+    from ditto.bench.loader.taxonomy import Mechanism
+    from ditto.bench.runner.scoring import Score, aggregate_with_discount
+
+    scores = [
+        Score(
+            schema_version="dittobench/1",
+            case_id="x",
+            mechanism=Mechanism.CORE,
+            score=0.5,
+            challenge_id="x",
+            visibility="public",
+        ),
+        Score(
+            schema_version="dittobench/1",
+            case_id="y",
+            mechanism=Mechanism.CORE,
+            score=0.7,
+            challenge_id="y",
+            visibility="public",
+        ),
+    ]
+    weights, _ = aggregate_with_discount(scores, {"x": "A"}, Mechanism.CORE)
+    assert weights == {"A": 1.0}

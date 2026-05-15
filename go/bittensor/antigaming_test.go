@@ -102,6 +102,62 @@ func TestEnsureParaphraseChanged(t *testing.T) {
 	}
 }
 
+func TestAggregateWithDiscount_PenalisesMemorisingMiner(t *testing.T) {
+	// Two miners with identical public means but very different canary
+	// means. The high-gap miner should land at a strictly lower normalised
+	// weight than the matched-canary miner.
+	scores := []Score{
+		// Miner A: matched public/canary (no memorisation signal).
+		{ChallengeID: "a1", Visibility: "public", Score: 0.90},
+		{ChallengeID: "a2", Visibility: "public", Score: 0.90},
+		{ChallengeID: "a3", Visibility: "canary", Score: 0.88},
+		{ChallengeID: "a4", Visibility: "canary", Score: 0.89},
+		// Miner B: high public but collapsing canary (memorising).
+		{ChallengeID: "b1", Visibility: "public", Score: 0.90},
+		{ChallengeID: "b2", Visibility: "public", Score: 0.90},
+		{ChallengeID: "b3", Visibility: "canary", Score: 0.30},
+		{ChallengeID: "b4", Visibility: "canary", Score: 0.30},
+	}
+	hk := map[string]string{
+		"a1": "A", "a2": "A", "a3": "A", "a4": "A",
+		"b1": "B", "b2": "B", "b3": "B", "b4": "B",
+	}
+	agg, details := AggregateWithDiscount(scores, hk, MechanismCore, DiscountOpts{})
+	weights := agg.Weights
+	if agg.Mechanism != MechanismCore {
+		t.Fatalf("expected Mechanism=core, got %q", agg.Mechanism)
+	}
+	if got := len(weights); got != 2 {
+		t.Fatalf("expected weights for two miners, got %d (%v)", got, weights)
+	}
+	if weights["A"]+weights["B"] < 0.9999 || weights["A"]+weights["B"] > 1.0001 {
+		t.Fatalf("weights should sum to 1, got A=%v B=%v", weights["A"], weights["B"])
+	}
+	if !(weights["A"] > weights["B"]) {
+		t.Fatalf("memorising miner B should be penalised: A=%v B=%v", weights["A"], weights["B"])
+	}
+	for _, d := range details {
+		if d.Hotkey == "B" && d.Discount >= 1.0 {
+			t.Fatalf("miner B should have discount<1, got %v", d.Discount)
+		}
+		if d.Hotkey == "A" && d.Discount != 1.0 {
+			t.Fatalf("miner A should have discount=1, got %v", d.Discount)
+		}
+	}
+}
+
+func TestAggregateWithDiscount_IgnoresUnmappedChallenges(t *testing.T) {
+	scores := []Score{
+		{ChallengeID: "x", Visibility: "public", Score: 0.5},
+		{ChallengeID: "y", Visibility: "public", Score: 0.7}, // not in map
+	}
+	hk := map[string]string{"x": "A"}
+	agg, _ := AggregateWithDiscount(scores, hk, MechanismCore, DiscountOpts{})
+	if len(agg.Weights) != 1 {
+		t.Fatalf("expected 1 miner aggregate, got %v", agg.Weights)
+	}
+}
+
 func equalStringSets(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
