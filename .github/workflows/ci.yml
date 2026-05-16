@@ -77,7 +77,10 @@ jobs:
         run: make harness-build
 
       - name: docker build harness image
-        run: docker build harness/go-template -t ditto-harness:ci
+        run: docker build -f harness/go-template/Dockerfile -t ditto-harness:ci .
+
+      - name: docker build baseline harness image
+        run: docker build -f harness/go-template-baseline/Dockerfile -t ditto-harness-baseline:ci .
 
   parity-smoke:
     runs-on: ubuntu-latest
