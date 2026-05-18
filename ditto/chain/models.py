@@ -13,19 +13,21 @@ class ChainConfig:
     Holds Pylon connection parameters plus the subtensor network identifier
     used for events that Pylon does not surface (e.g. ExtrinsicSuccess /
     ExtrinsicFailed). Loaded from a service's argparse + env config.
+
+    Auth modes:
+    - **Open-access** (read-only): set ``open_access_token``. Sufficient for
+      ``get_recent_neurons``, ``get_latest_block``, ``get_extrinsic``.
+    - **Identity** (read + write): set both ``identity_name`` and
+      ``identity_token``. Required for ``put_weights``.
+
+    At least one mode must be configured; both can be set side by side.
     """
 
     pylon_url: str
-    """HTTP URL for the Pylon container (e.g. ``http://pylon:8080``).
+    """HTTP URL for the Pylon container (e.g. ``http://pylon:8000``).
 
     Passed to Pylon SDK as ``AsyncConfig.address``.
     """
-
-    identity_name: str
-    """Pylon identity name used to authenticate this client."""
-
-    identity_token: str
-    """Pylon identity token paired with ``identity_name``."""
 
     netuid: int
     """Bittensor subnet netuid this client operates against (Ditto is 118).
@@ -34,6 +36,15 @@ class ChainConfig:
     is informational on the client side. Kept here so consumers have a
     single source for "what subnet are we on".
     """
+
+    open_access_token: str | None = None
+    """Token for Pylon's open-access read endpoints. Optional if identity is set."""
+
+    identity_name: str | None = None
+    """Pylon identity name. Required for write operations like ``put_weights``."""
+
+    identity_token: str | None = None
+    """Pylon identity token paired with ``identity_name``."""
 
     subtensor_network: str = "finney"
     """Subtensor network identifier passed to async-substrate-interface.
@@ -49,6 +60,20 @@ class ChainConfig:
     Mirrors Pylon's default. Reads for blocks older than ``current - cutoff``
     automatically fall back to an archive node inside Pylon.
     """
+
+    def __post_init__(self) -> None:
+        """Validate that at least one Pylon auth mode is configured."""
+        if bool(self.identity_name) != bool(self.identity_token):
+            raise ValueError(
+                "identity_name and identity_token must be provided together"
+            )
+        has_open_access = bool(self.open_access_token)
+        has_identity = bool(self.identity_name) and bool(self.identity_token)
+        if not (has_open_access or has_identity):
+            raise ValueError(
+                "ChainConfig requires either open_access_token or "
+                "(identity_name + identity_token); none provided"
+            )
 
 
 @dataclass(frozen=True)

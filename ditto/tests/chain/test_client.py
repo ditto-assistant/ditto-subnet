@@ -10,6 +10,7 @@ import pytest
 
 from ditto.chain.client import ChainClient
 from ditto.chain.errors import (
+    ChainAuthError,
     ChainConnectionError,
     ChainTimeoutError,
     ExtrinsicNotFoundError,
@@ -89,6 +90,8 @@ def make_pylon_extrinsic(**overrides: Any) -> MagicMock:
 
 
 class TestChainClientLifecycle:
+    """Tests for ChainClient async context manager and AsyncConfig wiring."""
+
     async def test_aenter_connects(self, install_pylon_module: AsyncMock):
         async with ChainClient(make_chain_config()) as client:
             assert client._pylon is install_pylon_module
@@ -111,8 +114,71 @@ class TestChainClientLifecycle:
         with pytest.raises(RuntimeError):
             await client.get_latest_block()
 
+    @pytest.mark.usefixtures("install_pylon_module")
+    async def test_aenter_open_access_only_passes_correct_kwargs(self):
+        """Open-access-only config must not leak identity kwargs into ``AsyncConfig``.
+        Real Pylon validates that identity_name/identity_token come as a pair."""
+        import pylon_client.artanis as artanis
+
+        config = ChainConfig(
+            pylon_url="http://pylon:8000",
+            netuid=118,
+            open_access_token="open-tok",
+        )
+        async with ChainClient(config):
+            pass
+        artanis.AsyncConfig.assert_called_once_with(
+            address="http://pylon:8000",
+            open_access_token="open-tok",
+        )
+
+    @pytest.mark.usefixtures("install_pylon_module")
+    async def test_aenter_identity_only_passes_correct_kwargs(self):
+        """Identity-only config must not pass an empty ``open_access_token``
+        (Pylon treats empty string as a real but invalid token)."""
+        import pylon_client.artanis as artanis
+
+        config = ChainConfig(
+            pylon_url="http://pylon:8000",
+            netuid=118,
+            identity_name="validator",
+            identity_token="id-tok",
+        )
+        async with ChainClient(config):
+            pass
+        artanis.AsyncConfig.assert_called_once_with(
+            address="http://pylon:8000",
+            identity_name="validator",
+            identity_token="id-tok",
+        )
+
+    @pytest.mark.usefixtures("install_pylon_module")
+    async def test_aenter_both_modes_passes_all_kwargs(self):
+        """Both auth modes set: ``AsyncConfig`` receives all three tokens.
+        Real Pylon supports this for processes that read open-access AND
+        also write under an identity."""
+        import pylon_client.artanis as artanis
+
+        config = ChainConfig(
+            pylon_url="http://pylon:8000",
+            netuid=118,
+            open_access_token="open-tok",
+            identity_name="validator",
+            identity_token="id-tok",
+        )
+        async with ChainClient(config):
+            pass
+        artanis.AsyncConfig.assert_called_once_with(
+            address="http://pylon:8000",
+            open_access_token="open-tok",
+            identity_name="validator",
+            identity_token="id-tok",
+        )
+
 
 class TestGetRecentNeurons:
+    """Tests for ChainClient.get_recent_neurons."""
+
     async def test_returns_neuron_info_list(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
             make_neurons_response({"5HK1": make_pylon_neuron()})
@@ -155,6 +221,8 @@ class TestGetRecentNeurons:
 
 
 class TestGetLatestBlock:
+    """Tests for ChainClient.get_latest_block."""
+
     async def test_returns_block_info(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_latest_block_info.return_value = (
             MagicMock(number=4242, hash="0xdead", timestamp=1700000000)
@@ -175,6 +243,8 @@ class TestGetLatestBlock:
 
 
 class TestGetExtrinsic:
+    """Tests for ChainClient.get_extrinsic."""
+
     async def test_returns_extrinsic_info(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_extrinsic.return_value = (
             make_pylon_extrinsic()
@@ -219,6 +289,8 @@ class TestGetExtrinsic:
 
 
 class TestPutWeights:
+    """Tests for ChainClient.put_weights."""
+
     async def test_calls_pylon_identity(self, install_pylon_module: AsyncMock):
         async with ChainClient(make_chain_config()) as client:
             await client.put_weights({"5HK1": 1.0})
@@ -238,9 +310,27 @@ class TestPutWeights:
             with pytest.raises(ChainConnectionError):
                 await client.put_weights({"5HK1": 1.0})
 
+    @pytest.mark.parametrize("pylon_exc_attr", ["PylonUnauthorized", "PylonForbidden"])
+    async def test_pylon_auth_rejection_raises_chain_auth_error(
+        self, install_pylon_module: AsyncMock, pylon_exc_attr: str
+    ):
+        """Pylon returns 401 (bad/missing identity) or 403 (no permit / stake)
+        when an identity-mode call is rejected. Both must surface as
+        ``ChainAuthError`` so callers can distinguish auth failures from
+        transient network issues."""
+        import pylon_client.artanis as artanis
+
+        exc_cls = getattr(artanis, pylon_exc_attr)
+        install_pylon_module.v1.identity.put_weights.side_effect = exc_cls("denied")
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainAuthError):
+                await client.put_weights({"5HK1": 1.0})
+
 
 @pytest.mark.usefixtures("install_pylon_module")
 class TestCheckExtrinsicSuccess:
+    """Tests for ChainClient.check_extrinsic_success (the Pylon-events gap)."""
+
     async def test_returns_true_on_success_event(
         self, install_substrate_module: AsyncMock
     ):

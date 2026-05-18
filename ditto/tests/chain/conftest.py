@@ -56,6 +56,8 @@ def install_pylon_module(
     artanis.PylonNotFound = type("PylonNotFound", (Exception,), {})
     artanis.PylonTimeoutException = type("PylonTimeoutException", (Exception,), {})
     artanis.PylonClosed = type("PylonClosed", (Exception,), {})
+    artanis.PylonUnauthorized = type("PylonUnauthorized", (Exception,), {})
+    artanis.PylonForbidden = type("PylonForbidden", (Exception,), {})
     parent = MagicMock()
     parent.artanis = artanis
     monkeypatch.setitem(sys.modules, "pylon_client", parent)
@@ -75,12 +77,22 @@ def install_substrate_module(
 
 
 def make_event_record(
-    extrinsic_index: int,
+    extrinsic_index: int | None,
     module_id: str = "System",
     event_id: str = "ExtrinsicSuccess",
+    phase: str = "ApplyExtrinsic",
 ) -> dict[str, Any]:
-    """Build one event-record dict in the shape async-substrate-interface returns."""
+    """Build one event-record dict in the shape async-substrate-interface returns.
+
+    Verified against finney's ``System.Events`` storage on mainnet: records
+    are flat dicts with ``phase`` (str), ``extrinsic_idx`` (int or None for
+    Initialization/Finalization phases), ``module_id``, ``event_id``, plus
+    nested ``event`` data we don't read in ``check_extrinsic_success``.
+    """
     return {
-        "phase": {"ApplyExtrinsic": extrinsic_index},
-        "event": {"module_id": module_id, "event_id": event_id},
+        "phase": phase,
+        "extrinsic_idx": extrinsic_index,
+        "module_id": module_id,
+        "event_id": event_id,
+        "event": {"module_id": module_id, "event_id": event_id, "attributes": []},
     }

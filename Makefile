@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test
+.PHONY: lint format typecheck test smoke-pylon
 
 lint:
 	uv run ruff format --check .
@@ -13,3 +13,6 @@ typecheck:
 
 test:
 	uv run pytest
+
+smoke-pylon:
+	uv run python scripts/smoke_pylon.py
