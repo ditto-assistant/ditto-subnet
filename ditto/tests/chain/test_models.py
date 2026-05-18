@@ -33,6 +33,8 @@ def make_pylon_arg(name: str, value: Any) -> MagicMock:
 
 
 class TestChainConfigValidation:
+    """Tests for ChainConfig.__post_init__ auth-mode validation."""
+
     def test_open_access_alone_is_valid(self):
         config = ChainConfig(
             pylon_url="http://pylon:8000",
@@ -90,6 +92,8 @@ class TestChainConfigValidation:
 
 
 class TestNeuronInfoFromPylon:
+    """Tests for NeuronInfo.from_pylon adapter."""
+
     def test_dict_key_hotkey_overrides_raw_field(self):
         """When ``GetNeuronsResponse.neurons`` is iterated as ``.items()``,
         the dict key is the authoritative hotkey - ``from_pylon`` must honour
@@ -157,6 +161,8 @@ class TestNeuronInfoFromPylon:
 
 
 class TestExtrinsicInfoFromPylon:
+    """Tests for ExtrinsicInfo.from_pylon adapter."""
+
     def test_flattens_list_of_call_args_to_name_value_dict(self):
         """Real Pylon returns ``call_args`` as ``list[ExtrinsicCallArg]`` where
         each arg has ``.name`` and ``.value``. The adapter flattens to a
@@ -266,6 +272,8 @@ class TestExtrinsicInfoFromPylon:
 
 
 class TestBlockInfoFromPylon:
+    """Tests for BlockInfo.from_pylon adapter."""
+
     def test_carries_number_hash_timestamp(self):
         raw = MagicMock(number=99, hash="0xblock", timestamp=1700000100)
         block = BlockInfo.from_pylon(raw)

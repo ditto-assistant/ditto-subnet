@@ -89,6 +89,8 @@ def make_pylon_extrinsic(**overrides: Any) -> MagicMock:
 
 
 class TestChainClientLifecycle:
+    """Tests for ChainClient async context manager and AsyncConfig wiring."""
+
     async def test_aenter_connects(self, install_pylon_module: AsyncMock):
         async with ChainClient(make_chain_config()) as client:
             assert client._pylon is install_pylon_module
@@ -174,6 +176,8 @@ class TestChainClientLifecycle:
 
 
 class TestGetRecentNeurons:
+    """Tests for ChainClient.get_recent_neurons."""
+
     async def test_returns_neuron_info_list(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
             make_neurons_response({"5HK1": make_pylon_neuron()})
@@ -216,6 +220,8 @@ class TestGetRecentNeurons:
 
 
 class TestGetLatestBlock:
+    """Tests for ChainClient.get_latest_block."""
+
     async def test_returns_block_info(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_latest_block_info.return_value = (
             MagicMock(number=4242, hash="0xdead", timestamp=1700000000)
@@ -236,6 +242,8 @@ class TestGetLatestBlock:
 
 
 class TestGetExtrinsic:
+    """Tests for ChainClient.get_extrinsic."""
+
     async def test_returns_extrinsic_info(self, install_pylon_module: AsyncMock):
         install_pylon_module.v1.open_access.get_extrinsic.return_value = (
             make_pylon_extrinsic()
@@ -280,6 +288,8 @@ class TestGetExtrinsic:
 
 
 class TestPutWeights:
+    """Tests for ChainClient.put_weights."""
+
     async def test_calls_pylon_identity(self, install_pylon_module: AsyncMock):
         async with ChainClient(make_chain_config()) as client:
             await client.put_weights({"5HK1": 1.0})
@@ -302,6 +312,8 @@ class TestPutWeights:
 
 @pytest.mark.usefixtures("install_pylon_module")
 class TestCheckExtrinsicSuccess:
+    """Tests for ChainClient.check_extrinsic_success (the Pylon-events gap)."""
+
     async def test_returns_true_on_success_event(
         self, install_substrate_module: AsyncMock
     ):
