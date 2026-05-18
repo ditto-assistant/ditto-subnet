@@ -1,18 +1,11 @@
 """Smoke test ChainClient against a real running Pylon.
 
-Reads Pylon connection from environment:
-
-    PYLON_URL               default: http://localhost:8000
-    PYLON_OPEN_ACCESS_TOKEN required for read-only smoke
-    PYLON_IDENTITY_NAME     optional (only for write operations like put_weights)
-    PYLON_IDENTITY_TOKEN    paired with PYLON_IDENTITY_NAME
-    NETUID                  default: 118
-    SUBTENSOR_NETWORK       default: finney
-
-Exercises every read path: get_latest_block, get_recent_neurons,
-check_extrinsic_success (which uses async-substrate-interface, not Pylon).
-Prints a summary, exits non-zero on any ChainError. Used to validate
-ditto.chain against a live backend before downstream modules build on top.
+Reads Pylon connection from environment (see ``.env.example`` for the
+keys + dev defaults). Exercises every read path: ``get_latest_block``,
+``get_recent_neurons``, ``check_extrinsic_success`` (which uses
+``async-substrate-interface``, not Pylon). Prints a summary, exits
+non-zero on any ``ChainError``. Used to validate ``ditto.chain`` against
+a live backend before downstream modules build on top.
 """
 
 from __future__ import annotations
