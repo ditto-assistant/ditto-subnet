@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ditto.chain.errors import (
+    ChainAuthError,
     ChainConnectionError,
     ChainTimeoutError,
     ExtrinsicNotFoundError,
@@ -38,12 +39,22 @@ class ChainClient:
     """Async context manager wrapping Pylon for chain access.
 
     Holds an :class:`AsyncPylonClient` for the duration of the ``async with``
-    block. Methods cover the chain interactions Ditto's validator and platform
-    need: neuron discovery, latest block, extrinsic lookup, weight setting.
+    block. Two consumer processes in the Ditto codebase:
+
+    - **API server** (open-access mode): reads neurons, blocks, extrinsics,
+      events. Does not write. Used by ``ditto.api.payment_verifier``,
+      ``ditto.api.loops``, and the request handlers under
+      ``ditto.api.endpoints``.
+    - **Validator daemon** (identity mode): same read surface plus
+      :meth:`put_weights` for weight emission. Identity is mandatory because
+      ``put_weights`` is an identity-only endpoint.
+
+    ``ditto.miner_cli`` is NOT a consumer - it uses raw bittensor SDK
+    directly per the locked architecture exception.
 
     Extrinsic success / failure detection is the one Pylon gap: Pylon's
     ``Extrinsic`` response carries the call data but no ``ExtrinsicSuccess``
-    /``ExtrinsicFailed`` event status, and the block-hash needed to read
+    /``ExtrinsicFailed`` event status, and the block hash needed to read
     events is not in the response either. :meth:`check_extrinsic_success`
     fills the gap via a small ``async-substrate-interface`` read, but the
     caller must supply the block hash (typically obtained from extrinsic
@@ -199,8 +210,11 @@ class ChainClient:
                 plain values are accepted at runtime.
 
         Raises:
-            ChainConnectionError: When Pylon is unreachable, returns an error,
-                or rejects the call (e.g. no validator permit).
+            ChainAuthError: When the client was opened without an identity or
+                when the configured identity lacks the validator permit / stake
+                Pylon requires to accept a weight submission.
+            ChainConnectionError: When Pylon is unreachable or returns an
+                unexpected non-auth error.
             ChainTimeoutError: When the request exceeds the configured timeout.
         """
         pylon = self._ensure_pylon()
@@ -222,6 +236,9 @@ class ChainClient:
 
         Pylon does NOT surface ``system.ExtrinsicSuccess`` / ``ExtrinsicFailed``
         events; this method fills that gap via ``async-substrate-interface``.
+        The main caller is ``ditto.api.payment_verifier``, which uses this to
+        confirm a miner's upload-payment extrinsic actually executed
+        successfully on chain after Pylon has confirmed its call args.
 
         Args:
             block_hash: Block hash containing the extrinsic. Typically
@@ -290,18 +307,27 @@ class ChainClient:
 
 
 def _translate_pylon_error(exc: Exception, op: str) -> Exception:
-    """Map a Pylon SDK exception to a ``ChainError`` subclass.
+    """Map a Pylon SDK exception to a :class:`ChainError` subclass.
 
     Imports Pylon's exception module lazily so unit tests that stub
     ``pylon_client`` via ``sys.modules`` do not need the real types.
     Falls back to :class:`ChainConnectionError` when the SDK is not
     importable or the exception is not a Pylon type.
+
+    Mapping:
+
+    - ``PylonNotFound`` -> :class:`ExtrinsicNotFoundError`
+    - ``PylonTimeoutException`` or stdlib ``TimeoutError`` -> :class:`ChainTimeoutError`
+    - ``PylonUnauthorized`` or ``PylonForbidden`` -> :class:`ChainAuthError`
+    - ``PylonClosed`` or anything else -> :class:`ChainConnectionError`
     """
     try:
         from pylon_client.artanis import (
             PylonClosed,
+            PylonForbidden,
             PylonNotFound,
             PylonTimeoutException,
+            PylonUnauthorized,
         )
     except Exception:
         return ChainConnectionError(f"{op} failed: {exc}")
@@ -310,6 +336,8 @@ def _translate_pylon_error(exc: Exception, op: str) -> Exception:
         return ExtrinsicNotFoundError(f"{op} not found: {exc}")
     if isinstance(exc, PylonTimeoutException):
         return ChainTimeoutError(f"{op} timed out: {exc}")
+    if isinstance(exc, (PylonUnauthorized, PylonForbidden)):
+        return ChainAuthError(f"{op} rejected by Pylon auth: {exc}")
     if isinstance(exc, PylonClosed):
         return ChainConnectionError(f"{op} on closed client: {exc}")
     if isinstance(exc, TimeoutError):

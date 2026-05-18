@@ -10,6 +10,7 @@ import pytest
 
 from ditto.chain.client import ChainClient
 from ditto.chain.errors import (
+    ChainAuthError,
     ChainConnectionError,
     ChainTimeoutError,
     ExtrinsicNotFoundError,
@@ -307,6 +308,22 @@ class TestPutWeights:
         install_pylon_module.v1.identity.put_weights.side_effect = RuntimeError("boom")
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainConnectionError):
+                await client.put_weights({"5HK1": 1.0})
+
+    @pytest.mark.parametrize("pylon_exc_attr", ["PylonUnauthorized", "PylonForbidden"])
+    async def test_pylon_auth_rejection_raises_chain_auth_error(
+        self, install_pylon_module: AsyncMock, pylon_exc_attr: str
+    ):
+        """Pylon returns 401 (bad/missing identity) or 403 (no permit / stake)
+        when an identity-mode call is rejected. Both must surface as
+        ``ChainAuthError`` so callers can distinguish auth failures from
+        transient network issues."""
+        import pylon_client.artanis as artanis
+
+        exc_cls = getattr(artanis, pylon_exc_attr)
+        install_pylon_module.v1.identity.put_weights.side_effect = exc_cls("denied")
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainAuthError):
                 await client.put_weights({"5HK1": 1.0})
 
 

@@ -56,6 +56,8 @@ def install_pylon_module(
     artanis.PylonNotFound = type("PylonNotFound", (Exception,), {})
     artanis.PylonTimeoutException = type("PylonTimeoutException", (Exception,), {})
     artanis.PylonClosed = type("PylonClosed", (Exception,), {})
+    artanis.PylonUnauthorized = type("PylonUnauthorized", (Exception,), {})
+    artanis.PylonForbidden = type("PylonForbidden", (Exception,), {})
     parent = MagicMock()
     parent.artanis = artanis
     monkeypatch.setitem(sys.modules, "pylon_client", parent)

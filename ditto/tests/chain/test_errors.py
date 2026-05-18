@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from ditto.chain.errors import (
+    ChainAuthError,
     ChainConnectionError,
     ChainError,
     ChainTimeoutError,
@@ -19,6 +20,7 @@ from ditto.chain.errors import (
 )
 
 CHAIN_ERROR_SUBCLASSES = [
+    ChainAuthError,
     ChainConnectionError,
     ChainTimeoutError,
     ExtrinsicNotFoundError,

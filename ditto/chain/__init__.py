@@ -1,34 +1,41 @@
 """Chain access layer wrapping Pylon and async-substrate-interface.
 
-Validator and platform code goes through this module rather than calling
-Pylon or bittensor directly. Isolates the chain library's choice from
-every consumer.
+The API server (open-access mode) and validator daemon (identity mode) are
+the two consumers. Both go through ``ChainClient`` rather than calling
+Pylon or bittensor directly, so the chain library's choice is isolated
+from every other module.
 
-The miner CLI is a deliberate exception (per the locked architecture): it
-uses raw bittensor SDK to submit ``Balances.transfer_keep_alive`` for upload
-payment, because Pylon does not expose balance transfers and the CLI is a
-short-lived process that does not need a Pylon container.
+``ditto.miner_cli`` is the deliberate exception: it uses the raw bittensor
+SDK directly for balance transfers and registrations (operations Pylon
+does not expose) and talks to our HTTP API for everything else, so it
+never touches ``ChainClient`` at all.
 
 Usage:
     from ditto.chain import ChainConfig, create_chain_client
 
+    # API server (read-only)
     config = ChainConfig(
-        pylon_url="http://localhost:8080",
+        pylon_url="http://localhost:8000",
+        netuid=118,
+        open_access_token="...",
+    )
+    # Validator daemon (writes weights)
+    config = ChainConfig(
+        pylon_url="http://localhost:8000",
+        netuid=118,
         identity_name="validator",
         identity_token="...",
-        netuid=118,
     )
     async with create_chain_client(config) as client:
         block = await client.get_latest_block()
         extrinsic = await client.get_extrinsic(block.number, 0)
-        if extrinsic.succeeded:
-            ...
 """
 
 from __future__ import annotations
 
 from ditto.chain.client import ChainClient
 from ditto.chain.errors import (
+    ChainAuthError,
     ChainConnectionError,
     ChainError,
     ChainTimeoutError,
@@ -53,6 +60,7 @@ __all__ = [
     "NeuronInfo",
     # Errors
     "ChainError",
+    "ChainAuthError",
     "ChainConnectionError",
     "ChainTimeoutError",
     "ExtrinsicNotFoundError",
