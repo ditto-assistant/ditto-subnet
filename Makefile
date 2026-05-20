@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test smoke-pylon
+.PHONY: lint format typecheck test smoke-pylon stack-up stack-down migrate migrate-down migrate-history migrate-current
 
 lint:
 	uv run ruff format --check .
@@ -15,4 +15,22 @@ test:
 	uv run pytest
 
 smoke-pylon:
-	uv run python scripts/smoke_pylon.py
+	set -a && . ./.env && set +a && uv run python scripts/smoke_pylon.py
+
+stack-up:
+	docker compose up -d --wait
+
+stack-down:
+	docker compose down
+
+migrate:
+	set -a && . ./.env && set +a && uv run alembic upgrade head
+
+migrate-down:
+	set -a && . ./.env && set +a && uv run alembic downgrade -1
+
+migrate-history:
+	set -a && . ./.env && set +a && uv run alembic history --verbose
+
+migrate-current:
+	set -a && . ./.env && set +a && uv run alembic current
