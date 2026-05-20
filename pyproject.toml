@@ -13,6 +13,8 @@ dependencies = [
     "bittensor>=10.2.1",
     "bittensor-pylon-client",
     "async-substrate-interface",
+    "asyncpg>=0.30",
+    "alembic>=1.13",
 ]
 
 [tool.uv.sources]
