@@ -57,9 +57,6 @@ class Agent:
     name: str
     """Human-friendly agent name supplied by the miner."""
 
-    version_num: int
-    """Per-hotkey version counter. ``UNIQUE (miner_hotkey, version_num)``."""
-
     sha256: str
     """SHA-256 of the uploaded tarball, hex encoded."""
 
@@ -83,7 +80,6 @@ class Agent:
             agent_id=row["agent_id"],
             miner_hotkey=row["miner_hotkey"],
             name=row["name"],
-            version_num=row["version_num"],
             sha256=row["sha256"],
             status=AgentStatus(row["status"]),
             ip_address=row["ip_address"],
@@ -109,13 +105,16 @@ class EvaluationPayment:
     """Zero-based index of the extrinsic within the block. PK part 2."""
 
     agent_id: UUID
-    """FK to ``agents.agent_id``. The agent this payment funds."""
+    """FK to ``agents.agent_id``. The agent this payment funds. ``UNIQUE``."""
 
     miner_hotkey: str
-    """Signer hotkey on the payment extrinsic. Matches ``agents.miner_hotkey``."""
+    """Signer hotkey on the payment extrinsic. FK-bound to ``agents.miner_hotkey``."""
+
+    miner_coldkey: str
+    """Coldkey that owns the hotkey at payment time. Snapshot for audit."""
 
     amount_rao: int
-    """Payment amount in rao (1 TAO = 1e9 rao). Stored as ``BIGINT``."""
+    """Payment amount in rao (1 TAO = 1e9 rao). ``CHECK (amount_rao > 0)``."""
 
     dest_address: str
     """SS58 address that received the payment."""
@@ -123,8 +122,8 @@ class EvaluationPayment:
     timestamp: datetime
     """On-chain block timestamp."""
 
-    verified_at: datetime
-    """Server-side row insert time (``TIMESTAMPTZ NOT NULL DEFAULT NOW()``)."""
+    created_at: datetime
+    """Row insertion timestamp (``TIMESTAMPTZ NOT NULL DEFAULT NOW()``)."""
 
     @classmethod
     def from_row(cls, row: Record) -> EvaluationPayment:
@@ -134,8 +133,9 @@ class EvaluationPayment:
             extrinsic_index=row["extrinsic_index"],
             agent_id=row["agent_id"],
             miner_hotkey=row["miner_hotkey"],
+            miner_coldkey=row["miner_coldkey"],
             amount_rao=row["amount_rao"],
             dest_address=row["dest_address"],
             timestamp=row["timestamp"],
-            verified_at=row["verified_at"],
+            created_at=row["created_at"],
         )

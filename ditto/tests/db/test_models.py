@@ -22,7 +22,6 @@ def make_agent_row(**overrides: Any) -> dict[str, Any]:
         "agent_id": uuid4(),
         "miner_hotkey": "5HKsomething",
         "name": "alpha",
-        "version_num": 1,
         "sha256": "deadbeef" * 8,
         "status": "uploaded",
         "ip_address": "192.0.2.1",
@@ -39,10 +38,11 @@ def make_payment_row(**overrides: Any) -> dict[str, Any]:
         "extrinsic_index": 3,
         "agent_id": uuid4(),
         "miner_hotkey": "5HKsomething",
+        "miner_coldkey": "5CKsomething",
         "amount_rao": 5_000_000_000,
         "dest_address": "5Dest",
         "timestamp": datetime(2026, 5, 19, 12, 0, tzinfo=UTC),
-        "verified_at": datetime(2026, 5, 19, 12, 0, 5, tzinfo=UTC),
+        "created_at": datetime(2026, 5, 19, 12, 0, 5, tzinfo=UTC),
     }
     base.update(overrides)
     return base
@@ -77,7 +77,6 @@ class TestAgentFromRow:
             agent_id=agent_id,
             miner_hotkey="5HK1",
             name="bravo",
-            version_num=4,
             sha256="abc",
             status="evaluating",
             ip_address="10.0.0.1",
@@ -89,7 +88,6 @@ class TestAgentFromRow:
         assert agent.agent_id == agent_id
         assert agent.miner_hotkey == "5HK1"
         assert agent.name == "bravo"
-        assert agent.version_num == 4
         assert agent.sha256 == "abc"
         assert agent.status is AgentStatus.EVALUATING
         assert agent.ip_address == "10.0.0.1"
@@ -114,16 +112,17 @@ class TestEvaluationPaymentFromRow:
     def test_happy_path_maps_every_column(self):
         agent_id = uuid4()
         ts = datetime(2026, 5, 19, 12, 0, tzinfo=UTC)
-        verified = datetime(2026, 5, 19, 12, 0, 5, tzinfo=UTC)
+        created = datetime(2026, 5, 19, 12, 0, 5, tzinfo=UTC)
         row = make_payment_row(
             block_hash="0xabc",
             extrinsic_index=7,
             agent_id=agent_id,
             miner_hotkey="5HK1",
+            miner_coldkey="5CK1",
             amount_rao=1_234_567_890,
             dest_address="5Dest",
             timestamp=ts,
-            verified_at=verified,
+            created_at=created,
         )
 
         payment = EvaluationPayment.from_row(row)
@@ -132,7 +131,8 @@ class TestEvaluationPaymentFromRow:
         assert payment.extrinsic_index == 7
         assert payment.agent_id == agent_id
         assert payment.miner_hotkey == "5HK1"
+        assert payment.miner_coldkey == "5CK1"
         assert payment.amount_rao == 1_234_567_890
         assert payment.dest_address == "5Dest"
         assert payment.timestamp == ts
-        assert payment.verified_at == verified
+        assert payment.created_at == created
