@@ -14,9 +14,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import StatementError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.db.models import Agent, AgentStatus, EvaluationPayment
 
@@ -203,6 +204,16 @@ class TestEvaluationPaymentConstraints:
         with pytest.raises(SAIntegrityError):
             await session.commit()
 
+    async def test_amount_rao_check_rejects_negative(self, session: AsyncSession):
+        """``CHECK (amount_rao > 0)`` covers negative values too."""
+        agent = make_agent()
+        session.add(agent)
+        await session.commit()
+
+        session.add(make_payment(agent, amount_rao=-1))
+        with pytest.raises(SAIntegrityError):
+            await session.commit()
+
     async def test_extrinsic_index_check_rejects_negative(self, session: AsyncSession):
         agent = make_agent()
         session.add(agent)
@@ -212,21 +223,88 @@ class TestEvaluationPaymentConstraints:
         with pytest.raises(SAIntegrityError):
             await session.commit()
 
+    async def test_on_delete_restrict_blocks_agent_deletion(
+        self, session: AsyncSession
+    ):
+        """Deleting an agent referenced by a payment must fail.
+
+        The composite FK on ``evaluation_payments(agent_id, miner_hotkey)``
+        uses ``ON DELETE RESTRICT`` so the payment audit trail is never
+        orphaned by an agent deletion.
+        """
+        agent = make_agent()
+        session.add(agent)
+        await session.commit()
+
+        session.add(make_payment(agent))
+        await session.commit()
+
+        await session.delete(agent)
+        with pytest.raises(SAIntegrityError):
+            await session.commit()
+
 
 class TestAgentConstraints:
     """Schema-level invariants on the agents table."""
 
-    async def test_agent_id_primary_key_blocks_duplicate(self, session: AsyncSession):
-        first = make_agent()
-        session.add(first)
-        await session.commit()
+    async def test_agent_id_primary_key_blocks_duplicate(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ):
+        """Two sessions, same agent_id - the second insert hits the DB PK.
 
-        duplicate = make_agent(
-            agent_id=first.agent_id,
-            miner_hotkey="5HK_DIFFERENT",
-        )
-        session.add(duplicate)
-        with pytest.raises(SAIntegrityError):
+        Using two sessions ensures the second insert is rejected by the
+        DB primary-key constraint rather than by SQLAlchemy's in-session
+        identity map, which would also flag the conflict but for a
+        different reason.
+        """
+        first = make_agent()
+        async with session_maker() as session1:
+            session1.add(first)
+            await session1.commit()
+
+        async with session_maker() as session2:
+            duplicate = make_agent(
+                agent_id=first.agent_id,
+                miner_hotkey="5HK_DIFFERENT",
+            )
+            session2.add(duplicate)
+            with pytest.raises(SAIntegrityError):
+                await session2.commit()
+
+
+class TestAgentStatusBoundary:
+    """The ``agentstatus`` ENUM column rejects values outside the type."""
+
+    async def test_python_enum_rejects_unknown_value(self):
+        """``AgentStatus`` parsing fails before the row reaches SQLAlchemy."""
+        with pytest.raises(ValueError):
+            AgentStatus("bogus")
+
+    async def test_db_rejects_unknown_status_value(self, session: AsyncSession):
+        """A raw INSERT with an unknown status value hits the DB-level guard.
+
+        ``Enum(create_constraint=True)`` emits a CHECK constraint when
+        the dialect (here SQLite) has no native ENUM type. Postgres uses
+        the native ``agentstatus`` ENUM, where the same out-of-range
+        value would be rejected at type-cast time.
+        """
+        agent_id = uuid4()
+        with pytest.raises((SAIntegrityError, StatementError)):
+            await session.execute(
+                text(
+                    "INSERT INTO agents "
+                    "(agent_id, miner_hotkey, name, sha256, status, created_at) "
+                    "VALUES (:agent_id, :hotkey, :name, :sha, :status, :ts)"
+                ),
+                {
+                    "agent_id": str(agent_id),
+                    "hotkey": "5HK1",
+                    "name": "alpha",
+                    "sha": "abc",
+                    "status": "bogus",
+                    "ts": datetime(2026, 5, 19, tzinfo=UTC),
+                },
+            )
             await session.commit()
 
 
