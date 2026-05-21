@@ -28,6 +28,18 @@ def create_db_engine(config: PostgresConfig | None = None) -> AsyncEngine:
     lazily; this call does not perform I/O. Caller owns disposal; call
     ``await engine.dispose()`` when the consuming service tears down.
 
+    Production guards applied to every engine:
+
+    * ``pool_pre_ping=True`` issues a tiny round-trip on checkout so
+      stale connections after a Postgres restart or a network blip are
+      detected and replaced before being handed to a query path.
+    * ``pool_recycle=3600`` recycles connections older than an hour to
+      defend against firewall / load-balancer idle timeouts that close
+      sockets without telling the client.
+    * ``command_timeout`` flows into asyncpg's per-query timeout via
+      ``connect_args`` (the asyncpg-native semantic), not into SA's
+      ``pool_timeout`` which is the unrelated pool-acquisition wait.
+
     Args:
         config: Optional override. Defaults to
             :func:`parse_postgres_config_from_env`.
@@ -50,7 +62,9 @@ def create_db_engine(config: PostgresConfig | None = None) -> AsyncEngine:
             config.async_dsn,
             pool_size=config.pool_min_size,
             max_overflow=max(config.pool_max_size - config.pool_min_size, 0),
-            pool_timeout=config.command_timeout,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            connect_args={"command_timeout": config.command_timeout},
         )
     except (SQLAlchemyError, OSError) as e:
         target = (

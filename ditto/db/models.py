@@ -25,6 +25,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    MetaData,
     PrimaryKeyConstraint,
     Text,
     UniqueConstraint,
@@ -34,13 +35,29 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TIMESTAMP
 
+# Predictable constraint names matter for alembic autogenerate: without
+# a convention, generated migrations carry random-looking SHA-suffixed
+# names that drift between developers. The convention below matches the
+# SQLAlchemy docs' suggested form.
+_NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
 
 class Base(DeclarativeBase):
     """Declarative base for every Ditto ORM model.
 
     Carries the shared metadata so alembic's ``env.py`` can pass it to
-    ``target_metadata`` for autogenerate workflows.
+    ``target_metadata`` for autogenerate workflows. The naming convention
+    on the metadata ensures autogenerate emits deterministic constraint
+    names rather than random-looking SHA suffixes.
     """
+
+    metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 
 
 class AgentStatus(StrEnum):
