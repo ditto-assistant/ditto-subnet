@@ -226,12 +226,7 @@ class TestEvaluationPaymentConstraints:
     async def test_on_delete_restrict_blocks_agent_deletion(
         self, session: AsyncSession
     ):
-        """Deleting an agent referenced by a payment must fail.
-
-        The composite FK on ``evaluation_payments(agent_id, miner_hotkey)``
-        uses ``ON DELETE RESTRICT`` so the payment audit trail is never
-        orphaned by an agent deletion.
-        """
+        """``ON DELETE RESTRICT`` on the composite FK keeps payments un-orphaned."""
         agent = make_agent()
         session.add(agent)
         await session.commit()
@@ -250,13 +245,7 @@ class TestAgentConstraints:
     async def test_agent_id_primary_key_blocks_duplicate(
         self, session_maker: async_sessionmaker[AsyncSession]
     ):
-        """Two sessions, same agent_id - the second insert hits the DB PK.
-
-        Using two sessions ensures the second insert is rejected by the
-        DB primary-key constraint rather than by SQLAlchemy's in-session
-        identity map, which would also flag the conflict but for a
-        different reason.
-        """
+        """Second insert in a fresh session hits the DB PK, not SA's identity map."""
         first = make_agent()
         async with session_maker() as session1:
             session1.add(first)
@@ -281,13 +270,7 @@ class TestAgentStatusBoundary:
             AgentStatus("bogus")
 
     async def test_db_rejects_unknown_status_value(self, session: AsyncSession):
-        """A raw INSERT with an unknown status value hits the DB-level guard.
-
-        ``Enum(create_constraint=True)`` emits a CHECK constraint when
-        the dialect (here SQLite) has no native ENUM type. Postgres uses
-        the native ``agentstatus`` ENUM, where the same out-of-range
-        value would be rejected at type-cast time.
-        """
+        """Raw INSERT with an unknown status value fires the DB-level guard."""
         agent_id = uuid4()
         with pytest.raises((SAIntegrityError, StatementError)):
             await session.execute(

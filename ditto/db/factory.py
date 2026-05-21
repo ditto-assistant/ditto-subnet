@@ -22,38 +22,13 @@ if TYPE_CHECKING:
 def create_db_engine(config: PostgresConfig | None = None) -> AsyncEngine:
     """Create an async SQLAlchemy engine over the asyncpg driver.
 
-    Wraps lower-level driver errors in the
-    :class:`DatabaseConnectionError` hierarchy so callers handle a single
-    well-defined exception type. The engine establishes connections
-    lazily; this call does not perform I/O. Caller owns disposal; call
-    ``await engine.dispose()`` when the consuming service tears down.
-
-    Production guards applied to every engine:
-
-    * ``pool_pre_ping=True`` issues a tiny round-trip on checkout so
-      stale connections after a Postgres restart or a network blip are
-      detected and replaced before being handed to a query path.
-    * ``pool_recycle=3600`` recycles connections older than an hour to
-      defend against firewall / load-balancer idle timeouts that close
-      sockets without telling the client.
-    * ``command_timeout`` flows into asyncpg's per-query timeout via
-      ``connect_args`` (the asyncpg-native semantic), not into SA's
-      ``pool_timeout`` which is the unrelated pool-acquisition wait.
-
-    Args:
-        config: Optional override. Defaults to
-            :func:`parse_postgres_config_from_env`.
+    Wraps lower-level driver errors in :class:`DatabaseConnectionError`.
+    Connections are opened lazily; this call does not perform I/O.
+    Caller owns disposal via ``await engine.dispose()``.
 
     Raises:
         DatabaseConnectionError: When DSN construction fails or a required
             ``POSTGRES_*`` env var is missing.
-
-    Example:
-        engine = create_db_engine()
-        session_maker = create_session_maker(engine)
-        async with session_maker() as session:
-            ...
-        await engine.dispose()
     """
     if config is None:
         config = parse_postgres_config_from_env()
@@ -64,6 +39,8 @@ def create_db_engine(config: PostgresConfig | None = None) -> AsyncEngine:
             max_overflow=max(config.pool_max_size - config.pool_min_size, 0),
             pool_pre_ping=True,
             pool_recycle=3600,
+            # command_timeout is asyncpg's per-query timeout. SA's pool_timeout
+            # is an unrelated pool-acquisition wait, so route via connect_args.
             connect_args={"command_timeout": config.command_timeout},
         )
     except (SQLAlchemyError, OSError) as e:
@@ -76,15 +53,7 @@ def create_db_engine(config: PostgresConfig | None = None) -> AsyncEngine:
 def create_session_maker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     """Create an :class:`async_sessionmaker` bound to ``engine``.
 
-    ``expire_on_commit=False`` because async sessions in request-scoped
-    services should not expire attributes after commit; the standard
-    workaround for the SQLAlchemy async footgun where a committed
-    instance becomes detached and re-access triggers a lazy load.
-
-    Args:
-        engine: The async engine to bind sessions to.
-
-    Returns:
-        Session factory used by callers as ``async with session_maker() as s:``.
+    ``expire_on_commit=False`` so attribute access on committed instances
+    does not trigger an unwanted lazy load (standard async-SA pattern).
     """
     return async_sessionmaker(engine, expire_on_commit=False)

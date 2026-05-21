@@ -1,11 +1,9 @@
 """Alembic migration environment.
 
-Reads ``POSTGRES_*`` env vars to build the connection URL at run time;
-nothing is baked into :file:`alembic.ini`. ``target_metadata`` is wired
-to :data:`ditto.db.Base.metadata` so ``alembic revision --autogenerate``
-can draft migrations from model diffs. Drafts are reviewed and edited
-per migration to catch autogenerate's known failure modes (column
-renames as DROP+ADD, partial-index handling, ENUM type changes).
+Connection URL is built at runtime from ``POSTGRES_*`` env vars;
+nothing is baked into :file:`alembic.ini`. ``target_metadata`` is
+wired to :data:`ditto.db.Base.metadata` so ``alembic revision
+--autogenerate`` works.
 """
 
 from __future__ import annotations

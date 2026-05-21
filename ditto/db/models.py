@@ -1,12 +1,8 @@
-"""SQLAlchemy 2.0 declarative ORM models for the Ditto data layer.
+"""SQLAlchemy 2.0 declarative models for the Ditto data layer.
 
-The alembic migrations in :file:`alembic/versions/` own the schema on
-disk; these declarative models describe the same schema in Python so
-SQLAlchemy can hydrate :class:`AsyncSession` queries into typed objects.
-Models and migrations must stay in sync; future migrations can use
-``alembic revision --autogenerate`` to draft from model diffs, with
-manual review per migration to catch autogenerate's known footguns
-(renames as DROP+ADD, partial-index handling, ENUM type changes).
+Alembic migrations under :file:`alembic/versions/` own the schema;
+these models describe it in Python so :class:`AsyncSession` queries
+hydrate into typed objects. Models and migrations must stay in sync.
 """
 
 from __future__ import annotations
@@ -35,10 +31,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TIMESTAMP
 
-# Predictable constraint names matter for alembic autogenerate: without
-# a convention, generated migrations carry random-looking SHA-suffixed
-# names that drift between developers. The convention below matches the
-# SQLAlchemy docs' suggested form.
+# Naming convention so alembic autogenerate produces deterministic constraint
+# names instead of random SHA suffixes.
 _NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
@@ -49,13 +43,7 @@ _NAMING_CONVENTION = {
 
 
 class Base(DeclarativeBase):
-    """Declarative base for every Ditto ORM model.
-
-    Carries the shared metadata so alembic's ``env.py`` can pass it to
-    ``target_metadata`` for autogenerate workflows. The naming convention
-    on the metadata ensures autogenerate emits deterministic constraint
-    names rather than random-looking SHA suffixes.
-    """
+    """Declarative base for every Ditto ORM model."""
 
     metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 

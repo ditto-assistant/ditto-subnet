@@ -1,17 +1,10 @@
 """Postgres data layer for the Ditto subnet.
 
-SQLAlchemy 2.0 async ORM over the asyncpg driver. The alembic migrations
-under :file:`alembic/versions/` own the schema on disk; declarative
-models in :mod:`ditto.db.models` describe the same schema in Python so
-SQLAlchemy can hydrate :class:`AsyncSession` queries into typed objects.
-
-Every platform-side module reads or writes through this package - the
-API server's endpoints, the payment verifier, the validator session
-manager, the scoring write-out, and the public retrieval endpoints all
-go through an :class:`AsyncSession` produced by the configured
-:class:`async_sessionmaker`. Putting all SQL behind a single boundary
-keeps "what queries does each feature run" greppable and means schema
-migrations are the only place column shapes are described.
+SQLAlchemy 2.0 async ORM over the asyncpg driver. Alembic migrations
+under :file:`alembic/versions/` own the schema; declarative models in
+:mod:`ditto.db.models` describe it in Python so :class:`AsyncSession`
+queries hydrate into typed objects. All platform-side SQL goes through
+this package.
 
 Usage:
     from ditto.db import (

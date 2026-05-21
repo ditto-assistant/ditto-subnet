@@ -1,14 +1,8 @@
 """Shared fixtures + builders for ditto.db tests.
 
-Unit tests use SQLite-in-memory via ``aiosqlite`` so the SQLAlchemy ORM
-is exercised against a real database engine rather than against mocks
-of the session API. SQLite handles every feature our schema needs
-(composite PK + FK, UNIQUE, CHECK, partial indexes); Postgres-specific
-quirks are covered by integration tests in a later layer.
-
-``PRAGMA foreign_keys=ON`` is enabled per connection because SQLite
-does not enforce foreign keys by default and the data layer relies on
-the composite FK on ``evaluation_payments``.
+Unit tests run against SQLite-in-memory via ``aiosqlite`` so the SA
+session API is exercised for real. Postgres-specific quirks are
+covered by integration tests in a later layer.
 """
 
 from __future__ import annotations
