@@ -4,43 +4,73 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import asyncpg
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from ditto.db.config import parse_postgres_config_from_env
 from ditto.db.errors import DatabaseConnectionError
-from ditto.db.pool import _create_pool
 
 if TYPE_CHECKING:
     from ditto.db.config import PostgresConfig
 
 
-async def create_db_pool(config: PostgresConfig | None = None) -> asyncpg.Pool:
-    """Open the asyncpg pool with sensible defaults.
+def create_db_engine(config: PostgresConfig | None = None) -> AsyncEngine:
+    """Create an async SQLAlchemy engine over the asyncpg driver.
 
-    Wraps asyncpg's lower-level connection errors in the
-    :class:`DatabaseConnectionError` hierarchy so callers can catch a
-    single, well-defined exception type. The caller owns shutdown; call
-    ``await pool.close()`` when the consuming service tears down.
+    Wraps lower-level driver errors in the
+    :class:`DatabaseConnectionError` hierarchy so callers handle a single
+    well-defined exception type. The engine establishes connections
+    lazily; this call does not perform I/O. Caller owns disposal; call
+    ``await engine.dispose()`` when the consuming service tears down.
 
     Args:
         config: Optional override. Defaults to
             :func:`parse_postgres_config_from_env`.
 
     Raises:
-        DatabaseConnectionError: When Postgres is unreachable, auth fails,
-            or a required ``POSTGRES_*`` env var is missing.
+        DatabaseConnectionError: When DSN construction fails or a required
+            ``POSTGRES_*`` env var is missing.
 
     Example:
-        pool = await create_db_pool()
-        async with DatabaseConnection(pool) as conn:
+        engine = create_db_engine()
+        session_maker = create_session_maker(engine)
+        async with session_maker() as session:
             ...
+        await engine.dispose()
     """
     if config is None:
         config = parse_postgres_config_from_env()
     try:
-        return await _create_pool(config)
-    except (asyncpg.PostgresError, asyncpg.InterfaceError, OSError) as e:
+        return create_async_engine(
+            config.async_dsn,
+            pool_size=config.pool_min_size,
+            max_overflow=max(config.pool_max_size - config.pool_min_size, 0),
+            pool_timeout=config.command_timeout,
+        )
+    except (SQLAlchemyError, OSError) as e:
         target = (
             f"postgresql://{config.user}@{config.host}:{config.port}/{config.database}"
         )
-        raise DatabaseConnectionError(f"failed to open pool to {target}: {e}") from e
+        raise DatabaseConnectionError(f"failed to open engine to {target}: {e}") from e
+
+
+def create_session_maker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """Create an :class:`async_sessionmaker` bound to ``engine``.
+
+    ``expire_on_commit=False`` because async sessions in request-scoped
+    services should not expire attributes after commit; the standard
+    workaround for the SQLAlchemy async footgun where a committed
+    instance becomes detached and re-access triggers a lazy load.
+
+    Args:
+        engine: The async engine to bind sessions to.
+
+    Returns:
+        Session factory used by callers as ``async with session_maker() as s:``.
+    """
+    return async_sessionmaker(engine, expire_on_commit=False)

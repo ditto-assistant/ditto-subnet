@@ -28,7 +28,7 @@ def _clear_postgres_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestPostgresConfigDsn:
-    """Tests for :attr:`PostgresConfig.dsn`."""
+    """Tests for :attr:`PostgresConfig.dsn` and :attr:`PostgresConfig.async_dsn`."""
 
     def test_dsn_includes_every_field(self):
         config = PostgresConfig(
@@ -39,6 +39,18 @@ class TestPostgresConfigDsn:
             database="ditto_prod",
         )
         assert config.dsn == "postgresql://ditto:hunter2@db.internal:6543/ditto_prod"
+
+    def test_async_dsn_uses_asyncpg_driver(self):
+        config = PostgresConfig(
+            host="db.internal",
+            port=6543,
+            user="ditto",
+            password="hunter2",
+            database="ditto_prod",
+        )
+        assert config.async_dsn == (
+            "postgresql+asyncpg://ditto:hunter2@db.internal:6543/ditto_prod"
+        )
 
 
 class TestPostgresConfigRepr:

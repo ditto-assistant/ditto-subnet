@@ -1,11 +1,11 @@
 """Alembic migration environment.
 
 Reads ``POSTGRES_*`` env vars to build the connection URL at run time;
-nothing is baked into :file:`alembic.ini`. ``target_metadata`` is
-``None`` by design: this project does not use a SQLAlchemy ORM, so
-``--autogenerate`` is intentionally unavailable and every migration is
-written by hand. SQLAlchemy is only pulled in transitively by alembic
-for the engine + connection scaffolding around our raw SQL.
+nothing is baked into :file:`alembic.ini`. ``target_metadata`` is wired
+to :data:`ditto.db.Base.metadata` so ``alembic revision --autogenerate``
+can draft migrations from model diffs. Drafts are reviewed and edited
+per migration to catch autogenerate's known failure modes (column
+renames as DROP+ADD, partial-index handling, ENUM type changes).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
+from ditto.db import Base
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
@@ -29,9 +30,7 @@ if context.config.config_file_name is not None:
     fileConfig(context.config.config_file_name)
 
 
-# No ORM => no metadata to diff against => --autogenerate is intentionally
-# unavailable. All migrations are hand-written.
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def _db_url() -> str:

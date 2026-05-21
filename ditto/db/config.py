@@ -50,6 +50,14 @@ class PostgresConfig:
             f"@{self.host}:{self.port}/{self.database}"
         )
 
+    @property
+    def async_dsn(self) -> str:
+        """SQLAlchemy async DSN selecting the asyncpg driver."""
+        return (
+            f"postgresql+asyncpg://{self.user}:{self.password}"
+            f"@{self.host}:{self.port}/{self.database}"
+        )
+
 
 def parse_postgres_config_from_env() -> PostgresConfig:
     """Build a :class:`PostgresConfig` from ``POSTGRES_*`` env vars.
