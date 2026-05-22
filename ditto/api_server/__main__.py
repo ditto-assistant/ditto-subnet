@@ -20,6 +20,7 @@ import uvicorn
 
 from ditto.api_server.config import (
     ApiServerConfig,
+    check_config,
     parse_api_server_config_from_env,
 )
 from ditto.api_server.errors import ApiServerConfigError
@@ -86,6 +87,50 @@ def _config_from_args(ns: argparse.Namespace) -> ApiServerConfig:
     )
 
 
+def _redact(value: str | None, keep: int = 4) -> str:
+    """Mask all but the last ``keep`` chars of a sensitive string."""
+    if not value:
+        return "<unset>"
+    if len(value) <= keep:
+        return "***"
+    return f"***{value[-keep:]}"
+
+
+def _config_to_log_dict(config: ApiServerConfig) -> dict[str, object]:
+    """Build a redacted, JSON-safe view of the resolved config for boot logging.
+
+    Passwords + bearer tokens are masked. Everything else is logged in
+    full so operators can confirm host / port / db / netuid wiring at a
+    glance without leaking secrets into log shippers.
+    """
+    return {
+        "api": {
+            "host": config.host,
+            "port": config.port,
+            "log_level": config.log_level,
+            "commit": config.commit_hash,
+        },
+        "postgres": {
+            "host": config.postgres.host,
+            "port": config.postgres.port,
+            "user": config.postgres.user,
+            "password": _redact(config.postgres.password),
+            "database": config.postgres.database,
+            "pool_min_size": config.postgres.pool_min_size,
+            "pool_max_size": config.postgres.pool_max_size,
+            "command_timeout": config.postgres.command_timeout,
+        },
+        "chain": {
+            "pylon_url": config.chain.pylon_url,
+            "netuid": config.chain.netuid,
+            "subtensor_network": config.chain.subtensor_network,
+            "open_access_token": _redact(config.chain.open_access_token),
+            "identity_name": config.chain.identity_name or "<unset>",
+            "identity_token": _redact(config.chain.identity_token),
+        },
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ditto.api_server")
     add_args(parser)
@@ -93,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = _config_from_args(ns)
+        check_config(config)
     except ApiServerConfigError as e:
         # Logging is not configured yet; print to stderr so the supervisor
         # sees the cause.
@@ -100,10 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     logging.config.dictConfig(build_dict_config(config.log_level))
-    logger.info(
-        f"api server starting: host={config.host} port={config.port} "
-        f"log_level={config.log_level} commit={config.commit_hash}"
-    )
+    logger.info(f"api server starting: {_config_to_log_dict(config)}")
 
     try:
         uvicorn.run(
