@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test smoke-pylon stack-up stack-down migrate migrate-down migrate-history migrate-current
+.PHONY: lint format typecheck test smoke-pylon smoke-api stack-up stack-down migrate migrate-down migrate-history migrate-current api-up
 
 lint:
 	uv run ruff format --check .
@@ -16,6 +16,12 @@ test:
 
 smoke-pylon:
 	set -a && . ./.env && set +a && uv run python scripts/smoke_pylon.py
+
+api-up:
+	set -a && . ./.env && set +a && uv run python -m ditto.api_server
+
+smoke-api:
+	curl -sf http://localhost:8000/health > /dev/null && echo "api ok"
 
 stack-up:
 	docker compose up -d --wait
