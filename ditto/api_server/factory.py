@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
@@ -29,9 +28,6 @@ from ditto.api_server.middleware import (
 )
 from ditto.chain import create_chain_client
 from ditto.db import create_db_engine, create_session_maker
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
