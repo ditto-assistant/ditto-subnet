@@ -22,8 +22,10 @@ services:
     environment:
       PYLON_OPEN_ACCESS_TOKEN: ${PYLON_OPEN_ACCESS_TOKEN:-dev-open-access}
       PYLON_RECENT_OBJECTS_NETUIDS: "[118]"
+    # Host port 8001 is reserved for Pylon; 8000 is the API server's slot.
+    # The container still listens on 8000 internally.
     ports:
-      - "8000:8000"
+      - "8001:8000"
     healthcheck:
       test:
         - CMD-SHELL
