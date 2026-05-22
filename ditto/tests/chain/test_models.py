@@ -13,7 +13,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ditto.chain.models import BlockInfo, ChainConfig, ExtrinsicInfo, NeuronInfo
+from ditto.chain.models import (
+    BlockInfo,
+    ChainConfig,
+    ExtrinsicInfo,
+    NeuronInfo,
+    parse_chain_config_from_env,
+)
 
 
 def make_pylon_arg(name: str, value: Any) -> MagicMock:
@@ -292,3 +298,72 @@ class TestBlockInfoFromPylon:
         assert block.number == 5
         assert block.hash == "0xabc"
         assert block.timestamp == 0
+
+
+# --- parse_chain_config_from_env ---
+
+
+class TestParseChainConfigFromEnv:
+    """Tests for the env-var builder, including default fall-through."""
+
+    def test_open_access_only_is_parsed(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("PYLON_URL", "http://pylon:9999")
+        monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "open-tok")
+        monkeypatch.setenv("NETUID", "118")
+        monkeypatch.delenv("PYLON_IDENTITY_NAME", raising=False)
+        monkeypatch.delenv("PYLON_IDENTITY_TOKEN", raising=False)
+
+        config = parse_chain_config_from_env()
+
+        assert config.pylon_url == "http://pylon:9999"
+        assert config.netuid == 118
+        assert config.open_access_token == "open-tok"
+        assert config.identity_name is None
+        assert config.identity_token is None
+
+    def test_identity_pair_is_parsed(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("PYLON_OPEN_ACCESS_TOKEN", raising=False)
+        monkeypatch.setenv("PYLON_IDENTITY_NAME", "validator")
+        monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "id-tok")
+
+        config = parse_chain_config_from_env()
+
+        assert config.identity_name == "validator"
+        assert config.identity_token == "id-tok"
+
+    def test_empty_string_tokens_become_none(self, monkeypatch: pytest.MonkeyPatch):
+        """An empty ``.env`` value would otherwise pass ``__post_init__``'s
+        truthiness check and look like a configured token to ``ChainClient``."""
+        monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "real-tok")
+        monkeypatch.setenv("PYLON_IDENTITY_NAME", "")
+        monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "")
+
+        config = parse_chain_config_from_env()
+
+        assert config.identity_name is None
+        assert config.identity_token is None
+
+    def test_defaults_apply_when_optional_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok")
+        monkeypatch.delenv("PYLON_URL", raising=False)
+        monkeypatch.delenv("NETUID", raising=False)
+        monkeypatch.delenv("SUBTENSOR_NETWORK", raising=False)
+
+        config = parse_chain_config_from_env()
+
+        # Default Pylon URL aligns with the post-shift compose layout.
+        assert config.pylon_url == "http://localhost:8001"
+        assert config.netuid == 118
+        assert config.subtensor_network == "finney"
+
+    def test_no_auth_configured_raises(self, monkeypatch: pytest.MonkeyPatch):
+        """``ChainConfig.__post_init__`` surfaces a ``ValueError`` that the
+        env builder must not swallow."""
+        monkeypatch.delenv("PYLON_OPEN_ACCESS_TOKEN", raising=False)
+        monkeypatch.delenv("PYLON_IDENTITY_NAME", raising=False)
+        monkeypatch.delenv("PYLON_IDENTITY_TOKEN", raising=False)
+
+        with pytest.raises(ValueError, match="open_access_token or"):
+            parse_chain_config_from_env()

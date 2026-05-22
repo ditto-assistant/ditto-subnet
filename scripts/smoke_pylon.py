@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import sys
 
-from ditto.chain import ChainConfig, ChainError, create_chain_client
+from ditto.chain import ChainError, create_chain_client, parse_chain_config_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +26,10 @@ def _setup_logging() -> None:
     )
 
 
-def _config_from_env() -> ChainConfig:
-    return ChainConfig(
-        pylon_url=os.environ.get("PYLON_URL", "http://localhost:8000"),
-        netuid=int(os.environ.get("NETUID", "118")),
-        open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
-        identity_name=os.environ.get("PYLON_IDENTITY_NAME") or None,
-        identity_token=os.environ.get("PYLON_IDENTITY_TOKEN") or None,
-        subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
-    )
-
-
 async def main() -> int:
     _setup_logging()
 
-    config = _config_from_env()
+    config = parse_chain_config_from_env()
     logger.info(f"connecting to Pylon at {config.pylon_url} for netuid={config.netuid}")
 
     try:

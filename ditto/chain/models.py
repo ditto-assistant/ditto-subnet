@@ -1,7 +1,15 @@
-"""Frozen dataclass models for the chain access layer."""
+"""Frozen dataclass models for the chain access layer.
+
+Also hosts :func:`parse_chain_config_from_env`, the env-var builder for
+:class:`ChainConfig`. The chain subpackage does not yet have a dedicated
+``config.py`` (a deferred consistency refactor to mirror :mod:`ditto.db`);
+keeping the parser next to the dataclass it builds is the lightweight
+intermediate step.
+"""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -74,6 +82,31 @@ class ChainConfig:
                 "ChainConfig requires either open_access_token or "
                 "(identity_name + identity_token); none provided"
             )
+
+
+def parse_chain_config_from_env() -> ChainConfig:
+    """Build a :class:`ChainConfig` from the ``PYLON_*`` / ``NETUID`` /
+    ``SUBTENSOR_NETWORK`` environment variables.
+
+    Defaults match the local docker-compose stack: Pylon on
+    ``http://localhost:8001`` (post the API-server port shift), subnet
+    netuid 118, finney mainnet for the substrate-interface event reader.
+    Empty token strings are normalised to ``None`` so a partially-filled
+    ``.env`` does not mask required-auth detection.
+
+    Raises:
+        ValueError: When neither ``PYLON_OPEN_ACCESS_TOKEN`` nor a paired
+            (``PYLON_IDENTITY_NAME``, ``PYLON_IDENTITY_TOKEN``) is set.
+            Surfaces from :meth:`ChainConfig.__post_init__`.
+    """
+    return ChainConfig(
+        pylon_url=os.environ.get("PYLON_URL", "http://localhost:8001"),
+        netuid=int(os.environ.get("NETUID", "118")),
+        open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
+        identity_name=os.environ.get("PYLON_IDENTITY_NAME") or None,
+        identity_token=os.environ.get("PYLON_IDENTITY_TOKEN") or None,
+        subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
+    )
 
 
 @dataclass(frozen=True)
