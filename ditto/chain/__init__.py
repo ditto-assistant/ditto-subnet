@@ -47,6 +47,7 @@ from ditto.chain.models import (
     ChainConfig,
     ExtrinsicInfo,
     NeuronInfo,
+    parse_chain_config_from_env,
 )
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "ChainClient",
     # Configuration
     "ChainConfig",
+    "parse_chain_config_from_env",
     # Result models
     "BlockInfo",
     "ExtrinsicInfo",
