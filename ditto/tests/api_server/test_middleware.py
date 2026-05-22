@@ -106,6 +106,38 @@ class TestRequestIDMiddleware:
         finally:
             request_id_var.reset(token)
 
+    async def test_contextvar_reset_when_call_next_raises(self):
+        """``finally`` must reset the contextvar even when the inner
+        ASGI app raises. Tested directly against the middleware (not via
+        httpx) so we observe the contextvar in the same task that ran
+        the dispatch."""
+        from unittest.mock import MagicMock
+
+        from ditto.api_server.middleware.request_id import RequestIDMiddleware
+
+        # Ensure a clean baseline value before we start.
+        token = request_id_var.set("-")
+        try:
+            middleware = RequestIDMiddleware(app=MagicMock())
+            request = MagicMock()
+            request.headers = {}
+            request.method = "GET"
+            request.url.path = "/boom"
+            request.state = MagicMock()
+
+            async def _raises(_req):
+                # Confirm the contextvar IS set during the inner call.
+                assert request_id_var.get() != "-"
+                raise RuntimeError("inner boom")
+
+            with pytest.raises(RuntimeError, match="inner boom"):
+                await middleware.dispatch(request, _raises)
+
+            # finally block must have reset the contextvar.
+            assert request_id_var.get() == "-"
+        finally:
+            request_id_var.reset(token)
+
 
 class TestErrorEnvelope:
     """Each FastAPI exception handler returns the documented envelope."""
