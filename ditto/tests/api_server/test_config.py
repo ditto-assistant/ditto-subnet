@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
-from ditto.api_server.config import parse_api_server_config_from_env
+from ditto.api_server.config import check_config, parse_api_server_config_from_env
 from ditto.api_server.errors import ApiServerConfigError
+from ditto.tests.api_server.conftest import make_api_server_config
 
 
 def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,22 +58,31 @@ class TestParseApiServerConfigFromEnv:
         assert config.chain.open_access_token == "tok-xyz"
 
     def test_non_integer_port_raises(self, monkeypatch: pytest.MonkeyPatch):
+        """Parse-time failure: the value is not coercible to int."""
         _set_minimum_env(monkeypatch)
         monkeypatch.setenv("API_PORT", "not-a-port")
 
         with pytest.raises(ApiServerConfigError, match="API_PORT"):
             parse_api_server_config_from_env(commit_hash="abc")
 
-    def test_port_out_of_range_raises(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("API_PORT", "0")
 
-        with pytest.raises(ApiServerConfigError, match="out of range"):
-            parse_api_server_config_from_env(commit_hash="abc")
+class TestCheckConfig:
+    """Validation gates that the dataclass type system cannot enforce."""
 
-    def test_unknown_log_level_raises(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("API_LOG_LEVEL", "loud")
+    def test_valid_config_passes(self):
+        check_config(make_api_server_config())
 
-        with pytest.raises(ApiServerConfigError, match="API_LOG_LEVEL"):
-            parse_api_server_config_from_env(commit_hash="abc")
+    def test_port_out_of_range_raises(self):
+        config = replace(make_api_server_config(), port=0)
+        with pytest.raises(ApiServerConfigError, match="port out of range"):
+            check_config(config)
+
+    def test_port_above_max_raises(self):
+        config = replace(make_api_server_config(), port=70000)
+        with pytest.raises(ApiServerConfigError, match="port out of range"):
+            check_config(config)
+
+    def test_unknown_log_level_raises(self):
+        config = replace(make_api_server_config(), log_level="loud")
+        with pytest.raises(ApiServerConfigError, match="log_level"):
+            check_config(config)
