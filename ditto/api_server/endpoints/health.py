@@ -56,9 +56,7 @@ async def health(
         logger.warning("health probe: chain unreachable", exc_info=True)
         chain_status = "down"
 
-    overall: DepStatus = (
-        "ok" if db_status == "ok" and chain_status == "ok" else "down"
-    )
+    overall: DepStatus = "ok" if db_status == "ok" and chain_status == "ok" else "down"
     if overall != "ok":
         response.status_code = 503
 
