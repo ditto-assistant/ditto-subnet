@@ -58,14 +58,20 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     """Build an :class:`ApiServerConfig` from the ``API_*`` env vars plus
     the postgres + chain sub-config parsers.
 
+    Pure construction: this function does NOT validate range / set
+    membership. Call :func:`check_config` after parsing to surface
+    impossible combinations (port out of range, unknown log level).
+    Splitting the two matches the standards-doc pattern where
+    ``check_config`` is a separate gate.
+
     Args:
         commit_hash: Pre-resolved git revision. Passed in instead of read
             from env because ``git rev-parse`` is the source of truth and
             happens once at process start, not on every config rebuild.
 
     Raises:
-        ApiServerConfigError: When ``API_PORT`` is not a positive integer
-            or ``API_LOG_LEVEL`` is not a recognised stdlib level. Errors
+        ApiServerConfigError: When ``API_PORT`` is not parseable as an
+            integer (a parse-time failure, not a range check). Errors
             from the sub-config parsers (``DatabaseConnectionError``,
             ``ValueError`` from ``ChainConfig.__post_init__``) propagate
             untouched so callers see the original cause.
@@ -80,13 +86,6 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         raise ApiServerConfigError(
             f"API_PORT must be an integer, got {raw_port!r}"
         ) from e
-    if not 1 <= port <= 65535:
-        raise ApiServerConfigError(f"API_PORT out of range: {port}")
-    if log_level not in _VALID_LOG_LEVELS:
-        raise ApiServerConfigError(
-            f"API_LOG_LEVEL must be one of {sorted(_VALID_LOG_LEVELS)}; "
-            f"got {log_level!r}"
-        )
 
     return ApiServerConfig(
         host=host,
@@ -96,3 +95,24 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         postgres=parse_postgres_config_from_env(),
         chain=parse_chain_config_from_env(),
     )
+
+
+def check_config(config: ApiServerConfig) -> None:
+    """Validate a resolved :class:`ApiServerConfig`.
+
+    Catches combinations the dataclass type system cannot:
+    out-of-range ports and unrecognised log levels. Called by
+    :mod:`ditto.api_server.__main__` after parsing + argparse overlay
+    so CLI overrides are validated alongside env-resolved values.
+
+    Raises:
+        ApiServerConfigError: When ``port`` falls outside ``1..65535``
+            or ``log_level`` is not a stdlib level name.
+    """
+    if not 1 <= config.port <= 65535:
+        raise ApiServerConfigError(f"port out of range: {config.port}")
+    if config.log_level not in _VALID_LOG_LEVELS:
+        raise ApiServerConfigError(
+            f"log_level must be one of {sorted(_VALID_LOG_LEVELS)}; "
+            f"got {config.log_level!r}"
+        )
