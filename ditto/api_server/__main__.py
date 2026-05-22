@@ -1,0 +1,125 @@
+"""Process entry point for the API server.
+
+Resolves config (argparse + env), configures stdlib logging, builds the
+FastAPI app via :func:`create_api_server`, and hands it to uvicorn.
+Uncaught startup failures land in the crash path, log a traceback, and
+exit non-zero so process supervisors restart cleanly.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import logging.config
+import os
+import subprocess
+import sys
+from dataclasses import replace
+
+import uvicorn
+
+from ditto.api_server.config import (
+    ApiServerConfig,
+    parse_api_server_config_from_env,
+)
+from ditto.api_server.errors import ApiServerConfigError
+from ditto.api_server.factory import create_api_server
+from ditto.api_server.logging_config import build_dict_config
+
+logger = logging.getLogger(__name__)
+
+
+def add_args(parser: argparse.ArgumentParser) -> None:
+    """Register API-level CLI flags. Sub-configs come from env."""
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=os.environ.get("API_HOST", "0.0.0.0"),
+        help="Interface to bind. Defaults to 0.0.0.0 / $API_HOST.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("API_PORT", "8000")),
+        help="TCP port. Defaults to 8000 / $API_PORT.",
+    )
+    parser.add_argument(
+        "--log-level",
+        dest="log_level",
+        type=str,
+        default=os.environ.get("API_LOG_LEVEL", "INFO"),
+        help="Root logger level. Defaults to INFO / $API_LOG_LEVEL.",
+    )
+
+
+def _resolve_commit_hash() -> str:
+    """Return the git revision the process was built from.
+
+    Falls back to ``"unknown"`` on any failure (subprocess error, non-zero
+    exit, missing git binary, no ``.git`` directory). The fallback lets
+    deploy images without git history boot cleanly.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "unknown"
+    if result.returncode != 0:
+        return "unknown"
+    return result.stdout.strip() or "unknown"
+
+
+def _config_from_args(ns: argparse.Namespace) -> ApiServerConfig:
+    """Resolve env-driven sub-configs, then overlay argparse top-level values."""
+    commit = _resolve_commit_hash()
+    base = parse_api_server_config_from_env(commit_hash=commit)
+    return replace(
+        base,
+        host=ns.host,
+        port=ns.port,
+        log_level=ns.log_level.upper(),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="ditto.api_server")
+    add_args(parser)
+    ns = parser.parse_args(argv)
+
+    try:
+        config = _config_from_args(ns)
+    except ApiServerConfigError as e:
+        # Logging is not configured yet; print to stderr so the supervisor
+        # sees the cause.
+        print(f"api server config error: {e}", file=sys.stderr)
+        return 2
+
+    logging.config.dictConfig(build_dict_config(config.log_level))
+    logger.info(
+        f"api server starting: host={config.host} port={config.port} "
+        f"log_level={config.log_level} commit={config.commit_hash}"
+    )
+
+    try:
+        uvicorn.run(
+            create_api_server(config),
+            host=config.host,
+            port=config.port,
+            log_config=None,
+            server_header=False,
+            date_header=False,
+            timeout_graceful_shutdown=30,
+        )
+    except Exception:
+        logger.exception("api server crashed")
+        os._exit(1)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
