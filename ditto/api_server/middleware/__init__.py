@@ -1,16 +1,4 @@
-"""Starlette middleware + FastAPI exception handlers for the API server.
-
-Three files matching the roadmap-locked roster:
-
-- :mod:`request_id` - request-id contextvar, filter, and ASGI middleware
-- :mod:`error_envelope` - three FastAPI exception handlers returning a
-  uniform JSON shape
-- :mod:`auth_pass_through` - no-op stub whose body fills in when the
-  first authenticated endpoint lands
-
-Order in :func:`ditto.api_server.factory.create_api_server` is locked
-here so the future auth swap is a one-line body change.
-"""
+"""Starlette middleware + FastAPI exception handlers."""
 
 from __future__ import annotations
 

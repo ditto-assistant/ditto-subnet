@@ -17,17 +17,17 @@ make test            # unit tests
 
 `make stack-down` stops the services. Postgres state persists in a named docker volume across restarts; `docker compose down -v` for a hard reset.
 
-The API server is run locally (not in compose) at MVP for fast iteration. Pylon shifts to host port 8001 so the API can own 8000.
+The API server runs locally (not in compose) for fast iteration. Pylon shifts to host port 8001 so the API can own 8000.
 
 ## Make targets
 
-- `make lint` — `ruff format --check` + `ruff check`
-- `make format` — `ruff format` + `ruff check --fix`
-- `make typecheck` — `mypy ditto/`
-- `make test` — `pytest`
-- `make api-up` — run `python -m ditto.api_server` against the local stack
-- `make smoke-api` — curl `/health` to confirm the API is reachable
-- `make smoke-pylon` — exercise the chain client against the live Pylon
-- `make stack-up` / `make stack-down` — bring docker-compose services up / down
-- `make migrate` / `make migrate-down` — apply / roll back one alembic revision
-- `make migrate-history` / `make migrate-current` — alembic history + current head
+- `make lint` - `ruff format --check` + `ruff check`
+- `make format` - `ruff format` + `ruff check --fix`
+- `make typecheck` - `mypy ditto/`
+- `make test` - `pytest`
+- `make api-up` - run `python -m ditto.api_server` against the local stack
+- `make smoke-api` - curl `/health` to confirm the API is reachable
+- `make smoke-pylon` - exercise the chain client against the live Pylon
+- `make stack-up` / `make stack-down` - bring docker-compose services up / down
+- `make migrate` / `make migrate-down` - apply / roll back one alembic revision
+- `make migrate-history` / `make migrate-current` - alembic history + current head
