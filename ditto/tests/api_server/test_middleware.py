@@ -87,6 +87,29 @@ class TestRequestIDMiddleware:
         finally:
             caplog_handler.removeFilter(handler_filter)
 
+    async def test_malicious_request_id_is_rejected(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """Inbound X-Request-ID values with control chars or excessive
+        length must be replaced with a fresh UUID."""
+        override_get_session(app)
+        override_get_chain_client(app)
+
+        # Newline injection attempt - would forge log lines if accepted.
+        response = await client.get(
+            "/health", headers={REQUEST_ID_HEADER: "abc\n[FAKE LOG]"}
+        )
+        echoed = response.headers[REQUEST_ID_HEADER]
+        assert echoed != "abc\n[FAKE LOG]"
+        # UUID4 hex is exactly 32 chars; the fallback should have produced one.
+        assert len(echoed) == 32
+
+        # Cardinality blow-up: 200-char id rejected.
+        long_id = "x" * 200
+        response = await client.get("/health", headers={REQUEST_ID_HEADER: long_id})
+        assert response.headers[REQUEST_ID_HEADER] != long_id
+        assert len(response.headers[REQUEST_ID_HEADER]) == 32
+
     def test_filter_uses_contextvar_default_outside_request(self):
         """Records logged outside a request scope still format cleanly."""
         # Reset to the default by clearing any leaked value from prior tests.

@@ -60,11 +60,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _validation_error_handler(
         _request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        # TODO(security): exc.errors() can echo raw user input in the
-        # body. Acceptable while the API has no HTML consumers; revisit
-        # before the public dashboard lands.
+        # Full validation details land in server logs; the public body
+        # stays generic so user-supplied input never echoes back.
+        logger.warning(f"request validation failed: {exc.errors()}")
         return _envelope_response(
-            422, ERROR_CODE_VALIDATION, f"request validation failed: {exc.errors()}"
+            422, ERROR_CODE_VALIDATION, "request validation failed"
         )
 
     @app.exception_handler(Exception)

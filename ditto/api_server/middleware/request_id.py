@@ -9,6 +9,7 @@ current value onto every log record so ``%(request_id)s`` resolves.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
@@ -23,6 +24,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 REQUEST_ID_HEADER = "X-Request-ID"
+
+# Accept only alphanumerics + `_-.` up to 64 chars on inbound headers so
+# log lines cannot be forged (newline injection) and cardinality cannot
+# be blown up by attackers crafting huge unique values.
+_SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
@@ -46,7 +52,8 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        rid = request.headers.get(REQUEST_ID_HEADER) or uuid4().hex
+        incoming = request.headers.get(REQUEST_ID_HEADER, "")
+        rid = incoming if _SAFE_REQUEST_ID.fullmatch(incoming) else uuid4().hex
         token = request_id_var.set(rid)
         request.state.request_id = rid
         start = time.perf_counter()
