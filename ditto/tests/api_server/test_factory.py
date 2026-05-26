@@ -29,11 +29,18 @@ class TestCreateApiServer:
         assert app.state.config is config
         assert app.state.commit_hash == "test-commit"
 
-    def test_middleware_stack_registered(self):
+    def test_middleware_order_request_id_outermost(self):
+        """Starlette inserts each middleware at position 0, so the LAST
+        ``add_middleware`` call ends up outermost. RequestIDMiddleware
+        must be outermost or future auth that short-circuits with 401
+        before ``call_next`` would skip request-id setup entirely."""
         app = create_api_server(make_api_server_config())
-        classes = {m.cls for m in app.user_middleware}
-        assert RequestIDMiddleware in classes
+        classes = [m.cls for m in app.user_middleware]
+        assert classes[0] is RequestIDMiddleware
         assert AuthPassThroughMiddleware in classes
+        assert classes.index(RequestIDMiddleware) < classes.index(
+            AuthPassThroughMiddleware
+        )
 
     def test_redoc_disabled(self):
         app = create_api_server(make_api_server_config())

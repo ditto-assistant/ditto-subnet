@@ -1,9 +1,4 @@
-"""``GET /health`` - DB + chain reachability probe.
-
-Returns HTTP 200 with per-dependency status when everything is reachable,
-HTTP 503 with the same body shape when any dependency is down. Excluded
-from the OpenAPI schema since it is ops infra rather than consumer API.
-"""
+"""``GET /health`` - DB + chain reachability probe."""
 
 from __future__ import annotations
 
@@ -46,14 +41,16 @@ async def health(
 
     try:
         await session.execute(text("SELECT 1"))
-    except SQLAlchemyError:
-        logger.warning("health probe: db unreachable", exc_info=True)
+    except SQLAlchemyError as e:
+        # Plain string, no exc_info: Prometheus scrape rate would flood
+        # logs with full tracebacks if a dep flickers.
+        logger.warning(f"health probe: db unreachable: {e}")
         db_status = "down"
 
     try:
         await chain.get_latest_block()
-    except ChainError:
-        logger.warning("health probe: chain unreachable", exc_info=True)
+    except ChainError as e:
+        logger.warning(f"health probe: chain unreachable: {e}")
         chain_status = "down"
 
     overall: DepStatus = "ok" if db_status == "ok" and chain_status == "ok" else "down"

@@ -1,26 +1,4 @@
-"""Uniform JSON error envelope for every uncaught exception.
-
-Implemented as FastAPI exception handlers rather than middleware: handlers
-run before response bytes flush, so they can transform an in-flight error
-without needing to wrap the ASGI send channel. The catch-all chain is:
-
-1. :class:`starlette.exceptions.HTTPException` - preserves the original
-   status code, wraps the detail in the envelope.
-2. :class:`fastapi.exceptions.RequestValidationError` - 422 in the same
-   envelope (FastAPI's default uses a different shape).
-3. :class:`Exception` - 500 catch-all with a 3000-range platform error code.
-
-Envelope shape:
-
-.. code-block:: json
-
-    {"error_code": 3000, "message": "...", "request_id": "..."}
-
-The ``error_code`` ranges (1xxx agent / 2xxx validator / 3xxx platform)
-are documented in the review checklist. This module only registers the
-3xxx ``UNHANDLED`` and ``VALIDATION`` codes; per-endpoint codes land
-with their endpoint PRs.
-"""
+"""Uniform JSON error envelope for uncaught exceptions."""
 
 from __future__ import annotations
 
@@ -33,18 +11,20 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
-from ditto.api_server.middleware.request_id import request_id_var
+from ditto.api_server.middleware.request_id import (
+    REQUEST_ID_HEADER,
+    request_id_var,
+)
 
 logger = logging.getLogger(__name__)
 
-# Platform error codes (3xxx range).
+# Platform error codes (3xxx range per CODE-REVIEW-CHECKLIST).
 ERROR_CODE_UNHANDLED = 3000
 ERROR_CODE_VALIDATION = 3001
 ERROR_CODE_HTTP_EXCEPTION = 3002
 
 
 def _envelope(error_code: int, message: str) -> dict[str, Any]:
-    """Build the canonical error JSON body."""
     return {
         "error_code": error_code,
         "message": message,
@@ -52,34 +32,39 @@ def _envelope(error_code: int, message: str) -> dict[str, Any]:
     }
 
 
-def register_exception_handlers(app: FastAPI) -> None:
-    """Attach the three uniform-envelope handlers to ``app``.
+def _envelope_response(status_code: int, error_code: int, message: str) -> JSONResponse:
+    """Build the canonical JSON response with the request id echoed on a header.
 
-    Called from :func:`ditto.api_server.factory.create_api_server` after
-    middleware is registered. Idempotent: re-registering the same handler
-    type replaces the previous registration.
+    Header is set here as backup so error responses still carry the id
+    even on code paths where ``RequestIDMiddleware`` cannot set it.
     """
+    rid = request_id_var.get()
+    return JSONResponse(
+        status_code=status_code,
+        content=_envelope(error_code, message),
+        headers={REQUEST_ID_HEADER: rid},
+    )
+
+
+def register_exception_handlers(app: FastAPI) -> None:
+    """Attach the three envelope handlers to ``app``."""
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception_handler(
         _request: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
         message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-        return JSONResponse(
-            status_code=exc.status_code,
-            content=_envelope(ERROR_CODE_HTTP_EXCEPTION, message),
-        )
+        return _envelope_response(exc.status_code, ERROR_CODE_HTTP_EXCEPTION, message)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error_handler(
         _request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        return JSONResponse(
-            status_code=422,
-            content=_envelope(
-                ERROR_CODE_VALIDATION,
-                f"request validation failed: {exc.errors()}",
-            ),
+        # TODO(security): exc.errors() can echo raw user input in the
+        # body. Acceptable while the API has no HTML consumers; revisit
+        # before the public dashboard lands.
+        return _envelope_response(
+            422, ERROR_CODE_VALIDATION, f"request validation failed: {exc.errors()}"
         )
 
     @app.exception_handler(Exception)
@@ -87,7 +72,4 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, _exc: Exception
     ) -> JSONResponse:
         logger.exception("unhandled exception in request handler")
-        return JSONResponse(
-            status_code=500,
-            content=_envelope(ERROR_CODE_UNHANDLED, "internal server error"),
-        )
+        return _envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
