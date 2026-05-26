@@ -14,6 +14,7 @@ from logging.config import fileConfig
 from typing import TYPE_CHECKING
 
 from sqlalchemy import pool
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
@@ -32,13 +33,21 @@ target_metadata = Base.metadata
 
 
 def _db_url() -> str:
-    """Build the async Postgres URL from ``POSTGRES_*`` env vars."""
-    user = os.environ["POSTGRES_USER"]
-    password = os.environ["POSTGRES_PASSWORD"]
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    name = os.environ["POSTGRES_DB"]
-    return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
+    """Build the async Postgres URL from ``POSTGRES_*`` env vars.
+
+    Uses ``URL.create`` so credentials with reserved characters (``@``,
+    ``:``, ``/``) survive serialisation instead of corrupting the URL.
+    """
+    return str(
+        URL.create(
+            "postgresql+asyncpg",
+            username=os.environ["POSTGRES_USER"],
+            password=os.environ["POSTGRES_PASSWORD"],
+            host=os.environ.get("POSTGRES_HOST", "localhost"),
+            port=int(os.environ.get("POSTGRES_PORT", "5432")),
+            database=os.environ["POSTGRES_DB"],
+        )
+    )
 
 
 def _do_run_migrations(connection: Connection) -> None:

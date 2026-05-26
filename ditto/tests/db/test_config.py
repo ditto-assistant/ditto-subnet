@@ -52,6 +52,21 @@ class TestPostgresConfigDsn:
             "postgresql+asyncpg://ditto:hunter2@db.internal:6543/ditto_prod"
         )
 
+    def test_dsn_percent_encodes_reserved_characters(self):
+        """Passwords with ``@`` / ``:`` / ``/`` must not corrupt the URL."""
+        config = PostgresConfig(
+            host="db.internal",
+            port=6543,
+            user="user@corp",
+            password="p@ss:wo/rd#1",
+            database="ditto_prod",
+        )
+        # Each reserved char should be percent-encoded in its slot.
+        assert "user%40corp" in config.dsn
+        assert "p%40ss%3Awo%2Frd%231" in config.dsn
+        # And async_dsn uses the same encoding path.
+        assert "p%40ss%3Awo%2Frd%231" in config.async_dsn
+
 
 class TestPostgresConfigRepr:
     """Tests for :meth:`PostgresConfig.__repr__`."""
@@ -127,4 +142,26 @@ class TestParsePostgresConfigFromEnv:
         monkeypatch.delenv(missing, raising=False)
 
         with pytest.raises(DatabaseConnectionError, match="postgres env var missing"):
+            parse_postgres_config_from_env()
+
+    @pytest.mark.parametrize(
+        "var,bad_value",
+        [
+            ("POSTGRES_PORT", "not-an-int"),
+            ("POSTGRES_POOL_MIN_SIZE", "abc"),
+            ("POSTGRES_POOL_MAX_SIZE", "xyz"),
+            ("POSTGRES_COMMAND_TIMEOUT", "fast"),
+        ],
+    )
+    def test_invalid_numeric_env_raises_database_connection_error(
+        self, monkeypatch: pytest.MonkeyPatch, var: str, bad_value: str
+    ):
+        """``int()`` / ``float()`` failures map into the db error hierarchy."""
+        _clear_postgres_env(monkeypatch)
+        monkeypatch.setenv("POSTGRES_USER", "ditto")
+        monkeypatch.setenv("POSTGRES_PASSWORD", "ditto")
+        monkeypatch.setenv("POSTGRES_DB", "ditto")
+        monkeypatch.setenv(var, bad_value)
+
+        with pytest.raises(DatabaseConnectionError, match="invalid numeric"):
             parse_postgres_config_from_env()

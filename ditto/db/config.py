@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 from ditto.db.errors import DatabaseConnectionError
 
@@ -44,18 +45,28 @@ class PostgresConfig:
 
     @property
     def dsn(self) -> str:
-        """asyncpg-compatible connection string built from the fields."""
-        return (
-            f"postgresql://{self.user}:{self.password}"
-            f"@{self.host}:{self.port}/{self.database}"
-        )
+        """asyncpg-compatible connection string built from the fields.
+
+        User, password, and database are percent-encoded so reserved
+        characters (``@``, ``:``, ``/``, ``#``) in secrets cannot
+        corrupt the URL structure.
+        """
+        user = quote(self.user, safe="")
+        password = quote(self.password, safe="")
+        database = quote(self.database, safe="")
+        return f"postgresql://{user}:{password}@{self.host}:{self.port}/{database}"
 
     @property
     def async_dsn(self) -> str:
-        """SQLAlchemy async DSN selecting the asyncpg driver."""
+        """SQLAlchemy async DSN selecting the asyncpg driver.
+
+        Same percent-encoding as :attr:`dsn`.
+        """
+        user = quote(self.user, safe="")
+        password = quote(self.password, safe="")
+        database = quote(self.database, safe="")
         return (
-            f"postgresql+asyncpg://{self.user}:{self.password}"
-            f"@{self.host}:{self.port}/{self.database}"
+            f"postgresql+asyncpg://{user}:{password}@{self.host}:{self.port}/{database}"
         )
 
 
@@ -66,7 +77,9 @@ def parse_postgres_config_from_env() -> PostgresConfig:
     All others fall back to safe defaults.
 
     Raises:
-        DatabaseConnectionError: When any required env var is unset.
+        DatabaseConnectionError: When any required env var is unset, or
+            when a numeric env var (port, pool sizes, command timeout)
+            cannot be parsed.
     """
     try:
         return PostgresConfig(
@@ -83,3 +96,5 @@ def parse_postgres_config_from_env() -> PostgresConfig:
         raise DatabaseConnectionError(
             f"required postgres env var missing: {e.args[0]}"
         ) from e
+    except ValueError as e:
+        raise DatabaseConnectionError(f"invalid numeric postgres env var: {e}") from e
