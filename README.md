@@ -24,7 +24,8 @@ The API server runs locally (not in compose) for fast iteration. Pylon shifts to
 - `make lint` - `ruff format --check` + `ruff check`
 - `make format` - `ruff format` + `ruff check --fix`
 - `make typecheck` - `mypy ditto/`
-- `make test` - `pytest`
+- `make test` - run the default `pytest` suite
+- `make test-integration` - run integration tests against the live stack
 - `make api-up` - run `python -m ditto.api_server` against the local stack
 - `make smoke-api` - curl `/health` to confirm the API is reachable
 - `make smoke-pylon` - exercise the chain client against the live Pylon
