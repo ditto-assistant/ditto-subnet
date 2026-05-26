@@ -1,11 +1,4 @@
-"""Frozen dataclass models for the chain access layer.
-
-Also hosts :func:`parse_chain_config_from_env`, the env-var builder for
-:class:`ChainConfig`. The chain subpackage does not yet have a dedicated
-``config.py`` (a deferred consistency refactor to mirror :mod:`ditto.db`);
-keeping the parser next to the dataclass it builds is the lightweight
-intermediate step.
-"""
+"""Frozen dataclass models + env builder for the chain access layer."""
 
 from __future__ import annotations
 
@@ -106,6 +99,7 @@ def parse_chain_config_from_env() -> ChainConfig:
         identity_name=os.environ.get("PYLON_IDENTITY_NAME") or None,
         identity_token=os.environ.get("PYLON_IDENTITY_TOKEN") or None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
+        archive_blocks_cutoff=int(os.environ.get("ARCHIVE_BLOCKS_CUTOFF", "300")),
     )
 
 
