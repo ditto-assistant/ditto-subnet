@@ -24,7 +24,8 @@ api-up:
 	set -a && . ./.env && set +a && uv run python -m ditto.api_server
 
 smoke-api:
-	curl -sf http://localhost:8000/health > /dev/null && echo "api ok"
+	set -a && . ./.env && set +a && \
+	curl -sf "http://localhost:$${API_PORT:-8000}/health" > /dev/null && echo "api ok"
 
 stack-up:
 	docker compose up -d --wait

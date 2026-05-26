@@ -29,10 +29,11 @@ def _setup_logging() -> None:
 async def main() -> int:
     _setup_logging()
 
-    config = parse_chain_config_from_env()
-    logger.info(f"connecting to Pylon at {config.pylon_url} for netuid={config.netuid}")
-
     try:
+        config = parse_chain_config_from_env()
+        logger.info(
+            f"connecting to Pylon at {config.pylon_url} for netuid={config.netuid}"
+        )
         async with create_chain_client(config) as client:
             block = await client.get_latest_block()
             logger.info(
@@ -59,6 +60,9 @@ async def main() -> int:
             if not succeeded:
                 logger.error("Timestamp.set should always succeed; got False")
                 return 1
+    except ValueError as e:
+        logger.error(f"invalid chain config: {e}")
+        return 1
     except ChainError as e:
         logger.error(f"chain smoke failed: {e}", exc_info=True)
         return 1

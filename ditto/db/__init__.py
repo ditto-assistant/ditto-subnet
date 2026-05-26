@@ -8,9 +8,9 @@ this package.
 
 Usage:
     from ditto.db import (
+        Agent,
         create_db_engine,
         create_session_maker,
-        parse_postgres_config_from_env,
     )
 
     engine = create_db_engine()

@@ -15,6 +15,21 @@ class TestCreateDbEngine:
     """Tests for :func:`create_db_engine`."""
 
     def test_uses_env_when_no_config_passed(self, monkeypatch: pytest.MonkeyPatch):
+        # Clear any ambient POSTGRES_* so the test runs hermetically: a
+        # stale shell env (e.g. POSTGRES_PORT="bad") would otherwise make
+        # parse_postgres_config_from_env fail for reasons unrelated to
+        # the assertion below.
+        for key in (
+            "POSTGRES_HOST",
+            "POSTGRES_PORT",
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+            "POSTGRES_DB",
+            "POSTGRES_POOL_MIN_SIZE",
+            "POSTGRES_POOL_MAX_SIZE",
+            "POSTGRES_COMMAND_TIMEOUT",
+        ):
+            monkeypatch.delenv(key, raising=False)
         # Required env present so parse_postgres_config_from_env succeeds.
         monkeypatch.setenv("POSTGRES_USER", "u")
         monkeypatch.setenv("POSTGRES_PASSWORD", "p")

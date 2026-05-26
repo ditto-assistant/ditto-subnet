@@ -10,9 +10,19 @@ uv sync
 make stack-up        # postgres + pylon, blocks until both report healthy
 make migrate         # apply alembic migrations
 make smoke-pylon     # verify ChainClient against finney via Pylon
-make api-up          # run the FastAPI server locally on :8000
-make smoke-api       # curl /health to confirm the API is alive
 make test            # unit tests
+```
+
+`make api-up` runs the FastAPI server in the foreground on `:8000`. In a separate terminal:
+
+```sh
+make api-up          # foreground; Ctrl+C to stop
+```
+
+Then back in the first terminal:
+
+```sh
+make smoke-api       # curl /health to confirm the API is reachable
 ```
 
 `make stack-down` stops the services. Postgres state persists in a named docker volume across restarts; `docker compose down -v` for a hard reset.
