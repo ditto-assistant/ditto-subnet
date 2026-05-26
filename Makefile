@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test smoke-pylon smoke-api stack-up stack-down migrate migrate-down migrate-history migrate-current api-up
+.PHONY: lint format typecheck test test-integration smoke-pylon smoke-api stack-up stack-down migrate migrate-down migrate-history migrate-current api-up
 
 lint:
 	uv run ruff format --check .
@@ -13,6 +13,9 @@ typecheck:
 
 test:
 	uv run pytest
+
+test-integration:
+	set -a && . ./.env && set +a && uv run pytest -m integration
 
 smoke-pylon:
 	set -a && . ./.env && set +a && uv run python scripts/smoke_pylon.py
