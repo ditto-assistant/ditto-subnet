@@ -24,8 +24,6 @@ def _make_args(**overrides: object) -> argparse.Namespace:
 
 
 class TestResolveCommitHash:
-    """Fallback behaviour for ``git rev-parse HEAD``."""
-
     def test_returns_hex_on_success(self):
         result = MagicMock(returncode=0, stdout="abcdef1234567890\n")
         with patch("ditto.api_server.__main__.subprocess.run", return_value=result):

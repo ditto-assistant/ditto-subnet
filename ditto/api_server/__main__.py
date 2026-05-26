@@ -97,12 +97,7 @@ def _redact(value: str | None, keep: int = 4) -> str:
 
 
 def _config_to_log_dict(config: ApiServerConfig) -> dict[str, object]:
-    """Build a redacted, JSON-safe view of the resolved config for boot logging.
-
-    Passwords + bearer tokens are masked. Everything else is logged in
-    full so operators can confirm host / port / db / netuid wiring at a
-    glance without leaking secrets into log shippers.
-    """
+    """Build a redacted JSON-safe view of the resolved config for boot logging."""
     return {
         "api": {
             "host": config.host,
@@ -140,9 +135,9 @@ def main(argv: list[str] | None = None) -> int:
         config = _config_from_args(ns)
         check_config(config)
     except ApiServerConfigError as e:
-        # Logging is not configured yet; print to stderr so the supervisor
-        # sees the cause.
-        print(f"api server config error: {e}", file=sys.stderr)
+        # Logging is not configured yet; write directly to stderr so the
+        # supervisor sees the cause.
+        sys.stderr.write(f"api server config error: {e}\n")
         return 2
 
     logging.config.dictConfig(build_dict_config(config.log_level))

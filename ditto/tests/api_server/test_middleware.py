@@ -185,7 +185,7 @@ class TestErrorEnvelope:
 
 
 class TestAuthPassThrough:
-    """The Phase 1 stub must not alter responses."""
+    """The no-op stub must not alter responses."""
 
     async def test_does_not_change_status_or_headers(
         self, app: FastAPI, client: httpx.AsyncClient

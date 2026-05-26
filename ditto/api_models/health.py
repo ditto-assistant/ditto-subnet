@@ -8,18 +8,7 @@ from pydantic import BaseModel
 
 
 class HealthResponse(BaseModel):
-    """Status snapshot returned by :func:`ditto.api_server.endpoints.health`.
-
-    Endpoint returns HTTP 200 when ``status == "ok"`` and HTTP 503 when
-    any dependency is ``"down"``. Per-dependency fields let callers
-    distinguish a wedged Postgres from a flaky chain reader without
-    parsing log lines.
-
-    The ``commit`` field carries the git revision the running process
-    was built from (or ``"unknown"`` when no git checkout is available,
-    e.g. inside a Docker image without ``.git``). Mirrors the MVP spec
-    contract that ``/health`` returns liveness *and* commit hash.
-    """
+    """Response shape for ``GET /health``."""
 
     status: Literal["ok", "down"]
     """Overall health: ``"ok"`` only when every dependency is up."""
