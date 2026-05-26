@@ -304,8 +304,6 @@ class TestBlockInfoFromPylon:
 
 
 class TestParseChainConfigFromEnv:
-    """Tests for the env-var builder, including default fall-through."""
-
     def test_open_access_only_is_parsed(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("PYLON_URL", "http://pylon:9999")
         monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "open-tok")
@@ -332,8 +330,8 @@ class TestParseChainConfigFromEnv:
         assert config.identity_token == "id-tok"
 
     def test_empty_string_tokens_become_none(self, monkeypatch: pytest.MonkeyPatch):
-        """An empty ``.env`` value would otherwise pass ``__post_init__``'s
-        truthiness check and look like a configured token to ``ChainClient``."""
+        # Empty .env values would otherwise pass the auth-mode truthiness
+        # check and look like configured tokens.
         monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "real-tok")
         monkeypatch.setenv("PYLON_IDENTITY_NAME", "")
         monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "")
@@ -359,8 +357,6 @@ class TestParseChainConfigFromEnv:
         assert config.subtensor_network == "finney"
 
     def test_no_auth_configured_raises(self, monkeypatch: pytest.MonkeyPatch):
-        """``ChainConfig.__post_init__`` surfaces a ``ValueError`` that the
-        env builder must not swallow."""
         monkeypatch.delenv("PYLON_OPEN_ACCESS_TOKEN", raising=False)
         monkeypatch.delenv("PYLON_IDENTITY_NAME", raising=False)
         monkeypatch.delenv("PYLON_IDENTITY_TOKEN", raising=False)
