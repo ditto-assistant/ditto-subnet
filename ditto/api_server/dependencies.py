@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from fastapi import Request
-    from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
-    from ditto.chain import ChainClient
+from ditto.chain import ChainClient
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
