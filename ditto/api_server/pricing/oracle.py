@@ -11,7 +11,7 @@ import asyncio
 import logging
 import math
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Protocol
 
 import httpx
@@ -162,7 +162,7 @@ class CoinGeckoOracle:
         try:
             # str() first to avoid float-binary surprises in Decimal.
             price = Decimal(str(raw))
-        except Exception as e:
+        except (InvalidOperation, TypeError, ValueError) as e:
             raise MalformedPriceError(f"price {raw!r} not parseable as Decimal") from e
         # Decimal supports is_nan + is_infinite; also reject non-positive.
         if price.is_nan() or price.is_infinite() or price <= 0:

@@ -5,6 +5,19 @@ semantics. Single-host assumption: multi-host deployments will keep
 per-pod caches that converge within the TTL but never share state.
 ``TAO_PRICE_OVERRIDE_USD`` env var is an operator kill switch that
 short-circuits CoinGecko + cache.
+
+Usage:
+    from ditto.api_server.pricing import (
+        create_price_oracle,
+        parse_pricing_config_from_env,
+    )
+
+    config = parse_pricing_config_from_env()
+    oracle = create_price_oracle(config)
+    try:
+        tao_usd = await oracle.get_tao_usd()
+    finally:
+        await oracle.aclose()
 """
 
 from __future__ import annotations
