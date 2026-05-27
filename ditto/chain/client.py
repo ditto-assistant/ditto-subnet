@@ -140,6 +140,20 @@ class ChainClient:
             for hotkey, neuron in response.neurons.items()
         ]
 
+    async def is_registered(self, hotkey: str, netuid: int) -> bool:
+        """Return ``True`` iff ``hotkey`` is registered on ``netuid``.
+
+        Walks the latest :meth:`get_recent_neurons` response. The Pylon
+        cache is one block stale at worst (~12 s), acceptable for
+        registration checks at HTTP-request scope.
+
+        Raises:
+            ChainConnectionError: When Pylon is unreachable.
+            ChainTimeoutError: When the request exceeds the configured timeout.
+        """
+        neurons = await self.get_recent_neurons(netuid)
+        return any(n.hotkey == hotkey for n in neurons)
+
     # --- Block + extrinsic reads ---
 
     async def get_latest_block(self) -> BlockInfo:
