@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_server.pricing import PriceOracle
 from ditto.chain import ChainClient
 
 
@@ -20,3 +21,8 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 async def get_chain_client(request: Request) -> ChainClient:
     """Return the lifespan-opened :class:`ChainClient`."""
     return request.app.state.chain
+
+
+async def get_price_oracle(request: Request) -> PriceOracle:
+    """Return the lifespan-opened :class:`PriceOracle`."""
+    return request.app.state.price_oracle

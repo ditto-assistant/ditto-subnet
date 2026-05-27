@@ -17,13 +17,18 @@ from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
 )
-from ditto.api_server.endpoints import health_router, metrics_router
+from ditto.api_server.endpoints import (
+    health_router,
+    metrics_router,
+    upload_router,
+)
 from ditto.api_server.errors import ApiServerLifespanError
 from ditto.api_server.middleware import (
     AuthPassThroughMiddleware,
     RequestIDMiddleware,
     register_exception_handlers,
 )
+from ditto.api_server.pricing import create_price_oracle
 from ditto.chain import create_chain_client
 from ditto.db import create_db_engine, create_session_maker
 
@@ -42,6 +47,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             chain = await stack.enter_async_context(create_chain_client(config.chain))
             app.state.chain = chain
+
+            price_oracle = create_price_oracle(config.pricing)
+            stack.push_async_callback(price_oracle.aclose)
+            app.state.price_oracle = price_oracle
         except Exception as e:
             raise ApiServerLifespanError(
                 f"failed to open dependencies during startup: {e}"
@@ -89,5 +98,6 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(metrics_router)
+    app.include_router(upload_router, prefix="/api/v1")
 
     return app

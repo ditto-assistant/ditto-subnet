@@ -123,6 +123,21 @@ def _config_to_log_dict(config: ApiServerConfig) -> dict[str, object]:
             "identity_name": config.chain.identity_name or "<unset>",
             "identity_token": _redact(config.chain.identity_token),
         },
+        "upload": {
+            "payment_address": config.upload_payment_address,
+        },
+        "pricing": {
+            "fee_usd": str(config.pricing.fee_usd),
+            "fee_buffer": str(config.pricing.fee_buffer),
+            "cache_ttl_seconds": config.pricing.cache_ttl_seconds,
+            "max_stale_seconds": config.pricing.max_stale_seconds,
+            "coingecko_timeout_seconds": config.pricing.coingecko_timeout_seconds,
+            "override_tao_usd": (
+                str(config.pricing.override_tao_usd)
+                if config.pricing.override_tao_usd is not None
+                else "<unset>"
+            ),
+        },
     }
 
 

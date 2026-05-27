@@ -10,6 +10,7 @@ or set on the app directly.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,7 +19,12 @@ import pytest
 from fastapi import FastAPI
 
 from ditto.api_server import ApiServerConfig, create_api_server
-from ditto.api_server.dependencies import get_chain_client, get_session
+from ditto.api_server.dependencies import (
+    get_chain_client,
+    get_price_oracle,
+    get_session,
+)
+from ditto.api_server.pricing import PricingConfig
 from ditto.chain import ChainConfig
 from ditto.db.config import PostgresConfig
 
@@ -34,6 +40,7 @@ def make_api_server_config(**overrides: Any) -> ApiServerConfig:
         port=8000,
         log_level="INFO",
         commit_hash="test-commit",
+        upload_payment_address="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
         postgres=PostgresConfig(
             host="localhost",
             port=5432,
@@ -45,6 +52,14 @@ def make_api_server_config(**overrides: Any) -> ApiServerConfig:
             pylon_url="http://pylon:8001",
             netuid=118,
             open_access_token="test-token",
+        ),
+        pricing=PricingConfig(
+            fee_usd=Decimal("5"),
+            fee_buffer=Decimal("1.4"),
+            cache_ttl_seconds=3600,
+            max_stale_seconds=86400,
+            coingecko_timeout_seconds=5.0,
+            override_tao_usd=None,
         ),
     )
     if overrides:
@@ -102,8 +117,29 @@ def override_get_chain_client(app: FastAPI, *, raises: Exception | None = None) 
         chain = MagicMock()
         if raises is not None:
             chain.get_latest_block = AsyncMock(side_effect=raises)
+            chain.is_registered = AsyncMock(side_effect=raises)
         else:
             chain.get_latest_block = AsyncMock(return_value=MagicMock(number=42))
+            chain.is_registered = AsyncMock(return_value=True)
         return chain
 
     app.dependency_overrides[get_chain_client] = _fake_chain
+
+
+def override_get_price_oracle(
+    app: FastAPI,
+    *,
+    price_usd: Decimal | None = None,
+    raises: Exception | None = None,
+) -> None:
+    """Install a ``get_price_oracle`` override that returns a mock oracle."""
+
+    async def _fake_oracle() -> MagicMock:
+        oracle = MagicMock()
+        if raises is not None:
+            oracle.get_tao_usd = AsyncMock(side_effect=raises)
+        else:
+            oracle.get_tao_usd = AsyncMock(return_value=price_usd or Decimal("400"))
+        return oracle
+
+    app.dependency_overrides[get_price_oracle] = _fake_oracle

@@ -12,11 +12,17 @@ from ditto.tests.api_server.conftest import make_api_server_config
 
 
 def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set the minimum env vars to make both sub-config parsers succeed."""
+    """Set the minimum env vars to make every sub-config parser succeed."""
     monkeypatch.setenv("POSTGRES_USER", "u")
     monkeypatch.setenv("POSTGRES_PASSWORD", "p")
     monkeypatch.setenv("POSTGRES_DB", "d")
     monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok")
+    monkeypatch.setenv(
+        "DITTO_UPLOAD_PAYMENT_ADDRESS",
+        "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    )
+    # Override unset by default; tested explicitly elsewhere.
+    monkeypatch.delenv("TAO_PRICE_OVERRIDE_USD", raising=False)
 
 
 class TestParseApiServerConfigFromEnv:
@@ -64,6 +70,45 @@ class TestParseApiServerConfigFromEnv:
 
         with pytest.raises(ApiServerConfigError, match="API_PORT"):
             parse_api_server_config_from_env(commit_hash="abc")
+
+    def test_missing_payment_address_raises(self, monkeypatch: pytest.MonkeyPatch):
+        _set_minimum_env(monkeypatch)
+        monkeypatch.delenv("DITTO_UPLOAD_PAYMENT_ADDRESS", raising=False)
+
+        with pytest.raises(ApiServerConfigError, match="DITTO_UPLOAD_PAYMENT_ADDRESS"):
+            parse_api_server_config_from_env(commit_hash="abc")
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "REPLACE_WITH_DITTO_SS58_ADDRESS",  # the .env.example placeholder
+            "not-an-ss58",
+            "5short",
+            "0OIl" * 12 + "1234567890ab",  # SS58 forbidden chars 0/O/I/l
+        ],
+    )
+    def test_malformed_payment_address_raises(
+        self, monkeypatch: pytest.MonkeyPatch, bad: str
+    ):
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_UPLOAD_PAYMENT_ADDRESS", bad)
+
+        with pytest.raises(ApiServerConfigError, match="SS58"):
+            parse_api_server_config_from_env(commit_hash="abc")
+
+    def test_pricing_sub_config_picked_up(self, monkeypatch: pytest.MonkeyPatch):
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_UPLOAD_FEE_USD", "7.50")
+        monkeypatch.setenv("DITTO_UPLOAD_FEE_BUFFER", "1.2")
+        monkeypatch.setenv("PRICING_CACHE_TTL_SECONDS", "60")
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        from decimal import Decimal
+
+        assert config.pricing.fee_usd == Decimal("7.50")
+        assert config.pricing.fee_buffer == Decimal("1.2")
+        assert config.pricing.cache_ttl_seconds == 60
 
 
 class TestCheckConfig:
