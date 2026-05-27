@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "prometheus-client>=0.20",
+    "tenacity>=8.0",
 ]
 
 [tool.uv.sources]
