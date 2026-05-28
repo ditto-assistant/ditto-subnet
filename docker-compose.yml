@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ditto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ditto}
+      POSTGRES_DB: ${POSTGRES_DB:-ditto}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-ditto} -d ${POSTGRES_DB:-ditto}
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pylon:
+    image: backenddevelopersltd/bittensor-pylon:latest
+    environment:
+      PYLON_OPEN_ACCESS_TOKEN: ${PYLON_OPEN_ACCESS_TOKEN:-dev-open-access}
+      PYLON_RECENT_OBJECTS_NETUIDS: "[118]"
+    # Host port 8001 is reserved for Pylon; 8000 is the API server's slot.
+    # The container still listens on 8000 internally.
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -sf
+          -H "Authorization: Bearer ${PYLON_OPEN_ACCESS_TOKEN:-dev-open-access}"
+          http://localhost:8000/api/v1/block/latest >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  postgres_data:
