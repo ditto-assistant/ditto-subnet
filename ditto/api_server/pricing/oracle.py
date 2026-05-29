@@ -123,7 +123,16 @@ class CoinGeckoOracle:
                     timeout=self._config.coingecko_timeout_seconds,
                 )
                 response.raise_for_status()
-                payload = response.json()
+                # CoinGecko has been known to return 200 with an HTML
+                # error page during CDN incidents; wrap the decode so
+                # the failure surfaces as MalformedPriceError instead
+                # of an unhandled ValueError.
+                try:
+                    payload = response.json()
+                except ValueError as e:
+                    raise MalformedPriceError(
+                        "CoinGecko response body is not valid JSON"
+                    ) from e
         return self._extract_price(payload)
 
     def _fall_back_or_raise(self, cause: Exception) -> Decimal:

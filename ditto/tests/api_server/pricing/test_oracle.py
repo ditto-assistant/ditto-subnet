@@ -228,3 +228,19 @@ class TestMalformedPrice:
             oracle = CoinGeckoOracle(make_pricing_config(), client)
             with pytest.raises(MalformedPriceError):
                 await oracle.get_tao_usd()
+
+    async def test_non_json_200_body_rejected(self):
+        # Simulates CDN-injected error page during an incident: HTTP 200
+        # but the body is HTML, not JSON. Without explicit handling the
+        # decode raises ValueError and escapes as an unhandled 500.
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=b"<html>nginx 502</html>",
+                headers={"content-type": "text/html"},
+            )
+
+        async with make_client(handler) as client:
+            oracle = CoinGeckoOracle(make_pricing_config(), client)
+            with pytest.raises(MalformedPriceError, match="not valid JSON"):
+                await oracle.get_tao_usd()
