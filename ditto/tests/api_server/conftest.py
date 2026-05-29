@@ -139,7 +139,9 @@ def override_get_price_oracle(
         if raises is not None:
             oracle.get_tao_usd = AsyncMock(side_effect=raises)
         else:
-            oracle.get_tao_usd = AsyncMock(return_value=price_usd or Decimal("400"))
+            oracle.get_tao_usd = AsyncMock(
+                return_value=price_usd if price_usd is not None else Decimal("400")
+            )
         return oracle
 
     app.dependency_overrides[get_price_oracle] = _fake_oracle
