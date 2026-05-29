@@ -87,3 +87,52 @@ class TestParsePricingConfigFromEnv:
 
         with pytest.raises(PricingError, match="positive finite"):
             parse_pricing_config_from_env()
+
+    @pytest.mark.parametrize(
+        ("env_var", "bad"),
+        [
+            ("DITTO_UPLOAD_FEE_USD", "0"),
+            ("DITTO_UPLOAD_FEE_USD", "-1"),
+            ("DITTO_UPLOAD_FEE_USD", "NaN"),
+            ("DITTO_UPLOAD_FEE_USD", "Infinity"),
+            ("DITTO_UPLOAD_FEE_BUFFER", "0"),
+            ("DITTO_UPLOAD_FEE_BUFFER", "-0.5"),
+        ],
+    )
+    def test_invalid_decimal_env_var_raises(
+        self, monkeypatch: pytest.MonkeyPatch, env_var: str, bad: str
+    ):
+        _clear_pricing_env(monkeypatch)
+        monkeypatch.setenv(env_var, bad)
+
+        with pytest.raises(PricingError, match=f"{env_var}.*positive finite"):
+            parse_pricing_config_from_env()
+
+    @pytest.mark.parametrize(
+        ("env_var", "bad"),
+        [
+            ("PRICING_CACHE_TTL_SECONDS", "0"),
+            ("PRICING_CACHE_TTL_SECONDS", "-100"),
+            ("PRICING_MAX_STALE_SECONDS", "0"),
+            ("PRICING_MAX_STALE_SECONDS", "-1"),
+        ],
+    )
+    def test_invalid_int_env_var_raises(
+        self, monkeypatch: pytest.MonkeyPatch, env_var: str, bad: str
+    ):
+        _clear_pricing_env(monkeypatch)
+        monkeypatch.setenv(env_var, bad)
+
+        with pytest.raises(PricingError, match=f"{env_var}.*positive integer"):
+            parse_pricing_config_from_env()
+
+    @pytest.mark.parametrize("bad", ["0", "-1", "nan", "inf", "-inf"])
+    def test_invalid_timeout_raises(self, monkeypatch: pytest.MonkeyPatch, bad: str):
+        _clear_pricing_env(monkeypatch)
+        monkeypatch.setenv("PRICING_COINGECKO_TIMEOUT_SECONDS", bad)
+
+        with pytest.raises(
+            PricingError,
+            match="PRICING_COINGECKO_TIMEOUT_SECONDS.*positive finite",
+        ):
+            parse_pricing_config_from_env()

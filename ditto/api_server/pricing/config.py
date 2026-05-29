@@ -54,42 +54,71 @@ def _parse_optional_decimal(name: str, raw: str | None) -> Decimal | None:
     return _parse_decimal(name, raw)
 
 
-def _parse_override(name: str, raw: str | None) -> Decimal | None:
-    """Parse the operator override and reject non-finite or non-positive values.
-
-    The kill switch bypasses CoinGecko + cache + the price-validation
-    code that would otherwise reject these, so the gate has to live
-    here. Fails closed so a typo (``TAO_PRICE_OVERRIDE_USD=Infinity``)
-    refuses boot instead of silently breaking the endpoint.
-    """
-    value = _parse_optional_decimal(name, raw)
-    if value is None:
-        return None
+def _require_positive_finite_decimal(name: str, value: Decimal) -> Decimal:
     if value.is_nan() or value.is_infinite() or value <= 0:
         raise PricingError(f"{name} must be a positive finite decimal, got {value}")
     return value
 
 
+def _require_positive_int(name: str, value: int) -> int:
+    if value <= 0:
+        raise PricingError(f"{name} must be a positive integer, got {value}")
+    return value
+
+
+def _require_positive_finite_float(name: str, value: float) -> float:
+    # NaN != NaN is the canonical NaN check; isinf catches +/- inf.
+    if value != value or value in (float("inf"), float("-inf")) or value <= 0:
+        raise PricingError(f"{name} must be a positive finite float, got {value}")
+    return value
+
+
+def _parse_override(name: str, raw: str | None) -> Decimal | None:
+    """Parse the operator override; rejects non-positive or non-finite values."""
+    value = _parse_optional_decimal(name, raw)
+    if value is None:
+        return None
+    return _require_positive_finite_decimal(name, value)
+
+
 def parse_pricing_config_from_env() -> PricingConfig:
     """Build :class:`PricingConfig` from ``DITTO_UPLOAD_*`` + ``PRICING_*`` env vars.
 
+    Every numeric field is validated positive + finite at boot so a typo
+    (``PRICING_CACHE_TTL_SECONDS=-100``, ``PRICING_COINGECKO_TIMEOUT_SECONDS=NaN``)
+    refuses to start instead of degrading the endpoint at request time.
+
     Raises:
-        PricingError: When a numeric env var cannot be parsed.
+        PricingError: When a numeric env var cannot be parsed or is not
+            a positive finite number.
     """
     try:
         return PricingConfig(
-            fee_usd=_parse_decimal(
+            fee_usd=_require_positive_finite_decimal(
                 "DITTO_UPLOAD_FEE_USD",
-                os.environ.get("DITTO_UPLOAD_FEE_USD", "5"),
+                _parse_decimal(
+                    "DITTO_UPLOAD_FEE_USD",
+                    os.environ.get("DITTO_UPLOAD_FEE_USD", "5"),
+                ),
             ),
-            fee_buffer=_parse_decimal(
+            fee_buffer=_require_positive_finite_decimal(
                 "DITTO_UPLOAD_FEE_BUFFER",
-                os.environ.get("DITTO_UPLOAD_FEE_BUFFER", "1.4"),
+                _parse_decimal(
+                    "DITTO_UPLOAD_FEE_BUFFER",
+                    os.environ.get("DITTO_UPLOAD_FEE_BUFFER", "1.4"),
+                ),
             ),
-            cache_ttl_seconds=int(os.environ.get("PRICING_CACHE_TTL_SECONDS", "3600")),
-            max_stale_seconds=int(os.environ.get("PRICING_MAX_STALE_SECONDS", "86400")),
-            coingecko_timeout_seconds=float(
-                os.environ.get("PRICING_COINGECKO_TIMEOUT_SECONDS", "5.0")
+            cache_ttl_seconds=_require_positive_int(
+                "PRICING_CACHE_TTL_SECONDS",
+                int(os.environ.get("PRICING_CACHE_TTL_SECONDS", "3600")),
+            ),
+            max_stale_seconds=_require_positive_int(
+                "PRICING_MAX_STALE_SECONDS",
+                int(os.environ.get("PRICING_MAX_STALE_SECONDS", "86400")),
+            ),
+            coingecko_timeout_seconds=_require_positive_finite_float(
+                "PRICING_COINGECKO_TIMEOUT_SECONDS",
+                float(os.environ.get("PRICING_COINGECKO_TIMEOUT_SECONDS", "5.0")),
             ),
             override_tao_usd=_parse_override(
                 "TAO_PRICE_OVERRIDE_USD",
