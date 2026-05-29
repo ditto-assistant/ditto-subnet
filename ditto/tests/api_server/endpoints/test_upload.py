@@ -191,6 +191,44 @@ class TestUploadCheck:
         response = await client.post("/api/v1/upload/check", json=body)
         assert response.status_code == 503
 
+    async def test_passes_configured_netuid_to_chain_client(self):
+        # Build an app with a non-default netuid and assert it flows
+        # through to chain.is_registered + the failure message.
+        from dataclasses import replace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from ditto.api_server import create_api_server
+        from ditto.api_server.dependencies import get_chain_client
+        from ditto.tests.api_server.conftest import make_api_server_config
+
+        base = make_api_server_config()
+        cfg = replace(base, chain=replace(base.chain, netuid=999))
+        custom_app = create_api_server(cfg)
+        custom_app.state.commit_hash = "test-commit"
+
+        recorded: dict[str, int] = {}
+
+        async def _fake_chain() -> MagicMock:
+            chain = MagicMock()
+
+            async def _is_registered(_hotkey: str, *, netuid: int) -> bool:
+                recorded["netuid"] = netuid
+                return False
+
+            chain.is_registered = AsyncMock(side_effect=_is_registered)
+            return chain
+
+        custom_app.dependency_overrides[get_chain_client] = _fake_chain
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=custom_app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as c:
+            body = _signed_request_body()
+            response = await c.post("/api/v1/upload/check", json=body)
+
+        assert recorded["netuid"] == 999
+        assert "netuid 999" in " ".join(response.json()["messages"])
+
 
 class TestOpenApiInclusion:
     """``/upload/*`` IS in the schema (consumer surface), unlike ops endpoints."""

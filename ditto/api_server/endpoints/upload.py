@@ -77,7 +77,9 @@ async def eval_pricing(request: Request, oracle: OracleDep) -> EvalPricingRespon
 
 
 @router.post("/check", response_model=UploadCheckResponse)
-async def check(body: UploadCheckRequest, chain: ChainDep) -> UploadCheckResponse:
+async def check(
+    request: Request, body: UploadCheckRequest, chain: ChainDep
+) -> UploadCheckResponse:
     """Pre-payment dry-run validation.
 
     Aggregates every failed check into ``error_codes`` + ``messages`` so
@@ -85,6 +87,7 @@ async def check(body: UploadCheckRequest, chain: ChainDep) -> UploadCheckRespons
     is miner-reported and unverified at this endpoint; the next-PR
     ``/upload/agent`` re-derives it from the actual tarball bytes.
     """
+    netuid = request.app.state.config.chain.netuid
     codes: list[int] = []
     messages: list[str] = []
 
@@ -97,7 +100,7 @@ async def check(body: UploadCheckRequest, chain: ChainDep) -> UploadCheckRespons
     # 2. Hotkey registered. On a chain outage we return 503 instead of
     #    a silent false-pass that would lie to miners.
     try:
-        registered = await chain.is_registered(body.hotkey, netuid=118)
+        registered = await chain.is_registered(body.hotkey, netuid=netuid)
     except ChainError as e:
         logger.warning(f"chain unreachable during /upload/check: {e}")
         raise HTTPException(
@@ -105,7 +108,7 @@ async def check(body: UploadCheckRequest, chain: ChainDep) -> UploadCheckRespons
         ) from e
     if not registered:
         codes.append(ERROR_CODE_HOTKEY_NOT_REGISTERED)
-        messages.append("hotkey is not registered on netuid 118")
+        messages.append(f"hotkey is not registered on netuid {netuid}")
 
     # 3. Tarball size cap.
     if body.file_size_bytes > MAX_TARBALL_SIZE_BYTES:
