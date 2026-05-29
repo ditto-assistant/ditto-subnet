@@ -18,7 +18,15 @@ Usage:
 from __future__ import annotations
 
 from ditto.api_models.health import HealthResponse
+from ditto.api_models.upload import (
+    EvalPricingResponse,
+    UploadCheckRequest,
+    UploadCheckResponse,
+)
 
 __all__ = [
+    "EvalPricingResponse",
     "HealthResponse",
+    "UploadCheckRequest",
+    "UploadCheckResponse",
 ]

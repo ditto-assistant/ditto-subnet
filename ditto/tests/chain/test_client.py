@@ -220,6 +220,38 @@ class TestGetRecentNeurons:
                 await client.get_recent_neurons(118)
 
 
+class TestIsRegistered:
+    """Tests for ChainClient.is_registered."""
+
+    async def test_returns_true_when_hotkey_present(
+        self, install_pylon_module: AsyncMock
+    ):
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response(
+                {"5HK1": make_pylon_neuron(), "5HK2": make_pylon_neuron()}
+            )
+        )
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.is_registered("5HK1", 118) is True
+
+    async def test_returns_false_when_hotkey_absent(
+        self, install_pylon_module: AsyncMock
+    ):
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response({"5HK1": make_pylon_neuron()})
+        )
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.is_registered("5UNREGISTERED", 118) is False
+
+    async def test_propagates_chain_error(self, install_pylon_module: AsyncMock):
+        install_pylon_module.v1.open_access.get_recent_neurons.side_effect = (
+            RuntimeError("pylon down")
+        )
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainConnectionError):
+                await client.is_registered("5HK1", 118)
+
+
 class TestGetLatestBlock:
     """Tests for ChainClient.get_latest_block."""
 

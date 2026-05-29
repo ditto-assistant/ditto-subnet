@@ -15,6 +15,12 @@ from ditto.api_server.middleware.request_id import (
     REQUEST_ID_HEADER,
     request_id_var,
 )
+from ditto.api_server.pricing import (
+    MalformedPriceError,
+    OracleUnreachableError,
+    PriceTooStaleError,
+    PricingError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +28,10 @@ logger = logging.getLogger(__name__)
 ERROR_CODE_UNHANDLED = 3000
 ERROR_CODE_VALIDATION = 3001
 ERROR_CODE_HTTP_EXCEPTION = 3002
+ERROR_CODE_PRICING = 3100
+ERROR_CODE_ORACLE_UNREACHABLE = 3101
+ERROR_CODE_MALFORMED_PRICE = 3102
+ERROR_CODE_PRICE_TOO_STALE = 3103
 
 
 def _envelope(error_code: int, message: str) -> dict[str, Any]:
@@ -66,6 +76,42 @@ def register_exception_handlers(app: FastAPI) -> None:
         return _envelope_response(
             422, ERROR_CODE_VALIDATION, "request validation failed"
         )
+
+    @app.exception_handler(OracleUnreachableError)
+    async def _oracle_unreachable_handler(
+        _request: Request, exc: OracleUnreachableError
+    ) -> JSONResponse:
+        logger.warning(f"pricing oracle unreachable: {exc}")
+        return _envelope_response(
+            503, ERROR_CODE_ORACLE_UNREACHABLE, "pricing oracle unavailable"
+        )
+
+    @app.exception_handler(PriceTooStaleError)
+    async def _price_too_stale_handler(
+        _request: Request, exc: PriceTooStaleError
+    ) -> JSONResponse:
+        logger.warning(f"pricing cache past max-stale window: {exc}")
+        return _envelope_response(
+            503, ERROR_CODE_PRICE_TOO_STALE, "pricing oracle unavailable"
+        )
+
+    @app.exception_handler(MalformedPriceError)
+    async def _malformed_price_handler(
+        _request: Request, exc: MalformedPriceError
+    ) -> JSONResponse:
+        logger.error(f"pricing oracle returned malformed price: {exc}")
+        return _envelope_response(
+            503, ERROR_CODE_MALFORMED_PRICE, "pricing data is invalid"
+        )
+
+    @app.exception_handler(PricingError)
+    async def _pricing_error_handler(
+        _request: Request, exc: PricingError
+    ) -> JSONResponse:
+        # Catch-all for any future PricingError subclass that the specific
+        # handlers above don't cover.
+        logger.warning(f"pricing error: {exc}")
+        return _envelope_response(503, ERROR_CODE_PRICING, "pricing failure")
 
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(

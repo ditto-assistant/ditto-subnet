@@ -63,6 +63,10 @@ class TestConfigFromArgs:
         monkeypatch.setenv("POSTGRES_PASSWORD", "p")
         monkeypatch.setenv("POSTGRES_DB", "d")
         monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok")
+        monkeypatch.setenv(
+            "DITTO_UPLOAD_PAYMENT_ADDRESS",
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        )
         monkeypatch.delenv("API_HOST", raising=False)
         monkeypatch.delenv("API_PORT", raising=False)
         monkeypatch.delenv("API_LOG_LEVEL", raising=False)
@@ -85,6 +89,10 @@ class TestConfigFromArgs:
         monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
         monkeypatch.setenv("POSTGRES_DB", "metrics")
         monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok-x")
+        monkeypatch.setenv(
+            "DITTO_UPLOAD_PAYMENT_ADDRESS",
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        )
 
         with patch(
             "ditto.api_server.__main__._resolve_commit_hash",
