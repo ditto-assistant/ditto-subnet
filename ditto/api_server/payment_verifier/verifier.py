@@ -178,7 +178,7 @@ class PaymentVerifier:
         Reuses the same formula as ``/upload/eval-pricing`` so a verify-
         time recompute that hits the same oracle cache entry produces an
         identical integer rao value. Recompute deliberately stays in
-        :class:`Decimal` end-to-end — the band-bounds cast back to ``int``
+        :class:`Decimal` end-to-end; the band-bounds cast back to ``int``
         only at the comparison boundary.
         """
         price_usd = await self._oracle.get_tao_usd()
@@ -191,17 +191,17 @@ class PaymentVerifier:
 def _decode_dest(raw: Any) -> str:
     """Normalise the Pylon ``dest`` arg to a plain SS58 string.
 
-    Pylon's flattened ``call_args`` may carry the destination as either
-    a plain SS58 string (``"5..."``) or a single-key dict
-    (``{"Id": "5..."}``) depending on how the SDK decoded the call. The
-    verifier compares against a string ``send_address``, so unify here.
-    Any other shape returns an empty string, which fails the equality
-    check downstream with a clean :class:`PaymentDestinationMismatch`.
+    Pylon's flattened ``call_args`` carries the destination as either a
+    plain SS58 string (``"5..."``) or a ``{"Id": "5..."}`` dict; both
+    are the substrate-interface decode shapes for ``MultiAddress::Id``.
+    The verifier compares against a string ``send_address``, so unify
+    here. Any other shape returns an empty string and fails the
+    equality check with a clean :class:`PaymentDestinationMismatch`.
     """
     if isinstance(raw, str):
         return raw
     if isinstance(raw, dict):
-        inner = raw.get("Id") or raw.get("AccountId") or raw.get("address")
+        inner = raw.get("Id")
         if isinstance(inner, str):
             return inner
     return ""

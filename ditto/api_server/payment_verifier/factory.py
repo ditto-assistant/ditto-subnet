@@ -19,7 +19,7 @@ def create_payment_verifier(
 ) -> PaymentVerifier:
     """Wire a :class:`PaymentVerifier` against its chain + pricing deps.
 
-    The verifier owns no resources — chain and oracle lifetimes are
+    The verifier owns no resources; chain and oracle lifetimes are
     managed by the api_server lifespan. The factory exists for symmetry
     with the rest of ``ditto/api_server`` (and so callers go through one
     name, not a constructor scattered across imports).

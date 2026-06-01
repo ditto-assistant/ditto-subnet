@@ -95,6 +95,6 @@ class PaymentSignerMismatch(PaymentVerifierError):
     - The miner's wallet was misconfigured and signed the transfer from
       a sibling coldkey rather than the hotkey owner.
     - The chain returned an SS58 string with a different network prefix
-      than the extrinsic signer (canonicalisation bug — investigate
+      than the extrinsic signer (canonicalisation bug; investigate
       before treating as adversarial).
     """

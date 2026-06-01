@@ -66,7 +66,7 @@ class VerifiedPayment:
 
     miner_coldkey: str
     """On-chain coldkey that owns ``miner_hotkey`` at the payment block.
-    This is the same value found in the extrinsic's signer field — the
+    This is the same value found in the extrinsic's signer field; the
     verifier asserts equality before populating this field."""
 
     amount_rao: int

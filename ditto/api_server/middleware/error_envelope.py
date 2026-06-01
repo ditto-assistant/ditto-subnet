@@ -49,8 +49,8 @@ ERROR_CODE_PAYMENT_DESTINATION_MISMATCH = 3204
 ERROR_CODE_PAYMENT_SIGNER_MISMATCH = 3205
 ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH = 3206
 # 3207 reserved for PaymentReplayedError (db/queries/payments.py,
-# feat/upload-agent) — pre-allocated so the next PR does not need to
-# renumber + so reviewers see the slot is taken.
+# feat/upload-agent); pre-allocated so the next PR does not need to
+# renumber and so reviewers see the slot is taken.
 
 
 def _envelope(error_code: int, message: str) -> dict[str, Any]:

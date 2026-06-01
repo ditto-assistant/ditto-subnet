@@ -151,7 +151,7 @@ class TestExtrinsicLookup:
             await verifier.verify_payment(_make_proof(), expected_hotkey="5Hotkey")
 
     async def test_chain_connection_error_propagates(self):
-        """ChainConnectionError must NOT be swallowed — envelope handler
+        """ChainConnectionError must NOT be swallowed; envelope handler
         already maps it to 503. Catching it here would lose typed signal."""
         verifier = _make_verifier(
             extrinsic_side_effect=ChainConnectionError("pylon down")
@@ -252,7 +252,7 @@ class TestSignerOwnership:
         chain layer raises ExtrinsicNotFoundError. That propagates rather
         than being silently converted, because the envelope handler maps
         it via the chain-error path (no specific 32xx for "hotkey not
-        registered at payment block" — a tighter type can land later if
+        registered at payment block"; a tighter type can land later if
         observed in practice)."""
         verifier = _make_verifier(
             coldkey_side_effect=ExtrinsicNotFoundError("no owner")
