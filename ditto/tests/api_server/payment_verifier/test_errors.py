@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from ditto.api_server.payment_verifier import (
@@ -30,14 +32,16 @@ class TestErrorDocstrings:
         ],
     )
     def test_has_trigger_bullets(self, cls: type[Exception]):
-        doc = cls.__doc__ or ""
+        # Python 3.13 strips common leading whitespace at compile time;
+        # 3.11/3.12 preserve the source indentation. Normalise via
+        # ``inspect.cleandoc`` so the assertion behaves identically
+        # across the supported interpreter range.
+        doc = inspect.cleandoc(cls.__doc__ or "")
         assert "This can happen when:" in doc, (
             f"{cls.__name__} missing 'This can happen when:' docstring section"
         )
         # At least one bullet entry signals real content rather than an
-        # empty placeholder section. ``__doc__`` preserves the indentation
-        # uniform across lines, so look for the post-newline bullet marker
-        # rather than a specific column.
+        # empty placeholder section.
         assert "\n- " in doc, (
             f"{cls.__name__} 'This can happen when:' has no bullet entries"
         )
