@@ -34,6 +34,13 @@ _SYSTEM_MODULE = "System"
 _EXTRINSIC_SUCCESS_EVENT = "ExtrinsicSuccess"
 _EXTRINSIC_FAILED_EVENT = "ExtrinsicFailed"
 
+# --- substrate storage identifiers for payment-verifier reads ---
+
+_SUBTENSOR_MODULE = "SubtensorModule"
+_OWNER_STORAGE = "Owner"
+_TIMESTAMP_MODULE = "Timestamp"
+_TIMESTAMP_NOW_STORAGE = "Now"
+
 
 class ChainClient:
     """Async context manager wrapping Pylon for chain access.
@@ -308,6 +315,103 @@ class ChainClient:
             f"at block {block_hash}"
         )
 
+    async def get_coldkey_for_hotkey(self, hotkey: str, block_hash: str) -> str:
+        """Read ``SubtensorModule.Owner(hotkey)`` at ``block_hash``.
+
+        Used by :mod:`ditto.api_server.payment_verifier` to confirm the
+        payment extrinsic was signed by the same coldkey that owns the
+        claimed hotkey at payment time. Pylon does not expose historical
+        coldkey ownership keyed by ``block_hash``, so this method fills
+        the gap via ``async-substrate-interface`` in the same shape as
+        :meth:`check_extrinsic_success`.
+
+        Args:
+            hotkey: SS58-encoded hotkey to look up the owner for.
+            block_hash: Block hash at which to read the storage entry.
+
+        Returns:
+            SS58-encoded coldkey that owns ``hotkey`` at ``block_hash``.
+
+        Raises:
+            ExtrinsicNotFoundError: When the storage entry is empty
+                (hotkey was not registered at that block).
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the query exceeds its timeout.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+                result = await substrate.query(
+                    module=_SUBTENSOR_MODULE,
+                    storage_function=_OWNER_STORAGE,
+                    params=[hotkey],
+                    block_hash=block_hash,
+                )
+        except TimeoutError as e:
+            raise ChainTimeoutError(
+                f"get_coldkey_for_hotkey({hotkey}, {block_hash}) timed out"
+            ) from e
+        except Exception as e:
+            raise ChainConnectionError(
+                f"get_coldkey_for_hotkey({hotkey}, {block_hash}) failed: {e}"
+            ) from e
+
+        coldkey = _unwrap_substrate_value(result)
+        if not coldkey:
+            raise ExtrinsicNotFoundError(
+                f"no Owner entry for hotkey {hotkey} at block {block_hash}"
+            )
+        return str(coldkey)
+
+    async def get_block_timestamp(self, block_hash: str) -> int:
+        """Read ``Timestamp.Now`` at ``block_hash`` and return seconds.
+
+        Substrate's ``pallet_timestamp`` stores the block time as a u64
+        millisecond unix timestamp. The payment verifier needs seconds
+        to populate the ``evaluation_payments.timestamp`` column (which
+        is a tz-aware ``datetime`` built from this value). Conversion
+        happens here so callers never see the ms representation.
+
+        Args:
+            block_hash: Block hash at which to read the storage entry.
+
+        Returns:
+            Block timestamp as unix seconds (integer).
+
+        Raises:
+            ExtrinsicNotFoundError: When the storage entry is empty
+                (the block does not exist in the archive).
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the query exceeds its timeout.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+                result = await substrate.query(
+                    module=_TIMESTAMP_MODULE,
+                    storage_function=_TIMESTAMP_NOW_STORAGE,
+                    block_hash=block_hash,
+                )
+        except TimeoutError as e:
+            raise ChainTimeoutError(
+                f"get_block_timestamp({block_hash}) timed out"
+            ) from e
+        except Exception as e:
+            raise ChainConnectionError(
+                f"get_block_timestamp({block_hash}) failed: {e}"
+            ) from e
+
+        raw = _unwrap_substrate_value(result)
+        if raw is None:
+            raise ExtrinsicNotFoundError(
+                f"no Timestamp.Now entry at block {block_hash}"
+            )
+        # Substrate ``pallet_timestamp`` stores milliseconds. Convert to
+        # seconds at the boundary so downstream code never sees ms.
+        return int(raw) // 1000
+
     def _substrate_url(self) -> str:
         """Resolve substrate WebSocket URL for the configured network identifier."""
         network = self._config.subtensor_network
@@ -372,3 +476,16 @@ def _iter_event_records(events: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [dict(r) for r in value if isinstance(r, dict)]
     return []
+
+
+def _unwrap_substrate_value(result: Any) -> Any:
+    """Return the inner ``value`` for a scalar substrate storage query.
+
+    ``async-substrate-interface`` wraps scalar storage reads in an object
+    exposing ``.value``; some versions return the value directly. Treat
+    empty / ``None`` results uniformly so callers can branch on a single
+    falsy check.
+    """
+    if result is None:
+        return None
+    return getattr(result, "value", result)

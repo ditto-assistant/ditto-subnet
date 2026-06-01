@@ -411,3 +411,118 @@ class TestCheckExtrinsicSuccess:
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainTimeoutError):
                 await client.check_extrinsic_success("0xhash", 3)
+
+
+@pytest.mark.usefixtures("install_pylon_module")
+class TestGetColdkeyForHotkey:
+    """Tests for ChainClient.get_coldkey_for_hotkey (Pylon-gap substrate read)."""
+
+    async def test_returns_coldkey_string(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.return_value = MagicMock(value="5Coldkey")
+        async with ChainClient(make_chain_config()) as client:
+            coldkey = await client.get_coldkey_for_hotkey("5Hotkey", "0xblock")
+        assert coldkey == "5Coldkey"
+
+    async def test_query_targets_subtensor_owner_storage(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = MagicMock(value="5Coldkey")
+        async with ChainClient(make_chain_config()) as client:
+            await client.get_coldkey_for_hotkey("5Hotkey", "0xblock")
+        install_substrate_module.query.assert_awaited_once()
+        kwargs = install_substrate_module.query.await_args.kwargs
+        assert kwargs["module"] == "SubtensorModule"
+        assert kwargs["storage_function"] == "Owner"
+        assert kwargs["params"] == ["5Hotkey"]
+        assert kwargs["block_hash"] == "0xblock"
+
+    async def test_unwraps_raw_string_result(self, install_substrate_module: AsyncMock):
+        """Some substrate-interface versions return the value directly,
+        not wrapped in ``.value``. Verifier must handle both."""
+        install_substrate_module.query.return_value = "5Coldkey"
+        async with ChainClient(make_chain_config()) as client:
+            assert (
+                await client.get_coldkey_for_hotkey("5Hotkey", "0xblock") == "5Coldkey"
+            )
+
+    async def test_empty_result_raises_not_found(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = MagicMock(value=None)
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ExtrinsicNotFoundError):
+                await client.get_coldkey_for_hotkey("5Hotkey", "0xblock")
+
+    async def test_none_result_raises_not_found(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = None
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ExtrinsicNotFoundError):
+                await client.get_coldkey_for_hotkey("5Hotkey", "0xblock")
+
+    async def test_timeout_wrapped(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.side_effect = TimeoutError()
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainTimeoutError):
+                await client.get_coldkey_for_hotkey("5Hotkey", "0xblock")
+
+    async def test_connection_error_wrapped(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.side_effect = RuntimeError("boom")
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainConnectionError):
+                await client.get_coldkey_for_hotkey("5Hotkey", "0xblock")
+
+
+@pytest.mark.usefixtures("install_pylon_module")
+class TestGetBlockTimestamp:
+    """Tests for ChainClient.get_block_timestamp (Pylon-gap substrate read).
+
+    Substrate ``pallet_timestamp.Now`` is a u64 millisecond unix timestamp;
+    the method converts to seconds before returning so downstream code
+    never sees the ms representation.
+    """
+
+    async def test_returns_seconds_from_milliseconds(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = MagicMock(value=1_700_000_000_456)
+        async with ChainClient(make_chain_config()) as client:
+            ts = await client.get_block_timestamp("0xblock")
+        assert ts == 1_700_000_000
+
+    async def test_unwraps_raw_int_result(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.return_value = 1_700_000_000_000
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_block_timestamp("0xblock") == 1_700_000_000
+
+    async def test_query_targets_timestamp_now_storage(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = MagicMock(value=1_700_000_000_000)
+        async with ChainClient(make_chain_config()) as client:
+            await client.get_block_timestamp("0xblock")
+        kwargs = install_substrate_module.query.await_args.kwargs
+        assert kwargs["module"] == "Timestamp"
+        assert kwargs["storage_function"] == "Now"
+        assert kwargs["block_hash"] == "0xblock"
+
+    async def test_none_result_raises_not_found(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = None
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ExtrinsicNotFoundError):
+                await client.get_block_timestamp("0xblock")
+
+    async def test_timeout_wrapped(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.side_effect = TimeoutError()
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainTimeoutError):
+                await client.get_block_timestamp("0xblock")
+
+    async def test_connection_error_wrapped(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.side_effect = RuntimeError("boom")
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainConnectionError):
+                await client.get_block_timestamp("0xblock")
