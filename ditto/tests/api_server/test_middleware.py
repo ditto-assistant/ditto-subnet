@@ -12,6 +12,13 @@ from fastapi.exceptions import RequestValidationError
 
 from ditto.api_server.middleware.error_envelope import (
     ERROR_CODE_HTTP_EXCEPTION,
+    ERROR_CODE_PAYMENT_AMOUNT_MISMATCH,
+    ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH,
+    ERROR_CODE_PAYMENT_DESTINATION_MISMATCH,
+    ERROR_CODE_PAYMENT_EXTRINSIC_FAILED,
+    ERROR_CODE_PAYMENT_NOT_FOUND,
+    ERROR_CODE_PAYMENT_SIGNER_MISMATCH,
+    ERROR_CODE_PAYMENT_VERIFIER,
     ERROR_CODE_UNHANDLED,
     ERROR_CODE_VALIDATION,
 )
@@ -19,6 +26,15 @@ from ditto.api_server.middleware.request_id import (
     REQUEST_ID_HEADER,
     RequestIdFilter,
     request_id_var,
+)
+from ditto.api_server.payment_verifier import (
+    PaymentAmountMismatch,
+    PaymentCallTypeMismatch,
+    PaymentDestinationMismatch,
+    PaymentExtrinsicFailed,
+    PaymentNotFoundOnChain,
+    PaymentSignerMismatch,
+    PaymentVerifierError,
 )
 from ditto.tests.api_server.conftest import (
     override_get_chain_client,
@@ -205,6 +221,61 @@ class TestErrorEnvelope:
         rid = "envelope-rid"
         response = await client.get("/_test/http", headers={REQUEST_ID_HEADER: rid})
         assert response.json()["request_id"] == rid
+
+
+class TestPaymentVerifierEnvelope:
+    """Each PaymentVerifierError subclass surfaces a typed 402 envelope."""
+
+    @pytest.mark.parametrize(
+        ("exc", "expected_code"),
+        [
+            (PaymentNotFoundOnChain("nope"), ERROR_CODE_PAYMENT_NOT_FOUND),
+            (PaymentExtrinsicFailed("failed"), ERROR_CODE_PAYMENT_EXTRINSIC_FAILED),
+            (PaymentAmountMismatch("band"), ERROR_CODE_PAYMENT_AMOUNT_MISMATCH),
+            (
+                PaymentDestinationMismatch("dest"),
+                ERROR_CODE_PAYMENT_DESTINATION_MISMATCH,
+            ),
+            (PaymentSignerMismatch("signer"), ERROR_CODE_PAYMENT_SIGNER_MISMATCH),
+            (PaymentCallTypeMismatch("call"), ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH),
+        ],
+    )
+    async def test_specific_handlers_map_to_402(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        exc: Exception,
+        expected_code: int,
+    ):
+        """One throw-route per error type so each handler is exercised."""
+
+        @app.get("/_test/payment_specific")
+        async def _raise() -> dict[str, Any]:
+            raise exc
+
+        response = await client.get("/_test/payment_specific")
+        assert response.status_code == 402
+        body = response.json()
+        assert body["error_code"] == expected_code
+        assert "request_id" in body
+
+    async def test_base_class_catch_all_handler(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """Future PaymentVerifierError subclasses without dedicated
+        handlers must still surface as the base-class envelope."""
+
+        class _Custom(PaymentVerifierError):
+            pass
+
+        @app.get("/_test/payment_base")
+        async def _raise() -> dict[str, Any]:
+            raise _Custom("unmapped subclass")
+
+        response = await client.get("/_test/payment_base")
+        assert response.status_code == 402
+        body = response.json()
+        assert body["error_code"] == ERROR_CODE_PAYMENT_VERIFIER
 
 
 class TestAuthPassThrough:
