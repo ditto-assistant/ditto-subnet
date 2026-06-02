@@ -6,13 +6,19 @@ here (``agents.py``, ``payments.py``, ``scores.py``, ``sessions.py``,
 that exercise them, not as a speculative interface up front.
 
 Every function in this package must:
-- Take ``pool: asyncpg.Pool`` as the first positional argument.
-- Use ``$N`` placeholders for any parameter that contains caller data.
-  Never string-format user values into the SQL.
-- Be wrapped with :func:`ditto.db.connection.db_operation` so nested
-  calls share one connection.
-- Translate ``asyncpg.IntegrityConstraintViolationError`` into
-  :class:`ditto.db.IntegrityError` at the boundary.
+
+- Take ``session: AsyncSession`` as the first positional argument.
+- Operate inside a caller-owned transaction (``async with
+  session.begin():``) when crossing more than one INSERT/UPDATE so
+  partial-failure rollback is automatic.
+- Mutate via the ORM models in :mod:`ditto.db.models` (``session.add``
+  + ``session.flush``); never hand-format SQL with caller data.
+- Catch ``sqlalchemy.exc.IntegrityError`` at the boundary, dispatch on
+  ``e.orig`` (asyncpg-specific) to a typed error, and re-raise with
+  ``raise <TypedError>(...) from e``. Domain-specific replay or
+  uniqueness outcomes get domain-typed errors (e.g.
+  :class:`PaymentReplayedError` for the upload-payment PK collision);
+  everything else gets :class:`ditto.db.IntegrityError`.
 """
 
 from __future__ import annotations
