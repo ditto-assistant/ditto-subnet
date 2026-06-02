@@ -17,6 +17,7 @@ from ditto.api_server.middleware.error_envelope import (
     ERROR_CODE_PAYMENT_DESTINATION_MISMATCH,
     ERROR_CODE_PAYMENT_EXTRINSIC_FAILED,
     ERROR_CODE_PAYMENT_NOT_FOUND,
+    ERROR_CODE_PAYMENT_REPLAYED,
     ERROR_CODE_PAYMENT_SIGNER_MISMATCH,
     ERROR_CODE_PAYMENT_VERIFIER,
     ERROR_CODE_UNHANDLED,
@@ -33,6 +34,7 @@ from ditto.api_server.payment_verifier import (
     PaymentDestinationMismatch,
     PaymentExtrinsicFailed,
     PaymentNotFoundOnChain,
+    PaymentReplayedError,
     PaymentSignerMismatch,
     PaymentVerifierError,
 )
@@ -238,6 +240,7 @@ class TestPaymentVerifierEnvelope:
             ),
             (PaymentSignerMismatch("signer"), ERROR_CODE_PAYMENT_SIGNER_MISMATCH),
             (PaymentCallTypeMismatch("call"), ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH),
+            (PaymentReplayedError("replay"), ERROR_CODE_PAYMENT_REPLAYED),
         ],
     )
     async def test_specific_handlers_map_to_402(
@@ -276,6 +279,23 @@ class TestPaymentVerifierEnvelope:
         assert response.status_code == 402
         body = response.json()
         assert body["error_code"] == ERROR_CODE_PAYMENT_VERIFIER
+
+    async def test_replay_does_not_fall_through_to_catch_all(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """Without the specific 3207 handler the replay would surface as
+        the generic 3200 fallback. Pin the ordering by asserting the code."""
+
+        @app.get("/_test/payment_replay")
+        async def _raise() -> dict[str, Any]:
+            raise PaymentReplayedError("seen before")
+
+        response = await client.get("/_test/payment_replay")
+        assert response.status_code == 402
+        body = response.json()
+        assert body["error_code"] == ERROR_CODE_PAYMENT_REPLAYED
+        assert body["error_code"] != ERROR_CODE_PAYMENT_VERIFIER
+        assert body["message"] == "payment proof already used"
 
 
 class TestAuthPassThrough:

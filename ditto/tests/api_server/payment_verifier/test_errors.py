@@ -12,6 +12,7 @@ from ditto.api_server.payment_verifier import (
     PaymentDestinationMismatch,
     PaymentExtrinsicFailed,
     PaymentNotFoundOnChain,
+    PaymentReplayedError,
     PaymentSignerMismatch,
     PaymentVerifierError,
 )
@@ -29,6 +30,7 @@ class TestErrorDocstrings:
             PaymentAmountMismatch,
             PaymentDestinationMismatch,
             PaymentSignerMismatch,
+            PaymentReplayedError,
         ],
     )
     def test_has_trigger_bullets(self, cls: type[Exception]):
@@ -54,5 +56,6 @@ class TestErrorDocstrings:
             PaymentAmountMismatch,
             PaymentDestinationMismatch,
             PaymentSignerMismatch,
+            PaymentReplayedError,
         ):
             assert issubclass(cls, PaymentVerifierError)

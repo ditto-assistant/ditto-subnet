@@ -98,3 +98,33 @@ class PaymentSignerMismatch(PaymentVerifierError):
       than the extrinsic signer (canonicalisation bug; investigate
       before treating as adversarial).
     """
+
+
+# --- Persistence-side outcomes ---
+
+
+class PaymentReplayedError(PaymentVerifierError):
+    """Raised when the payment proof has already been consumed.
+
+    Detected at the database boundary: the composite primary key on
+    ``evaluation_payments(block_hash, extrinsic_index)`` rejects the
+    INSERT when the same on-chain payment has already funded a prior
+    upload. The queries layer catches the integrity error, matches the
+    PK constraint name, and re-raises this typed error so the envelope
+    handler can surface a clean ``HTTP 402`` + error code ``3207`` to
+    the miner.
+
+    Living in the verifier's error module keeps the 32xx payment family
+    in one file even though the raise site is in :mod:`ditto.db.queries`.
+
+    This can happen when:
+    - The miner re-submits an upload using a payment proof previously
+      consumed (intentional retry against a successful prior upload).
+    - The CLI retried a POST after a transient client-side error even
+      though the original call had committed the row on the server.
+    - An attacker who sniffed a miner's signed upload re-posted it
+      ahead of the legit miner (closes the cross-endpoint replay window
+      described in threat-model G10; the attack ends as a no-op
+      DoS-style nuisance because the agent still attributes to the
+      original hotkey).
+    """
