@@ -70,12 +70,18 @@ async def insert_evaluation_payment(
     try:
         await session.flush()
     except SAIntegrityError as e:
-        if isinstance(e.orig, UniqueViolationError):
+        # SA's asyncpg dialect wraps the underlying asyncpg exception
+        # one layer deep: ``e.orig`` is SA's own dbapi-compat
+        # IntegrityError, and the real asyncpg exception (carrying
+        # ``constraint_name``) sits on ``e.orig.__cause__``. Walk the
+        # cause to recover the asyncpg shape.
+        asyncpg_err = e.orig.__cause__ if e.orig is not None else None
+        if isinstance(asyncpg_err, UniqueViolationError):
             # ``constraint_name`` can be empty on edge paths (driver
             # version differences, certain replication setups); the
             # ``or ""`` guard keeps the comparison total instead of
             # crashing on ``None``.
-            cname = getattr(e.orig, "constraint_name", "") or ""
+            cname = getattr(asyncpg_err, "constraint_name", "") or ""
             if cname == _PAYMENT_REPLAY_CONSTRAINT:
                 raise PaymentReplayedError(
                     f"payment proof "

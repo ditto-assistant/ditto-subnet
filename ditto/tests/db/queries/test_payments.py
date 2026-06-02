@@ -59,8 +59,18 @@ def _make_unique_violation(
     return err
 
 
-def _wrap_in_sa(orig: Exception) -> SAIntegrityError:
-    return SAIntegrityError(statement="...", params=(), orig=orig)
+def _wrap_in_sa(asyncpg_err: Exception) -> SAIntegrityError:
+    """Mimic SA's asyncpg dialect: ``e.orig`` is SA's own wrapper, the
+    asyncpg exception lives on ``e.orig.__cause__``. The dispatch under
+    test reads ``e.orig.__cause__`` so the synthetic must match.
+    """
+
+    class _SAWrappedIntegrity(Exception):
+        pass
+
+    wrapper = _SAWrappedIntegrity("wrapped")
+    wrapper.__cause__ = asyncpg_err
+    return SAIntegrityError(statement="...", params=(), orig=wrapper)
 
 
 def _mock_session(flush_side_effect: BaseException | None = None) -> MagicMock:
