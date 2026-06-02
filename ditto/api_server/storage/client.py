@@ -69,7 +69,14 @@ class S3StorageClient:
         body: bytes,
         content_type: str = "application/octet-stream",
     ) -> StoredObject:
-        """Upload ``body`` to ``key`` with SSE-AES256.
+        """Upload ``body`` to ``key``.
+
+        Server-side encryption is enforced at the BUCKET level via
+        default-encryption policy rather than per-request, because
+        per-request ``ServerSideEncryption`` headers are rejected by
+        minio without KMS config. Bucket-level default encryption (set
+        via Terraform / mc encrypt for minio / S3 default encryption)
+        applies transparently to every object written here.
 
         Raises:
             ObjectUploadFailedError: When the underlying S3 call raises
@@ -90,7 +97,6 @@ class S3StorageClient:
                     Key=key,
                     Body=body,
                     ContentType=content_type,
-                    ServerSideEncryption="AES256",
                 )
         except (ClientError, BotoCoreError) as e:
             raise ObjectUploadFailedError(

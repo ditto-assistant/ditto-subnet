@@ -84,7 +84,7 @@ class TestPutObject:
         assert stored.size_bytes == len(body)
         assert stored.sha256 == hashlib.sha256(body).hexdigest()
 
-    async def test_passes_sse_aes256_header(self):
+    async def test_passes_expected_kwargs(self):
         client = S3StorageClient(_make_config())
         _install_mock_session(client)
 
@@ -93,7 +93,11 @@ class TestPutObject:
         )
 
         kwargs = client._mock_s3.put_object.await_args.kwargs  # type: ignore[attr-defined]
-        assert kwargs["ServerSideEncryption"] == "AES256"
+        # Server-side encryption is enforced at the bucket level (default
+        # encryption policy), not as a per-request header; minio without
+        # KMS rejects per-request SSE while still applying the bucket
+        # default to incoming objects.
+        assert "ServerSideEncryption" not in kwargs
         assert kwargs["Bucket"] == "ditto-agents"
         assert kwargs["Key"] == "abc/agent.tar.gz"
         assert kwargs["ContentType"] == "application/gzip"
