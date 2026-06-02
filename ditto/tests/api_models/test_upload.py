@@ -9,9 +9,11 @@ from pydantic import ValidationError
 
 from ditto.api_models import (
     EvalPricingResponse,
+    UploadAgentResponse,
     UploadCheckRequest,
     UploadCheckResponse,
 )
+from ditto.db.models import AgentStatus
 
 _GOOD_SS58 = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _GOOD_SHA256 = "1d8a3b6f04e2c7f9a51bd3e5c8f2a7b06d4e9c1f2a3b4c5d6e7f8a9b0c1d2e3f"
@@ -82,3 +84,33 @@ class TestUploadCheckResponse:
         assert r.ok is False
         assert r.error_codes == [1100, 1101]
         assert len(r.messages) == 2
+
+
+class TestUploadAgentResponse:
+    def test_happy_path(self):
+        agent_id = "11111111-1111-1111-1111-111111111111"
+        r = UploadAgentResponse(agent_id=agent_id, status=AgentStatus.UPLOADED)
+        assert str(r.agent_id) == agent_id
+        assert r.status == AgentStatus.UPLOADED
+
+    def test_status_serializes_to_string(self):
+        r = UploadAgentResponse(
+            agent_id="11111111-1111-1111-1111-111111111111",
+            status=AgentStatus.UPLOADED,
+        )
+        body = r.model_dump(mode="json")
+        assert body["status"] == "uploaded"
+
+    def test_rejects_unknown_status(self):
+        with pytest.raises(ValidationError):
+            UploadAgentResponse(
+                agent_id="11111111-1111-1111-1111-111111111111",
+                status="invented-status",  # type: ignore[arg-type]
+            )
+
+    def test_rejects_malformed_uuid(self):
+        with pytest.raises(ValidationError):
+            UploadAgentResponse(
+                agent_id="not-a-uuid",  # type: ignore[arg-type]
+                status=AgentStatus.UPLOADED,
+            )
