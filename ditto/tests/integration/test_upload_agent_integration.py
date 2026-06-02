@@ -21,6 +21,7 @@ import os
 import subprocess
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -34,10 +35,11 @@ from sqlalchemy import text
 from ditto.api_server import create_api_server, parse_api_server_config_from_env
 from ditto.api_server.dependencies import (
     get_chain_client,
+    get_payment_verifier,
     get_price_oracle,
 )
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_PAYMENT_REPLAYED
-from ditto.chain import ExtrinsicInfo
+from ditto.api_server.payment_verifier import VerifiedPayment
 
 pytestmark = pytest.mark.integration
 
@@ -49,31 +51,52 @@ _QUOTE_RAO = 17_500_000
 _COLDKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 
 
-def _build_fake_chain(
-    *, payment_address: str, block_hash: str, ext_idx: int = 0
-) -> MagicMock:
-    """A MagicMock ChainClient that returns canned, plausible payment data."""
+def _build_fake_chain() -> MagicMock:
+    """A MagicMock ChainClient for the hotkey-registered check.
+
+    The PaymentVerifier itself is overridden separately, so the chain
+    client only needs to answer ``is_registered``. We mock the chain
+    rather than letting the real lifespan-opened ChainClient talk to
+    Pylon: this test does not require chain access, and the lifespan
+    has already opened a real client that would not understand canned
+    payment data.
+    """
     chain = MagicMock()
     chain.is_registered = AsyncMock(return_value=True)
-    chain.get_extrinsic = AsyncMock(
-        return_value=ExtrinsicInfo(
-            block_number=13579,
-            extrinsic_index=ext_idx,
-            extrinsic_hash="0x" + "ab" * 32,
-            call_module="Balances",
-            call_function="transfer_keep_alive",
-            call_args={"dest": payment_address, "value": _QUOTE_RAO},
-            signer_address=_COLDKEY,
-        )
-    )
-    chain.check_extrinsic_success = AsyncMock(return_value=True)
-    chain.get_coldkey_for_hotkey = AsyncMock(return_value=_COLDKEY)
-    chain.get_block_timestamp = AsyncMock(return_value=1_700_000_000)
-    # Test doesn't read latest block but health checks might.
-    chain.get_latest_block = AsyncMock(
-        return_value=MagicMock(number=13579, hash=block_hash)
-    )
+    chain.get_latest_block = AsyncMock(return_value=MagicMock(number=13579))
     return chain
+
+
+def _build_fake_verifier(
+    *, block_hash: str, ext_idx: int, dest_address: str
+) -> MagicMock:
+    """Stub PaymentVerifier returning a canned VerifiedPayment.
+
+    The verifier's chain-side logic is exercised at the unit-test
+    layer. Here the integration test focuses on endpoint composition +
+    DB writes + storage; the verifier is mocked so the test does not
+    have to construct plausible chain state.
+
+    ``verify_payment`` echoes the ``expected_hotkey`` argument into the
+    returned VerifiedPayment.miner_hotkey so the composite FK on
+    evaluation_payments (which references agents.miner_hotkey) is
+    satisfied at INSERT time.
+    """
+    verifier = MagicMock()
+
+    async def _verify(_proof, *, expected_hotkey: str) -> VerifiedPayment:
+        return VerifiedPayment(
+            block_hash=block_hash,
+            extrinsic_index=ext_idx,
+            miner_hotkey=expected_hotkey,
+            miner_coldkey=_COLDKEY,
+            amount_rao=_QUOTE_RAO,
+            dest_address=dest_address,
+            block_timestamp=datetime(2026, 5, 19, 12, 0, tzinfo=UTC),
+        )
+
+    verifier.verify_payment = AsyncMock(side_effect=_verify)
+    return verifier
 
 
 @asynccontextmanager
@@ -86,17 +109,23 @@ async def _running_app(*, block_hash: str, ext_idx: int = 0) -> AsyncIterator[Fa
         oracle.get_tao_usd = AsyncMock(return_value=Decimal("400"))
         return oracle
 
-    fake_chain = _build_fake_chain(
-        payment_address=config.upload_payment_address,
-        block_hash=block_hash,
-        ext_idx=ext_idx,
-    )
+    fake_chain = _build_fake_chain()
 
     async def _fake_chain_client() -> MagicMock:
         return fake_chain
 
+    fake_verifier = _build_fake_verifier(
+        block_hash=block_hash,
+        ext_idx=ext_idx,
+        dest_address=config.upload_payment_address,
+    )
+
+    async def _fake_payment_verifier() -> MagicMock:
+        return fake_verifier
+
     app.dependency_overrides[get_price_oracle] = _fake_oracle
     app.dependency_overrides[get_chain_client] = _fake_chain_client
+    app.dependency_overrides[get_payment_verifier] = _fake_payment_verifier
 
     async with app.router.lifespan_context(app):
         yield app
