@@ -36,18 +36,18 @@ def _db_url() -> str:
     """Build the async Postgres URL from ``POSTGRES_*`` env vars.
 
     Uses ``URL.create`` so credentials with reserved characters (``@``,
-    ``:``, ``/``) survive serialisation instead of corrupting the URL.
+    ``:``, ``/``) survive serialisation. ``render_as_string`` with
+    ``hide_password=False`` is required because plain ``str(URL)`` masks
+    the password as ``***``, which then fails the asyncpg auth handshake.
     """
-    return str(
-        URL.create(
-            "postgresql+asyncpg",
-            username=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-            host=os.environ.get("POSTGRES_HOST", "localhost"),
-            port=int(os.environ.get("POSTGRES_PORT", "5432")),
-            database=os.environ["POSTGRES_DB"],
-        )
-    )
+    return URL.create(
+        "postgresql+asyncpg",
+        username=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
+        host=os.environ.get("POSTGRES_HOST", "localhost"),
+        port=int(os.environ.get("POSTGRES_PORT", "5432")),
+        database=os.environ["POSTGRES_DB"],
+    ).render_as_string(hide_password=False)
 
 
 def _do_run_migrations(connection: Connection) -> None:
