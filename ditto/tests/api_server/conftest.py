@@ -23,8 +23,10 @@ from ditto.api_server.dependencies import (
     get_chain_client,
     get_price_oracle,
     get_session,
+    get_storage_client,
 )
 from ditto.api_server.pricing import PricingConfig
+from ditto.api_server.storage import StorageConfig
 from ditto.chain import ChainConfig
 from ditto.db.config import PostgresConfig
 
@@ -60,6 +62,12 @@ def make_api_server_config(**overrides: Any) -> ApiServerConfig:
             max_stale_seconds=86400,
             coingecko_timeout_seconds=5.0,
             override_tao_usd=None,
+        ),
+        storage=StorageConfig(
+            endpoint_url="http://minio:9000",
+            bucket="ditto-agents",
+            access_key="minio",
+            secret_key="miniominio",
         ),
     )
     if overrides:
@@ -145,3 +153,27 @@ def override_get_price_oracle(
         return oracle
 
     app.dependency_overrides[get_price_oracle] = _fake_oracle
+
+
+def override_get_storage_client(
+    app: FastAPI,
+    *,
+    raises: Exception | None = None,
+) -> MagicMock:
+    """Install a ``get_storage_client`` override returning a mock client.
+
+    Returns the mock so tests can inspect ``put_object`` call args.
+    """
+    storage = MagicMock()
+    if raises is not None:
+        storage.put_object = AsyncMock(side_effect=raises)
+        storage.object_exists = AsyncMock(side_effect=raises)
+    else:
+        storage.put_object = AsyncMock(return_value=MagicMock())
+        storage.object_exists = AsyncMock(return_value=True)
+
+    async def _fake_storage() -> MagicMock:
+        return storage
+
+    app.dependency_overrides[get_storage_client] = _fake_storage
+    return storage

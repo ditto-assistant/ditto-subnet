@@ -138,6 +138,14 @@ def _config_to_log_dict(config: ApiServerConfig) -> dict[str, object]:
                 else "<unset>"
             ),
         },
+        "storage": {
+            "endpoint_url": config.storage.endpoint_url,
+            "bucket": config.storage.bucket,
+            "region": config.storage.region,
+            "use_tls": config.storage.use_tls,
+            "access_key": _redact(config.storage.access_key),
+            "secret_key": _redact(config.storage.secret_key),
+        },
     }
 
 

@@ -30,6 +30,7 @@ from ditto.api_server.middleware import (
 )
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
+from ditto.api_server.storage import create_storage_client
 from ditto.chain import create_chain_client
 from ditto.db import create_db_engine, create_session_maker
 
@@ -60,6 +61,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 send_address=config.upload_payment_address,
             )
             app.state.payment_verifier = payment_verifier
+
+            storage = await stack.enter_async_context(
+                create_storage_client(config.storage)
+            )
+            app.state.storage = storage
         except Exception as e:
             raise ApiServerLifespanError(
                 f"failed to open dependencies during startup: {e}"

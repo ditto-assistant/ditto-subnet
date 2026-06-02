@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.pricing import PricingConfig, parse_pricing_config_from_env
+from ditto.api_server.storage import StorageConfig, parse_storage_config_from_env
 from ditto.chain import ChainConfig, parse_chain_config_from_env
 from ditto.db import PostgresConfig, parse_postgres_config_from_env
 
@@ -57,6 +58,9 @@ class ApiServerConfig:
     pricing: PricingConfig
     """CoinGecko oracle + upload-fee parameters."""
 
+    storage: StorageConfig
+    """S3-compatible object store parameters for uploaded tarballs."""
+
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
@@ -102,6 +106,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         postgres=parse_postgres_config_from_env(),
         chain=parse_chain_config_from_env(),
         pricing=parse_pricing_config_from_env(),
+        storage=parse_storage_config_from_env(),
     )
 
 

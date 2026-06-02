@@ -67,6 +67,10 @@ class TestConfigFromArgs:
             "DITTO_UPLOAD_PAYMENT_ADDRESS",
             "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
         )
+        monkeypatch.setenv("STORAGE_ENDPOINT_URL", "http://minio:9000")
+        monkeypatch.setenv("STORAGE_BUCKET", "ditto-agents")
+        monkeypatch.setenv("STORAGE_ACCESS_KEY", "minio")
+        monkeypatch.setenv("STORAGE_SECRET_KEY", "miniominio")
         monkeypatch.delenv("API_HOST", raising=False)
         monkeypatch.delenv("API_PORT", raising=False)
         monkeypatch.delenv("API_LOG_LEVEL", raising=False)
@@ -93,6 +97,10 @@ class TestConfigFromArgs:
             "DITTO_UPLOAD_PAYMENT_ADDRESS",
             "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
         )
+        monkeypatch.setenv("STORAGE_ENDPOINT_URL", "http://minio:9000")
+        monkeypatch.setenv("STORAGE_BUCKET", "ditto-agents")
+        monkeypatch.setenv("STORAGE_ACCESS_KEY", "minio")
+        monkeypatch.setenv("STORAGE_SECRET_KEY", "miniominio")
 
         with patch(
             "ditto.api_server.__main__._resolve_commit_hash",
@@ -103,6 +111,7 @@ class TestConfigFromArgs:
         assert config.postgres.user == "alice"
         assert config.postgres.database == "metrics"
         assert config.chain.open_access_token == "tok-x"
+        assert config.storage.bucket == "ditto-agents"
 
 
 class TestRedact:
