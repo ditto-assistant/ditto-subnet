@@ -195,9 +195,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _payment_replayed_handler(
         _request: Request, exc: PaymentReplayedError
     ) -> JSONResponse:
-        # Registered before the PaymentVerifierError catch-all so FastAPI
-        # matches the more-specific subclass first; without this a replay
-        # would surface as the generic 3200 code.
+        # Starlette's _lookup_exception_handler walks ``type(exc).__mro__``
+        # and returns the first registered class. Registering a handler
+        # on the specific subclass guarantees the MRO walk hits this one
+        # before the PaymentVerifierError base; without this handler a
+        # replay would fall through to the 3200 catch-all below.
         logger.info(f"payment replay rejected: {exc}")
         return _envelope_response(
             402, ERROR_CODE_PAYMENT_REPLAYED, "payment proof already used"
