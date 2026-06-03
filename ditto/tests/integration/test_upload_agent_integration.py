@@ -1,12 +1,15 @@
 """Integration tests for ``POST /upload/agent``.
 
 Exercises the real api_server lifespan against real Postgres + real
-minio, with the chain client + price oracle overridden so the test
-does not depend on a live Pylon connection. The chain replacement
-returns canned ``ExtrinsicInfo`` / ``check_extrinsic_success`` /
-``get_coldkey_for_hotkey`` / ``get_block_timestamp`` values so the
-shipped :class:`PaymentVerifier` is exercised end-to-end against
-"plausible" chain data without speaking to the chain itself.
+minio, focused on endpoint composition + DB writes + storage. The
+chain client, price oracle, AND :class:`PaymentVerifier` are
+overridden via ``app.dependency_overrides`` because the lifespan-
+opened verifier holds a real ChainClient that would try to talk to
+Pylon. The mocked verifier echoes ``expected_hotkey`` back into a
+canned :class:`VerifiedPayment` so the composite FK on
+``evaluation_payments`` resolves at INSERT time. The verifier's
+chain-side logic is exercised at the unit-test layer in
+``ditto/tests/api_server/payment_verifier/``.
 
 Run via ``make test-integration`` (excluded from the default suite).
 Requires ``docker compose up`` for postgres + minio + the
