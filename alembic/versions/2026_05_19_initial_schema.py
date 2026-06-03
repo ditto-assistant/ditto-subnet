@@ -75,6 +75,16 @@ def upgrade() -> None:
     # to agents (agent_id, miner_hotkey) documents the ownership invariant in
     # DDL so future endpoints can't silently break it. CHECK constraints catch
     # garbage values that an app-layer bug might let through.
+    #
+    # The PK below relies on Postgres' default constraint-naming rule to
+    # produce the name "evaluation_payments_pkey". The queries layer at
+    # ditto.db.queries.payments._PAYMENT_REPLAY_CONSTRAINT dispatches PK
+    # violations on that exact string to raise PaymentReplayedError (3207).
+    # Any future migration that renames the PK must update the queries
+    # constant in lockstep or replay protection silently regresses to a
+    # generic IntegrityError 500. The layer-3 integration test
+    # test_pk_constraint_name_matches_dispatch_constant catches this drift
+    # on every PR.
     op.execute(
         """
         CREATE TABLE evaluation_payments (
