@@ -18,9 +18,10 @@ class StorageConfig:
     """
 
     endpoint_url: str
-    """S3 endpoint URL. ``http://minio:9000`` in dev compose;
-    unset / overridden to the AWS regional endpoint in prod
-    (``STORAGE_ENDPOINT_URL``)."""
+    """S3 endpoint URL (``STORAGE_ENDPOINT_URL``). Required at boot.
+    ``http://minio:9000`` for dev compose; the AWS regional endpoint
+    (e.g. ``https://s3.us-east-1.amazonaws.com``), R2 bucket endpoint,
+    or self-hosted minio URL in prod."""
 
     bucket: str
     """Bucket name where agent tarballs are stored (``STORAGE_BUCKET``)."""

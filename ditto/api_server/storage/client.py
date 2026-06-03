@@ -25,9 +25,13 @@ class S3StorageClient:
     other S3-compatible endpoint via :class:`StorageConfig.endpoint_url`.
 
     The lifespan owns one of these per process and reuses the underlying
-    aioboto3 session across requests. Per-call work goes through a
-    short-lived ``async with self._session.client(...)`` block; aioboto3
-    pools the connection internally.
+    aioboto3 :class:`aioboto3.Session` across requests. Each call to
+    :meth:`put_object` / :meth:`object_exists` opens a short-lived
+    ``async with self._session.client("s3", ...)`` block; aiobotocore
+    sets up + tears down a fresh client (and TCP connection) per call.
+    At MVP scale this is fine; if upload volume ever makes the per-call
+    handshake material, cache a long-lived client in :meth:`__aenter__`
+    + close in :meth:`__aexit__`.
 
     Usage:
         async with create_storage_client(config) as storage:
