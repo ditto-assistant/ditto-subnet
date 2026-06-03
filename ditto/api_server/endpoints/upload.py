@@ -179,10 +179,12 @@ async def upload_agent(
 
     1. Form fields auto-validated by FastAPI regex (already done by
        the time this body runs; malformed input returns 422).
-    2. Signature over ``f"{hotkey}:{sha256}"`` (CPU only, no I/O; 1100).
-    3. Hotkey registered on the configured netuid (1 Pylon call; 1101).
-    4. Stream tar bytes: size cap (1102) + sha256 re-verify (1103).
-    5. PaymentVerifier.verify_payment (4 chain calls; 3201-3206).
+    2. Signature over ``f"{hotkey}:{sha256}"`` (CPU only, no I/O; 400).
+    3. Hotkey registered on the configured netuid (1 Pylon call;
+       400 if absent, 503 if chain unreachable).
+    4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
+    5. PaymentVerifier.verify_payment (4 chain calls; 3201-3206 on
+       payment-side rejection, 503 if chain unreachable).
     6. ``agent_id = uuid4()``.
     7. ``storage.put_object`` (orphan blob is cheap on DB failure;
        orphan agent rows would break the state machine).
@@ -222,16 +224,25 @@ async def upload_agent(
             status_code=400, detail="sha256 of received tarball does not match claim"
         )
 
-    # 5. Chain-side verification (typed errors are mapped to 3201-3206
-    # by the envelope handler; we re-raise unchanged).
-    verified = await verifier.verify_payment(
-        PaymentProof(
-            block_hash=payment_block_hash,
-            block_number=payment_block_number,
-            extrinsic_index=payment_extrinsic_index,
-        ),
-        expected_hotkey=hotkey,
-    )
+    # 5. Chain-side verification. Typed PaymentVerifierError subclasses
+    # are mapped to 3201-3206 by the envelope handler; we re-raise them
+    # unchanged. A bare ChainError surfaces when one of the verifier's
+    # four chain reads cannot reach Pylon, which we treat as a 503 to
+    # match the shipped /upload/check pattern around chain.is_registered.
+    try:
+        verified = await verifier.verify_payment(
+            PaymentProof(
+                block_hash=payment_block_hash,
+                block_number=payment_block_number,
+                extrinsic_index=payment_extrinsic_index,
+            ),
+            expected_hotkey=hotkey,
+        )
+    except ChainError as e:
+        logger.warning(f"chain unreachable during /upload/agent verify: {e}")
+        raise HTTPException(
+            status_code=503, detail="chain unavailable; retry shortly"
+        ) from e
 
     # 6. Server-generated identity. The CLI cannot pre-supply it.
     agent_id = uuid.uuid4()
