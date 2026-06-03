@@ -453,6 +453,10 @@ class TestUploadAgentValidationFailures:
     async def test_chain_unreachable_returns_503(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
+        from ditto.api_server.middleware.error_envelope import (
+            ERROR_CODE_HTTP_EXCEPTION,
+        )
+
         _wire_full_stack(app)
         override_get_chain_client(app, raises=ChainConnectionError("pylon down"))
         data, files = _upload_agent_form()
@@ -460,6 +464,11 @@ class TestUploadAgentValidationFailures:
         response = await client.post("/api/v1/upload/agent", data=data, files=files)
 
         assert response.status_code == 503
+        # Pinned: the chain-unreachable path uses HTTPException(503) which
+        # surfaces via the generic _http_exception_handler. A future move
+        # to a chain-specific envelope handler would need this assertion
+        # updated alongside the new code.
+        assert response.json()["error_code"] == ERROR_CODE_HTTP_EXCEPTION
 
     async def test_sha_mismatch_returns_400(
         self, app: FastAPI, client: httpx.AsyncClient
@@ -606,3 +615,43 @@ class TestUploadAgentStorageFailure:
         # ObjectUploadFailedError is unhandled by the envelope handlers,
         # so it falls through to the generic 500 path.
         assert response.status_code == 500
+
+
+class TestUploadAgentDbFailure:
+    async def test_agent_insert_db_integrity_error_returns_5xx(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """Any non-replay constraint violation on the agents insert (e.g.
+        UNIQUE(agent_id, miner_hotkey), CHECK, NOT NULL) is programmer-bug
+        territory; the envelope catch-all must surface a 500 rather than
+        accidentally classifying it as something miner-facing."""
+        from ditto.db import IntegrityError as DbIntegrityError
+
+        _wire_full_stack(app)
+        _override_session_raise_on_insert(
+            app, DbIntegrityError("agent constraint violation")
+        )
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 500
+
+
+class TestUploadAgentChainOutageDuringVerify:
+    async def test_chain_error_during_verify_returns_503(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """Pylon hiccup mid-verify must surface as 503 (same as the
+        chain.is_registered path) instead of falling through to the
+        unhandled-exception 500. Mirrors the shipped /upload/check
+        contract around chain outages."""
+        _wire_full_stack(app)
+        _override_payment_verifier(
+            app, raises=ChainConnectionError("pylon down mid-verify")
+        )
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 503
