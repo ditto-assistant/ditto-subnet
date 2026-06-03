@@ -617,6 +617,130 @@ class TestUploadAgentStorageFailure:
         assert response.status_code == 500
 
 
+class TestUploadAgentBoundaries:
+    """Pin boundary values whose off-by-one regressions would silently
+    reject legitimate uploads or accept malformed ones."""
+
+    async def test_size_exactly_at_cap_accepted(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """``_read_tar_capped_with_sha`` uses ``size > max_bytes``; this
+        test pins the boundary so a refactor to ``>=`` is caught."""
+        from ditto.api_server.endpoints.upload import MAX_TARBALL_SIZE_BYTES
+
+        _wire_full_stack(app)
+        # gzip magic + filler up to exactly the cap.
+        at_cap = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 2)
+        at_cap_sha = hashlib.sha256(at_cap).hexdigest()
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        payload = f"{kp.ss58_address}:{at_cap_sha}".encode()
+        data = {
+            "hotkey": kp.ss58_address,
+            "sha256": at_cap_sha,
+            "name": "alpha-agent",
+            "signature": kp.sign(payload).hex(),
+            "payment_block_hash": _GOOD_BLOCK_HASH,
+            "payment_block_number": 13579,
+            "payment_extrinsic_index": 7,
+        }
+        files = {"agent_tar": ("harness.tar.gz", at_cap, "application/gzip")}
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+
+    async def test_size_one_over_cap_rejected(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        from ditto.api_server.endpoints.upload import MAX_TARBALL_SIZE_BYTES
+
+        _wire_full_stack(app)
+        over = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 2) + b"!"
+        over_sha = hashlib.sha256(over).hexdigest()
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        payload = f"{kp.ss58_address}:{over_sha}".encode()
+        data = {
+            "hotkey": kp.ss58_address,
+            "sha256": over_sha,
+            "name": "alpha-agent",
+            "signature": kp.sign(payload).hex(),
+            "payment_block_hash": _GOOD_BLOCK_HASH,
+            "payment_block_number": 13579,
+            "payment_extrinsic_index": 7,
+        }
+        files = {"agent_tar": ("harness.tar.gz", over, "application/gzip")}
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 413
+
+    async def test_extrinsic_index_zero_accepted(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """``payment_extrinsic_index`` uses ``Form(ge=0)``; index 0 is
+        the first extrinsic in any block and must be valid."""
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        data["payment_extrinsic_index"] = 0
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+
+    async def test_payment_block_number_zero_rejected(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """``payment_block_number`` uses ``Form(ge=1)``; 0 must 422."""
+        _wire_full_stack(app)
+        data, files = _upload_agent_form()
+        data["payment_block_number"] = 0
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 422
+
+    async def test_name_at_max_length_accepted(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """The 64-char ``name`` cap is a chosen value, not spec-mandated;
+        pin both ends so a future tightening is a deliberate change."""
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        data, files = _upload_agent_form(keypair=kp, name="x" * 64)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+
+    async def test_name_over_max_length_rejected(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        _wire_full_stack(app)
+        data, files = _upload_agent_form(name="x" * 65)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 422
+
+    async def test_name_empty_rejected(self, app: FastAPI, client: httpx.AsyncClient):
+        _wire_full_stack(app)
+        data, files = _upload_agent_form(name="")
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 422
+
+
 class TestUploadAgentDbFailure:
     async def test_agent_insert_db_integrity_error_returns_5xx(
         self, app: FastAPI, client: httpx.AsyncClient
