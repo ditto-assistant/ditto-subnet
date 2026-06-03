@@ -71,7 +71,6 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 ERROR_CODE_BAD_SIGNATURE = 1100
 ERROR_CODE_HOTKEY_NOT_REGISTERED = 1101
 ERROR_CODE_TARBALL_TOO_LARGE = 1102
-ERROR_CODE_TARBALL_SHA_MISMATCH = 1103
 
 # Hard cap shared with /upload/check. Tarballs above this size are
 # rejected; /upload/check enforces it from the miner-reported header,
