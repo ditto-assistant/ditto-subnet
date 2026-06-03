@@ -49,10 +49,17 @@ services:
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
+    # ``mc ready local`` is MinIO's official readiness probe and is
+    # guaranteed to ship in the server image; a curl-based probe
+    # against /minio/health/live works today but the minio image is
+    # built on a minimal base where curl availability has historically
+    # been inconsistent across versions.
     healthcheck:
       test:
-        - CMD-SHELL
-        - curl -sf http://localhost:9000/minio/health/live >/dev/null
+        - CMD
+        - mc
+        - ready
+        - local
       interval: 5s
       timeout: 5s
       retries: 6
