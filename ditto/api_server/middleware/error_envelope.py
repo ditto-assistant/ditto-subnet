@@ -15,6 +15,15 @@ from ditto.api_server.middleware.request_id import (
     REQUEST_ID_HEADER,
     request_id_var,
 )
+from ditto.api_server.payment_verifier import (
+    PaymentAmountMismatch,
+    PaymentCallTypeMismatch,
+    PaymentDestinationMismatch,
+    PaymentExtrinsicFailed,
+    PaymentNotFoundOnChain,
+    PaymentSignerMismatch,
+    PaymentVerifierError,
+)
 from ditto.api_server.pricing import (
     MalformedPriceError,
     OracleUnreachableError,
@@ -32,6 +41,16 @@ ERROR_CODE_PRICING = 3100
 ERROR_CODE_ORACLE_UNREACHABLE = 3101
 ERROR_CODE_MALFORMED_PRICE = 3102
 ERROR_CODE_PRICE_TOO_STALE = 3103
+ERROR_CODE_PAYMENT_VERIFIER = 3200
+ERROR_CODE_PAYMENT_NOT_FOUND = 3201
+ERROR_CODE_PAYMENT_EXTRINSIC_FAILED = 3202
+ERROR_CODE_PAYMENT_AMOUNT_MISMATCH = 3203
+ERROR_CODE_PAYMENT_DESTINATION_MISMATCH = 3204
+ERROR_CODE_PAYMENT_SIGNER_MISMATCH = 3205
+ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH = 3206
+# 3207 reserved for PaymentReplayedError (db/queries/payments.py,
+# feat/upload-agent); pre-allocated so the next PR does not need to
+# renumber and so reviewers see the slot is taken.
 
 
 def _envelope(error_code: int, message: str) -> dict[str, Any]:
@@ -112,6 +131,77 @@ def register_exception_handlers(app: FastAPI) -> None:
         # handlers above don't cover.
         logger.warning(f"pricing error: {exc}")
         return _envelope_response(503, ERROR_CODE_PRICING, "pricing failure")
+
+    @app.exception_handler(PaymentNotFoundOnChain)
+    async def _payment_not_found_handler(
+        _request: Request, exc: PaymentNotFoundOnChain
+    ) -> JSONResponse:
+        logger.info(f"payment not found on chain: {exc}")
+        return _envelope_response(
+            402, ERROR_CODE_PAYMENT_NOT_FOUND, "payment extrinsic not found on chain"
+        )
+
+    @app.exception_handler(PaymentExtrinsicFailed)
+    async def _payment_extrinsic_failed_handler(
+        _request: Request, exc: PaymentExtrinsicFailed
+    ) -> JSONResponse:
+        logger.info(f"payment extrinsic failed: {exc}")
+        return _envelope_response(
+            402,
+            ERROR_CODE_PAYMENT_EXTRINSIC_FAILED,
+            "payment extrinsic failed on chain",
+        )
+
+    @app.exception_handler(PaymentAmountMismatch)
+    async def _payment_amount_mismatch_handler(
+        _request: Request, exc: PaymentAmountMismatch
+    ) -> JSONResponse:
+        logger.info(f"payment amount mismatch: {exc}")
+        return _envelope_response(
+            402, ERROR_CODE_PAYMENT_AMOUNT_MISMATCH, "payment amount mismatch"
+        )
+
+    @app.exception_handler(PaymentDestinationMismatch)
+    async def _payment_destination_mismatch_handler(
+        _request: Request, exc: PaymentDestinationMismatch
+    ) -> JSONResponse:
+        logger.info(f"payment destination mismatch: {exc}")
+        return _envelope_response(
+            402,
+            ERROR_CODE_PAYMENT_DESTINATION_MISMATCH,
+            "payment destination mismatch",
+        )
+
+    @app.exception_handler(PaymentSignerMismatch)
+    async def _payment_signer_mismatch_handler(
+        _request: Request, exc: PaymentSignerMismatch
+    ) -> JSONResponse:
+        logger.info(f"payment signer mismatch: {exc}")
+        return _envelope_response(
+            402, ERROR_CODE_PAYMENT_SIGNER_MISMATCH, "payment signer mismatch"
+        )
+
+    @app.exception_handler(PaymentCallTypeMismatch)
+    async def _payment_call_type_mismatch_handler(
+        _request: Request, exc: PaymentCallTypeMismatch
+    ) -> JSONResponse:
+        logger.info(f"payment call type mismatch: {exc}")
+        return _envelope_response(
+            402,
+            ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH,
+            "payment call type mismatch",
+        )
+
+    @app.exception_handler(PaymentVerifierError)
+    async def _payment_verifier_error_handler(
+        _request: Request, exc: PaymentVerifierError
+    ) -> JSONResponse:
+        # Catch-all for any future PaymentVerifierError subclass that the
+        # specific handlers above don't cover.
+        logger.warning(f"payment verifier error: {exc}")
+        return _envelope_response(
+            402, ERROR_CODE_PAYMENT_VERIFIER, "payment verification failed"
+        )
 
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(

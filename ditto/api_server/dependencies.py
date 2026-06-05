@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_server.payment_verifier import PaymentVerifier
 from ditto.api_server.pricing import PriceOracle
 from ditto.chain import ChainClient
 
@@ -26,3 +27,8 @@ async def get_chain_client(request: Request) -> ChainClient:
 async def get_price_oracle(request: Request) -> PriceOracle:
     """Return the lifespan-opened :class:`PriceOracle`."""
     return request.app.state.price_oracle
+
+
+async def get_payment_verifier(request: Request) -> PaymentVerifier:
+    """Return the lifespan-instantiated :class:`PaymentVerifier`."""
+    return request.app.state.payment_verifier

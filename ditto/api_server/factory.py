@@ -28,6 +28,7 @@ from ditto.api_server.middleware import (
     RequestIDMiddleware,
     register_exception_handlers,
 )
+from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.chain import create_chain_client
 from ditto.db import create_db_engine, create_session_maker
@@ -51,6 +52,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             price_oracle = create_price_oracle(config.pricing)
             stack.push_async_callback(price_oracle.aclose)
             app.state.price_oracle = price_oracle
+
+            payment_verifier = create_payment_verifier(
+                chain=chain,
+                oracle=price_oracle,
+                pricing_config=config.pricing,
+                send_address=config.upload_payment_address,
+            )
+            app.state.payment_verifier = payment_verifier
         except Exception as e:
             raise ApiServerLifespanError(
                 f"failed to open dependencies during startup: {e}"
