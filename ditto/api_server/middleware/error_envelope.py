@@ -21,6 +21,7 @@ from ditto.api_server.payment_verifier import (
     PaymentDestinationMismatch,
     PaymentExtrinsicFailed,
     PaymentNotFoundOnChain,
+    PaymentReplayedError,
     PaymentSignerMismatch,
     PaymentVerifierError,
 )
@@ -48,9 +49,7 @@ ERROR_CODE_PAYMENT_AMOUNT_MISMATCH = 3203
 ERROR_CODE_PAYMENT_DESTINATION_MISMATCH = 3204
 ERROR_CODE_PAYMENT_SIGNER_MISMATCH = 3205
 ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH = 3206
-# 3207 reserved for PaymentReplayedError (db/queries/payments.py,
-# feat/upload-agent); pre-allocated so the next PR does not need to
-# renumber and so reviewers see the slot is taken.
+ERROR_CODE_PAYMENT_REPLAYED = 3207
 
 
 def _envelope(error_code: int, message: str) -> dict[str, Any]:
@@ -190,6 +189,20 @@ def register_exception_handlers(app: FastAPI) -> None:
             402,
             ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH,
             "payment call type mismatch",
+        )
+
+    @app.exception_handler(PaymentReplayedError)
+    async def _payment_replayed_handler(
+        _request: Request, exc: PaymentReplayedError
+    ) -> JSONResponse:
+        # Starlette's _lookup_exception_handler walks ``type(exc).__mro__``
+        # and returns the first registered class. Registering a handler
+        # on the specific subclass guarantees the MRO walk hits this one
+        # before the PaymentVerifierError base; without this handler a
+        # replay would fall through to the 3200 catch-all below.
+        logger.info(f"payment replay rejected: {exc}")
+        return _envelope_response(
+            402, ERROR_CODE_PAYMENT_REPLAYED, "payment proof already used"
         )
 
     @app.exception_handler(PaymentVerifierError)

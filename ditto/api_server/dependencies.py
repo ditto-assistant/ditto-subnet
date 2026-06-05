@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_server.payment_verifier import PaymentVerifier
 from ditto.api_server.pricing import PriceOracle
+from ditto.api_server.storage import S3StorageClient
 from ditto.chain import ChainClient
 
 
@@ -32,3 +33,8 @@ async def get_price_oracle(request: Request) -> PriceOracle:
 async def get_payment_verifier(request: Request) -> PaymentVerifier:
     """Return the lifespan-instantiated :class:`PaymentVerifier`."""
     return request.app.state.payment_verifier
+
+
+async def get_storage_client(request: Request) -> S3StorageClient:
+    """Return the lifespan-opened :class:`S3StorageClient`."""
+    return request.app.state.storage

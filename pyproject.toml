@@ -17,9 +17,11 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.13",
     "fastapi>=0.110",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.27",
     "prometheus-client>=0.20",
     "tenacity>=8.0",
+    "aioboto3>=13.0",
 ]
 
 [tool.uv.sources]

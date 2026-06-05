@@ -4,8 +4,9 @@ Reads the ``Balances.transfer_keep_alive`` extrinsic the miner claims
 in their upload, confirms it succeeded, paid the configured address,
 matched the recomputed quote within the drift band, and was signed by
 the hotkey's on-chain coldkey owner at payment time. Returns a
-:class:`VerifiedPayment` ready for the orchestrator (``/upload/agent``,
-next PR) to bind into ``evaluation_payments``.
+:class:`VerifiedPayment` that the ``/upload/agent`` orchestrator binds
+into ``evaluation_payments``. PK violations at insert time surface as
+:class:`PaymentReplayedError` (3207) via the queries layer.
 
 Usage:
     from ditto.api_server.payment_verifier import (
@@ -33,6 +34,7 @@ from ditto.api_server.payment_verifier.errors import (
     PaymentDestinationMismatch,
     PaymentExtrinsicFailed,
     PaymentNotFoundOnChain,
+    PaymentReplayedError,
     PaymentSignerMismatch,
     PaymentVerifierError,
 )
@@ -60,6 +62,7 @@ __all__ = [
     "PaymentAmountMismatch",
     "PaymentDestinationMismatch",
     "PaymentSignerMismatch",
+    "PaymentReplayedError",
     # Factory
     "create_payment_verifier",
 ]

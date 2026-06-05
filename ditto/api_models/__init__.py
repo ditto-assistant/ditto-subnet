@@ -20,6 +20,7 @@ from __future__ import annotations
 from ditto.api_models.health import HealthResponse
 from ditto.api_models.upload import (
     EvalPricingResponse,
+    UploadAgentResponse,
     UploadCheckRequest,
     UploadCheckResponse,
 )
@@ -27,6 +28,7 @@ from ditto.api_models.upload import (
 __all__ = [
     "EvalPricingResponse",
     "HealthResponse",
+    "UploadAgentResponse",
     "UploadCheckRequest",
     "UploadCheckResponse",
 ]

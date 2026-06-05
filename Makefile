@@ -28,7 +28,12 @@ smoke-api:
 	curl -sf "http://localhost:$${API_PORT:-8000}/health" > /dev/null && echo "api ok"
 
 stack-up:
-	docker compose up -d --wait
+	# Wait on the long-lived services to report healthy; bring the
+	# one-shot bucket-init sidecar up separately because `--wait`
+	# treats its (correct) `exited 0` terminal state as not-healthy
+	# and fails the whole target.
+	docker compose up -d --wait postgres pylon minio
+	docker compose up -d minio-create-bucket
 
 stack-down:
 	docker compose down

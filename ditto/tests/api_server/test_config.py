@@ -21,6 +21,10 @@ def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DITTO_UPLOAD_PAYMENT_ADDRESS",
         "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
     )
+    monkeypatch.setenv("STORAGE_ENDPOINT_URL", "http://minio:9000")
+    monkeypatch.setenv("STORAGE_BUCKET", "ditto-agents")
+    monkeypatch.setenv("STORAGE_ACCESS_KEY", "minio")
+    monkeypatch.setenv("STORAGE_SECRET_KEY", "miniominio")
     # Override unset by default; tested explicitly elsewhere.
     monkeypatch.delenv("TAO_PRICE_OVERRIDE_USD", raising=False)
 
@@ -109,6 +113,20 @@ class TestParseApiServerConfigFromEnv:
         assert config.pricing.fee_usd == Decimal("7.50")
         assert config.pricing.fee_buffer == Decimal("1.2")
         assert config.pricing.cache_ttl_seconds == 60
+
+    def test_storage_sub_config_picked_up(self, monkeypatch: pytest.MonkeyPatch):
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("STORAGE_ENDPOINT_URL", "https://s3.example.com")
+        monkeypatch.setenv("STORAGE_BUCKET", "custom-bucket")
+        monkeypatch.setenv("STORAGE_REGION", "eu-west-1")
+        monkeypatch.setenv("STORAGE_USE_TLS", "true")
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.storage.endpoint_url == "https://s3.example.com"
+        assert config.storage.bucket == "custom-bucket"
+        assert config.storage.region == "eu-west-1"
+        assert config.storage.use_tls is True
 
 
 class TestCheckConfig:

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.pricing import PricingConfig, parse_pricing_config_from_env
+from ditto.api_server.storage import StorageConfig, parse_storage_config_from_env
 from ditto.chain import ChainConfig, parse_chain_config_from_env
 from ditto.db import PostgresConfig, parse_postgres_config_from_env
 
@@ -21,9 +22,9 @@ _SS58_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
 class ApiServerConfig:
     """Resolved configuration for the API server process.
 
-    Composition over flattening: ``postgres``, ``chain``, and ``pricing``
-    carry their own typed dataclasses so the same configs feed validator
-    daemon + smoke scripts unchanged.
+    Composition over flattening: ``postgres``, ``chain``, ``pricing``,
+    and ``storage`` carry their own typed dataclasses so the same
+    sub-configs feed validator daemon + smoke scripts unchanged.
     """
 
     host: str
@@ -57,13 +58,16 @@ class ApiServerConfig:
     pricing: PricingConfig
     """CoinGecko oracle + upload-fee parameters."""
 
+    storage: StorageConfig
+    """S3-compatible object store parameters for uploaded tarballs."""
+
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
 def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     """Build an :class:`ApiServerConfig` from ``API_*`` env vars plus
-    the postgres + chain + pricing sub-config parsers. Call
+    the postgres + chain + pricing + storage sub-config parsers. Call
     :func:`check_config` after to validate ranges + set membership.
 
     Raises:
@@ -102,6 +106,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         postgres=parse_postgres_config_from_env(),
         chain=parse_chain_config_from_env(),
         pricing=parse_pricing_config_from_env(),
+        storage=parse_storage_config_from_env(),
     )
 
 

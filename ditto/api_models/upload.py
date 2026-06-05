@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from ditto.db.models import AgentStatus
 
 # SS58 addresses are 47-48 chars from the base58 alphabet (no 0, O, I, l).
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
@@ -14,6 +17,9 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 # sr25519 signature = 64 bytes = 128 hex chars (case-insensitive accepted).
 _SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
+
+# Substrate block hash = 0x + 64 hex chars (case-insensitive).
+_BLOCK_HASH_PATTERN = r"^0x[0-9a-fA-F]{64}$"
 
 
 class EvalPricingResponse(BaseModel):
@@ -62,3 +68,23 @@ class UploadCheckResponse(BaseModel):
 
     messages: list[str]
     """Parallel array of human-readable failure reasons. Empty when ``ok``."""
+
+
+class UploadAgentResponse(BaseModel):
+    """Returned by ``POST /upload/agent`` on a successful upload.
+
+    The endpoint's only positive output: the server-generated
+    ``agent_id`` plus the lifecycle state the row was inserted at. The
+    retrieval endpoints (next PR) expose anything else the miner CLI
+    might want to poll for.
+    """
+
+    agent_id: UUID
+    """Server-generated UUID identifying the inserted agent row. Use
+    this to track screening + evaluation status via the retrieval
+    endpoints."""
+
+    status: AgentStatus
+    """Initial lifecycle state. Always ``uploaded`` immediately after a
+    successful upload; the screener PR moves this to ``screening``
+    shortly after."""
