@@ -11,6 +11,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
+from ditto.api_server.endpoints.retrieval import (
+    AgentNotFoundError,
+    HotkeyAgentNotFoundError,
+)
 from ditto.api_server.middleware.request_id import (
     REQUEST_ID_HEADER,
     request_id_var,
@@ -33,6 +37,12 @@ from ditto.api_server.pricing import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Agent-side error codes (1xxx range per CODE-REVIEW-CHECKLIST). Both
+# retrieval not-found codes map to HTTP 404 with distinct envelope
+# codes so callers can branch on the specific failure mode.
+ERROR_CODE_AGENT_NOT_FOUND = 1200
+ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
 
 # Platform error codes (3xxx range per CODE-REVIEW-CHECKLIST).
 ERROR_CODE_UNHANDLED = 3000
@@ -214,6 +224,22 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning(f"payment verifier error: {exc}")
         return _envelope_response(
             402, ERROR_CODE_PAYMENT_VERIFIER, "payment verification failed"
+        )
+
+    @app.exception_handler(AgentNotFoundError)
+    async def _agent_not_found_handler(
+        _request: Request, exc: AgentNotFoundError
+    ) -> JSONResponse:
+        logger.info(f"agent not found: {exc}")
+        return _envelope_response(404, ERROR_CODE_AGENT_NOT_FOUND, "agent not found")
+
+    @app.exception_handler(HotkeyAgentNotFoundError)
+    async def _hotkey_agent_not_found_handler(
+        _request: Request, exc: HotkeyAgentNotFoundError
+    ) -> JSONResponse:
+        logger.info(f"no agent for hotkey: {exc}")
+        return _envelope_response(
+            404, ERROR_CODE_HOTKEY_AGENT_NOT_FOUND, "no agent for hotkey"
         )
 
     @app.exception_handler(Exception)
