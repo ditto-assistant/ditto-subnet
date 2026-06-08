@@ -1,0 +1,67 @@
+"""Wire shapes for the ``/retrieval/*`` endpoints."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Annotated
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ditto.db.models import AgentStatus
+
+
+class AgentResponse(BaseModel):
+    """Returned by ``GET /retrieval/agent-by-hotkey``.
+
+    Excludes ``ip_address`` deliberately. The column is captured at upload
+    for audit-only retention but never surfaced over HTTP; a follow-up PR
+    removes the column entirely.
+    """
+
+    agent_id: Annotated[UUID, Field(description="Server-generated agent identifier.")]
+    miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
+    name: Annotated[str, Field(description="Miner-chosen agent name.")]
+    status: Annotated[
+        AgentStatus, Field(description="Lifecycle state (see MVP-SPEC §9).")
+    ]
+    sha256: Annotated[
+        str, Field(description="SHA-256 of the uploaded tarball, lowercase hex.")
+    ]
+    created_at: Annotated[
+        datetime, Field(description="When the upload row was inserted (UTC).")
+    ]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+                "miner_hotkey": "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+                "name": "alpha-agent",
+                "status": "uploaded",
+                "sha256": "deadbeef" * 8,
+                "created_at": "2026-06-08T12:00:00Z",
+            }
+        }
+    )
+
+
+class AgentStatusResponse(BaseModel):
+    """Returned by ``GET /retrieval/agent/{agent_id}/status``.
+
+    Minimal shape so polling loops carry small bodies. The caller already
+    knows ``agent_id`` from the upload response; the field is echoed for
+    self-containment but no extra metadata is emitted.
+    """
+
+    agent_id: Annotated[UUID, Field(description="Echoes the path-param id.")]
+    status: Annotated[AgentStatus, Field(description="Lifecycle state.")]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+                "status": "screening",
+            }
+        }
+    )
