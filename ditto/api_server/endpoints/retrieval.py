@@ -11,10 +11,11 @@ defeats that.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import AgentResponse, AgentStatusResponse
 from ditto.api_models.upload import _SS58_PATTERN
@@ -24,12 +25,11 @@ from ditto.db.queries.agents import (
     get_latest_agent_by_hotkey,
 )
 
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retrieval", tags=["retrieval"])
+
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 class AgentNotFoundError(Exception):
@@ -62,7 +62,7 @@ class HotkeyAgentNotFoundError(Exception):
 )
 async def agent_by_hotkey(
     miner_hotkey: Annotated[str, Query(pattern=_SS58_PATTERN)],
-    session: Annotated[AsyncSession, Depends(get_session)],
+    session: SessionDep,
     response: Response,
 ) -> AgentResponse:
     """Return the most recent agent for ``miner_hotkey``, or 404."""
@@ -92,7 +92,7 @@ async def agent_by_hotkey(
 )
 async def agent_status(
     agent_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_session)],
+    session: SessionDep,
     response: Response,
 ) -> AgentStatusResponse:
     """Return the minimal lifecycle status for ``agent_id``, or 404."""
