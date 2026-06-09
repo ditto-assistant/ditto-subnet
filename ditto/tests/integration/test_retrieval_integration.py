@@ -71,7 +71,6 @@ async def _seed_agent(
     sha256: str | None = None,
     status: AgentStatus = AgentStatus.UPLOADED,
     created_at: datetime | None = None,
-    ip_address: str | None = "127.0.0.1",
 ) -> Agent:
     """Insert one agent row via the lifespan-opened ``session_maker``."""
     session_maker = app.state.session_maker
@@ -80,7 +79,6 @@ async def _seed_agent(
         miner_hotkey=miner_hotkey,
         name=name,
         sha256=sha256 or ("deadbeef" * 8),
-        ip_address=ip_address,
         status=status,
     )
     if created_at is not None:

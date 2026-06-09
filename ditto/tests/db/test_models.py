@@ -30,7 +30,6 @@ def make_agent(**overrides: Any) -> Agent:
         "name": "alpha",
         "sha256": "deadbeef" * 8,
         "status": AgentStatus.UPLOADED,
-        "ip_address": "192.0.2.1",
         "created_at": datetime(2026, 5, 19, 12, 0, tzinfo=UTC),
     }
     base.update(overrides)
@@ -90,20 +89,7 @@ class TestAgentRoundTrip:
         assert result.name == original.name
         assert result.sha256 == original.sha256
         assert result.status is AgentStatus.EVALUATING
-        assert result.ip_address == original.ip_address
         assert result.created_at == original.created_at
-
-    async def test_ip_address_nullable(self, session: AsyncSession):
-        original = make_agent(ip_address=None)
-        session.add(original)
-        await session.commit()
-
-        result = await session.scalar(
-            select(Agent).where(Agent.agent_id == original.agent_id)
-        )
-
-        assert result is not None
-        assert result.ip_address is None
 
 
 class TestEvaluationPaymentRoundTrip:

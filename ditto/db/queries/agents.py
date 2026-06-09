@@ -28,7 +28,6 @@ async def insert_agent(
     miner_hotkey: str,
     name: str,
     sha256: str,
-    ip_address: str | None,
 ) -> None:
     """Insert one ``agents`` row inside the caller-owned transaction.
 
@@ -50,7 +49,6 @@ async def insert_agent(
         miner_hotkey=miner_hotkey,
         name=name,
         sha256=sha256,
-        ip_address=ip_address,
     )
     session.add(row)
     try:
