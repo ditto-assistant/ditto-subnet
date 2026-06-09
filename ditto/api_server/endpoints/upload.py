@@ -259,7 +259,6 @@ async def upload_agent(
     # 8. Atomic DB tx: agent + payment commit together or roll back
     # together. A replayed payment proof surfaces as PaymentReplayedError
     # (3207) and the envelope handler maps it to HTTP 402.
-    ip_address = request.client.host if request.client else None
     async with session.begin():
         await insert_agent(
             session,
@@ -267,7 +266,6 @@ async def upload_agent(
             miner_hotkey=hotkey,
             name=name,
             sha256=sha256,
-            ip_address=ip_address,
         )
         await insert_evaluation_payment(session, verified=verified, agent_id=agent_id)
 

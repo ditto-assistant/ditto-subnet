@@ -14,9 +14,10 @@ from ditto.db.models import AgentStatus
 class AgentResponse(BaseModel):
     """Returned by ``GET /retrieval/agent-by-hotkey``.
 
-    Excludes ``ip_address`` deliberately. The column is captured at upload
-    for audit-only retention but never surfaced over HTTP; a follow-up PR
-    removes the column entirely.
+    Mirrors the public-safe shape of the ``agents`` row. Client-side
+    connection metadata (the request's source IP) is never retained or
+    surfaced; the corresponding column was dropped from the schema once
+    no read path consumed it.
     """
 
     agent_id: Annotated[UUID, Field(description="Server-generated agent identifier.")]

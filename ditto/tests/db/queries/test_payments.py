@@ -100,7 +100,6 @@ class TestInsertEvaluationPaymentHappyPath:
                 miner_hotkey=verified.miner_hotkey,
                 name="alpha-agent",
                 sha256="deadbeef" * 8,
-                ip_address=None,
             )
             await insert_evaluation_payment(
                 session, verified=verified, agent_id=agent_id

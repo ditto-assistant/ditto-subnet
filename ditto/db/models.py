@@ -103,9 +103,6 @@ class Agent(Base):
     )
     """Current state in the submission state machine."""
 
-    ip_address: Mapped[str | None] = mapped_column(Text, nullable=True)
-    """Source IP of the upload request, for audit. ``NULL`` when not recorded."""
-
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,

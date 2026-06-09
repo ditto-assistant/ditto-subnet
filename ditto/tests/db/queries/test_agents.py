@@ -30,7 +30,6 @@ def _make_kwargs(**overrides: object) -> dict[str, object]:
         "miner_hotkey": "5HKAlphaHotkey",
         "name": "alpha-agent",
         "sha256": "deadbeef" * 8,
-        "ip_address": "192.0.2.1",
     }
     base.update(overrides)
     return base
@@ -43,7 +42,6 @@ async def _seed_agent(
     miner_hotkey: str = "5HKAlphaHotkey",
     name: str = "alpha-agent",
     sha256: str = "deadbeef" * 8,
-    ip_address: str | None = "192.0.2.1",
     status: AgentStatus = AgentStatus.UPLOADED,
     created_at: datetime | None = None,
 ) -> Agent:
@@ -57,7 +55,6 @@ async def _seed_agent(
         miner_hotkey=miner_hotkey,
         name=name,
         sha256=sha256,
-        ip_address=ip_address,
         status=status,
     )
     if created_at is not None:
@@ -81,7 +78,6 @@ class TestInsertAgentHappyPath:
         assert row.miner_hotkey == kwargs["miner_hotkey"]
         assert row.name == kwargs["name"]
         assert row.sha256 == kwargs["sha256"]
-        assert row.ip_address == kwargs["ip_address"]
 
     async def test_status_defaults_to_uploaded(self, session: AsyncSession):
         """The schema default places new rows in the initial state. The
@@ -96,18 +92,6 @@ class TestInsertAgentHappyPath:
             )
         ).scalar_one()
         assert row.status == AgentStatus.UPLOADED
-
-    async def test_ip_address_optional(self, session: AsyncSession):
-        kwargs = _make_kwargs(ip_address=None)
-        async with session.begin():
-            await insert_agent(session, **kwargs)  # type: ignore[arg-type]
-
-        row = (
-            await session.execute(
-                select(Agent).where(Agent.agent_id == kwargs["agent_id"])
-            )
-        ).scalar_one()
-        assert row.ip_address is None
 
 
 class TestInsertAgentConstraintViolations:
@@ -144,7 +128,6 @@ class TestKeywordOnlyContract:
                 "5HKsomething",
                 "name",
                 "deadbeef" * 8,
-                None,
             )
 
 
