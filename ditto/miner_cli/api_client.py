@@ -61,9 +61,32 @@ class ApiClient:
     is closed via context manager so connections release promptly.
     """
 
-    def __init__(self, *, base_url: str, timeout_s: float = DEFAULT_TIMEOUT_S) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._client = httpx.Client(base_url=self._base_url, timeout=timeout_s)
+    def __init__(
+        self,
+        *,
+        base_url: str = "",
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+        client: httpx.Client | None = None,
+    ) -> None:
+        """Build an ApiClient.
+
+        Args:
+            base_url: Base URL for the API. Used only when ``client`` is
+                None (the production path).
+            timeout_s: Per-request timeout. Used only when ``client`` is
+                None.
+            client: Pre-built ``httpx.Client``. When supplied, the
+                ApiClient reuses it verbatim and ``base_url`` /
+                ``timeout_s`` are ignored. Integration tests inject a
+                :class:`fastapi.testclient.TestClient` here so requests
+                hit the ASGI app via anyio instead of the network.
+        """
+        if client is not None:
+            self._client = client
+            self._base_url = str(client.base_url).rstrip("/")
+        else:
+            self._base_url = base_url.rstrip("/")
+            self._client = httpx.Client(base_url=self._base_url, timeout=timeout_s)
 
     def __enter__(self) -> ApiClient:
         return self

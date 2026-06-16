@@ -19,7 +19,7 @@ HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 
 
 def make_args(**overrides: object) -> argparse.Namespace:
-    base = {
+    base: dict[str, object] = {
         "agent_id": None,
         "coldkey_name": None,
         "hotkey_name": None,

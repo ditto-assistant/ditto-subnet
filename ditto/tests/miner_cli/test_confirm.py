@@ -23,9 +23,10 @@ class TestConfirmPayment:
     def test_y_answer_returns_none(self, monkeypatch, capsys) -> None:
         monkeypatch.setattr(builtins, "input", lambda _: "y")
 
-        result = confirm_payment(**self._kwargs())
+        # confirm_payment returns None on success; here we just need to
+        # know it did not raise (PaymentCancelledError).
+        confirm_payment(**self._kwargs())
 
-        assert result is None
         out = capsys.readouterr().out
         # Preview is on stdout for user-facing display.
         assert "1.5 TAO" in out

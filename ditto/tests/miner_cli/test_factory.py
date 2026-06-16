@@ -12,7 +12,7 @@ from ditto.miner_cli.models import MinerCliConfig
 
 def make_ns(**overrides: object) -> argparse.Namespace:
     """Build an :class:`argparse.Namespace` with sensible defaults for tests."""
-    base = {"network": "mainnet"}
+    base: dict[str, object] = {"network": "mainnet"}
     base.update(overrides)
     return argparse.Namespace(**base)
 
