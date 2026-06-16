@@ -29,7 +29,7 @@ class TarStructureError(MinerCliError):
     This can happen when:
     - The path supplied to ``ditto upload`` / ``ditto verify`` does not exist
       or is not a regular file.
-    - The file exceeds the 2 MB upload limit enforced by the API (the CLI
+    - The file exceeds the 200 MB upload limit enforced by the API (the CLI
       checks locally so miners do not pay for an upload the server will reject).
     - The gzip layer is invalid (truncated download, wrong format).
     - The inner tar cannot be opened by :mod:`tarfile`.

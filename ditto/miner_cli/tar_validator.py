@@ -29,10 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 # Must match the server constant at
-# ditto/api_server/endpoints/upload.py:78. Duplicated here so the CLI
-# can reject oversize tars before bothering the API; if either side
-# changes, both should change.
-MAX_TARBALL_SIZE_BYTES = 2 * 1024 * 1024
+# ditto/api_server/endpoints/upload.py:MAX_TARBALL_SIZE_BYTES.
+# Duplicated here so the CLI can reject oversize tars before bothering
+# the API; if either side changes, both must change.
+MAX_TARBALL_SIZE_BYTES = 200 * 1024 * 1024
 
 
 def run_preflight(tar_path: Path) -> PreflightResult:

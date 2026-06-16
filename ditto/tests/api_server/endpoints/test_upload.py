@@ -175,8 +175,10 @@ class TestUploadCheck:
     async def test_tarball_too_large_returns_1102(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
+        from ditto.api_server.endpoints.upload import MAX_TARBALL_SIZE_BYTES
+
         override_get_chain_client(app)
-        body = _signed_request_body(file_size_bytes=3 * 1024 * 1024)  # 3 MB
+        body = _signed_request_body(file_size_bytes=MAX_TARBALL_SIZE_BYTES + 1)
         response = await client.post("/api/v1/upload/check", json=body)
         assert response.status_code == 200
         result = response.json()
@@ -196,7 +198,9 @@ class TestUploadCheck:
             return chain
 
         app.dependency_overrides[get_chain_client] = _fake_chain
-        body = _signed_request_body(file_size_bytes=3 * 1024 * 1024)
+        from ditto.api_server.endpoints.upload import MAX_TARBALL_SIZE_BYTES
+
+        body = _signed_request_body(file_size_bytes=MAX_TARBALL_SIZE_BYTES + 1)
         body["signature"] = _BAD_SIG
         response = await client.post("/api/v1/upload/check", json=body)
         result = response.json()
@@ -494,11 +498,15 @@ class TestUploadAgentValidationFailures:
         assert response.status_code == 400
         assert "sha256" in response.json()["message"]
 
+    @pytest.mark.slow
     async def test_oversized_tarball_returns_413(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
+        from ditto.api_server.endpoints.upload import MAX_TARBALL_SIZE_BYTES
+
         _wire_full_stack(app)
-        oversized = b"\x1f\x8b" + b"x" * (3 * 1024 * 1024)
+        # 1 KiB above the cap so the streaming guard fires.
+        oversized = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES + 1024)
         big_sha = hashlib.sha256(oversized).hexdigest()
         kp = bittensor.Keypair.create_from_uri("//Alice")
         payload = f"{kp.ss58_address}:{big_sha}".encode()
@@ -619,8 +627,16 @@ class TestUploadAgentStorageFailure:
 
 class TestUploadAgentBoundaries:
     """Pin boundary values whose off-by-one regressions would silently
-    reject legitimate uploads or accept malformed ones."""
+    reject legitimate uploads or accept malformed ones.
 
+    The two ``test_size_*_cap`` cases are marked ``slow`` because each
+    one allocates and hashes a buffer at the configured size cap; at
+    the 200 MB launch ceiling that is a multi-second test. Excluded
+    from the default suite via the ``-m "not slow"`` addopts; the
+    other boundary cases in this class stay in the default suite.
+    """
+
+    @pytest.mark.slow
     async def test_size_exactly_at_cap_accepted(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
@@ -652,6 +668,7 @@ class TestUploadAgentBoundaries:
 
         assert response.status_code == 200, response.text
 
+    @pytest.mark.slow
     async def test_size_one_over_cap_rejected(
         self, app: FastAPI, client: httpx.AsyncClient
     ):

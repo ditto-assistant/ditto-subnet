@@ -73,5 +73,11 @@ def bad_gzip_tar(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def oversize_tar(tmp_path: Path) -> Path:
-    # MAX is 2 MiB; build something 3 MiB.
-    return _write_too_large(tmp_path / "huge.tar.gz", target_bytes=3 * 1024 * 1024)
+    # Build a file 1 KiB above the configured cap so the fixture tracks
+    # any future cap changes without manual updates.
+    from ditto.miner_cli.tar_validator import MAX_TARBALL_SIZE_BYTES
+
+    return _write_too_large(
+        tmp_path / "huge.tar.gz",
+        target_bytes=MAX_TARBALL_SIZE_BYTES + 1024,
+    )
