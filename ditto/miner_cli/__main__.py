@@ -18,6 +18,7 @@ import os
 import sys
 
 from ditto.miner_cli.commands import status as status_cmd
+from ditto.miner_cli.commands import upload as upload_cmd
 from ditto.miner_cli.commands import verify as verify_cmd
 from ditto.miner_cli.errors import MinerCliError
 from ditto.miner_cli.network import NETWORKS
@@ -51,8 +52,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
-    verify_cmd.add_subparser(subparsers)
+    upload_cmd.add_subparser(subparsers)
     status_cmd.add_subparser(subparsers)
+    verify_cmd.add_subparser(subparsers)
 
     return parser
 

@@ -24,6 +24,9 @@ dependencies = [
     "aioboto3>=13.0",
 ]
 
+[project.scripts]
+ditto = "ditto.miner_cli.__main__:main"
+
 [tool.uv.sources]
 bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
 
