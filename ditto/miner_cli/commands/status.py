@@ -1,4 +1,4 @@
-"""``ditto status`` — poll lifecycle by agent id or wallet hotkey.
+"""``ditto status``: poll lifecycle by agent id or wallet hotkey.
 
 Two resolution modes:
 

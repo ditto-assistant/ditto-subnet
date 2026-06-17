@@ -324,7 +324,7 @@ class TestUploadFailurePaths:
     ) -> None:
         """Chain rejected the extrinsic before it landed in a block; no
         money left the wallet. Exit 1 with stderr message but NO proof
-        tuple printed — there is no proof, and printing one would mislead
+        tuple printed: there is no proof, and printing one would mislead
         the miner into thinking they paid."""
         client = MagicMock()
         client.post_upload_check.return_value = _ok_check()
@@ -359,7 +359,7 @@ class TestUploadFailurePaths:
         captured = capsys.readouterr()
         assert rc == 1
         assert "insufficient balance" in captured.err
-        # No proof tuple — money never left.
+        # No proof tuple: money never left.
         assert "block_hash:" not in captured.err
         # post_upload_agent must NOT be called after a payment failure.
         client.post_upload_agent.assert_not_called()
@@ -459,7 +459,7 @@ class TestUploadFailurePaths:
         """API goes down between payment and /upload/agent: connect-refused
         bubbles up as a generic ApiResponseError (not the specific
         UploadAgentRejectedError). The proof tuple must STILL surface so
-        the miner has it for support — money is on chain regardless of
+        the miner has it for support; money is on chain regardless of
         whether the API rejected or was unreachable."""
         client = MagicMock()
         client.post_upload_check.return_value = _ok_check()

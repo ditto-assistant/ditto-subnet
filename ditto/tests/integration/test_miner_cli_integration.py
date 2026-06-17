@@ -209,7 +209,7 @@ def _install_cli_api_client_patches(test_client: TestClient) -> list:
 
     The constructor returns a MagicMock context manager whose
     ``__enter__`` yields a real :class:`ApiClient` wrapping the shared
-    TestClient and whose ``__exit__`` does nothing — bypassing the
+    TestClient and whose ``__exit__`` does nothing, bypassing the
     real ``ApiClient.__exit__`` that would otherwise close the
     TestClient mid-test. (Python looks up dunders on the class, not
     the instance, so we cannot patch ``__exit__`` on the api_client

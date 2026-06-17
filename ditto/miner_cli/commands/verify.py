@@ -1,4 +1,4 @@
-"""``ditto verify`` — local pre-flight without paying.
+"""``ditto verify``: local pre-flight without paying.
 
 Wraps :func:`ditto.miner_cli.tar_validator.run_preflight`, prints a
 per-check status table to stdout, and exits 0 on clean / 1 on any real

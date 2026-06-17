@@ -1,7 +1,7 @@
 """Unit tests for :mod:`ditto.miner_cli.models`.
 
 Pin the contract callers depend on:
-- frozen — mutation raises
+- frozen: mutation raises
 - ``PreflightResult.passed`` ignores deferred checks
 """
 

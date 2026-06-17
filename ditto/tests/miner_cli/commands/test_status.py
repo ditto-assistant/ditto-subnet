@@ -210,7 +210,7 @@ class TestStatusByHotkey:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """``WalletNotFoundError`` from load_wallet must surface as a
-        friendly stderr message + exit 1 — not a raw traceback."""
+        friendly stderr message + exit 1, not a raw traceback."""
         with (
             patch(
                 "ditto.miner_cli.commands.status.load_wallet",
@@ -228,7 +228,7 @@ class TestStatusByHotkey:
         captured = capsys.readouterr()
         assert exit_code == 1
         assert "wallet error" in captured.err
-        # No leak to stdout — scripts piping --json output must not see this.
+        # No leak to stdout: scripts piping --json output must not see this.
         assert captured.out == ""
 
 

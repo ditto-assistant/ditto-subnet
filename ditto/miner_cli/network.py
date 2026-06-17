@@ -44,11 +44,10 @@ NETWORKS: dict[str, NetworkConfig] = {
 """Canonical (API URL, subtensor network) pairs keyed by user-facing name.
 
 ``finney`` (mainnet) and ``test`` (testnet) API URLs are placeholders
-until the API host is provisioned (tracked in
-``IMPLEMENTATION-PHASES.md`` Phase 7). The ``local`` entry points at
-the local docker-compose stack used by integration tests and manual
-smoke; the matching subtensor must be supplied by the developer
-(bittensor's localnet workflow, not bundled in this repo).
+until the API host is provisioned. The ``local`` entry points at the
+local docker-compose stack used by integration tests and manual smoke;
+the matching subtensor must be supplied by the developer (bittensor's
+localnet workflow, not bundled in this repo).
 """
 
 

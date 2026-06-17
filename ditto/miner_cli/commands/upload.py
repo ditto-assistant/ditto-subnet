@@ -1,4 +1,4 @@
-"""``ditto upload`` — full 10-step submission flow.
+"""``ditto upload``: full 10-step submission flow.
 
 Glues every other module together. Walk:
 

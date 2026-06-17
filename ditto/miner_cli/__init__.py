@@ -1,4 +1,4 @@
-"""Miner-side CLI process — the ``ditto`` command miners run to upload.
+"""Miner-side CLI process: the ``ditto`` command miners run to upload.
 
 The CLI consumes the HTTP API exposed by :mod:`ditto.api_server` and
 submits one chain operation directly via the raw bittensor SDK: a
@@ -9,9 +9,9 @@ CLI itself never reaches for Pylon or :class:`ditto.chain.ChainClient`.
 
 Three subcommands ship here:
 
-- ``ditto upload <tar>`` — full 10-step submission flow
-- ``ditto status [agent_id]`` — poll lifecycle by id or wallet hotkey
-- ``ditto verify <tar>`` — pure-local pre-flight without paying
+- ``ditto upload <tar>``: full 10-step submission flow
+- ``ditto status [agent_id]``: poll lifecycle by id or wallet hotkey
+- ``ditto verify <tar>``: pure-local pre-flight without paying
 
 A fourth subcommand (``ditto logs``) is part of the locked CLI surface
 in ``context-docs/MVP-SPEC.md §14`` but its target endpoint is not yet

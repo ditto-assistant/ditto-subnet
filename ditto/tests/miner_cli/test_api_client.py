@@ -279,7 +279,7 @@ class TestAgentByHotkey:
 
 class TestTransportErrors:
     """Transport-level failures must surface as :class:`ApiResponseError`
-    with a friendly message — not raw ``httpx`` tracebacks.
+    with a friendly message, not raw ``httpx`` tracebacks.
 
     The mock transport's handler raises the relevant ``httpx`` exception
     so the request never gets a response; ``_request`` is the
