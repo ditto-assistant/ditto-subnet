@@ -13,7 +13,12 @@ import pytest
 from ditto.api_models.retrieval import AgentResponse, AgentStatusResponse
 from ditto.db.models import AgentStatus
 from ditto.miner_cli.commands.status import run
-from ditto.miner_cli.errors import AgentNotFoundError, HotkeyAgentNotFoundError
+from ditto.miner_cli.errors import (
+    AgentNotFoundError,
+    ApiResponseError,
+    HotkeyAgentNotFoundError,
+    WalletNotFoundError,
+)
 
 HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 
@@ -156,3 +161,118 @@ class TestStatusByHotkey:
 
         assert exit_code == 3
         assert capsys.readouterr().err
+
+    def test_json_flag_emits_full_shape(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The hotkey-fallback ``--json`` path emits a richer body than
+        the by-id path (miner_hotkey, name, sha256, created_at). Pin the
+        full shape so script consumers do not break silently if a field
+        is renamed or dropped."""
+        client = MagicMock()
+        agent_id = uuid4()
+        client.get_agent_by_hotkey.return_value = AgentResponse(
+            agent_id=agent_id,
+            miner_hotkey=HOTKEY,
+            name="alpha",
+            status=AgentStatus.UPLOADED,
+            sha256="ab" * 32,
+            created_at=datetime(2026, 6, 16, 12, 0, tzinfo=UTC),
+        )
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY)
+        with (
+            patch(
+                "ditto.miner_cli.commands.status.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.status.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            run(make_args(coldkey_name="miner", hotkey_name="default", json=True))
+
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert set(payload.keys()) == {
+            "agent_id",
+            "miner_hotkey",
+            "name",
+            "status",
+            "sha256",
+            "created_at",
+        }
+        assert payload["agent_id"] == str(agent_id)
+        assert payload["miner_hotkey"] == HOTKEY
+        assert payload["status"] == "uploaded"
+
+    def test_wallet_not_found_returns_exit_one(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``WalletNotFoundError`` from load_wallet must surface as a
+        friendly stderr message + exit 1 — not a raw traceback."""
+        with (
+            patch(
+                "ditto.miner_cli.commands.status.load_wallet",
+                side_effect=WalletNotFoundError(
+                    "could not load hotkey for coldkey='bogus' hotkey='default'"
+                ),
+            ),
+            patch(
+                "ditto.miner_cli.commands.status.ApiClient",
+                _patch_api_client(MagicMock()),
+            ),
+        ):
+            exit_code = run(make_args(coldkey_name="bogus", hotkey_name="default"))
+
+        captured = capsys.readouterr()
+        assert exit_code == 1
+        assert "wallet error" in captured.err
+        # No leak to stdout — scripts piping --json output must not see this.
+        assert captured.out == ""
+
+
+class TestStatusErrorOutputSeparation:
+    """Pin the invariant that error messages stay on stderr so ``--json``
+    consumers piping stdout to ``jq`` get clean JSON or nothing."""
+
+    def test_generic_api_error_exits_one_with_stderr_only(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agent_id = uuid4()
+        client = MagicMock()
+        client.get_agent_status.side_effect = ApiResponseError(
+            "agent-status failed: HTTP 503 code=3000 server error"
+        )
+
+        with patch(
+            "ditto.miner_cli.commands.status.ApiClient", _patch_api_client(client)
+        ):
+            exit_code = run(make_args(agent_id=agent_id))
+
+        captured = capsys.readouterr()
+        assert exit_code == 1
+        assert "api error" in captured.err
+        assert "503" in captured.err
+        # Critical for --json consumers: stdout must be empty on error.
+        assert captured.out == ""
+
+    def test_not_found_error_does_not_leak_to_stdout(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Repeats the 404 test from above but specifically pins
+        stdout=empty so a future refactor cannot accidentally print
+        the error message to stdout."""
+        agent_id = uuid4()
+        client = MagicMock()
+        client.get_agent_status.side_effect = AgentNotFoundError("not found")
+
+        with patch(
+            "ditto.miner_cli.commands.status.ApiClient", _patch_api_client(client)
+        ):
+            exit_code = run(make_args(agent_id=agent_id))
+
+        captured = capsys.readouterr()
+        assert exit_code == 3
+        assert captured.out == ""
+        assert captured.err

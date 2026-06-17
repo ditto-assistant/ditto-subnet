@@ -41,6 +41,17 @@ def _write_bad_gzip(dest: Path) -> Path:
     return dest
 
 
+def _write_empty_tar(dest: Path) -> Path:
+    """A valid empty .tar.gz (zero entries). Edge case: the structure
+    parses cleanly but the tar contains nothing. Real preflight checks
+    must still pass because we are validating containers, not contents."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz"):
+        pass
+    dest.write_bytes(buf.getvalue())
+    return dest
+
+
 def _write_too_large(dest: Path, *, target_bytes: int) -> Path:
     """A valid gzip stream whose payload is forcibly oversize on disk.
 
@@ -69,6 +80,11 @@ def good_tar(tmp_path: Path) -> Path:
 @pytest.fixture
 def bad_gzip_tar(tmp_path: Path) -> Path:
     return _write_bad_gzip(tmp_path / "bad_gzip.tar.gz")
+
+
+@pytest.fixture
+def empty_tar(tmp_path: Path) -> Path:
+    return _write_empty_tar(tmp_path / "empty.tar.gz")
 
 
 @pytest.fixture
