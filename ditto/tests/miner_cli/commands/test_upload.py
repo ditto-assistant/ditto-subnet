@@ -31,7 +31,10 @@ from ditto.api_models import (
 from ditto.db.models import AgentStatus
 from ditto.miner_cli.commands.upload import run
 from ditto.miner_cli.errors import (
+    ApiResponseError,
     PaymentCancelledError,
+    PaymentFinalizationTimeoutError,
+    PaymentSubmissionError,
     UploadAgentRejectedError,
 )
 from ditto.miner_cli.models import PaymentReceipt, PreflightCheckResult, PreflightResult
@@ -315,3 +318,409 @@ class TestUploadFailurePaths:
         assert receipt.block_hash in err
         assert str(receipt.block_number) in err
         assert str(receipt.extrinsic_index) in err
+
+    def test_payment_submission_failure_exits_one_no_proof_surfaced(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Chain rejected the extrinsic before it landed in a block; no
+        money left the wallet. Exit 1 with stderr message but NO proof
+        tuple printed — there is no proof, and printing one would mislead
+        the miner into thinking they paid."""
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                side_effect=PaymentSubmissionError("insufficient balance"),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar))
+
+        captured = capsys.readouterr()
+        assert rc == 1
+        assert "insufficient balance" in captured.err
+        # No proof tuple — money never left.
+        assert "block_hash:" not in captured.err
+        # post_upload_agent must NOT be called after a payment failure.
+        client.post_upload_agent.assert_not_called()
+
+    def test_payment_finalization_timeout_exits_one(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Extrinsic was submitted but did not finalise in time. Ambiguous
+        whether money left or not. CLI exits 1 with stderr message; user
+        can check chain via btcli or wait + retry."""
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                side_effect=PaymentFinalizationTimeoutError("60s elapsed"),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar))
+
+        captured = capsys.readouterr()
+        assert rc == 1
+        assert (
+            "60s" in captured.err
+            or "finalise" in captured.err.lower()
+            or "timeout" in captured.err.lower()
+        )
+        client.post_upload_agent.assert_not_called()
+
+    def test_check_rejection_with_multiple_codes_prints_all(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The server returns parallel error_codes + messages arrays so
+        every rejection surfaces in one round trip. Each code must
+        appear in stderr so the miner sees the full picture, not just
+        the first rejection."""
+        client = MagicMock()
+        client.post_upload_check.return_value = UploadCheckResponse(
+            ok=False,
+            error_codes=[1100, 1101, 1102],
+            messages=["bad sig", "not registered", "too large"],
+        )
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment"),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar))
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        for code in ("1100", "1101", "1102"):
+            assert code in err, f"missing rejection code {code} in stderr"
+        for msg in ("bad sig", "not registered", "too large"):
+            assert msg in err, f"missing rejection message {msg!r} in stderr"
+
+    def test_transport_error_after_payment_surfaces_proof(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """API goes down between payment and /upload/agent: connect-refused
+        bubbles up as a generic ApiResponseError (not the specific
+        UploadAgentRejectedError). The proof tuple must STILL surface so
+        the miner has it for support — money is on chain regardless of
+        whether the API rejected or was unreachable."""
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+        # Note: bare ApiResponseError, NOT UploadAgentRejectedError.
+        # Simulates the api_client._request connect-refused wrapper raising.
+        client.post_upload_agent.side_effect = ApiResponseError(
+            "api unreachable at http://localhost:8000: connection refused"
+        )
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=receipt,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar))
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        # The CRITICAL invariant: proof tuple surfaces even on transport
+        # failure post-payment, not just on server-side rejection.
+        assert receipt.block_hash in err
+        assert str(receipt.block_number) in err
+        assert str(receipt.extrinsic_index) in err
+
+
+class TestUploadWireCorrectness:
+    """Pin that values flow through the orchestrator to the right sink.
+
+    Money-flow code: if amount, dest_address, or subtensor_network are
+    mis-wired, real TAO lands in the wrong place. These tests assert
+    the exact arguments passed to ``submit_eval_payment``."""
+
+    def test_pricing_amount_wired_to_payment_call(self, good_tar: Path) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = EvalPricingResponse(
+            amount_rao=2_750_000_000, send_address=DEST
+        )
+        client.post_upload_agent.return_value = _upload_response()
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ) as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            assert run(make_args(good_tar)) == 0
+
+        kwargs = pay.call_args.kwargs
+        assert kwargs["amount_rao"] == 2_750_000_000, (
+            "amount from /upload/eval-pricing must flow into "
+            "submit_eval_payment unchanged; mis-wiring sends wrong fee"
+        )
+
+    def test_pricing_send_address_wired_to_payment_call(self, good_tar: Path) -> None:
+        custom_dest = "5FCfAonRZgTFrTd9HREEyeJjDpT397KMzizE6T3DvebLFE7n"
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = EvalPricingResponse(
+            amount_rao=1_500_000_000, send_address=custom_dest
+        )
+        client.post_upload_agent.return_value = _upload_response()
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ) as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            assert run(make_args(good_tar)) == 0
+
+        kwargs = pay.call_args.kwargs
+        assert kwargs["dest_address"] == custom_dest, (
+            "dest_address from /upload/eval-pricing must flow into "
+            "submit_eval_payment unchanged; mis-wiring sends TAO to "
+            "the wrong recipient"
+        )
+
+    @pytest.mark.parametrize(
+        ("network_name", "expected_subtensor"),
+        [
+            ("finney", "finney"),
+            ("test", "test"),
+            ("local", "local"),
+        ],
+    )
+    def test_network_subtensor_wired_to_payment_call(
+        self, good_tar: Path, network_name: str, expected_subtensor: str
+    ) -> None:
+        """Cross-chain safety: the subtensor identifier from the resolved
+        ``NetworkConfig`` must reach ``submit_eval_payment``. If a refactor
+        breaks this wire, the miner could pay on the wrong chain entirely."""
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.return_value = _upload_response()
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ) as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            assert run(make_args(good_tar, network=network_name)) == 0
+
+        kwargs = pay.call_args.kwargs
+        assert kwargs["subtensor_network"] == expected_subtensor
+
+
+class TestUploadConfirmBypass:
+    """``-y`` / ``--yes`` translates to ``confirm_payment(skip=True)``.
+    Regression guard: a refactor that drops the wire would silently
+    re-introduce interactive prompts in scripted contexts."""
+
+    def test_yes_flag_passes_skip_true_to_confirm(self, good_tar: Path) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.return_value = _upload_response()
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.confirm_payment",
+            ) as confirm,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            assert run(make_args(good_tar, yes=True)) == 0
+
+        assert confirm.call_args.kwargs["skip"] is True
+
+    def test_no_yes_flag_passes_skip_false_to_confirm(self, good_tar: Path) -> None:
+        """Inverse: without --yes the confirm must be called with
+        skip=False so the interactive prompt actually fires."""
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.return_value = _upload_response()
+
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.confirm_payment",
+            ) as confirm,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            assert run(make_args(good_tar, yes=False)) == 0
+
+        assert confirm.call_args.kwargs["skip"] is False

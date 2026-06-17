@@ -210,10 +210,15 @@ def _run_upload(
                     signature=signature_hex,
                     payment=receipt,
                 )
-        except UploadAgentRejectedError as e:
-            # Money is on chain. Surface the proof so support can investigate.
+        except ApiResponseError as e:
+            # Money is on chain. Any post-payment API failure (server
+            # rejection OR transport error like connect-refused / timeout)
+            # must surface the proof so the miner can take it to support.
+            # Catching the ApiResponseError base covers UploadAgentRejectedError
+            # subclasses AND the bare transport-wrapped errors raised by
+            # api_client._request.
             print(
-                f"\nupload rejected after payment. "
+                f"\nupload failed after payment. "
                 f"Keep this proof for support:\n"
                 f"  block_hash:       {receipt.block_hash}\n"
                 f"  block_number:     {receipt.block_number}\n"
