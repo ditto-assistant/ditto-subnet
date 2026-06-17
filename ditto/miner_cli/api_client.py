@@ -12,6 +12,10 @@ Error mapping:
   attached to the exception for verbose logging
 - 404 on ``/retrieval/agent/{id}/status`` → :class:`AgentNotFoundError`
 - 404 on ``/retrieval/agent-by-hotkey`` → :class:`HotkeyAgentNotFoundError`
+- Transport-level failures (connection refused, timeout, DNS, TLS) →
+  :class:`ApiResponseError` with a friendly message naming the
+  base URL, so miners do not see raw ``httpx`` tracebacks when the
+  API is down or unreachable.
 """
 
 from __future__ import annotations
@@ -97,11 +101,41 @@ class ApiClient:
     def close(self) -> None:
         self._client.close()
 
+    # ---- transport-level wrapper ----------------------------------------
+
+    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Issue an HTTP request, translating transport faults to typed errors.
+
+        ``httpx.ConnectError``, ``httpx.TimeoutException``, and any other
+        :class:`httpx.RequestError` subclass surface as
+        :class:`ApiResponseError` with a friendly message naming the
+        base URL so miners see something they can act on instead of a
+        raw traceback. Response-level errors (non-2xx status) are NOT
+        mapped here; each caller maps them based on endpoint semantics.
+        """
+        try:
+            return self._client.request(method, path, **kwargs)
+        except httpx.ConnectError as e:
+            raise ApiResponseError(
+                f"api unreachable at {self._base_url}: {e}. "
+                f"Hint: confirm the API is running and --network matches "
+                f"your deployment."
+            ) from e
+        except httpx.TimeoutException as e:
+            raise ApiResponseError(
+                f"api request timed out at {self._base_url}: {e}"
+            ) from e
+        except httpx.RequestError as e:
+            # Catch-all for other transport faults (DNS, TLS, etc.).
+            raise ApiResponseError(
+                f"api request failed at {self._base_url}: {e}"
+            ) from e
+
     # ---- /upload/eval-pricing -------------------------------------------
 
     def get_eval_pricing(self) -> EvalPricingResponse:
         """Fetch the current upload fee + send address."""
-        response = self._client.get("/api/v1/upload/eval-pricing")
+        response = self._request("GET", "/api/v1/upload/eval-pricing")
         if response.status_code != 200:
             raise ApiResponseError(_format_error(response, prefix="eval-pricing"))
         return EvalPricingResponse.model_validate(response.json())
@@ -119,7 +153,8 @@ class ApiClient:
         Non-2xx HTTP responses (server-side failures, validation errors)
         still raise :class:`ApiResponseError`.
         """
-        response = self._client.post(
+        response = self._request(
+            "POST",
             "/api/v1/upload/check",
             json=body.model_dump(mode="json"),
         )
@@ -161,7 +196,8 @@ class ApiClient:
             "payment_block_number": str(payment.block_number),
             "payment_extrinsic_index": str(payment.extrinsic_index),
         }
-        response = self._client.post(
+        response = self._request(
+            "POST",
             "/api/v1/upload/agent",
             files=files,
             data=data,
@@ -175,7 +211,7 @@ class ApiClient:
     # ---- /retrieval/agent/{id}/status -----------------------------------
 
     def get_agent_status(self, *, agent_id: UUID) -> AgentStatusResponse:
-        response = self._client.get(f"/api/v1/retrieval/agent/{agent_id}/status")
+        response = self._request("GET", f"/api/v1/retrieval/agent/{agent_id}/status")
         if response.status_code == 404:
             envelope = _safe_envelope(response)
             if envelope.get("error_code") == _ERROR_CODE_AGENT_NOT_FOUND:
@@ -187,7 +223,8 @@ class ApiClient:
     # ---- /retrieval/agent-by-hotkey -------------------------------------
 
     def get_agent_by_hotkey(self, *, miner_hotkey: str) -> AgentResponse:
-        response = self._client.get(
+        response = self._request(
+            "GET",
             "/api/v1/retrieval/agent-by-hotkey",
             params={"miner_hotkey": miner_hotkey},
         )

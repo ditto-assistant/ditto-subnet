@@ -275,3 +275,71 @@ class TestAgentByHotkey:
 
         with make_client(handler) as client, pytest.raises(HotkeyAgentNotFoundError):
             client.get_agent_by_hotkey(miner_hotkey=self.HOTKEY)
+
+
+class TestTransportErrors:
+    """Transport-level failures must surface as :class:`ApiResponseError`
+    with a friendly message — not raw ``httpx`` tracebacks.
+
+    The mock transport's handler raises the relevant ``httpx`` exception
+    so the request never gets a response; ``_request`` is the
+    translation point.
+    """
+
+    def test_connect_error_maps_to_api_response_error(self) -> None:
+        """API is down. Miner should see a single friendly line, not a
+        50-line traceback."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("Connection refused", request=request)
+
+        with make_client(handler) as client, pytest.raises(ApiResponseError) as e:
+            client.get_agent_status(agent_id=UUID(int=0))
+
+        msg = str(e.value)
+        assert "api unreachable" in msg
+        assert "http://test" in msg
+        # Message includes a hint so miners know what to check first.
+        assert "Hint" in msg or "hint" in msg
+
+    def test_timeout_maps_to_api_response_error(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("read timeout", request=request)
+
+        with make_client(handler) as client, pytest.raises(ApiResponseError) as e:
+            client.get_eval_pricing()
+
+        assert "timed out" in str(e.value)
+        assert "http://test" in str(e.value)
+
+    def test_other_request_error_maps_to_api_response_error(self) -> None:
+        """Catch-all path: DNS / TLS / other ``httpx.RequestError``
+        subclasses surface as ApiResponseError too, so the orchestrator
+        only ever needs to catch one symbol."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.UnsupportedProtocol("bad scheme", request=request)
+
+        with make_client(handler) as client, pytest.raises(ApiResponseError) as e:
+            client.get_agent_status(agent_id=UUID(int=0))
+
+        # Specifically NOT the more-specific subclasses.
+        assert not isinstance(e.value, HotkeyAgentNotFoundError)
+        assert not isinstance(e.value, AgentNotFoundError)
+        assert "http://test" in str(e.value)
+
+    def test_connect_error_chained_for_postmortem(self) -> None:
+        """The original httpx exception is chained via ``from e`` so a
+        ``-v`` run can still inspect the underlying cause without losing
+        the friendly message."""
+        original = None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal original
+            original = httpx.ConnectError("refused", request=request)
+            raise original
+
+        with make_client(handler) as client, pytest.raises(ApiResponseError) as e:
+            client.get_agent_status(agent_id=UUID(int=0))
+
+        assert isinstance(e.value.__cause__, httpx.ConnectError)
