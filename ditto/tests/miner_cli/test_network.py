@@ -14,7 +14,7 @@ from ditto.miner_cli.network import NETWORKS, resolve_network
 
 
 class TestResolveNetwork:
-    @pytest.mark.parametrize("name", ["mainnet", "testnet", "local"])
+    @pytest.mark.parametrize("name", ["finney", "test", "local"])
     def test_each_canonical_name_resolves(self, name: str) -> None:
         result = resolve_network(name)
 
@@ -25,23 +25,34 @@ class TestResolveNetwork:
 
     def test_returned_pair_is_the_table_entry(self) -> None:
         """The function returns the same object NETWORKS holds, not a copy."""
-        assert resolve_network("mainnet") is NETWORKS["mainnet"]
+        assert resolve_network("finney") is NETWORKS["finney"]
 
     def test_unknown_network_raises_value_error(self) -> None:
         with pytest.raises(ValueError) as excinfo:
             resolve_network("staging-canary")
 
         assert "staging-canary" in str(excinfo.value)
-        assert "mainnet" in str(excinfo.value)
+        assert "finney" in str(excinfo.value)
+
+    def test_colloquial_name_is_not_accepted(self) -> None:
+        """``mainnet`` / ``testnet`` are colloquial English; the SDK and
+        btcli reject them. Make sure we follow suit so the value flowing
+        through the CLI matches what bittensor expects verbatim."""
+        with pytest.raises(ValueError):
+            resolve_network("mainnet")
+        with pytest.raises(ValueError):
+            resolve_network("testnet")
 
 
 class TestNetworksTable:
-    def test_mainnet_uses_finney_subtensor(self) -> None:
-        """Production network must bind to mainnet chain."""
-        assert NETWORKS["mainnet"].subtensor_network == "finney"
+    def test_finney_is_mainnet_chain(self) -> None:
+        """``finney`` is the bittensor SDK identifier for mainnet. The
+        subtensor_network field echoes the dict key so there is no
+        translation layer to drift."""
+        assert NETWORKS["finney"].subtensor_network == "finney"
 
-    def test_testnet_uses_test_subtensor(self) -> None:
-        assert NETWORKS["testnet"].subtensor_network == "test"
+    def test_test_is_testnet_chain(self) -> None:
+        assert NETWORKS["test"].subtensor_network == "test"
 
     def test_local_uses_local_subtensor(self) -> None:
         assert NETWORKS["local"].subtensor_network == "local"

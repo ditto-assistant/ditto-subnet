@@ -22,7 +22,7 @@ class NetworkConfig:
     """
 
     name: str
-    """One of ``"mainnet"``, ``"testnet"``, ``"local"``."""
+    """One of ``"finney"`` (mainnet), ``"test"`` (testnet), ``"local"``."""
 
     api_url: str
     """Base URL of the Ditto API server for this network."""

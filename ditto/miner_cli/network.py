@@ -8,6 +8,13 @@ footgun: a wrong-network upload either gets rejected at
 real TAO to the wrong chain entirely. Exposing one ``--network`` flag
 backed by a lookup table is the smallest surface that cannot desync.
 
+Network identifiers (``finney`` / ``test`` / ``local``) match the
+bittensor SDK's canonical values verbatim (``bittensor.core.settings``
+``NETWORKS = ['finney', 'test', 'archive', 'local', 'latent-lite']``)
+and the btcli convention. ``finney`` is the mainnet identifier; the
+colloquial "mainnet" word is not accepted by the SDK or btcli, and we
+deliberately do not introduce a translation layer.
+
 If a real decoupled deployment ever appears (Phase 7 canary, staged
 rollout), add override flags additively without breaking the existing
 flag.
@@ -18,13 +25,13 @@ from __future__ import annotations
 from ditto.miner_cli.models import NetworkConfig
 
 NETWORKS: dict[str, NetworkConfig] = {
-    "mainnet": NetworkConfig(
-        name="mainnet",
+    "finney": NetworkConfig(
+        name="finney",
         api_url="https://api.ditto.subnet.ai",
         subtensor_network="finney",
     ),
-    "testnet": NetworkConfig(
-        name="testnet",
+    "test": NetworkConfig(
+        name="test",
         api_url="https://staging.api.ditto.subnet.ai",
         subtensor_network="test",
     ),
@@ -36,10 +43,12 @@ NETWORKS: dict[str, NetworkConfig] = {
 }
 """Canonical (API URL, subtensor network) pairs keyed by user-facing name.
 
-The mainnet and testnet URLs are placeholders until the API host is
-provisioned (tracked in ``IMPLEMENTATION-PHASES.md`` Phase 7). The
-``local`` entry points at the local docker-compose stack used by
-integration tests and manual smoke.
+``finney`` (mainnet) and ``test`` (testnet) API URLs are placeholders
+until the API host is provisioned (tracked in
+``IMPLEMENTATION-PHASES.md`` Phase 7). The ``local`` entry points at
+the local docker-compose stack used by integration tests and manual
+smoke; the matching subtensor must be supplied by the developer
+(bittensor's localnet workflow, not bundled in this repo).
 """
 
 
@@ -47,7 +56,8 @@ def resolve_network(name: str) -> NetworkConfig:
     """Return the :class:`NetworkConfig` for ``name``.
 
     Args:
-        name: One of ``"mainnet"``, ``"testnet"``, ``"local"``.
+        name: One of ``"finney"`` (mainnet), ``"test"`` (testnet),
+            ``"local"`` (developer's own local subtensor).
 
     Raises:
         ValueError: When ``name`` is not a known network. The argparse

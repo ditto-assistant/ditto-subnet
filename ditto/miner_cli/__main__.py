@@ -37,11 +37,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--network",
         choices=sorted(NETWORKS),
-        default=os.environ.get("DITTO_NETWORK", "mainnet"),
+        default=os.environ.get("DITTO_NETWORK", "finney"),
         help=(
             "Deployment network. Couples API URL + subtensor network "
-            "from a locked lookup table; cannot desync. "
-            "Defaults to mainnet / $DITTO_NETWORK."
+            "from a locked lookup table; cannot desync. Values match the "
+            "bittensor SDK identifiers: 'finney' is mainnet, 'test' is "
+            "testnet, 'local' is the developer's own localnet. "
+            "Defaults to finney / $DITTO_NETWORK."
         ),
     )
     parser.add_argument(
