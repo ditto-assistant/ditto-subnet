@@ -6,12 +6,12 @@ status so both ``ditto verify`` and ``ditto upload`` consume the same
 data shape.
 
 Several checks the design spec calls for (manifest format validation,
-Go import allowlist scan, sqlite schema diff against
-``schema/initial_harness.sql``) depend on artifacts that have not yet
-landed in this repo. Those checks ship as ``deferred=True`` stubs that
-log a warning and surface in the result table; they do not gate
-uploads. Once the harness interface repo lands, the stubs become real
-implementations without changing the public API of this module.
+dependency allowlist scan, schema diff against the reference harness
+schema) depend on artifacts the harness team still owns. Those checks
+ship as ``deferred=True`` stubs that log a warning and surface in the
+result table; they do not gate uploads. Once the harness team locks
+the submission spec, the stubs become real implementations without
+changing the public API of this module.
 """
 
 from __future__ import annotations
@@ -134,9 +134,12 @@ def _deferred_checks() -> list[PreflightCheckResult]:
     flag tells the result table renderer to print these distinctly.
     """
     deferred_names = (
-        ("manifest_present", "manifest spec lives in ditto-harness/interface/ (TBD)"),
-        ("go_import_allowlist", "allowlist file lives in ditto-harness (TBD)"),
-        ("schema_diff", "reference schema lives at schema/initial_harness.sql (TBD)"),
+        ("manifest_present", "manifest spec owned by the harness team (TBD)"),
+        (
+            "dependency_allowlist",
+            "approved-dependency list owned by the harness team (TBD)",
+        ),
+        ("schema_diff", "reference harness schema owned by the harness team (TBD)"),
     )
     out: list[PreflightCheckResult] = []
     for name, hint in deferred_names:

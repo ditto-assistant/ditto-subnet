@@ -72,7 +72,7 @@ class TestDeferredChecks:
 
         deferred = [c for c in result.checks if c.deferred]
         names = {c.name for c in deferred}
-        assert names == {"manifest_present", "go_import_allowlist", "schema_diff"}
+        assert names == {"manifest_present", "dependency_allowlist", "schema_diff"}
 
     def test_deferred_checks_do_not_gate_aggregate_passed(self, good_tar: Path) -> None:
         """All real checks pass on good_tar; deferred checks marked passed=True
@@ -95,5 +95,5 @@ class TestDeferredChecks:
         debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
         # One debug line per deferred check.
         assert any("manifest_present" in m for m in debug_msgs)
-        assert any("go_import_allowlist" in m for m in debug_msgs)
+        assert any("dependency_allowlist" in m for m in debug_msgs)
         assert any("schema_diff" in m for m in debug_msgs)

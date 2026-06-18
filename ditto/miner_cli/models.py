@@ -63,10 +63,10 @@ class PreflightCheckResult:
     """Result of a single named pre-flight check.
 
     The ``deferred`` flag distinguishes checks that are stubbed pending
-    external artifacts (manifest spec, Go import allowlist file, schema
-    file) from real pass/fail results. Deferred checks always set
-    ``passed=True`` but surface in the printed table so miners see what
-    is not yet enforced.
+    artifacts the harness team still owns (manifest spec, approved
+    dependencies, reference schema) from real pass/fail results.
+    Deferred checks always set ``passed=True`` but surface in the
+    printed table so miners see what is not yet enforced.
     """
 
     name: str

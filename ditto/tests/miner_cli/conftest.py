@@ -24,8 +24,11 @@ def _write_good_tar(dest: Path) -> Path:
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for name, content in (
             ("manifest.yaml", b"name: alpha\nversion: 1\n"),
-            ("main.go", b"package main\n\nfunc main() {}\n"),
-            ("go.mod", b"module ditto-harness\n\ngo 1.22\n"),
+            ("src/main.rs", b'fn main() { println!("ok"); }\n'),
+            (
+                "Cargo.toml",
+                b'[package]\nname = "alpha"\nversion = "0.1.0"\nedition = "2021"\n',
+            ),
         ):
             data = content
             info = tarfile.TarInfo(name=name)

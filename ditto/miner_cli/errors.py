@@ -54,14 +54,14 @@ class ManifestError(MinerCliError):
     pass
 
 
-class ImportAllowlistError(MinerCliError):
-    """Raised when the harness imports Go packages outside the allowlist.
+class DependencyAllowlistError(MinerCliError):
+    """Raised when the harness pulls in dependencies outside the allowlist.
 
     This can happen when:
-    - The harness imports a package that is not on the allowlist file.
+    - The harness declares a dependency that is not on the approved list.
 
     NOTE: real allowlist enforcement is currently logged-only pending the
-    allowlist file shipping with the harness interface repo.
+    approved-dependency list shipping from the harness team.
     """
 
     pass

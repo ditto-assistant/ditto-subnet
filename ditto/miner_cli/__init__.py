@@ -23,8 +23,8 @@ from __future__ import annotations
 from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
+    DependencyAllowlistError,
     HotkeyAgentNotFoundError,
-    ImportAllowlistError,
     ManifestError,
     MinerCliError,
     PaymentCancelledError,
@@ -65,7 +65,7 @@ __all__ = [
     "MinerCliError",
     "TarStructureError",
     "ManifestError",
-    "ImportAllowlistError",
+    "DependencyAllowlistError",
     "SchemaDriftError",
     "WalletNotFoundError",
     "WalletDecryptError",

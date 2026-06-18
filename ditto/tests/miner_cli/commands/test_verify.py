@@ -56,7 +56,7 @@ class TestVerify:
         out = capsys.readouterr().out
         assert "DEFERRED" in out
         # All three deferred names show up.
-        for name in ("manifest_present", "go_import_allowlist", "schema_diff"):
+        for name in ("manifest_present", "dependency_allowlist", "schema_diff"):
             assert name in out
 
 
