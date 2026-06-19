@@ -15,8 +15,8 @@ and the btcli convention. ``finney`` is the mainnet identifier; the
 colloquial "mainnet" word is not accepted by the SDK or btcli, and we
 deliberately do not introduce a translation layer.
 
-If a real decoupled deployment ever appears (Phase 7 canary, staged
-rollout), add override flags additively without breaking the existing
+If a real decoupled deployment ever appears (staged rollout, canary
+overrides), add override flags additively without breaking the existing
 flag.
 """
 

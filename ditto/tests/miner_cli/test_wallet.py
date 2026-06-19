@@ -1,7 +1,7 @@
 """Unit tests for :mod:`ditto.miner_cli.wallet`.
 
-The bittensor SDK is mocked at the module boundary per TESTING-STRATEGY
-§145. Two invariants pinned:
+The bittensor SDK is mocked at the module boundary. Two invariants
+pinned:
 
 - Happy path: ``load_wallet`` returns ``(WalletHandle, live_wallet)``
   with the SS58 address read from the live wallet's ``.hotkey``.

@@ -13,9 +13,17 @@ Three subcommands ship here:
 - ``ditto status [agent_id]``: poll lifecycle by id or wallet hotkey
 - ``ditto verify <tar>``: pure-local pre-flight without paying
 
-A fourth subcommand (``ditto logs``) is part of the locked CLI surface
-in ``context-docs/MVP-SPEC.md §14`` but its target endpoint is not yet
-built; it lands in a follow-up PR.
+Usage:
+    from ditto.miner_cli import create_miner_cli_config, resolve_network
+
+    config = create_miner_cli_config(
+        network=resolve_network("local"),
+        coldkey_name="test",
+        hotkey_name="default",
+    )
+    # The CLI itself is invoked as `python -m ditto.miner_cli` or
+    # `ditto` once the entry point is installed; consumers of this
+    # module typically just import the typed errors + config dataclass.
 """
 
 from __future__ import annotations

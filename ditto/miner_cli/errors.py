@@ -1,7 +1,6 @@
 """Errors raised by the miner CLI.
 
-Each subclass carries a "This can happen when:" docstring per
-``context-docs/practices/CODE-QUALITY-STANDARDS.md §122-167`` so the
+Each subclass carries a "This can happen when:" docstring so the
 ``__main__`` exit-code mapper can document what each non-zero exit
 means without callers chasing through implementation files.
 """
@@ -179,7 +178,7 @@ class PreCheckRejectedError(ApiResponseError):
     This can happen when:
     - The signature does not verify against the supplied hotkey.
     - The hotkey is not registered on the netuid the API is bound to.
-    - The hotkey is on the banned list (when that table lands; not in MVP).
+    - The hotkey is on the banned list (when that table lands).
     - The tar manifest validation rejects the file (when manifest
       enforcement lands).
     """

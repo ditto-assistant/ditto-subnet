@@ -1,8 +1,9 @@
 """Wallet loading wrapper around the bittensor SDK.
 
-Per ``context-docs/architecture/02-code-architecture.md §miner_cli``,
-the CLI uses the raw ``bittensor`` SDK directly for any chain or wallet
-operation. This module exists to:
+The CLI uses the raw ``bittensor`` SDK directly for any chain or wallet
+operation (the documented exception from the ``ChainClient`` rule, since
+the SDK exposes balance transfers + key loading that Pylon does not).
+This module exists to:
 
 - centralise the SDK call so other modules import a stable seam
 - raise our typed :class:`WalletNotFoundError` when keyfiles are missing

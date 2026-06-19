@@ -1,9 +1,9 @@
 """Unit tests for :mod:`ditto.miner_cli.payment`.
 
-The bittensor SDK is mocked at the module boundary per TESTING-STRATEGY
-§145. The real Subtensor connects over the network; a unit test must
-not. We mock :func:`bittensor.Subtensor` so the function under test
-exercises real flow without doing real chain I/O.
+The bittensor SDK is mocked at the module boundary. The real Subtensor
+connects over the network; a unit test must not. We mock
+:func:`bittensor.Subtensor` so the function under test exercises real
+flow without doing real chain I/O.
 
 Invariants pinned:
 

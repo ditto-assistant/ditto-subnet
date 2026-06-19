@@ -61,8 +61,8 @@ class TestVerify:
 
 
 class TestVerifyBoundaries:
-    """Edge cases + boundary values per TESTING-STRATEGY §"How to add a test"
-    step 5: empty input, invalid input, boundary values, error paths.
+    """Edge cases + boundary values: empty input, invalid input, boundary
+    values, error paths.
 
     Each test pins one invariant a refactor could silently break."""
 

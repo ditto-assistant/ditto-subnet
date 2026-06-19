@@ -99,6 +99,12 @@ class ApiClient:
         self.close()
 
     def close(self) -> None:
+        """Release the underlying ``httpx.Client`` connection pool.
+
+        Idempotent: safe to call multiple times. ``__exit__`` calls
+        this automatically when the client is used as a context
+        manager.
+        """
         self._client.close()
 
     # ---- transport-level wrapper ----------------------------------------
@@ -211,6 +217,20 @@ class ApiClient:
     # ---- /retrieval/agent/{id}/status -----------------------------------
 
     def get_agent_status(self, *, agent_id: UUID) -> AgentStatusResponse:
+        """Fetch the lifecycle status for ``agent_id``.
+
+        Args:
+            agent_id: UUID returned by a prior ``/upload/agent`` call.
+
+        Returns:
+            Parsed :class:`AgentStatusResponse` describing the current
+            state machine position of the agent.
+
+        Raises:
+            AgentNotFoundError: When the API returns 404 with the
+                agent-not-found envelope code.
+            ApiResponseError: When any other non-2xx status is returned.
+        """
         response = self._request("GET", f"/api/v1/retrieval/agent/{agent_id}/status")
         if response.status_code == 404:
             envelope = _safe_envelope(response)
@@ -223,6 +243,20 @@ class ApiClient:
     # ---- /retrieval/agent-by-hotkey -------------------------------------
 
     def get_agent_by_hotkey(self, *, miner_hotkey: str) -> AgentResponse:
+        """Fetch the latest agent uploaded by ``miner_hotkey``.
+
+        Args:
+            miner_hotkey: SS58-encoded miner hotkey.
+
+        Returns:
+            Parsed :class:`AgentResponse` describing the most recent
+            agent associated with the hotkey.
+
+        Raises:
+            HotkeyAgentNotFoundError: When the API returns 404 with the
+                hotkey-agent-not-found envelope code.
+            ApiResponseError: When any other non-2xx status is returned.
+        """
         response = self._request(
             "GET",
             "/api/v1/retrieval/agent-by-hotkey",

@@ -1,8 +1,7 @@
 """Frozen dataclass value objects shared across the miner CLI subpackage.
 
-Per ``context-docs/practices/CODE-QUALITY-STANDARDS.md §72-114`` Pydantic
-is reserved for HTTP wire shapes (``ditto.api_models``); internal
-carriers go through ``@dataclass(frozen=True)``.
+Pydantic is reserved for HTTP wire shapes (``ditto.api_models``);
+internal value carriers go through ``@dataclass(frozen=True)``.
 """
 
 from __future__ import annotations

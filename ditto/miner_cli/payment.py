@@ -5,10 +5,9 @@ miner's coldkey, waits for finalisation, and returns the proof tuple
 ``(block_hash, block_number, extrinsic_index)`` that the server's
 :class:`ditto.api_server.payment_verifier.PaymentVerifier` consumes.
 
-Per ``context-docs/architecture/02-code-architecture.md §miner_cli``,
-the CLI never uses Pylon: balance transfers are one of the documented
-Pylon capability gaps (``verified-facts.md §1``). Going through the
-raw bittensor SDK is the architecture-locked choice for this module.
+The CLI never uses Pylon: balance transfers are one of the Pylon
+capability gaps. The raw bittensor SDK is the architecture-locked
+choice for this module.
 """
 
 from __future__ import annotations

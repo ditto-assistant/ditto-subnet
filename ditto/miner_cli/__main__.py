@@ -6,8 +6,7 @@ demand), and dispatches to the matching subcommand handler in
 :mod:`ditto.miner_cli.commands`.
 
 Mirrors :mod:`ditto.api_server.__main__` posture: argparse + env-var
-defaults per :file:`context-docs/practices/CODE-QUALITY-STANDARDS.md`
-§argparse rule, no click / typer / rich.
+defaults, stdlib logging, no click / typer / rich.
 """
 
 from __future__ import annotations
@@ -65,7 +64,7 @@ def _configure_logging(verbose: bool) -> None:
     """Stdlib logging dictConfig-equivalent for the CLI.
 
     Off by default (only WARNING and up reach stderr) so happy-path
-    output stays clean. ``--verbose`` enables DEBUG so miners can
+    output stays clean. ``--verbose`` switches to DEBUG so miners can
     diagnose flow without dropping into a debugger.
     """
     level = logging.DEBUG if verbose else logging.WARNING
@@ -77,6 +76,20 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Process entry point: parse argv, dispatch to a subcommand, map exit codes.
+
+    Args:
+        argv: Override the argv passed to argparse. Defaults to
+            ``sys.argv[1:]`` when ``None``.
+
+    Returns:
+        Process exit code:
+        ``0`` on success, ``1`` on any :class:`MinerCliError`,
+        ``130`` on user interrupt (Ctrl-C). Subcommands that raise
+        unhandled non-:class:`MinerCliError` exceptions propagate
+        to argparse / Python's default handling so tracebacks are
+        not swallowed during development.
+    """
     parser = _build_parser()
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
