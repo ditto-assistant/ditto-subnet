@@ -161,7 +161,7 @@ def _run_upload(
         )
         if not check_response.ok:
             for code, msg in zip(
-                check_response.error_codes, check_response.messages, strict=False
+                check_response.error_codes, check_response.messages, strict=True
             ):
                 print(f"  pre-check rejection {code}: {msg}", file=sys.stderr)
             raise PreCheckRejectedError(
@@ -210,7 +210,7 @@ def _run_upload(
                     signature=signature_hex,
                     payment=receipt,
                 )
-        except ApiResponseError as e:
+        except ApiResponseError:
             # Money is on chain. Any post-payment API failure (server
             # rejection OR transport error like connect-refused / timeout)
             # must surface the proof so the miner can take it to support.
@@ -225,7 +225,7 @@ def _run_upload(
                 f"  extrinsic_index:  {receipt.extrinsic_index}",
                 file=sys.stderr,
             )
-            raise e
+            raise
 
     # Step 9: print agent_id to stdout, hint to stderr
     print(result.agent_id)
