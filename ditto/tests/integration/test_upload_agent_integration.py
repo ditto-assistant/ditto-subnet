@@ -54,7 +54,7 @@ _QUOTE_RAO = 17_500_000
 _COLDKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 
 
-def _build_fake_chain() -> MagicMock:
+def _build_fake_chain(*, is_registered: bool = True) -> MagicMock:
     """A MagicMock ChainClient for the hotkey-registered check.
 
     The PaymentVerifier itself is overridden separately, so the chain
@@ -63,9 +63,13 @@ def _build_fake_chain() -> MagicMock:
     Pylon: this test does not require chain access, and the lifespan
     has already opened a real client that would not understand canned
     payment data.
+
+    Pass ``is_registered=False`` to exercise the server-side
+    belt-and-suspenders path where /upload/agent rejects unregistered
+    hotkeys regardless of what the CLI did at /upload/check.
     """
     chain = MagicMock()
-    chain.is_registered = AsyncMock(return_value=True)
+    chain.is_registered = AsyncMock(return_value=is_registered)
     chain.get_latest_block = AsyncMock(return_value=MagicMock(number=13579))
     return chain
 
@@ -103,7 +107,12 @@ def _build_fake_verifier(
 
 
 @asynccontextmanager
-async def _running_app(*, block_hash: str, ext_idx: int = 0) -> AsyncIterator[FastAPI]:
+async def _running_app(
+    *,
+    block_hash: str,
+    ext_idx: int = 0,
+    chain_is_registered: bool = True,
+) -> AsyncIterator[FastAPI]:
     config = parse_api_server_config_from_env(commit_hash="integration-test")
     app = create_api_server(config)
 
@@ -112,7 +121,7 @@ async def _running_app(*, block_hash: str, ext_idx: int = 0) -> AsyncIterator[Fa
         oracle.get_tao_usd = AsyncMock(return_value=Decimal("400"))
         return oracle
 
-    fake_chain = _build_fake_chain()
+    fake_chain = _build_fake_chain(is_registered=chain_is_registered)
 
     async def _fake_chain_client() -> MagicMock:
         return fake_chain
@@ -325,3 +334,65 @@ class TestUploadAgentIntegration:
             # Exactly one agent row: the original. The replayed insert
             # must have rolled back together with its agent companion.
             assert count == 1
+
+    async def test_unregistered_hotkey_rejected_with_no_side_effects(self):
+        """Server-side belt-and-suspenders gate.
+
+        A forked CLI that skips /upload/check and posts straight to
+        /upload/agent must still be blocked at the endpoint when the
+        signing hotkey is not registered on the configured netuid.
+        The rejection must fire BEFORE any side effect: no agent row,
+        no payment row, no S3 object. The proof tuple stays vacant in
+        evaluation_payments so the miner can retry after registering.
+        """
+        from sqlalchemy import func, select
+
+        from ditto.db.models import Agent, EvaluationPayment
+
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        block_hash = _new_block_hash(4)
+        async with _running_app(
+            block_hash=block_hash, chain_is_registered=False
+        ) as app:
+            data, files = _build_form(keypair=kp, block_hash=block_hash)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/api/v1/upload/agent", data=data, files=files
+                )
+
+            assert response.status_code == 400, response.text
+            assert "not registered" in response.json()["message"]
+
+            # No agent row written.
+            session_maker = app.state.session_maker
+            async with session_maker() as session:
+                agent_count = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(Agent)
+                        .where(Agent.miner_hotkey == kp.ss58_address)
+                    )
+                ).scalar_one()
+                # No payment row written: PK stays vacant so the proof
+                # is still consumable after the hotkey registers.
+                payment_count = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(EvaluationPayment)
+                        .where(EvaluationPayment.block_hash == block_hash)
+                    )
+                ).scalar_one()
+            assert agent_count == 0
+            assert payment_count == 0
+
+            # No S3 object should have been written either; the rejection
+            # fires BEFORE the storage.put_object call at upload.py:255.
+            # Object keys are agent-id-prefixed and agent_id is generated
+            # only after the registration + payment checks pass, so any
+            # object under the bucket from THIS test would be a regression.
+            # (Other tests' objects coexist; we cannot list-and-assert-empty
+            # without disrupting them. The DB-rowcount assertions above are
+            # the canonical side-effect check for this path.)
