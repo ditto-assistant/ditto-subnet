@@ -27,6 +27,7 @@ from ditto.miner_cli.errors import (
     HotkeyAgentNotFoundError,
     ManifestError,
     MinerCliError,
+    NetworkResolutionError,
     PaymentCancelledError,
     PaymentFinalizationTimeoutError,
     PaymentSubmissionError,
@@ -63,6 +64,7 @@ __all__ = [
     "WalletHandle",
     # Errors
     "MinerCliError",
+    "NetworkResolutionError",
     "TarStructureError",
     "ManifestError",
     "DependencyAllowlistError",

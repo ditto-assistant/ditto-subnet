@@ -22,6 +22,7 @@ flag.
 
 from __future__ import annotations
 
+from ditto.miner_cli.errors import NetworkResolutionError
 from ditto.miner_cli.models import NetworkConfig
 
 NETWORKS: dict[str, NetworkConfig] = {
@@ -59,12 +60,12 @@ def resolve_network(name: str) -> NetworkConfig:
             ``"local"`` (developer's own local subtensor).
 
     Raises:
-        ValueError: When ``name`` is not a known network. The argparse
-            ``choices=`` argument should normally reject unknown values
-            before this is reached; the explicit guard catches direct
-            programmatic callers that bypass argparse.
+        NetworkResolutionError: When ``name`` is not a known network.
+            The argparse ``choices=`` argument should normally reject
+            unknown values before this is reached; the explicit guard
+            catches direct programmatic callers that bypass argparse.
     """
     if name not in NETWORKS:
         known = sorted(NETWORKS)
-        raise ValueError(f"unknown network {name!r}; choose from {known}")
+        raise NetworkResolutionError(f"unknown network {name!r}; choose from {known}")
     return NETWORKS[name]

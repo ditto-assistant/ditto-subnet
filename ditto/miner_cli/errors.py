@@ -20,6 +20,22 @@ class MinerCliError(Exception):
     pass
 
 
+# --- Configuration errors ---
+
+
+class NetworkResolutionError(MinerCliError):
+    """Raised when an unknown network identifier is supplied.
+
+    This can happen when:
+    - A direct programmatic caller bypasses the argparse ``choices=``
+      gate and hands :func:`ditto.miner_cli.network.resolve_network`
+      a name outside the locked lookup table.
+    - The lookup table is edited without updating the argparse choices.
+    """
+
+    pass
+
+
 # --- Pre-flight errors ---
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from ditto.miner_cli.errors import NetworkResolutionError
 from ditto.miner_cli.models import NetworkConfig
 from ditto.miner_cli.network import NETWORKS, resolve_network
 
@@ -27,8 +28,8 @@ class TestResolveNetwork:
         """The function returns the same object NETWORKS holds, not a copy."""
         assert resolve_network("finney") is NETWORKS["finney"]
 
-    def test_unknown_network_raises_value_error(self) -> None:
-        with pytest.raises(ValueError) as excinfo:
+    def test_unknown_network_raises_typed_error(self) -> None:
+        with pytest.raises(NetworkResolutionError) as excinfo:
             resolve_network("staging-canary")
 
         assert "staging-canary" in str(excinfo.value)
@@ -38,9 +39,9 @@ class TestResolveNetwork:
         """``mainnet`` / ``testnet`` are colloquial English; the SDK and
         btcli reject them. Make sure we follow suit so the value flowing
         through the CLI matches what bittensor expects verbatim."""
-        with pytest.raises(ValueError):
+        with pytest.raises(NetworkResolutionError):
             resolve_network("mainnet")
-        with pytest.raises(ValueError):
+        with pytest.raises(NetworkResolutionError):
             resolve_network("testnet")
 
 

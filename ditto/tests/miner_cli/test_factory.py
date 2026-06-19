@@ -32,5 +32,7 @@ class TestCreateMinerCliConfig:
         assert config.network.subtensor_network == "test"
 
     def test_unknown_network_raises(self) -> None:
-        with pytest.raises(ValueError):
+        from ditto.miner_cli.errors import NetworkResolutionError
+
+        with pytest.raises(NetworkResolutionError):
             create_miner_cli_config(make_ns(network="bogus"))
