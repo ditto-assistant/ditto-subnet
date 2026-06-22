@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ditto"
 version = "0.0.1"
-description = "Ditto Bittensor Subnet 118 — Go-based agent memory harness incentive layer."
+description = "Ditto Bittensor Subnet 118: Rust agent memory harness incentive layer."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 authors = [{ name = "heyDitto" }]
