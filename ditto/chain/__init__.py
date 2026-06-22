@@ -47,6 +47,7 @@ from ditto.chain.models import (
     ChainConfig,
     ExtrinsicInfo,
     NeuronInfo,
+    normalize_address_to_ss58,
     parse_chain_config_from_env,
 )
 
@@ -60,6 +61,8 @@ __all__ = [
     "BlockInfo",
     "ExtrinsicInfo",
     "NeuronInfo",
+    # Helpers
+    "normalize_address_to_ss58",
     # Errors
     "ChainError",
     "ChainAuthError",
