@@ -3,7 +3,7 @@
 Public, unauthed reads. Status + hotkey are chain-public-equivalent;
 rate-limit + TLS deferred to a reverse proxy in front of the API
 (threat-model G6 known gap). ``Cache-Control: no-store`` on every
-response because these are state-machine status queries — polling
+response because these are state-machine status queries: polling
 exists exactly to detect transitions, and any intermediate cache
 defeats that.
 """
@@ -47,7 +47,7 @@ class HotkeyAgentNotFoundError(Exception):
     """Raised when ``/retrieval/agent-by-hotkey`` finds no agent for the hotkey.
 
     This can happen when:
-    - The hotkey has never submitted an upload (most common — fresh miner).
+    - The hotkey has never submitted an upload (most common; fresh miner).
     - All prior submissions from the hotkey were deleted by admin action.
     """
 

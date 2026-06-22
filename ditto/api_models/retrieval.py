@@ -24,7 +24,8 @@ class AgentResponse(BaseModel):
     miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
     name: Annotated[str, Field(description="Miner-chosen agent name.")]
     status: Annotated[
-        AgentStatus, Field(description="Lifecycle state (see MVP-SPEC §9).")
+        AgentStatus,
+        Field(description="Lifecycle state per the submission state machine."),
     ]
     sha256: Annotated[
         str, Field(description="SHA-256 of the uploaded tarball, lowercase hex.")

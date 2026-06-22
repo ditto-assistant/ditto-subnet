@@ -67,7 +67,7 @@ async def get_latest_agent_by_hotkey(
     Orders by ``created_at DESC`` and takes one. Status is unfiltered;
     callers see banned or failed rows if they are the most recent. Per
     the retrieval design, hotkey-level banned surfacing is deferred to
-    the ban PR (Phase 5) where the ``banned_hotkeys`` table lands.
+    a later PR where the ``banned_hotkeys`` table lands.
     """
     stmt = (
         select(Agent)
