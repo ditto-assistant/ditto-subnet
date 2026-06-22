@@ -61,9 +61,14 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentPa
         ),
     )
     parser.add_argument(
-        "tar_path",
+        "--path",
+        "--tar-path",
+        dest="tar_path",
         type=Path,
-        help="Path to the gzipped tarball to upload.",
+        required=True,
+        help=(
+            "Path to the gzipped tarball to upload. Flag aliases: --path / --tar-path."
+        ),
     )
     parser.add_argument(
         "--name",

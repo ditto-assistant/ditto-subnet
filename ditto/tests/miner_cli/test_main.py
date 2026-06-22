@@ -26,14 +26,14 @@ class TestMain:
 
     def test_unknown_network_rejected_by_argparse(self) -> None:
         with pytest.raises(SystemExit) as ex:
-            main(["--network", "staging-canary", "verify", "/tmp/x.tar.gz"])
+            main(["--network", "staging-canary", "verify", "--path", "/tmp/x.tar.gz"])
         # argparse exits 2 on invalid choices.
         assert ex.value.code == 2
 
     def test_verify_subcommand_dispatches_to_run(
         self, good_tar, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        rc = main(["verify", str(good_tar)])
+        rc = main(["verify", "--path", str(good_tar)])
         assert rc == 0
         out = capsys.readouterr().out
         assert "PASS" in out
@@ -49,7 +49,7 @@ class TestFlagAliases:
         ["--subtensor.network", "--network"],
     )
     def test_network_aliases_accepted(self, flag: str, good_tar) -> None:
-        rc = main([flag, "local", "verify", str(good_tar)])
+        rc = main([flag, "local", "verify", "--path", str(good_tar)])
         assert rc == 0
 
     @pytest.mark.parametrize(
@@ -77,7 +77,17 @@ class TestFlagAliases:
             return 0
 
         with patch("ditto.miner_cli.commands.upload.run", side_effect=_fake_run):
-            rc = main(["upload", str(good_tar), "--name", "smoke", *flags, "--yes"])
+            rc = main(
+                [
+                    "upload",
+                    "--path",
+                    str(good_tar),
+                    "--name",
+                    "smoke",
+                    *flags,
+                    "--yes",
+                ]
+            )
 
         assert rc == 0
         assert sentinel.coldkey == "miner"
