@@ -95,11 +95,26 @@ def submit_eval_payment(
             "transfer succeeded but no extrinsic_receipt was returned"
         )
 
-    # Use getattr indirection to dodge the substrate SDK's union-typed
-    # block_number property (sync int | async Coroutine[..., int]).
+    # Substrate SDK leaves receipt.block_number as None unless the
+    # caller explicitly populates it at construction; bittensor's
+    # transfer() doesn't. Fall back to a chain lookup keyed by the
+    # block_hash, which IS populated. Without this fallback the API's
+    # payment_block_number=ge=1 validator rejects the post-payment
+    # /upload/agent submission with HTTP 422.
     block_hash = _normalize_block_hash(getattr(receipt, "block_hash", None))
-    block_number = int(getattr(receipt, "block_number", 0) or 0)
     extrinsic_index = int(getattr(receipt, "extrinsic_idx", 0) or 0)
+
+    raw_block_number = getattr(receipt, "block_number", None)
+    if raw_block_number:
+        block_number = int(raw_block_number)
+    else:
+        try:
+            block_number = int(subtensor.substrate.get_block_number(block_hash))
+        except Exception as e:
+            raise PaymentSubmissionError(
+                f"transfer finalised but block_number could not be resolved "
+                f"from block_hash={block_hash}: {e}"
+            ) from e
 
     logger.info(
         f"payment finalised: block={block_number} ext_idx={extrinsic_index} "

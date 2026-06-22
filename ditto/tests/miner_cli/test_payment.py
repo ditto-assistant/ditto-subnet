@@ -219,3 +219,60 @@ class TestSubmitEvalPayment:
             )
 
         assert "block_hash" in str(e.value)
+
+    def test_none_block_number_falls_back_to_chain_lookup(self, monkeypatch) -> None:
+        """The substrate SDK leaves ExtrinsicReceipt.block_number as
+        None unless the caller passes it at construction; bittensor's
+        transfer() does not. Falling back to a chain lookup by
+        block_hash is required, otherwise the API's
+        payment_block_number=ge=1 validator rejects /upload/agent
+        with HTTP 422.
+        """
+        receipt = make_extrinsic_receipt(block_hash="0x" + "cd" * 32)
+        receipt.block_number = None  # SDK's default before lazy load
+        response = make_response(extrinsic_receipt=receipt)
+
+        fake_subtensor = MagicMock()
+        fake_subtensor.transfer = MagicMock(return_value=response)
+        fake_subtensor.substrate.get_block_number = MagicMock(return_value=99)
+        monkeypatch.setattr(bittensor, "Subtensor", lambda **_kwargs: fake_subtensor)
+
+        result = submit_eval_payment(
+            live_wallet=MagicMock(),
+            subtensor_network="local",
+            amount_rao=1,
+            dest_address=self.HOTKEY_DEST,
+        )
+
+        assert result.block_number == 99
+        fake_subtensor.substrate.get_block_number.assert_called_once_with(
+            "0x" + "cd" * 32
+        )
+
+    def test_block_number_lookup_failure_raises_submission_error(
+        self, monkeypatch
+    ) -> None:
+        """If the chain lookup itself fails after a successful transfer,
+        surface a typed PaymentSubmissionError naming the block_hash so
+        support can chase what landed on chain."""
+        receipt = make_extrinsic_receipt(block_hash="0x" + "ef" * 32)
+        receipt.block_number = None
+        response = make_response(extrinsic_receipt=receipt)
+
+        fake_subtensor = MagicMock()
+        fake_subtensor.transfer = MagicMock(return_value=response)
+        fake_subtensor.substrate.get_block_number = MagicMock(
+            side_effect=RuntimeError("rpc disconnected")
+        )
+        monkeypatch.setattr(bittensor, "Subtensor", lambda **_kwargs: fake_subtensor)
+
+        with pytest.raises(PaymentSubmissionError) as e:
+            submit_eval_payment(
+                live_wallet=MagicMock(),
+                subtensor_network="local",
+                amount_rao=1,
+                dest_address=self.HOTKEY_DEST,
+            )
+
+        assert "block_number" in str(e.value)
+        assert "0x" + "ef" * 32 in str(e.value)
