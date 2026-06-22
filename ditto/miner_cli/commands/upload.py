@@ -71,14 +71,26 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentPa
         help="Display name for the agent (1-64 chars). Stored in agents.name.",
     )
     parser.add_argument(
-        "--coldkey-name",
-        default=os.environ.get("DITTO_COLDKEY_NAME"),
-        help="Coldkey name. Required (flag or DITTO_COLDKEY_NAME env).",
+        "--wallet.name",
+        "--coldkey",
+        dest="coldkey_name",
+        default=os.environ.get("WALLET_NAME"),
+        help=(
+            "Coldkey wallet name. Required (flag or WALLET_NAME env). "
+            "Matches the bittensor SDK's --wallet.name; --coldkey is a "
+            "shorter alias."
+        ),
     )
     parser.add_argument(
-        "--hotkey-name",
-        default=os.environ.get("DITTO_HOTKEY_NAME"),
-        help="Hotkey name. Required (flag or DITTO_HOTKEY_NAME env).",
+        "--wallet.hotkey",
+        "--hotkey",
+        dest="hotkey_name",
+        default=os.environ.get("HOTKEY_NAME"),
+        help=(
+            "Hotkey name within the coldkey wallet. Required (flag or "
+            "HOTKEY_NAME env). Matches the bittensor SDK's "
+            "--wallet.hotkey; --hotkey is a shorter alias."
+        ),
     )
     parser.add_argument(
         "-y",
@@ -95,8 +107,8 @@ def run(args: argparse.Namespace) -> int:
     """Execute the upload subcommand and return an exit code."""
     if not args.coldkey_name or not args.hotkey_name:
         print(
-            "error: --coldkey-name and --hotkey-name are required "
-            "(or set DITTO_COLDKEY_NAME / DITTO_HOTKEY_NAME).",
+            "error: --wallet.name and --wallet.hotkey are required "
+            "(or set WALLET_NAME / HOTKEY_NAME).",
             file=sys.stderr,
         )
         return 1

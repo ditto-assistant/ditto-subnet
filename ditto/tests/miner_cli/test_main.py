@@ -37,3 +37,48 @@ class TestMain:
         assert rc == 0
         out = capsys.readouterr().out
         assert "PASS" in out
+
+
+class TestFlagAliases:
+    """Pin the bittensor-dotted flag names + their short aliases all
+    parse to the same destination so renames in the future do not
+    silently drop one of the entry points miners are typing."""
+
+    @pytest.mark.parametrize(
+        "flag",
+        ["--subtensor.network", "--network"],
+    )
+    def test_network_aliases_accepted(self, flag: str, good_tar) -> None:
+        rc = main([flag, "local", "verify", str(good_tar)])
+        assert rc == 0
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            ["--wallet.name", "miner", "--wallet.hotkey", "default"],
+            ["--coldkey", "miner", "--hotkey", "default"],
+            ["--wallet.name", "miner", "--hotkey", "default"],  # mixed forms
+        ],
+    )
+    def test_upload_wallet_flag_aliases_parse(self, flags, good_tar) -> None:
+        """``upload`` requires both wallet flags. All three alias
+        combinations must satisfy the argparse layout (we do not run
+        the subcommand here; we just confirm the parser accepts the
+        flags + reaches the subcommand handler).
+        """
+        import argparse
+        from unittest.mock import patch
+
+        sentinel = argparse.Namespace(parsed=True)
+
+        def _fake_run(args: argparse.Namespace) -> int:
+            sentinel.coldkey = args.coldkey_name
+            sentinel.hotkey = args.hotkey_name
+            return 0
+
+        with patch("ditto.miner_cli.commands.upload.run", side_effect=_fake_run):
+            rc = main(["upload", str(good_tar), "--name", "smoke", *flags, "--yes"])
+
+        assert rc == 0
+        assert sentinel.coldkey == "miner"
+        assert sentinel.hotkey == "default"

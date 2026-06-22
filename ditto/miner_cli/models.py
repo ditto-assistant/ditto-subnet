@@ -48,10 +48,10 @@ class WalletHandle:
     """
 
     coldkey_name: str
-    """Coldkey name as resolved from ``--coldkey-name`` / ``DITTO_COLDKEY_NAME``."""
+    """Coldkey wallet name (``--wallet.name`` / ``--coldkey`` / ``WALLET_NAME``)."""
 
     hotkey_name: str
-    """Hotkey name as resolved from ``--hotkey-name`` / ``DITTO_HOTKEY_NAME``."""
+    """Hotkey name (from ``--wallet.hotkey`` / ``--hotkey`` / env ``HOTKEY_NAME``)."""
 
     hotkey_ss58: str
     """SS58-encoded address derived from the loaded hotkey keyfile."""

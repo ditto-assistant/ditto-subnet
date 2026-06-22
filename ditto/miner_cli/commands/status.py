@@ -4,9 +4,10 @@ Two resolution modes:
 
 - Positional ``agent_id`` given → call
   ``/retrieval/agent/{agent_id}/status`` directly.
-- No positional → fall back to the wallet hotkey (``--hotkey-name`` or
-  ``DITTO_HOTKEY_NAME``) and call ``/retrieval/agent-by-hotkey`` to
-  resolve the latest agent for that hotkey.
+- No positional → fall back to the wallet hotkey (``--wallet.hotkey`` /
+  ``--hotkey`` or ``HOTKEY_NAME`` env) and call
+  ``/retrieval/agent-by-hotkey`` to resolve the latest agent for that
+  hotkey.
 
 Output formats:
 
@@ -48,9 +49,9 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentPa
         help="Poll agent lifecycle status by id or wallet hotkey.",
         description=(
             "Look up an agent's current status. If agent_id is omitted, "
-            "the wallet hotkey is resolved (via --hotkey-name / "
-            "DITTO_HOTKEY_NAME) and the latest agent for that hotkey is "
-            "returned."
+            "the wallet hotkey is resolved (via --wallet.hotkey / "
+            "--hotkey / HOTKEY_NAME env) and the latest agent for that "
+            "hotkey is returned."
         ),
     )
     parser.add_argument(
@@ -61,14 +62,26 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentPa
         help="UUID of the agent to look up. If omitted, falls back to hotkey.",
     )
     parser.add_argument(
-        "--coldkey-name",
-        default=os.environ.get("DITTO_COLDKEY_NAME"),
-        help="Coldkey name (only needed for hotkey-resolution fallback path).",
+        "--wallet.name",
+        "--coldkey",
+        dest="coldkey_name",
+        default=os.environ.get("WALLET_NAME"),
+        help=(
+            "Coldkey wallet name (only needed for hotkey-resolution "
+            "fallback path). Flag aliases: --wallet.name / --coldkey. "
+            "Env: WALLET_NAME."
+        ),
     )
     parser.add_argument(
-        "--hotkey-name",
-        default=os.environ.get("DITTO_HOTKEY_NAME"),
-        help="Hotkey name (only needed for hotkey-resolution fallback path).",
+        "--wallet.hotkey",
+        "--hotkey",
+        dest="hotkey_name",
+        default=os.environ.get("HOTKEY_NAME"),
+        help=(
+            "Hotkey name (only needed for hotkey-resolution fallback "
+            "path). Flag aliases: --wallet.hotkey / --hotkey. Env: "
+            "HOTKEY_NAME."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -127,8 +140,8 @@ def _status_by_hotkey(
     if not coldkey_name or not hotkey_name:
         print(
             "error: no agent_id supplied and wallet hotkey unresolved. "
-            "Pass --coldkey-name and --hotkey-name or set "
-            "DITTO_COLDKEY_NAME / DITTO_HOTKEY_NAME.",
+            "Pass --wallet.name and --wallet.hotkey (or --coldkey / "
+            "--hotkey) or set WALLET_NAME / HOTKEY_NAME.",
             file=sys.stderr,
         )
         return 1

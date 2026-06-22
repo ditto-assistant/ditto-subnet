@@ -103,7 +103,8 @@ class WalletNotFoundError(MinerCliError):
     """Raised when the named wallet cannot be located on disk.
 
     This can happen when:
-    - The ``--coldkey-name`` / ``--hotkey-name`` (or env-var equivalents)
+    - The ``--wallet.name`` / ``--wallet.hotkey`` (or ``--coldkey`` /
+      ``--hotkey``, or env-var equivalents ``WALLET_NAME`` / ``HOTKEY_NAME``)
       refer to a wallet that does not exist under ``~/.bittensor/wallets/``.
     - The wallet path is overridden via ``BT_WALLET_PATH`` to a directory
       that does not contain the expected coldkey + hotkey keyfiles.

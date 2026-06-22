@@ -140,7 +140,7 @@ class TestStatusByHotkey:
 
         err = capsys.readouterr().err
         assert exit_code == 1
-        assert "DITTO_COLDKEY_NAME" in err or "coldkey" in err
+        assert "WALLET_NAME" in err or "wallet.name" in err
 
     def test_404_returns_exit_code_3(self, capsys: pytest.CaptureFixture[str]) -> None:
         client = MagicMock()
