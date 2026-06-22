@@ -188,20 +188,48 @@ class PaymentVerifier:
         return fee_tao * _RAO_PER_TAO
 
 
+# Bittensor chains (including localnet built on the standard subtensor
+# image) use the generic substrate SS58 prefix. The verifier compares
+# against the configured send_address which is the operator's SS58 string
+# in the same format.
+_BITTENSOR_SS58_PREFIX = 42
+
+
 def _decode_dest(raw: Any) -> str:
     """Normalise the Pylon ``dest`` arg to a plain SS58 string.
 
-    Pylon's flattened ``call_args`` carries the destination as either a
-    plain SS58 string (``"5..."``) or a ``{"Id": "5..."}`` dict; both
-    are the substrate-interface decode shapes for ``MultiAddress::Id``.
+    Pylon's flattened ``call_args`` carries the destination as one of
+    three shapes depending on the upstream decode path:
+
+    - plain SS58 string (``"5..."``)
+    - ``{"Id": "5..."}`` dict (substrate-interface ``MultiAddress::Id``)
+    - hex-encoded raw account ID (``"0x..."``) - the canonical shape
+      Pylon returns for transfer_keep_alive on recent subtensor
+      releases; the verifier rehydrates this to SS58 before the
+      equality check.
+
     The verifier compares against a string ``send_address``, so unify
-    here. Any other shape returns an empty string and fails the
+    here. Any unrecognised shape returns an empty string and fails the
     equality check with a clean :class:`PaymentDestinationMismatch`.
     """
     if isinstance(raw, str):
-        return raw
+        return _maybe_hex_to_ss58(raw)
     if isinstance(raw, dict):
         inner = raw.get("Id")
         if isinstance(inner, str):
-            return inner
+            return _maybe_hex_to_ss58(inner)
     return ""
+
+
+def _maybe_hex_to_ss58(s: str) -> str:
+    """Return ``s`` as SS58. If it is a ``0x``-prefixed hex pubkey,
+    encode it; otherwise return the string unchanged.
+    """
+    if not s.startswith("0x"):
+        return s
+    try:
+        from scalecodec.utils.ss58 import ss58_encode
+
+        return ss58_encode(bytes.fromhex(s[2:]), ss58_format=_BITTENSOR_SS58_PREFIX)
+    except Exception:
+        return ""
