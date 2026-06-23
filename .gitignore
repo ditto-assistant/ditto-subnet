@@ -27,3 +27,6 @@ htmlcov/
 # be committed.
 docker-compose.override.yml
 docker-compose.*.override.yml
+
+# IDE
+.idea/
