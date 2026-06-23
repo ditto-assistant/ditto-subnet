@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from ditto.db.models import AgentStatus
+from ditto.api_models.agent_status import AgentStatus
 
 # SS58 addresses are 47-48 chars from the base58 alphabet (no 0, O, I, l).
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
