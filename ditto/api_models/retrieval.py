@@ -8,7 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ditto.db.models import AgentStatus
+from ditto.api_models.agent_status import AgentStatus
 
 
 class AgentResponse(BaseModel):

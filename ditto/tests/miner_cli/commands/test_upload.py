@@ -28,7 +28,7 @@ from ditto.api_models import (
     UploadAgentResponse,
     UploadCheckResponse,
 )
-from ditto.db.models import AgentStatus
+from ditto.api_models.agent_status import AgentStatus
 from ditto.miner_cli.commands.upload import run
 from ditto.miner_cli.errors import (
     ApiResponseError,

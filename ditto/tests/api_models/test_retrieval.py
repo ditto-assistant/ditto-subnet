@@ -13,8 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.retrieval import AgentResponse, AgentStatusResponse
-from ditto.db.models import AgentStatus
 
 _FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "retrieval"
 

@@ -10,8 +10,8 @@ from uuid import uuid4
 
 import pytest
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.retrieval import AgentResponse, AgentStatusResponse
-from ditto.db.models import AgentStatus
 from ditto.miner_cli.commands.status import run
 from ditto.miner_cli.errors import (
     AgentNotFoundError,
