@@ -189,6 +189,14 @@ class TestSuccessEvent:
 
 
 class TestDestination:
+    # Real SS58 + its matching hex pubkey. The verifier must decode the
+    # hex form to SS58 before comparing. Without this normalisation,
+    # the Pylon-returned dest (hex on recent subtensor releases) never
+    # matches the configured SS58 send_address and every upload
+    # post-payment fails with PaymentDestinationMismatch.
+    _REAL_SS58 = "5GNfk6UnxmxtsC8a7p556DR2RMQRj8KfCYuN7DDLMxYxQ9GD"
+    _REAL_HEX = "0xbea43ca9f879e54d833afeab197db4cbdd399297bc87f0914c90139de670fa6f"
+
     async def test_wrong_dest_rejected(self):
         ext = _make_extrinsic_info(dest="5SomeoneElse")
         verifier = _make_verifier(extrinsic_info=ext)
@@ -197,6 +205,33 @@ class TestDestination:
 
     async def test_unparseable_dest_rejected_as_mismatch(self):
         ext = _make_extrinsic_info(dest=12345)  # int, not str/dict
+        verifier = _make_verifier(extrinsic_info=ext)
+        with pytest.raises(PaymentDestinationMismatch):
+            await verifier.verify_payment(_make_proof(), expected_hotkey="5Hotkey")
+
+    async def test_hex_pubkey_dest_decodes_to_ss58(self):
+        """Pylon returns dest as a 0x-prefixed raw account ID on recent
+        subtensor versions; verifier must encode it back to SS58 before
+        the equality check.
+        """
+        ext = _make_extrinsic_info(dest=self._REAL_HEX)
+        verifier = _make_verifier(extrinsic_info=ext, send_address=self._REAL_SS58)
+        result = await verifier.verify_payment(_make_proof(), expected_hotkey="5Hotkey")
+        assert result.dest_address == self._REAL_SS58
+
+    async def test_dict_with_hex_inner_decodes_to_ss58(self):
+        """If Pylon wraps the hex form in {'Id': '0x...'}, same
+        normalisation must fire.
+        """
+        ext = _make_extrinsic_info(dest={"Id": self._REAL_HEX})
+        verifier = _make_verifier(extrinsic_info=ext, send_address=self._REAL_SS58)
+        result = await verifier.verify_payment(_make_proof(), expected_hotkey="5Hotkey")
+        assert result.dest_address == self._REAL_SS58
+
+    async def test_malformed_hex_dest_rejected_as_mismatch(self):
+        """Hex with odd characters / wrong length must fail the equality
+        check cleanly, not raise an unhandled exception."""
+        ext = _make_extrinsic_info(dest="0xnotvalidhex")
         verifier = _make_verifier(extrinsic_info=ext)
         with pytest.raises(PaymentDestinationMismatch):
             await verifier.verify_payment(_make_proof(), expected_hotkey="5Hotkey")

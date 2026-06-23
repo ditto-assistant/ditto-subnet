@@ -20,3 +20,10 @@ htmlcov/
 # Env files
 .env
 .env.local
+
+# Local docker-compose overrides for dev / smoke testing. Tracked
+# baseline is docker-compose.yml; this pattern is for per-developer
+# overrides (chain endpoints, port mappings, etc.) that should never
+# be committed.
+docker-compose.override.yml
+docker-compose.*.override.yml

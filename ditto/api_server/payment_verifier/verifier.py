@@ -20,6 +20,7 @@ from ditto.api_server.payment_verifier.models import (
     PaymentProof,
     VerifiedPayment,
 )
+from ditto.chain import normalize_address_to_ss58
 from ditto.chain.errors import ExtrinsicNotFoundError
 
 if TYPE_CHECKING:
@@ -191,17 +192,24 @@ class PaymentVerifier:
 def _decode_dest(raw: Any) -> str:
     """Normalise the Pylon ``dest`` arg to a plain SS58 string.
 
-    Pylon's flattened ``call_args`` carries the destination as either a
-    plain SS58 string (``"5..."``) or a ``{"Id": "5..."}`` dict; both
-    are the substrate-interface decode shapes for ``MultiAddress::Id``.
+    Pylon's flattened ``call_args`` carries the destination as one of
+    three shapes depending on the upstream decode path:
+
+    - plain SS58 string (``"5..."``)
+    - ``{"Id": "5..."}`` dict (substrate-interface ``MultiAddress::Id``)
+    - hex-encoded raw account ID (``"0x..."``) - the canonical shape
+      Pylon returns for transfer_keep_alive on recent subtensor
+      releases; the verifier rehydrates this to SS58 before the
+      equality check.
+
     The verifier compares against a string ``send_address``, so unify
-    here. Any other shape returns an empty string and fails the
+    here. Any unrecognised shape returns an empty string and fails the
     equality check with a clean :class:`PaymentDestinationMismatch`.
     """
     if isinstance(raw, str):
-        return raw
+        return normalize_address_to_ss58(raw)
     if isinstance(raw, dict):
         inner = raw.get("Id")
         if isinstance(inner, str):
-            return inner
+            return normalize_address_to_ss58(inner)
     return ""

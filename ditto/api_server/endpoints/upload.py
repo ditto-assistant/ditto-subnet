@@ -74,8 +74,10 @@ ERROR_CODE_TARBALL_TOO_LARGE = 1102
 
 # Hard cap shared with /upload/check. Tarballs above this size are
 # rejected; /upload/check enforces it from the miner-reported header,
-# /upload/agent enforces it from the actual streamed bytes.
-MAX_TARBALL_SIZE_BYTES = 2 * 1024 * 1024
+# /upload/agent enforces it from the actual streamed bytes. Sized for
+# the competition's launch envelope; can be lowered later without a
+# protocol change once real harness sizes settle.
+MAX_TARBALL_SIZE_BYTES = 200 * 1024 * 1024
 
 # Streaming read chunk size. 256 KiB keeps memory bounded while letting
 # size + sha256 update incrementally without re-reading the body.
@@ -155,7 +157,7 @@ async def check(
 @router.post("/agent", response_model=UploadAgentResponse, status_code=200)
 async def upload_agent(
     request: Request,
-    agent_tar: Annotated[UploadFile, File(description="gzipped tarball, <=2 MB")],
+    agent_tar: Annotated[UploadFile, File(description="gzipped tarball, <=200 MB")],
     hotkey: Annotated[str, Form(pattern=_SS58_PATTERN)],
     sha256: Annotated[str, Form(pattern=_SHA256_PATTERN)],
     # The 64-character cap is a chosen value rather than a spec mandate;
@@ -300,7 +302,7 @@ async def _read_tar_capped_with_sha(
     Returns the bytes plus the lowercase-hex sha256 of those bytes. The
     accumulating buffer is bounded at ``max_bytes`` so an attacker
     cannot exhaust memory by streaming forever; the cap also keeps the
-    happy-path footprint at the documented 2 MB ceiling.
+    happy-path footprint at the documented 200 MB ceiling.
 
     Raises:
         HTTPException: ``413`` when the streamed body exceeds the cap

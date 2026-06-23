@@ -208,6 +208,35 @@ class TestExtrinsicInfoFromPylon:
         assert ExtrinsicInfo.from_pylon(raw, succeeded=False).succeeded is False
         assert ExtrinsicInfo.from_pylon(raw).succeeded is None
 
+    def test_signer_hex_pubkey_decoded_to_ss58(self):
+        """Pylon returns the signer ``address`` as a 0x-prefixed raw
+        account ID on recent subtensor releases. ``from_pylon`` must
+        encode it to SS58 so downstream equality checks (e.g.
+        signer == coldkey-for-hotkey in the payment verifier) work
+        against the SS58 string the chain client returns elsewhere.
+        """
+        raw = MagicMock(
+            block_number=1,
+            extrinsic_index=0,
+            extrinsic_hash="0x",
+            address="0xbea43ca9f879e54d833afeab197db4cbdd399297bc87f0914c90139de670fa6f",
+            call=MagicMock(call_module="X", call_function="y", call_args=[]),
+        )
+        ext = ExtrinsicInfo.from_pylon(raw)
+        assert ext.signer_address == "5GNfk6UnxmxtsC8a7p556DR2RMQRj8KfCYuN7DDLMxYxQ9GD"
+
+    def test_signer_already_ss58_passes_through(self):
+        """An SS58-string address must be preserved verbatim."""
+        raw = MagicMock(
+            block_number=1,
+            extrinsic_index=0,
+            extrinsic_hash="0x",
+            address="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            call=MagicMock(call_module="X", call_function="y", call_args=[]),
+        )
+        ext = ExtrinsicInfo.from_pylon(raw)
+        assert ext.signer_address == "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+
     def test_already_flat_dict_call_args_passes_through(self):
         """Defensive: some Pylon shapes (or tests) hand call_args as a dict.
         Adapter accepts either."""

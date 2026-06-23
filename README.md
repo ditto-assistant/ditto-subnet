@@ -1,6 +1,6 @@
 # Ditto Subnet (Bittensor SN118)
 
-Go-based agent memory harness incentive layer. Miners submit a Go harness implementing the required MCP server + agent loop interfaces; validators run each submission in an isolated Docker sandbox, score across correctness / token cost / wall-clock, and the winner takes essentially all emissions.
+Rust agent memory harness incentive layer. Miners submit a Rust crate that depends on the `ditto-harness` library and overrides its extension traits; validators run each submission in an isolated Docker sandbox, score across correctness / token cost / wall-clock, and the winner takes essentially all emissions.
 
 ## Quickstart
 

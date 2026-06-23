@@ -6,6 +6,44 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+# Bittensor chains (finney, testnet, and the standard subtensor localnet
+# image) all use the generic substrate SS58 prefix 42. Pylon sometimes
+# returns addresses as raw hex pubkeys (``0x...``) on recent subtensor
+# versions; we encode them back to SS58 so downstream string compares
+# (signer == coldkey, dest == send_address) work uniformly.
+_BITTENSOR_SS58_PREFIX = 42
+
+
+def normalize_address_to_ss58(value: str) -> str:
+    """Return ``value`` as an SS58 string.
+
+    Pylon returns extrinsic signer / dest addresses in two shapes
+    depending on the subtensor release:
+
+    - Plain SS58 (``"5..."``): returned as-is.
+    - ``0x``-prefixed 32-byte raw account ID: encoded to SS58 with the
+      bittensor prefix.
+
+    Empty / unknown shapes return an empty string so downstream
+    equality checks fail cleanly rather than raising.
+
+    Args:
+        value: The raw address string from Pylon.
+
+    Returns:
+        SS58-encoded string, or empty on malformed input.
+    """
+    if not value:
+        return ""
+    if not value.startswith("0x"):
+        return value
+    try:
+        from scalecodec.utils.ss58 import ss58_encode
+
+        return ss58_encode(bytes.fromhex(value[2:]), ss58_format=_BITTENSOR_SS58_PREFIX)
+    except Exception:
+        return ""
+
 
 @dataclass(frozen=True)
 class ChainConfig:
@@ -240,7 +278,9 @@ class ExtrinsicInfo:
             call_module=str(getattr(call, "call_module", "") or ""),
             call_function=str(getattr(call, "call_function", "") or ""),
             call_args=_call_args_to_dict(getattr(call, "call_args", None)),
-            signer_address=str(getattr(raw, "address", "") or ""),
+            signer_address=normalize_address_to_ss58(
+                str(getattr(raw, "address", "") or "")
+            ),
             succeeded=succeeded,
         )
 
