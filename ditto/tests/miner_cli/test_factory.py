@@ -36,3 +36,33 @@ class TestCreateMinerCliConfig:
 
         with pytest.raises(NetworkResolutionError):
             create_miner_cli_config(make_ns(network="bogus"))
+
+
+class TestChainEndpointOverride:
+    """`args.chain_endpoint` must thread into ``MinerCliConfig.chain_endpoint``
+    unchanged when set, and normalise to ``None`` when absent or empty."""
+
+    def test_chain_endpoint_threads_through(self) -> None:
+        ns = make_ns(network="local", chain_endpoint="ws://example.org:9944")
+        config = create_miner_cli_config(ns)
+        assert config.chain_endpoint == "ws://example.org:9944"
+
+    def test_absent_attribute_defaults_to_none(self) -> None:
+        # No chain_endpoint on the namespace at all (older callers / tests).
+        ns = make_ns(network="local")
+        config = create_miner_cli_config(ns)
+        assert config.chain_endpoint is None
+
+    def test_explicit_none_stays_none(self) -> None:
+        ns = make_ns(network="local", chain_endpoint=None)
+        config = create_miner_cli_config(ns)
+        assert config.chain_endpoint is None
+
+    def test_empty_string_normalises_to_none(self) -> None:
+        """Empty string from an unset env var (`os.environ.get("X")` on
+        an unset key returns ``None``, but a present-but-empty env var
+        gives ``""``). Normalise to ``None`` so downstream code can
+        do a truthiness check without worrying about empty strings."""
+        ns = make_ns(network="local", chain_endpoint="")
+        config = create_miner_cli_config(ns)
+        assert config.chain_endpoint is None

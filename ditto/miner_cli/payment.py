@@ -33,6 +33,7 @@ def submit_eval_payment(
     subtensor_network: str,
     amount_rao: int,
     dest_address: str,
+    chain_endpoint: str | None = None,
 ) -> PaymentReceipt:
     """Sign + submit the upload-fee extrinsic, await finalisation.
 
@@ -46,6 +47,15 @@ def submit_eval_payment(
             WebSocket URL.
         amount_rao: Transfer amount in rao (1 TAO = 1e9 rao).
         dest_address: SS58 address that receives the payment.
+        chain_endpoint: Optional explicit chain URL override. When
+            provided, used in place of ``subtensor_network`` as the
+            value passed to :class:`bittensor.Subtensor`'s ``network``
+            arg (the SDK accepts either a known identifier or a full
+            WebSocket URL on that arg). Used for smoke testing against
+            a non-canonical endpoint (a hosted local subtensor, a
+            testnet pre-DNS WebSocket, etc.). ``None`` means use the
+            ``subtensor_network`` identifier and let the SDK resolve
+            the default URL.
 
     Returns:
         :class:`PaymentReceipt` populated with the proof tuple the API
@@ -62,13 +72,20 @@ def submit_eval_payment(
     logger.info(
         f"submitting payment: {amount_rao} rao to {dest_address} "
         f"on subtensor={subtensor_network}"
+        + (f" via chain_endpoint={chain_endpoint}" if chain_endpoint else "")
     )
 
+    # The bittensor SDK's ``network`` arg accepts either a known
+    # identifier ("finney", "test", "local") or a full WebSocket URL
+    # (e.g. "ws://example.org:9944"). When the caller supplies an
+    # explicit ``chain_endpoint``, pass the URL directly; otherwise
+    # use the network identifier from the locked-pair lookup.
+    chain_target = chain_endpoint or subtensor_network
     try:
-        subtensor = bittensor.Subtensor(network=subtensor_network)
+        subtensor = bittensor.Subtensor(network=chain_target)
     except Exception as e:
         raise PaymentSubmissionError(
-            f"could not connect to subtensor {subtensor_network!r}: {e}"
+            f"could not connect to subtensor {chain_target!r}: {e}"
         ) from e
 
     try:

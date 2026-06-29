@@ -21,8 +21,16 @@ from ditto.miner_cli.tar_validator import run_preflight
 logger = logging.getLogger(__name__)
 
 
-def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
-    """Register the ``verify`` subparser on the top-level argparse layout."""
+def add_subparser(
+    subparsers: argparse._SubParsersAction,
+    *,
+    parents: list[argparse.ArgumentParser] | None = None,
+) -> argparse.ArgumentParser:
+    """Register the ``verify`` subparser on the top-level argparse layout.
+
+    ``parents`` carries the shared top-level flags so they accept the
+    position after the subcommand as well as before it.
+    """
     parser = subparsers.add_parser(
         "verify",
         help="Run local pre-flight checks on a tarball without paying.",
@@ -30,6 +38,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentPa
             "Run every pre-flight check on the tarball and print a table "
             "of results. Exits 0 if every non-deferred check passed."
         ),
+        parents=parents or [],
     )
     parser.add_argument(
         "--path",

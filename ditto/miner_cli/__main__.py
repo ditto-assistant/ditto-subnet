@@ -25,6 +25,66 @@ from ditto.miner_cli.network import NETWORKS
 logger = logging.getLogger(__name__)
 
 
+# Help strings shared between the top-level parser (real defaults) and the
+# subcommand parent parser (SUPPRESS defaults). Centralised so the help text
+# stays identical regardless of where the flag is parsed.
+_NETWORK_HELP = (
+    "Deployment network. Couples API URL + subtensor network "
+    "from a locked lookup table; cannot desync. Values match the "
+    "bittensor SDK identifiers: 'finney' is mainnet, 'test' is "
+    "testnet, 'local' is localnet. Flag "
+    "aliases: --subtensor.network / --network. Env: "
+    "DITTO_NETWORK. Defaults to finney."
+)
+_CHAIN_ENDPOINT_HELP = (
+    "Override the chain target URL for the selected network. "
+    "When set, used in place of --network's chain identifier when "
+    "constructing bittensor.Subtensor; the API URL side of the "
+    "--network pair is unaffected. Useful for smoke testing against "
+    "a non-default chain endpoint (a hosted local subtensor at a "
+    "specific IP, a testnet endpoint pre-DNS). Flag aliases: "
+    "--subtensor.chain_endpoint / --chain-endpoint. Env: "
+    "DITTO_SUBTENSOR_CHAIN_ENDPOINT. Unset by default."
+)
+_VERBOSE_HELP = "Enable INFO/DEBUG logs to stderr."
+
+
+def _build_subcommand_parent() -> argparse.ArgumentParser:
+    """Parent parser used to register the shared flags on each subparser.
+
+    Defaults are ``argparse.SUPPRESS`` so that a subparser inheriting
+    this parent does NOT clobber an attribute already set by the
+    top-level parser when the flag was supplied before the subcommand.
+    The real defaults live on the top-level parser via
+    :func:`_build_parser`'s ``add_argument`` calls, where action objects
+    are NOT shared with this parent.
+    """
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument(
+        "--subtensor.network",
+        "--network",
+        dest="network",
+        choices=sorted(NETWORKS),
+        default=argparse.SUPPRESS,
+        help=_NETWORK_HELP,
+    )
+    parent.add_argument(
+        "--subtensor.chain_endpoint",
+        "--chain-endpoint",
+        dest="chain_endpoint",
+        default=argparse.SUPPRESS,
+        help=_CHAIN_ENDPOINT_HELP,
+    )
+    parent.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=_VERBOSE_HELP,
+    )
+    return parent
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ditto",
@@ -33,32 +93,41 @@ def _build_parser() -> argparse.ArgumentParser:
             "Submit agent harnesses, poll lifecycle, and pre-flight tarballs."
         ),
     )
+    # Top-level registrations carry the real defaults. NOT defined via
+    # ``parents=`` because that would share action objects with the
+    # subcommand parent below; mutating defaults on shared actions
+    # propagates into subparsers and breaks the SUPPRESS-on-subparser
+    # contract.
     parser.add_argument(
         "--subtensor.network",
         "--network",
         dest="network",
         choices=sorted(NETWORKS),
         default=os.environ.get("DITTO_NETWORK", "finney"),
-        help=(
-            "Deployment network. Couples API URL + subtensor network "
-            "from a locked lookup table; cannot desync. Values match the "
-            "bittensor SDK identifiers: 'finney' is mainnet, 'test' is "
-            "testnet, 'local' is localnet. Flag "
-            "aliases: --subtensor.network / --network. Env: "
-            "DITTO_NETWORK. Defaults to finney."
-        ),
+        help=_NETWORK_HELP,
+    )
+    parser.add_argument(
+        "--subtensor.chain_endpoint",
+        "--chain-endpoint",
+        dest="chain_endpoint",
+        default=os.environ.get("DITTO_SUBTENSOR_CHAIN_ENDPOINT"),
+        help=_CHAIN_ENDPOINT_HELP,
     )
     parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable INFO/DEBUG logs to stderr.",
+        help=_VERBOSE_HELP,
     )
 
+    # Subparsers inherit a SEPARATE parent with SUPPRESS defaults so
+    # they accept the same flags after the subcommand without clobbering
+    # whatever the top-level parser set.
+    sub_parent = _build_subcommand_parent()
     subparsers = parser.add_subparsers(dest="command", required=True)
-    upload_cmd.add_subparser(subparsers)
-    status_cmd.add_subparser(subparsers)
-    verify_cmd.add_subparser(subparsers)
+    upload_cmd.add_subparser(subparsers, parents=[sub_parent])
+    status_cmd.add_subparser(subparsers, parents=[sub_parent])
+    verify_cmd.add_subparser(subparsers, parents=[sub_parent])
 
     return parser
 

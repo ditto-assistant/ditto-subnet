@@ -137,3 +137,15 @@ class MinerCliConfig:
 
     network: NetworkConfig
     """Resolved network pair (API URL + subtensor network)."""
+
+    chain_endpoint: str | None = None
+    """Optional chain URL override (``--subtensor.chain_endpoint`` /
+    ``DITTO_SUBTENSOR_CHAIN_ENDPOINT``).
+
+    When set, used in place of ``network.subtensor_network`` as the
+    target passed to ``bittensor.Subtensor(network=...)`` (the SDK
+    accepts either a known identifier or a full WebSocket URL on that
+    arg). The API URL piece of the locked ``network`` pair is
+    unaffected. ``None`` means use the SDK's default URL for
+    ``network.subtensor_network``.
+    """
