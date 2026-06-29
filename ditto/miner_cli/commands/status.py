@@ -42,8 +42,16 @@ from ditto.miner_cli.wallet import load_wallet
 logger = logging.getLogger(__name__)
 
 
-def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
-    """Register the ``status`` subparser on the top-level argparse layout."""
+def add_subparser(
+    subparsers: argparse._SubParsersAction,
+    *,
+    parents: list[argparse.ArgumentParser] | None = None,
+) -> argparse.ArgumentParser:
+    """Register the ``status`` subparser on the top-level argparse layout.
+
+    ``parents`` carries the shared top-level flags so they accept the
+    position after the subcommand as well as before it.
+    """
     parser = subparsers.add_parser(
         "status",
         help="Poll agent lifecycle status by id or wallet hotkey.",
@@ -53,6 +61,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentPa
             "--hotkey / HOTKEY_NAME env) and the latest agent for that "
             "hotkey is returned."
         ),
+        parents=parents or [],
     )
     parser.add_argument(
         "agent_id",

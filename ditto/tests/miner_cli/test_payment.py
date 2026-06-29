@@ -276,3 +276,55 @@ class TestSubmitEvalPayment:
 
         assert "block_number" in str(e.value)
         assert "0x" + "ef" * 32 in str(e.value)
+
+    def test_chain_endpoint_url_passed_as_network_when_set(self, monkeypatch) -> None:
+        """When ``chain_endpoint`` is provided, the bittensor Subtensor
+        constructor receives the URL via the ``network`` kwarg. The SDK
+        accepts either a known identifier or a full WebSocket URL on
+        that arg; supplying the URL there is how btcli's
+        ``--subtensor.chain_endpoint`` ultimately resolves.
+        """
+        captured: dict = {}
+
+        fake_subtensor = MagicMock()
+        fake_subtensor.transfer = MagicMock(return_value=make_response())
+
+        def fake_ctor(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return fake_subtensor
+
+        monkeypatch.setattr(bittensor, "Subtensor", fake_ctor)
+
+        submit_eval_payment(
+            live_wallet=MagicMock(),
+            subtensor_network="local",
+            amount_rao=1_000_000_000,
+            dest_address=self.HOTKEY_DEST,
+            chain_endpoint="ws://example.org:9944",
+        )
+
+        assert captured == {"network": "ws://example.org:9944"}
+
+    def test_subtensor_network_used_when_chain_endpoint_none(self, monkeypatch) -> None:
+        """When no ``chain_endpoint`` override, the Subtensor constructor
+        receives the network identifier from the locked-pair lookup."""
+        captured: dict = {}
+
+        fake_subtensor = MagicMock()
+        fake_subtensor.transfer = MagicMock(return_value=make_response())
+
+        def fake_ctor(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return fake_subtensor
+
+        monkeypatch.setattr(bittensor, "Subtensor", fake_ctor)
+
+        submit_eval_payment(
+            live_wallet=MagicMock(),
+            subtensor_network="finney",
+            amount_rao=1_000_000_000,
+            dest_address=self.HOTKEY_DEST,
+            # chain_endpoint omitted (default None)
+        )
+
+        assert captured == {"network": "finney"}

@@ -50,8 +50,17 @@ from ditto.miner_cli.wallet import load_wallet
 logger = logging.getLogger(__name__)
 
 
-def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
-    """Register the ``upload`` subparser on the top-level argparse layout."""
+def add_subparser(
+    subparsers: argparse._SubParsersAction,
+    *,
+    parents: list[argparse.ArgumentParser] | None = None,
+) -> argparse.ArgumentParser:
+    """Register the ``upload`` subparser on the top-level argparse layout.
+
+    ``parents`` carries the shared top-level flags (``--network``,
+    ``--subtensor.chain_endpoint``, ``--verbose``) so they accept the
+    position after the subcommand as well as before it.
+    """
     parser = subparsers.add_parser(
         "upload",
         help="Submit an agent harness tarball + payment to the Ditto API.",
@@ -59,6 +68,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentPa
             "Run the full 10-step upload flow: pre-flight, sign, pre-pay "
             "check, fetch fee, confirm, pay, post tarball, return agent_id."
         ),
+        parents=parents or [],
     )
     parser.add_argument(
         "--path",
@@ -125,6 +135,7 @@ def run(args: argparse.Namespace) -> int:
             args,
             network_api_url=network.api_url,
             subtensor_network=network.subtensor_network,
+            chain_endpoint=getattr(args, "chain_endpoint", None) or None,
         )
     except PaymentCancelledError as e:
         print(f"cancelled: {e}", file=sys.stderr)
@@ -148,6 +159,7 @@ def _run_upload(
     *,
     network_api_url: str,
     subtensor_network: str,
+    chain_endpoint: str | None = None,
 ) -> int:
     # Step 1: load wallet
     handle, live_wallet = load_wallet(
@@ -207,6 +219,7 @@ def _run_upload(
             subtensor_network=subtensor_network,
             amount_rao=pricing.amount_rao,
             dest_address=pricing.send_address,
+            chain_endpoint=chain_endpoint,
         )
         print(
             f"payment finalised: block={receipt.block_number} "
