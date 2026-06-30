@@ -38,11 +38,19 @@
       "category": {
         "type": "string"
       },
+      "correct": {
+        "default": false,
+        "type": "boolean"
+      },
       "expected": {
         "items": {
           "type": "string"
         },
         "type": "array"
+      },
+      "kind": {
+        "default": "",
+        "type": "string"
       },
       "latency_ms": {
         "minimum": 0,
@@ -54,6 +62,17 @@
         },
         "type": "array"
       },
+      "quality": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "score": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
       "tool_score": {
         "maximum": 1.0,
         "minimum": 0.0,
@@ -63,10 +82,9 @@
     "required": [
       "case_id",
       "category",
+      "score",
       "tool_score",
-      "latency_ms",
-      "called",
-      "expected"
+      "latency_ms"
     ],
     "type": "object"
   },
@@ -86,11 +104,19 @@
           "category": {
             "type": "string"
           },
+          "correct": {
+            "default": false,
+            "type": "boolean"
+          },
           "expected": {
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "kind": {
+            "default": "",
+            "type": "string"
           },
           "latency_ms": {
             "minimum": 0,
@@ -102,6 +128,17 @@
             },
             "type": "array"
           },
+          "quality": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
           "tool_score": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -111,10 +148,9 @@
         "required": [
           "case_id",
           "category",
+          "score",
           "tool_score",
-          "latency_ms",
-          "called",
-          "expected"
+          "latency_ms"
         ],
         "type": "object"
       }
@@ -188,11 +224,19 @@
           "category": {
             "type": "string"
           },
+          "correct": {
+            "default": false,
+            "type": "boolean"
+          },
           "expected": {
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "kind": {
+            "default": "",
+            "type": "string"
           },
           "latency_ms": {
             "minimum": 0,
@@ -204,6 +248,17 @@
             },
             "type": "array"
           },
+          "quality": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
           "tool_score": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -213,10 +268,9 @@
         "required": [
           "case_id",
           "category",
+          "score",
           "tool_score",
-          "latency_ms",
-          "called",
-          "expected"
+          "latency_ms"
         ],
         "type": "object"
       },
