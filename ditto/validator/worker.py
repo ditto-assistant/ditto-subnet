@@ -36,14 +36,19 @@ class ValidatorWorker:
         config: ValidatorConfig,
         platform: PlatformClient,
         dittobench: DittobenchClient,
-        chain: ChainClient,
+        chain: ChainClient | None,
         keypair: Any,
+        weight_setter: Any | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
         self._dittobench = dittobench
         self._chain = chain
         self._keypair = keypair
+        # The weight sink: the Pylon-backed ChainClient by default, or an
+        # injected setter (e.g. the bittensor-SDK fallback on the localnet).
+        # Both expose ``async def put_weights(dict[str, float])``.
+        self._weight_setter: Any = weight_setter if weight_setter is not None else chain
 
     async def run_once(self) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue."""
@@ -65,7 +70,7 @@ class ValidatorWorker:
         if scores:
             weights = compute_weights(scores)
             if weights:
-                await self._chain.put_weights(weights)
+                await self._weight_setter.put_weights(weights)
                 logger.info("submitted weights for %d miner(s)", len(weights))
             else:
                 logger.info("no positive scores; skipping put_weights")

@@ -66,7 +66,17 @@ class ValidatorConfig:
     """Pylon identity token paired with ``pylon_identity_name``."""
 
     subtensor_network: str
-    """Subtensor network identifier for the substrate event reads."""
+    """Subtensor network identifier for the substrate event reads.
+
+    Also the chain target for the SDK weight fallback; a ``ws://`` endpoint is
+    passed straight to :class:`bittensor.Subtensor`."""
+
+    use_sdk_weights: bool
+    """When True, submit weights via the bittensor SDK instead of Pylon identity.
+
+    Localnet fallback (``VALIDATOR_USE_SDK_WEIGHTS``): Pylon identity-write isn't
+    stood up on the dev chain, so the worker calls ``Subtensor.set_weights``
+    directly. Pylon identity creds are not required in this mode."""
 
     # --- Cadence / limits ---
     epoch_seconds: int
@@ -112,16 +122,22 @@ def parse_validator_config_from_env() -> ValidatorConfig:
 
     # Mock mode bypasses dittobench-api, so its URL + OpenRouter key are
     # optional (local end-to-end plumbing without a scoring engine).
-    dittobench_mock = os.environ.get("VALIDATOR_DITTOBENCH_MOCK", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+    _truthy = {"1", "true", "yes"}
+    dittobench_mock = os.environ.get("VALIDATOR_DITTOBENCH_MOCK", "").lower() in _truthy
+    use_sdk_weights = os.environ.get("VALIDATOR_USE_SDK_WEIGHTS", "").lower() in _truthy
     dittobench_api_url = os.environ.get("VALIDATOR_DITTOBENCH_API_URL", "")
     openrouter_key = os.environ.get("VALIDATOR_OPENROUTER_KEY", "")
     if not dittobench_mock:
         _require("VALIDATOR_DITTOBENCH_API_URL", dittobench_api_url)
         _require("VALIDATOR_OPENROUTER_KEY", openrouter_key)
+
+    # Pylon identity is only needed for the Pylon ``put_weights`` path; the SDK
+    # weight fallback signs with the local hotkey, so don't require it there.
+    pylon_identity_name = os.environ.get("PYLON_IDENTITY_NAME", "")
+    pylon_identity_token = os.environ.get("PYLON_IDENTITY_TOKEN", "")
+    if not use_sdk_weights:
+        _require("PYLON_IDENTITY_NAME", pylon_identity_name)
+        _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
 
     config = ValidatorConfig(
         platform_api_url=_require(
@@ -140,13 +156,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         validator_mnemonic=os.environ.get("VALIDATOR_MNEMONIC") or None,
         netuid=int(os.environ.get("NETUID", "118")),
         pylon_url=os.environ.get("PYLON_URL", "http://localhost:8001"),
-        pylon_identity_name=_require(
-            "PYLON_IDENTITY_NAME", os.environ.get("PYLON_IDENTITY_NAME", "")
-        ),
-        pylon_identity_token=_require(
-            "PYLON_IDENTITY_TOKEN", os.environ.get("PYLON_IDENTITY_TOKEN", "")
-        ),
+        pylon_identity_name=pylon_identity_name,
+        pylon_identity_token=pylon_identity_token,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
+        use_sdk_weights=use_sdk_weights,
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),
         queue_limit=int(os.environ.get("VALIDATOR_QUEUE_LIMIT", "50")),
         dittobench_poll_seconds=float(
