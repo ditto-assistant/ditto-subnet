@@ -1,10 +1,17 @@
 # Ditto Subnet (SN118) — Project Plan
 
-Status: planning draft, 2026-06-22. Owners: Dan, Nick, Ethan, Omar (½ time).
+Status: in progress, updated 2026-06-29. Owners: Dan, Nick, Ethan, Omar (½ time).
 
 This is the working plan for getting SN118 to a testnet end-to-end loop and
 then a real evaluation/incentive pipeline. Architecture diagram:
 [`ditto-architecture-v2.mmd`](docs/ditto-architecture-v2.mmd).
+
+**Where we are (2026-06-29):** Phase 0 done (repo split, miner CLI merged, dev
+chain reachable). Phase 1 intake half proven end-to-end on the dev chain
+(`ditto upload` → on-chain eval-fee payment → verifier → agent stored). Validator
+worker relocated into `ditto-subnet` with a mock-bench hook; the validator →
+weights → emissions tail is **not** closed yet — blocked on the dev localnet's
+disabled staking (no vpermit). See `docs/dev-e2e-handoff.md`.
 
 ---
 
@@ -59,22 +66,29 @@ Basic gate only: harness passes Rust lint + compiles + builds. Expand later
 ## 2. Phases
 
 ### Phase 0 — Split & infra (unblocks everyone)
-- [ ] **[Dan]** Split API → `ditto-platform` repo (api_server + db + chain +
+- [x] **[Dan]** Split API → `ditto-platform` repo (api_server + db + chain +
       api_models + payment_verifier + pricing + storage).
-- [ ] **[Ethan]** Merge miner CLI (`feat/miner-cli`) → `main` in `ditto-subnet`.
-- [ ] **[Nick]** Provision API compute instance; create API repo shell (CI,
-      deploy, env); stand up Postgres + minio beside the API.
-- [ ] **[Nick]** Confirm access to the hosted local subtensor; document endpoints.
+- [x] **[Ethan]** Merge miner CLI → `dev` in `ditto-subnet` (PR #10; UX bundle #13).
+- [~] **[Nick]** Provision API compute instance; create API repo shell (CI,
+      deploy, env); stand up Postgres + minio beside the API. *(platform repo +
+      dev VM exist; the VM still serves a stub — real API deploy pending the
+      deploy-SA IAM fix.)*
+- [x] **[Nick]** Confirm access to the hosted local subtensor; document endpoints.
+      *(`ws://68.183.141.180:80`, netuid 3 — see `docs/dev-e2e-handoff.md`.)*
 - [ ] **[Nick]** Stand up a **testnet** target for the chain.
 
 ### Phase 1 — Walking skeleton (the plumbing) — top priority
 One agent flows miner → API → validator → on-chain weights, everything stubbed.
-- [ ] API up on the instance against the local/test chain (Dan + Nick).
-- [ ] Miner uploads successfully against the chain (Ethan + Dan).
-- [ ] Validator skeleton: register → poll work → download tarball → submit a
-      **dummy** score → fetch pool → set weights via SDK (Dan).
+- [x] API up against the dev chain (run locally against `ws://68.183.141.180:80`,
+      netuid 3; `/health` shows db + chain ok) (Dan + Nick).
+- [x] Miner uploads successfully against the chain — verified end-to-end on the
+      dev chain (real eval-fee payment → verifier → agent stored) (Ethan + Dan).
+- [~] Validator skeleton: poll queue → download tarball → submit a (mock) score →
+      set weights. Worker relocated into `ditto-subnet`; mock-bench hook in;
+      weight-setting blocked on the localnet (staking disabled → no vpermit) (Dan).
 - [ ] **Exit criteria:** upload an agent, watch `uploaded → evaluating →
-      scored`, see weights land on chain.
+      scored`, see weights land on chain. *(Blocked on the vpermit gate — enable
+      subtoken via Alice/sudo + stake the validator. See `docs/dev-e2e-handoff.md`.)*
 
 ### Phase 2 — Real components (parallel, after skeleton)
 - [ ] **[Nick]** Evaluator sandbox + build + runtime; egress proxy (OpenRouter
@@ -99,6 +113,12 @@ One agent flows miner → API → validator → on-chain weights, everything stu
 ## 3. Validator-facing API build order (Dan)
 
 Build one at a time (same cadence as intake). Each notes its DB addition.
+
+> **Built so far** (platform `feat/validator`, names diverged from the original
+> sketch below): `GET /api/v1/validator/queue` (agents awaiting eval),
+> `GET /api/v1/validator/agent/{id}/artifact` (presigned tarball URL), and
+> `POST /api/v1/validator/agent/{id}/score` (signed score → `scores` table). The
+> register/lease/heartbeat steps below are still pending.
 
 1. **Validator auth + `POST /validator/register`** — sr25519 sig auth +
    vpermit/stake check. Gates everything below. → `validators` table.
