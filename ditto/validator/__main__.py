@@ -45,30 +45,47 @@ async def _amain() -> int:
         config.dittobench_api_url,
     )
 
-    # Identity mode (write): required for put_weights. Open-access is not enough.
-    chain_config = ChainConfig(
-        pylon_url=config.pylon_url,
-        netuid=config.netuid,
-        identity_name=config.pylon_identity_name,
-        identity_token=config.pylon_identity_token,
-        subtensor_network=config.subtensor_network,
-    )
-
     stop = asyncio.Event()
     _install_signal_handlers(asyncio.get_running_loop(), stop)
 
-    async with (
-        httpx.AsyncClient(timeout=config.http_timeout_seconds) as http,
-        create_chain_client(chain_config) as chain,
-    ):
-        worker = ValidatorWorker(
-            config=config,
-            platform=PlatformClient(config, http),
-            dittobench=DittobenchClient(config, http),
-            chain=chain,
-            keypair=keypair,
-        )
-        await worker.run_forever(stop)
+    async with httpx.AsyncClient(timeout=config.http_timeout_seconds) as http:
+        platform = PlatformClient(config, http)
+        dittobench = DittobenchClient(config, http)
+
+        if config.use_sdk_weights:
+            # Localnet fallback: weights go through the bittensor SDK, signed by
+            # the local hotkey. No Pylon chain client / write identity needed.
+            from ditto.validator.sdk_weights import SdkWeightSetter
+
+            logger.info("weight mode: bittensor SDK (set_weights)")
+            worker = ValidatorWorker(
+                config=config,
+                platform=platform,
+                dittobench=dittobench,
+                chain=None,
+                keypair=keypair,
+                weight_setter=SdkWeightSetter(config, keypair),
+            )
+            await worker.run_forever(stop)
+        else:
+            # Identity mode (write): required for Pylon put_weights.
+            chain_config = ChainConfig(
+                pylon_url=config.pylon_url,
+                netuid=config.netuid,
+                identity_name=config.pylon_identity_name,
+                identity_token=config.pylon_identity_token,
+                subtensor_network=config.subtensor_network,
+            )
+            logger.info("weight mode: Pylon identity (put_weights)")
+            async with create_chain_client(chain_config) as chain:
+                worker = ValidatorWorker(
+                    config=config,
+                    platform=platform,
+                    dittobench=dittobench,
+                    chain=chain,
+                    keypair=keypair,
+                )
+                await worker.run_forever(stop)
     logger.info("validator worker stopped")
     return 0
 

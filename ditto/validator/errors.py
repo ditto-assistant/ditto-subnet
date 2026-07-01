@@ -17,3 +17,7 @@ class DittobenchError(ValidatorError):
 
 class PlatformError(ValidatorError):
     """Raised when a platform ``/validator/*`` call fails."""
+
+
+class WeightSubmissionError(ValidatorError):
+    """Raised when an on-chain weight submission fails (SDK fallback path)."""
