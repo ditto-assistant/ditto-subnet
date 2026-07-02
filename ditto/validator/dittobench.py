@@ -39,16 +39,25 @@ class DittobenchClient:
         self._config = config
         self._client = client
 
-    async def score_tarball(self, *, tarball_url: str) -> ScoreReport:
+    async def score_tarball(
+        self, *, tarball_url: str, tarball_sha256: str | None = None
+    ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
         Submits at ``run_size`` (default ``full``) with the BYOK OpenRouter key,
         then polls until the run finishes. Raises :class:`DittobenchError` on a
         failed run or when the overall timeout elapses.
+
+        ``tarball_sha256`` (the digest the platform registered at upload) is
+        forwarded so the scorer re-verifies the fetched bytes against it and
+        pins the Docker build tag to the content hash — closing the gap where a
+        swapped blob or a URL-basename tag collision could be scored.
         """
         if self._config.dittobench_mock:
             return self._mock_report()
-        run_id = await self._submit(tarball_url=tarball_url)
+        run_id = await self._submit(
+            tarball_url=tarball_url, tarball_sha256=tarball_sha256
+        )
         return await self._poll(run_id)
 
     def _mock_report(self) -> ScoreReport:
@@ -66,12 +75,16 @@ class DittobenchClient:
             per_case=[],
         )
 
-    async def _submit(self, *, tarball_url: str) -> str:
-        body = {
+    async def _submit(
+        self, *, tarball_url: str, tarball_sha256: str | None = None
+    ) -> str:
+        body: dict[str, object] = {
             "tarball_url": tarball_url,
             "run_size": self._config.run_size,
             "openrouter_key": self._config.openrouter_key,
         }
+        if tarball_sha256:
+            body["tarball_sha256"] = tarball_sha256
         url = f"{self._config.dittobench_api_url}/v1/submit"
         try:
             resp = await self._client.post(url, json=body)
