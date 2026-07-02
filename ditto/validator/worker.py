@@ -140,7 +140,19 @@ class ValidatorWorker:
 
     async def _score_agent(self, item: ValidatorQueueItem) -> ScoreReport:
         artifact = await self._platform.get_artifact(item.agent_id)
-        report = await self._dittobench.score_tarball(tarball_url=artifact.download_url)
+        # The queue item and the artifact response both carry the registered
+        # digest; a mismatch means the platform is inconsistent about which blob
+        # this agent is, so refuse to score rather than sign a score for an
+        # ambiguous artifact. (The scorer re-verifies the bytes too — this is the
+        # cheap cross-check before we even hand off the URL.)
+        if item.sha256.lower() != artifact.sha256.lower():
+            raise PlatformError(
+                f"sha256 mismatch for agent {item.agent_id}: "
+                f"queue={item.sha256} artifact={artifact.sha256}"
+            )
+        report = await self._dittobench.score_tarball(
+            tarball_url=artifact.download_url, tarball_sha256=artifact.sha256
+        )
         signature = sign_score(
             self._keypair,
             validator_hotkey=self._config.validator_hotkey,

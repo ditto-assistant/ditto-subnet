@@ -119,7 +119,8 @@ Verdicts: **DONE / PARTIAL / MISSING**.
 | Anti-copy (exact-hash + size/score heuristic) | **PARTIAL** | Cross-miner exact-sha256 + near-dup → `ath_pending_review`; **content-level near-dup NOT done**. |
 | First **real** end-to-end scoring run | **MISSING** | The 6/30 E2E used the mock scorer; no agent has flowed the real tarball→docker→judge path since deploy. **#1 milestone.** |
 | Multi-validator (k=3 + median-of-3) | **MISSING** | Single validator; one score row per agent. Endpoints still use stub names. |
-| OpenRouter egress allowlist + cost cap | **MISSING** | Only a global concurrency bound + per-IP rate limit — **unbounded LLM spend risk**. |
+| OpenRouter cost cap (`max_tokens` + per-run token budget) | **DONE** | Per-call `max_tokens` + per-run token budget on the dittobench LLM client (`LLM_MAX_TOKENS` / `LLM_RUN_TOKEN_BUDGET`); a looping harness fails the run instead of burning unbounded spend. |
+| OpenRouter/sandbox **egress allowlist** | **MISSING** | Sandbox container still runs on the default bridge (full egress); a host-allowlist needs an egress proxy. Cost cap above bounds spend in the meantime. |
 | Sandbox hardening (seccomp/gVisor/egress) | **DEFERRED** | `docker build --memory 2g`, no-new-privileges, private net; deeper isolation deferred in code comments. |
 | Plagiarism / first-seen at content level | **PARTIAL** | First-seen (`created_at`) + margin defeat verbatim copies; semantic near-dup is heuristic only. |
 | Emission economics (non-zero netuid emission) | **MISSING** | `SubnetTaoInEmission[3] = 0` → winners don't accrue alpha yet. **Ours to tune.** |
@@ -270,25 +271,44 @@ persists on-chain.
 - **Files:** `ditto-platform/ditto/api_server/endpoints/{validator,screener}.py`,
   `ditto-subnet/ditto/validator/signing.py`, the wire models (contract regen).
 
-#### C3 — dittobench-api hardening  ·  MISSING/DEFERRED  ·  🔴 cost + isolation
-- [ ] **OpenRouter egress allowlist + per-run cost cap** — currently only a global
-      concurrency bound + per-IP rate limit; a malicious/looping harness can burn
-      unbounded LLM spend. **Do before real scoring at volume (critical path #2).**
+#### C3 — dittobench-api hardening  ·  PARTIAL  ·  🔴 cost + isolation
+- [x] **Per-run cost cap** — per-call `max_tokens` + a per-run token budget on the
+      OpenRouter client (`internal/llm/llm.go`; env `LLM_MAX_TOKENS` /
+      `LLM_RUN_TOKEN_BUDGET`). The client is created per submission, so the budget
+      is per-run; a looping harness fails the run instead of burning unbounded
+      spend. Covers critical-path #2's cost half.
+- [ ] **OpenRouter/sandbox egress allowlist** — still MISSING. The sandbox
+      container runs on the default bridge (full egress); a real host-allowlist
+      needs an egress proxy. Deferred (bigger than a code change).
 - [ ] **Sandbox isolation:** add seccomp/gVisor + egress restriction (the sandbox
       comment defers these); the build host unpacks attacker-controlled tarballs.
-- [ ] **Redact the tarball error path** (`internal/sandbox/tarball.go`) — a
-      transport-level fetch error leaks the credentialed presigned URL into job
-      status + logs (git path redacts; tarball path doesn't). *(Open review item.)*
-- [ ] **Extractor CPU-DoS + tag collision:** count skipped tar-entry bytes vs the
-      64 MiB cap, honor `ctx`; include a content hash in the docker tag and have
-      the validator forward `tarball_sha256` (it already has the SHA). *(Open
-      review item.)*
-- **Repo:** `dittobench-api` (Go).
+- [x] **Redact the tarball error path** (`internal/sandbox/tarball.go`) — the
+      transport-level fetch error now runs through `redactURL`, stripping the
+      presigned signature query before it can reach job status / logs (parity with
+      the git path's `redact`). Covered by `TestRedactURL`.
+- [x] **Extractor CPU-DoS + tag:** skipped/non-regular tar-entry bodies are now
+      charged against the 64 MiB cap (`drainCounted`) so a large-bodied symlink
+      can't force unbounded gzip inflate; the extract loop honors `ctx`. The docker
+      tag already pins `tarball_sha256[:12]` when present — the validator now
+      **forwards** `tarball_sha256` (see below), so the tag is content-pinned and
+      the scorer re-verifies the fetched bytes. Covered by `TestDrainCounted`,
+      `TestExtractTarGz_CtxCanceled`.
+- **Repo:** `dittobench-api` (Go). **Paired subnet change:** the validator now
+  forwards `tarball_sha256` to `/v1/submit` and cross-checks the queue-vs-artifact
+  digest before scoring (`ditto/validator/{worker,dittobench}.py`) — this also
+  closes the "no sha256 verification anywhere in the validator path" cross-cutting
+  gap.
 
-#### C4 — Banned-hotkeys table + enforcement  ·  MISSING
-- [ ] Add the `banned_hotkeys` table + enforcement at upload and in
-      `get_latest_agent_by_hotkey` (hotkey-level ban surfacing was deferred).
-- **Files:** `ditto-platform/ditto/db/`, `endpoints/upload.py`, `retrieval.py`.
+#### C4 — Banned-hotkeys table + enforcement  ·  DONE
+- [x] `banned_hotkeys` table (migration `a3f1c9d27b40`, model `BannedHotkey`,
+      queries `ditto/db/queries/bans.py`), enforced at upload (`/upload/agent`
+      hard 403; `/upload/check` reports code `1103` pre-payment) and surfaced on
+      `/retrieval/agent-by-hotkey` (a hotkey-level ban shows `banned` regardless of
+      the latest agent's own status). Owner-only writes via `scripts/ban_hotkey.py`.
+- **Files:** `ditto-platform/ditto/db/{models.py,queries/bans.py}`,
+  `alembic/versions/2026_07_02_add_banned_hotkeys.py`, `endpoints/upload.py`,
+  `endpoints/retrieval.py`, `scripts/ban_hotkey.py`. Migration verified up+down on
+  real Postgres.
 
 #### C5 — Scoring integrity / verifiable scoring  ·  NEW (design)
 - [ ] Today scoring integrity is trusted to the dittobench-api operator

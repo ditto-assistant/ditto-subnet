@@ -200,6 +200,67 @@ class TestRunOnce:
         assert platform.submit_score.await_count == 1
         chain.put_weights.assert_awaited_once_with({"5MinerA" + "x" * 41: 0.9})
 
+    async def test_forwards_tarball_sha_to_scorer(self) -> None:
+        # The registered digest must be forwarded so dittobench re-verifies the
+        # fetched bytes and pins the build tag to the content hash.
+        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        platform = _platform_with_ledger(
+            items=[item], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        keypair = MagicMock()
+        keypair.sign = MagicMock(return_value=b"\x01" * 64)
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(put_weights=AsyncMock()),
+            keypair=keypair,
+        )
+        await worker.run_once()
+
+        dittobench.score_tarball.assert_awaited_once()
+        kwargs = dittobench.score_tarball.await_args.kwargs
+        assert kwargs["tarball_sha256"] == "ab" * 32
+        assert kwargs["tarball_url"].startswith("https://")
+
+    async def test_sha_mismatch_skips_agent(self) -> None:
+        # If the queue item and artifact disagree on the digest, the agent is
+        # skipped (never scored), but the sweep continues and weights still come
+        # from the durable ledger.
+        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        platform = _platform_with_ledger(
+            items=[item], ledger=[_entry("5Champ" + "x" * 42, 0.85)]
+        )
+        # Artifact reports a DIFFERENT sha than the queue item's "ab" * 32.
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=uuid4(),
+                sha256="cd" * 32,
+                download_url="https://signed.example/x.tar.gz?sig=1",
+                expires_at=datetime.now(UTC),
+            )
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock(put_weights=AsyncMock())
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        n = await worker.run_once()
+
+        assert n == 1  # the item was pulled...
+        dittobench.score_tarball.assert_not_awaited()  # ...but never scored
+        platform.submit_score.assert_not_awaited()
+        chain.put_weights.assert_awaited_once_with({"5Champ" + "x" * 42: 0.9})
+
     async def test_empty_queue_still_sets_weights_from_ledger(self) -> None:
         # The regression that broke incentives: an empty queue must NOT skip
         # weight-setting, or the reigning champion is zeroed.
