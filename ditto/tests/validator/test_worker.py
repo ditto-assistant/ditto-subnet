@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -49,7 +50,9 @@ def _entry(
     )
 
 
-_KOTH = {"margin": 0.01, "tail_size": 4, "champion_share": 0.9}
+# Mixed value types (float margin/share, int tail_size), so type as Any to
+# unpack cleanly into compute_weights' int/float params under `mypy ditto/`.
+_KOTH: dict[str, Any] = {"margin": 0.01, "tail_size": 4, "champion_share": 0.9}
 
 
 class TestComputeWeights:
