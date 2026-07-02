@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.upload import (
@@ -127,25 +127,54 @@ class ArtifactResponse(BaseModel):
 class CaseScore(BaseModel):
     """Per-case breakdown inside a :class:`ScoreReport`.
 
-    Mirrors the DittoBench ``CaseScore`` wire shape. Optional on the
-    submission path — daemons may post only the aggregate.
+    Mirrors the DittoBench ``CaseScore`` wire shape (``pkg/protocol``). Optional
+    on the submission path — daemons may post only the aggregate. Carries both
+    case families: a *tool* case has ``tool_score`` (deterministic accuracy) +
+    ``quality`` (LLM judge), with ``score = 0.5*tool_score + 0.5*quality``; a
+    *memory* case has ``correct`` (LongMemEval yes/no) and ``score`` 1.0/0.0,
+    with ``tool_score``/``quality`` unused. ``kind`` discriminates the two
+    (empty on the tool-only practice path).
     """
 
     case_id: Annotated[str, Field(description="Stable id of the scored case.")]
     category: Annotated[str, Field(description="Case category, e.g. ``web_search``.")]
+    kind: Annotated[
+        str, Field(default="", description="``tool`` | ``memory`` (empty if unset).")
+    ]
+    score: Annotated[
+        float, Field(ge=0.0, le=1.0, description="Per-case composite in [0,1].")
+    ]
     tool_score: Annotated[
         float, Field(ge=0.0, le=1.0, description="Per-case tool accuracy in [0,1].")
+    ]
+    quality: Annotated[
+        float,
+        Field(ge=0.0, le=1.0, default=0.0, description="LLM tool-quality judge [0,1]."),
+    ]
+    correct: Annotated[
+        bool, Field(default=False, description="Memory judge verdict (memory cases).")
     ]
     latency_ms: Annotated[
         int, Field(ge=0, description="Observed latency for the case.")
     ]
     called: Annotated[
-        list[str], Field(description="Tool names the agent actually called.")
+        list[str],
+        Field(default_factory=list, description="Tool names the agent called."),
     ]
-    expected: Annotated[list[str], Field(description="Tool names the case expected.")]
+    expected: Annotated[
+        list[str],
+        Field(default_factory=list, description="Tool names the case expected."),
+    ]
     notes: Annotated[
         list[str], Field(default_factory=list, description="Scorer annotations.")
     ]
+
+    @field_validator("called", "expected", "notes", mode="before")
+    @classmethod
+    def _none_to_empty(cls, v: list[str] | None) -> list[str]:
+        # The Go scorer omits or nulls these on cases that have none (memory
+        # cases carry no expected tools); coerce null/absent to an empty list.
+        return v if v is not None else []
 
 
 class ScoreReport(BaseModel):
