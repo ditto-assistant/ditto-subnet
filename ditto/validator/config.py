@@ -159,9 +159,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     # team-locked values (90/10 split, 1% margin).
     koth_margin = float(os.environ.get("VALIDATOR_KOTH_MARGIN", "0.01"))
     koth_tail_size = int(os.environ.get("VALIDATOR_KOTH_TAIL_SIZE", "4"))
-    koth_champion_share = float(
-        os.environ.get("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")
-    )
+    koth_champion_share = float(os.environ.get("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9"))
     if koth_margin <= 0:
         raise ValidatorConfigError(
             f"VALIDATOR_KOTH_MARGIN must be > 0, got {koth_margin}"

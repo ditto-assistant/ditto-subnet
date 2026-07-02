@@ -142,7 +142,12 @@ class ValidatorWorker:
         artifact = await self._platform.get_artifact(item.agent_id)
         report = await self._dittobench.score_tarball(tarball_url=artifact.download_url)
         signature = sign_score(
-            self._keypair, self._config.validator_hotkey, report.run_id
+            self._keypair,
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=item.agent_id,
+            run_id=report.run_id,
+            composite=report.composite,
+            seed=report.seed,
         )
         await self._platform.submit_score(
             item.agent_id, signature=signature, report=report

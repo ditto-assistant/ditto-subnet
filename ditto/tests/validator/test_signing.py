@@ -1,0 +1,75 @@
+"""Unit tests for the validator score signer.
+
+Locks the canonical signing-message format, which the platform's
+``_score_signing_message`` must reproduce byte-for-byte to verify.
+"""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+import bittensor
+
+from ditto.validator.signing import score_signing_message, sign_score
+
+_HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+_AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+
+def test_message_is_canonical_format() -> None:
+    msg = score_signing_message(
+        validator_hotkey=_HOTKEY,
+        agent_id=_AGENT,
+        run_id="run_1",
+        composite=0.82,
+        seed=8675309,
+    )
+    assert (
+        msg
+        == (
+            f"{_HOTKEY}:550e8400-e29b-41d4-a716-446655440000:run_1:0.82:8675309"
+        ).encode()
+    )
+
+
+def test_sign_verifies_with_real_keypair() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    sig_hex = sign_score(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        run_id="run_1",
+        composite=0.82,
+        seed=42,
+    )
+    msg = score_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        run_id="run_1",
+        composite=0.82,
+        seed=42,
+    )
+    verifier = bittensor.Keypair(ss58_address=keypair.ss58_address)
+    assert verifier.verify(msg, bytes.fromhex(sig_hex))
+
+
+def test_tampered_composite_breaks_signature() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    sig_hex = sign_score(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        run_id="run_1",
+        composite=0.50,
+        seed=42,
+    )
+    # Verifying against a different composite must fail.
+    tampered = score_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        run_id="run_1",
+        composite=0.99,
+        seed=42,
+    )
+    verifier = bittensor.Keypair(ss58_address=keypair.ss58_address)
+    assert not verifier.verify(tampered, bytes.fromhex(sig_hex))

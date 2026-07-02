@@ -290,9 +290,7 @@ class TestRunOnce:
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
         platform = _platform_with_ledger(items=[], ledger=ledger)
         chain = MagicMock()
-        chain.put_weights = AsyncMock(
-            side_effect=[ChainError("timeout"), None]
-        )
+        chain.put_weights = AsyncMock(side_effect=[ChainError("timeout"), None])
 
         worker = ValidatorWorker(
             config=_config(),

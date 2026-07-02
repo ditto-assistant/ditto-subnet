@@ -214,11 +214,12 @@ class ScoreReport(BaseModel):
 class SubmitScoreRequest(BaseModel):
     """Body of ``POST /validator/agent/{agent_id}/score``.
 
-    The validator authenticates by signing the report it submits: the
-    signature is over the UTF-8 bytes of ``f"{validator_hotkey}:{run_id}"``
-    with the validator's hotkey keypair. (Signature verification is
-    deferred to the real-auth pass; the field is carried now so the wire
-    contract is stable.)
+    The validator authenticates by signing a canonical payload binding the
+    agent id and the report contents — the UTF-8 bytes of
+    ``f"{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}"`` — with
+    the validator's hotkey keypair. The platform reconstructs and verifies the
+    same bytes, so a captured signature cannot be replayed against a different
+    agent nor cover an altered composite.
     """
 
     validator_hotkey: Annotated[
@@ -229,7 +230,10 @@ class SubmitScoreRequest(BaseModel):
         str,
         Field(
             pattern=_SIGNATURE_HEX_PATTERN,
-            description="Hex sr25519 signature over ``{validator_hotkey}:{run_id}``.",
+            description=(
+                "Hex sr25519 signature over "
+                "``{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}``."
+            ),
         ),
     ]
     report: Annotated[ScoreReport, Field(description="The DittoBench score report.")]
@@ -278,9 +282,7 @@ class LedgerEntry(BaseModel):
         datetime,
         Field(description="Agent upload time (UTC); the KOTH first-seen tie-break."),
     ]
-    sha256: Annotated[
-        str, Field(description="SHA-256 of the tarball, lowercase hex.")
-    ]
+    sha256: Annotated[str, Field(description="SHA-256 of the tarball, lowercase hex.")]
     size_bytes: Annotated[
         int | None, Field(default=None, ge=0, description="Tarball size in bytes.")
     ]

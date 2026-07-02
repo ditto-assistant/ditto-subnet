@@ -1,8 +1,12 @@
 """Validator hotkey loading + score signing.
 
 The worker signs each score submission so the platform can verify the report
-came from the claimed validator hotkey (the platform's ``/validator/.../score``
-verifies an sr25519 signature over ``f"{validator_hotkey}:{run_id}"``).
+came from the claimed validator hotkey *and* that its contents were not tampered
+with. The signature binds a **canonical payload** — the validator hotkey, the
+agent id, and the reported ``run_id`` / ``composite`` / ``seed`` — so a captured
+signature cannot be replayed against a different agent, and the composite the
+platform records cannot be altered without invalidating the signature. (The
+platform's ``/validator/.../score`` rebuilds the same string and verifies it.)
 
 WIP / ops decision: the signing private key comes from a bittensor wallet on the
 host or a mnemonic secret. We only hold the public hotkey
@@ -17,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 from ditto.validator.errors import ValidatorConfigError
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from ditto.validator.config import ValidatorConfig
 
 
@@ -47,8 +53,40 @@ def load_validator_keypair(config: ValidatorConfig) -> Any:
     return keypair
 
 
-def sign_score(keypair: Any, validator_hotkey: str, run_id: str) -> str:
-    """Return the hex sr25519 signature over ``f"{validator_hotkey}:{run_id}"``."""
-    message = f"{validator_hotkey}:{run_id}".encode()
+def score_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_id: str,
+    composite: float,
+    seed: int,
+) -> bytes:
+    """Build the canonical bytes a score signature is computed over.
+
+    ``{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}``. The
+    platform reconstructs this exact string from the request to verify, so both
+    sides MUST format it identically — in particular ``composite`` uses Python's
+    shortest round-trip float repr, which the JSON transport preserves.
+    """
+    return (f"{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}").encode()
+
+
+def sign_score(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_id: str,
+    composite: float,
+    seed: int,
+) -> str:
+    """Return the hex sr25519 signature over the canonical score payload."""
+    message = score_signing_message(
+        validator_hotkey=validator_hotkey,
+        agent_id=agent_id,
+        run_id=run_id,
+        composite=composite,
+        seed=seed,
+    )
     signature: bytes = keypair.sign(message)
     return signature.hex()
