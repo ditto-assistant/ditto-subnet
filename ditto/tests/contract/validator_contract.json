@@ -88,6 +88,197 @@
     ],
     "type": "object"
   },
+  "LedgerEntry": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "composite": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "first_seen": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "seed": {
+        "type": "integer"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "signature": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "size_bytes": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      },
+      "validator_hotkey": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "miner_hotkey",
+      "agent_id",
+      "composite",
+      "first_seen",
+      "sha256",
+      "run_id",
+      "seed",
+      "validator_hotkey",
+      "status"
+    ],
+    "type": "object"
+  },
+  "LedgerResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      },
+      "LedgerEntry": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "first_seen": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "miner_hotkey": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "$ref": "#/$defs/AgentStatus"
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "miner_hotkey",
+          "agent_id",
+          "composite",
+          "first_seen",
+          "sha256",
+          "run_id",
+          "seed",
+          "validator_hotkey",
+          "status"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "count": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/LedgerEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "entries",
+      "count"
+    ],
+    "type": "object"
+  },
   "ScoreReport": {
     "$defs": {
       "CaseScore": {
@@ -188,6 +379,8 @@
         "type": "string"
       },
       "seed": {
+        "maximum": 9223372036854775807,
+        "minimum": -9223372036854775808,
         "type": "integer"
       },
       "tool_mean": {
@@ -308,6 +501,8 @@
             "type": "string"
           },
           "seed": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
             "type": "integer"
           },
           "tool_mean": {

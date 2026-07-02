@@ -16,6 +16,7 @@ import httpx
 
 from ditto.api_models.validator import (
     ArtifactResponse,
+    LedgerResponse,
     ScoreReport,
     SubmitScoreRequest,
     SubmitScoreResponse,
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _PREFIX = "/api/v1/validator"
+# The scoring ledger lives under a sibling prefix, not /validator.
+_SCORING_PREFIX = "/api/v1/scoring"
 
 
 class PlatformClient:
@@ -53,6 +56,25 @@ class PlatformClient:
                 f"queue rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return ValidatorQueueResponse.model_validate(resp.json())
+
+    async def get_ledger(self) -> LedgerResponse:
+        """Pull the best-score-per-miner ledger the worker folds into weights.
+
+        This is the durable scoring pool (``GET /scoring/scores``) — the source
+        of the on-chain weight vector every epoch, so a scored agent keeps its
+        weight until genuinely dethroned instead of being zeroed the moment it
+        leaves the ``evaluating`` queue.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/scores"
+        try:
+            resp = await self._client.get(url, headers=self._headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return LedgerResponse.model_validate(resp.json())
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
         """Get a presigned tarball download URL for ``agent_id``."""

@@ -9,6 +9,7 @@ and writes weights via Pylon identity mode. Nothing here imports the DB.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -78,6 +79,21 @@ class ValidatorConfig:
     stood up on the dev chain, so the worker calls ``Subtensor.set_weights``
     directly. Pylon identity creds are not required in this mode."""
 
+    # --- Incentive mechanism (KOTH + ATH gate) ---
+    koth_margin: float
+    """Relative margin a challenger must beat the incumbent by to dethrone it.
+
+    ``0.01`` = 1%: a challenger becomes champion only if its composite exceeds the
+    incumbent's by more than this. Ties + sub-margin gains keep the incumbent
+    (first-seen wins), which is what makes a copy unprofitable."""
+
+    koth_tail_size: int
+    """How many runners-up (after the champion) split the participation tail."""
+
+    koth_champion_share: float
+    """Fraction of weight the ATH champion receives; the rest splits over the
+    tail. ``0.9`` = 90% champion / 10% tail."""
+
     # --- Cadence / limits ---
     epoch_seconds: int
     """Seconds to sleep between scoring sweeps (approx the subnet tempo)."""
@@ -105,6 +121,24 @@ def _require(name: str, value: str) -> str:
     if not value:
         raise ValidatorConfigError(f"{name} is required")
     return value
+
+
+def _parse_float(name: str, default: str) -> float:
+    """Parse a float env var into a typed ``ValidatorConfigError`` on garbage."""
+    raw = os.environ.get(name, default)
+    try:
+        return float(raw)
+    except ValueError as e:
+        raise ValidatorConfigError(f"{name} must be a number, got {raw!r}") from e
+
+
+def _parse_int(name: str, default: str) -> int:
+    """Parse an int env var into a typed ``ValidatorConfigError`` on garbage."""
+    raw = os.environ.get(name, default)
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValidatorConfigError(f"{name} must be an integer, got {raw!r}") from e
 
 
 def parse_validator_config_from_env() -> ValidatorConfig:
@@ -139,6 +173,29 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         _require("PYLON_IDENTITY_NAME", pylon_identity_name)
         _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
 
+    # KOTH+ATH mechanism knobs. Every validator must agree on these or Yuma
+    # consensus clips the deviator, so they are env-tunable but default to the
+    # team-locked values (90/10 split, 1% margin).
+    koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.01")
+    koth_tail_size = _parse_int("VALIDATOR_KOTH_TAIL_SIZE", "4")
+    koth_champion_share = _parse_float("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")
+    # ``math.isfinite`` rejects NaN/Inf, which slip past a bare ``<= 0`` (e.g.
+    # ``nan <= 0`` is False) and would silently disable the ATH gate — a
+    # consensus-divergence footgun since the fold multiplies by ``1 + margin``.
+    if not math.isfinite(koth_margin) or koth_margin <= 0:
+        raise ValidatorConfigError(
+            f"VALIDATOR_KOTH_MARGIN must be a finite number > 0, got {koth_margin}"
+        )
+    if koth_tail_size < 0:
+        raise ValidatorConfigError(
+            f"VALIDATOR_KOTH_TAIL_SIZE must be >= 0, got {koth_tail_size}"
+        )
+    if not (math.isfinite(koth_champion_share) and 0 < koth_champion_share <= 1):
+        raise ValidatorConfigError(
+            "VALIDATOR_KOTH_CHAMPION_SHARE must be a finite number in (0, 1], "
+            f"got {koth_champion_share}"
+        )
+
     config = ValidatorConfig(
         platform_api_url=_require(
             "VALIDATOR_PLATFORM_API_URL",
@@ -160,6 +217,9 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_identity_token=pylon_identity_token,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         use_sdk_weights=use_sdk_weights,
+        koth_margin=koth_margin,
+        koth_tail_size=koth_tail_size,
+        koth_champion_share=koth_champion_share,
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),
         queue_limit=int(os.environ.get("VALIDATOR_QUEUE_LIMIT", "50")),
         dittobench_poll_seconds=float(

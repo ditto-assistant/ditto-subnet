@@ -1,0 +1,76 @@
+"""Tests for KOTH+ATH knob parsing/validation in the validator config."""
+
+from __future__ import annotations
+
+import pytest
+
+from ditto.validator.config import parse_validator_config_from_env
+from ditto.validator.errors import ValidatorConfigError
+
+_HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+_MNEMONIC = "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+
+
+def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Minimal env under which parse succeeds (mock + SDK skip most requirements)."""
+    monkeypatch.setenv("VALIDATOR_DITTOBENCH_MOCK", "true")
+    monkeypatch.setenv("VALIDATOR_USE_SDK_WEIGHTS", "true")
+    monkeypatch.setenv("VALIDATOR_HOTKEY", _HOTKEY)
+    monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
+    for k in (
+        "VALIDATOR_KOTH_MARGIN",
+        "VALIDATOR_KOTH_TAIL_SIZE",
+        "VALIDATOR_KOTH_CHAMPION_SHARE",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+
+class TestKothConfig:
+    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        assert cfg.koth_margin == 0.01
+        assert cfg.koth_tail_size == 4
+        assert cfg.koth_champion_share == 0.9
+
+    @pytest.mark.parametrize("val", ["nan", "inf", "-inf", "0", "-0.5"])
+    def test_bad_margin_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, val: str
+    ) -> None:
+        # NaN/Inf are the ones that slip past a bare ``<= 0`` and would silently
+        # disable the ATH gate → validator diverges from consensus.
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_KOTH_MARGIN", val)
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
+
+    def test_non_numeric_margin_is_typed_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_KOTH_MARGIN", "abc")
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
+
+    @pytest.mark.parametrize("val", ["nan", "inf", "1.5", "0", "-0.1"])
+    def test_bad_champion_share_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, val: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_KOTH_CHAMPION_SHARE", val)
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
+
+    def test_negative_tail_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_KOTH_TAIL_SIZE", "-1")
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
+
+    def test_non_numeric_tail_is_typed_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_KOTH_TAIL_SIZE", "4.5")
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
