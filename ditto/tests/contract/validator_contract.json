@@ -122,6 +122,9 @@
       "miner_hotkey": {
         "type": "string"
       },
+      "run_id": {
+        "type": "string"
+      },
       "seed": {
         "type": "integer"
       },
@@ -164,6 +167,7 @@
       "composite",
       "first_seen",
       "sha256",
+      "run_id",
       "seed",
       "validator_hotkey",
       "status"
@@ -202,6 +206,9 @@
             "type": "string"
           },
           "miner_hotkey": {
+            "type": "string"
+          },
+          "run_id": {
             "type": "string"
           },
           "seed": {
@@ -246,6 +253,7 @@
           "composite",
           "first_seen",
           "sha256",
+          "run_id",
           "seed",
           "validator_hotkey",
           "status"
@@ -371,6 +379,8 @@
         "type": "string"
       },
       "seed": {
+        "maximum": 9223372036854775807,
+        "minimum": -9223372036854775808,
         "type": "integer"
       },
       "tool_mean": {
@@ -491,6 +501,8 @@
             "type": "string"
           },
           "seed": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
             "type": "integer"
           },
           "tool_mean": {

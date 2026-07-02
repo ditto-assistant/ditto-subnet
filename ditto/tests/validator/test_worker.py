@@ -41,6 +41,7 @@ def _entry(
         first_seen=first_seen,
         sha256="ab" * 32,
         size_bytes=524288,
+        run_id="run_1",
         seed=1,
         validator_hotkey=_VALIDATOR_HOTKEY,
         signature="ab" * 64,

@@ -9,6 +9,7 @@ and writes weights via Pylon identity mode. Nothing here imports the DB.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -122,6 +123,24 @@ def _require(name: str, value: str) -> str:
     return value
 
 
+def _parse_float(name: str, default: str) -> float:
+    """Parse a float env var into a typed ``ValidatorConfigError`` on garbage."""
+    raw = os.environ.get(name, default)
+    try:
+        return float(raw)
+    except ValueError as e:
+        raise ValidatorConfigError(f"{name} must be a number, got {raw!r}") from e
+
+
+def _parse_int(name: str, default: str) -> int:
+    """Parse an int env var into a typed ``ValidatorConfigError`` on garbage."""
+    raw = os.environ.get(name, default)
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValidatorConfigError(f"{name} must be an integer, got {raw!r}") from e
+
+
 def parse_validator_config_from_env() -> ValidatorConfig:
     """Build a :class:`ValidatorConfig` from ``VALIDATOR_*`` / ``PYLON_*`` env.
 
@@ -157,20 +176,23 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     # KOTH+ATH mechanism knobs. Every validator must agree on these or Yuma
     # consensus clips the deviator, so they are env-tunable but default to the
     # team-locked values (90/10 split, 1% margin).
-    koth_margin = float(os.environ.get("VALIDATOR_KOTH_MARGIN", "0.01"))
-    koth_tail_size = int(os.environ.get("VALIDATOR_KOTH_TAIL_SIZE", "4"))
-    koth_champion_share = float(os.environ.get("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9"))
-    if koth_margin <= 0:
+    koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.01")
+    koth_tail_size = _parse_int("VALIDATOR_KOTH_TAIL_SIZE", "4")
+    koth_champion_share = _parse_float("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")
+    # ``math.isfinite`` rejects NaN/Inf, which slip past a bare ``<= 0`` (e.g.
+    # ``nan <= 0`` is False) and would silently disable the ATH gate — a
+    # consensus-divergence footgun since the fold multiplies by ``1 + margin``.
+    if not math.isfinite(koth_margin) or koth_margin <= 0:
         raise ValidatorConfigError(
-            f"VALIDATOR_KOTH_MARGIN must be > 0, got {koth_margin}"
+            f"VALIDATOR_KOTH_MARGIN must be a finite number > 0, got {koth_margin}"
         )
     if koth_tail_size < 0:
         raise ValidatorConfigError(
             f"VALIDATOR_KOTH_TAIL_SIZE must be >= 0, got {koth_tail_size}"
         )
-    if not 0 < koth_champion_share <= 1:
+    if not (math.isfinite(koth_champion_share) and 0 < koth_champion_share <= 1):
         raise ValidatorConfigError(
-            "VALIDATOR_KOTH_CHAMPION_SHARE must be in (0, 1], "
+            "VALIDATOR_KOTH_CHAMPION_SHARE must be a finite number in (0, 1], "
             f"got {koth_champion_share}"
         )
 

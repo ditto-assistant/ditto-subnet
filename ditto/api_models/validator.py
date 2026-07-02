@@ -189,7 +189,13 @@ class ScoreReport(BaseModel):
 
     run_id: Annotated[str, Field(description="Scoring-engine run identifier.")]
     seed: Annotated[
-        int, Field(description="Dataset seed used (anti-overfit reproducibility).")
+        int,
+        Field(
+            ge=-(2**63),
+            le=2**63 - 1,
+            description="Dataset seed used (anti-overfit reproducibility); "
+            "bounded to the signed 64-bit range the ``scores.seed`` column stores.",
+        ),
     ]
     composite: Annotated[
         float, Field(ge=0.0, le=1.0, description="Aggregate score in [0,1].")
@@ -286,6 +292,10 @@ class LedgerEntry(BaseModel):
     size_bytes: Annotated[
         int | None, Field(default=None, ge=0, description="Tarball size in bytes.")
     ]
+    run_id: Annotated[
+        str,
+        Field(description="Run id of the scoring run (part of the signed payload)."),
+    ]
     seed: Annotated[int, Field(description="Dataset seed of the scoring run.")]
     validator_hotkey: Annotated[
         str, Field(description="SS58 hotkey of the validator that produced the score.")
@@ -329,6 +339,7 @@ class LedgerResponse(BaseModel):
                         "first_seen": "2026-06-08T12:00:00Z",
                         "sha256": "deadbeef" * 8,
                         "size_bytes": 524288,
+                        "run_id": "run_2026-06-08_abc123",
                         "seed": 8675309,
                         "validator_hotkey": (
                             "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
