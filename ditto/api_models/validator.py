@@ -257,6 +257,90 @@ class SubmitScoreRequest(BaseModel):
     )
 
 
+class LedgerEntry(BaseModel):
+    """One miner's best eligible score, returned by ``GET /scoring/scores``.
+
+    The public score pool (PROJECT.md D3) the validator folds into KOTH+ATH
+    weights. One entry per active miner = that miner's highest-scoring eligible
+    agent (status ``scored``). ``first_seen`` (the agent's upload time) is the
+    tie-break that lets the original beat a later copy of the same score;
+    ``composite`` is the raw reported double (never rounded, so every validator
+    folds identical bytes). ``signature`` is the reporting validator's sr25519
+    signature so the ledger is self-verifying.
+    """
+
+    miner_hotkey: Annotated[str, Field(description="Miner's SS58 hotkey.")]
+    agent_id: Annotated[UUID, Field(description="The miner's best eligible agent.")]
+    composite: Annotated[
+        float, Field(ge=0.0, le=1.0, description="Best composite score in [0,1].")
+    ]
+    first_seen: Annotated[
+        datetime,
+        Field(description="Agent upload time (UTC); the KOTH first-seen tie-break."),
+    ]
+    sha256: Annotated[
+        str, Field(description="SHA-256 of the tarball, lowercase hex.")
+    ]
+    size_bytes: Annotated[
+        int | None, Field(default=None, ge=0, description="Tarball size in bytes.")
+    ]
+    seed: Annotated[int, Field(description="Dataset seed of the scoring run.")]
+    validator_hotkey: Annotated[
+        str, Field(description="SS58 hotkey of the validator that produced the score.")
+    ]
+    signature: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Validator's hex sr25519 signature, if stored.",
+        ),
+    ]
+    status: Annotated[
+        AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
+    ]
+
+
+class LedgerResponse(BaseModel):
+    """Returned by ``GET /scoring/scores``.
+
+    ``entries`` is ordered highest-composite first (ties broken by ``first_seen``
+    then ``agent_id``), the same deterministic order the validator's fold uses,
+    so the exposed pool and the computed weights agree by construction.
+    """
+
+    entries: Annotated[
+        list[LedgerEntry],
+        Field(description="Best eligible score per miner, highest composite first."),
+    ]
+    count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "entries": [
+                    {
+                        "miner_hotkey": (
+                            "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+                        ),
+                        "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "composite": 0.82,
+                        "first_seen": "2026-06-08T12:00:00Z",
+                        "sha256": "deadbeef" * 8,
+                        "size_bytes": 524288,
+                        "seed": 8675309,
+                        "validator_hotkey": (
+                            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+                        ),
+                        "signature": "ab" * 64,
+                        "status": "scored",
+                    }
+                ],
+                "count": 1,
+            }
+        }
+    )
+
+
 class SubmitScoreResponse(BaseModel):
     """Returned by ``POST /validator/agent/{agent_id}/score``.
 

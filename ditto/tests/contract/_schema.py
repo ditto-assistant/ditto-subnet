@@ -30,6 +30,8 @@ SHARED_MODELS = [
     "ScoreReport",
     "SubmitScoreRequest",
     "SubmitScoreResponse",
+    "LedgerEntry",
+    "LedgerResponse",
 ]
 
 # Cosmetic JSON-Schema keys that carry prose/illustration, not structure.
