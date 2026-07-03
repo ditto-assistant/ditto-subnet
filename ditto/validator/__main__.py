@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 
 import httpx
@@ -90,11 +91,32 @@ async def _amain() -> int:
     return 0
 
 
+def _configure_logging() -> None:
+    """Make the worker's own log lines visible.
+
+    bittensor installs a root-logger handler at import time and clamps the root
+    level to WARNING, which turns ``logging.basicConfig`` into a no-op and
+    silently swallows every ``ditto.*`` INFO line — queue sweeps, per-agent
+    scores, weight submissions. Give the ``ditto`` logger tree its own handler
+    and level (overridable via ``VALIDATOR_LOG_LEVEL``, default INFO) with
+    propagation off, so our logs are immune to bittensor's root manipulation.
+    """
+    level_name = os.environ.get("VALIDATOR_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    ditto_logger = logging.getLogger("ditto")
+    ditto_logger.setLevel(level)
+    if not any(getattr(h, "_ditto_handler", False) for h in ditto_logger.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(fmt)
+        handler._ditto_handler = True  # type: ignore[attr-defined]
+        ditto_logger.addHandler(handler)
+    ditto_logger.propagate = False
+
+
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    _configure_logging()
     raise SystemExit(asyncio.run(_amain()))
 
 
