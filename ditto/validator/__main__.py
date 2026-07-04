@@ -21,6 +21,10 @@ from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.dittobench import DittobenchClient
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import load_validator_keypair
+from ditto.validator.telemetry import (
+    build_telemetry,
+    parse_telemetry_config_from_env,
+)
 from ditto.validator.worker import ValidatorWorker
 
 logger = logging.getLogger(__name__)
@@ -49,46 +53,59 @@ async def _amain() -> int:
     stop = asyncio.Event()
     _install_signal_handlers(asyncio.get_running_loop(), stop)
 
-    async with httpx.AsyncClient(timeout=config.http_timeout_seconds) as http:
-        platform = PlatformClient(config, http)
-        dittobench = DittobenchClient(config, http)
+    # Optional public telemetry (wandb). Off by default; a disabled instance is
+    # a cheap no-op. Built once and shared by whichever weight mode runs.
+    telemetry = build_telemetry(
+        parse_telemetry_config_from_env(),
+        validator_hotkey=config.validator_hotkey,
+        netuid=config.netuid,
+    )
 
-        if config.use_sdk_weights:
-            # Localnet fallback: weights go through the bittensor SDK, signed by
-            # the local hotkey. No Pylon chain client / write identity needed.
-            from ditto.validator.sdk_weights import SdkWeightSetter
+    try:
+        async with httpx.AsyncClient(timeout=config.http_timeout_seconds) as http:
+            platform = PlatformClient(config, http)
+            dittobench = DittobenchClient(config, http)
 
-            logger.info("weight mode: bittensor SDK (set_weights)")
-            worker = ValidatorWorker(
-                config=config,
-                platform=platform,
-                dittobench=dittobench,
-                chain=None,
-                keypair=keypair,
-                weight_setter=SdkWeightSetter(config, keypair),
-            )
-            _apply_ditto_logging()  # re-assert: bittensor has initialised by now
-            await worker.run_forever(stop)
-        else:
-            # Identity mode (write): required for Pylon put_weights.
-            chain_config = ChainConfig(
-                pylon_url=config.pylon_url,
-                netuid=config.netuid,
-                identity_name=config.pylon_identity_name,
-                identity_token=config.pylon_identity_token,
-                subtensor_network=config.subtensor_network,
-            )
-            logger.info("weight mode: Pylon identity (put_weights)")
-            async with create_chain_client(chain_config) as chain:
+            if config.use_sdk_weights:
+                # Localnet fallback: weights go through the bittensor SDK, signed
+                # by the local hotkey. No Pylon chain client / write identity.
+                from ditto.validator.sdk_weights import SdkWeightSetter
+
+                logger.info("weight mode: bittensor SDK (set_weights)")
                 worker = ValidatorWorker(
                     config=config,
                     platform=platform,
                     dittobench=dittobench,
-                    chain=chain,
+                    chain=None,
                     keypair=keypair,
+                    weight_setter=SdkWeightSetter(config, keypair),
+                    telemetry=telemetry,
                 )
-                _apply_ditto_logging()  # re-assert: bittensor has initialised by now
+                _apply_ditto_logging()  # re-assert: bittensor has initialised
                 await worker.run_forever(stop)
+            else:
+                # Identity mode (write): required for Pylon put_weights.
+                chain_config = ChainConfig(
+                    pylon_url=config.pylon_url,
+                    netuid=config.netuid,
+                    identity_name=config.pylon_identity_name,
+                    identity_token=config.pylon_identity_token,
+                    subtensor_network=config.subtensor_network,
+                )
+                logger.info("weight mode: Pylon identity (put_weights)")
+                async with create_chain_client(chain_config) as chain:
+                    worker = ValidatorWorker(
+                        config=config,
+                        platform=platform,
+                        dittobench=dittobench,
+                        chain=chain,
+                        keypair=keypair,
+                        telemetry=telemetry,
+                    )
+                    _apply_ditto_logging()  # re-assert: bittensor has initialised
+                    await worker.run_forever(stop)
+    finally:
+        telemetry.close()
     logger.info("validator worker stopped")
     return 0
 
@@ -111,8 +128,9 @@ def _apply_ditto_logging() -> None:
     """
     level_name = os.environ.get("VALIDATOR_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    log_format = "%(asctime)s %(levelname)s %(name)s %(message)s"
+    fmt = logging.Formatter(log_format)
+    logging.basicConfig(level=level, format=log_format)
     ditto_logger = logging.getLogger("ditto")
     ditto_logger.setLevel(level)
     ditto_logger.propagate = False
