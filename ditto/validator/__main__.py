@@ -67,6 +67,7 @@ async def _amain() -> int:
                 keypair=keypair,
                 weight_setter=SdkWeightSetter(config, keypair),
             )
+            _apply_ditto_logging()  # re-assert: bittensor has initialised by now
             await worker.run_forever(stop)
         else:
             # Identity mode (write): required for Pylon put_weights.
@@ -86,20 +87,27 @@ async def _amain() -> int:
                     chain=chain,
                     keypair=keypair,
                 )
+                _apply_ditto_logging()  # re-assert: bittensor has initialised by now
                 await worker.run_forever(stop)
     logger.info("validator worker stopped")
     return 0
 
 
-def _configure_logging() -> None:
-    """Make the worker's own log lines visible.
+def _apply_ditto_logging() -> None:
+    """Make the worker's own log lines visible, and keep them visible.
 
-    bittensor installs a root-logger handler at import time and clamps the root
-    level to WARNING, which turns ``logging.basicConfig`` into a no-op and
-    silently swallows every ``ditto.*`` INFO line — queue sweeps, per-agent
-    scores, weight submissions. Give the ``ditto`` logger tree its own handler
-    and level (overridable via ``VALIDATOR_LOG_LEVEL``, default INFO) with
-    propagation off, so our logs are immune to bittensor's root manipulation.
+    bittensor takes over Python logging when it initialises (lazily, on first
+    chain/SDK use): it clamps the level of *every logger that already exists* —
+    including ``ditto.validator.worker`` and friends — to WARNING, which silently
+    swallows the INFO lines we rely on (queue sweeps, per-agent scores, weight
+    submissions). Setting only the parent ``ditto`` level does not help, because
+    a child's own WARNING level filters the record before it can propagate up.
+
+    So: give the ``ditto`` tree its own handler + level (overridable via
+    ``VALIDATOR_LOG_LEVEL``, default INFO) with propagation off, and reset every
+    existing ``ditto.*`` child to NOTSET so it inherits that level again. This is
+    idempotent and must be called **again after bittensor has initialised** (see
+    the calls guarding ``run_forever``) to undo bittensor's clamp.
     """
     level_name = os.environ.get("VALIDATOR_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
@@ -107,16 +115,22 @@ def _configure_logging() -> None:
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     ditto_logger = logging.getLogger("ditto")
     ditto_logger.setLevel(level)
+    ditto_logger.propagate = False
     if not any(getattr(h, "_ditto_handler", False) for h in ditto_logger.handlers):
         handler = logging.StreamHandler()
         handler.setFormatter(fmt)
         handler._ditto_handler = True  # type: ignore[attr-defined]
         ditto_logger.addHandler(handler)
-    ditto_logger.propagate = False
+    # Undo any per-child level clamp (e.g. bittensor's) so children inherit
+    # ``ditto`` (INFO) rather than a stale WARNING set behind our back.
+    for name, child in logging.Logger.manager.loggerDict.items():
+        if name.startswith("ditto.") and isinstance(child, logging.Logger):
+            child.setLevel(logging.NOTSET)
+            child.disabled = False
 
 
 def main() -> None:
-    _configure_logging()
+    _apply_ditto_logging()
     raise SystemExit(asyncio.run(_amain()))
 
 
