@@ -34,7 +34,12 @@ def _case(category: str, score: float) -> CaseScore:
         kind="tool",
         score=score,
         tool_score=score,
+        quality=0.0,
+        correct=False,
         latency_ms=100,
+        called=[],
+        expected=[],
+        notes=[],
     )
 
 
@@ -144,17 +149,12 @@ class TestNoOpWhenDisabled:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Even with mode=online, an ImportError on wandb leaves it disabled
-        # rather than taking down the sweep loop.
-        import builtins
+        # rather than taking down the sweep loop. A ``None`` entry in
+        # ``sys.modules`` makes ``import wandb`` raise ImportError — the exact
+        # path _init_run guards — without touching ``builtins.__import__``.
+        import sys
 
-        real_import = builtins.__import__
-
-        def _fail(name: str, *args: object, **kwargs: object) -> object:
-            if name == "wandb":
-                raise ImportError("no wandb")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", _fail)
+        monkeypatch.setitem(sys.modules, "wandb", None)
         telemetry = build_telemetry(
             TelemetryConfig(mode="online", project="p", entity=None, run_name=None),
             validator_hotkey=_VALIDATOR,
