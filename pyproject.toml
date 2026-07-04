@@ -17,6 +17,12 @@ dependencies = [
     "pydantic>=2",
 ]
 
+[project.optional-dependencies]
+# Public wandb telemetry (opt-in). The validator imports wandb lazily and
+# degrades to a no-op when it is absent, so this is only needed to actually
+# publish stats: ``uv sync --extra telemetry`` (or ``pip install ditto[telemetry]``).
+telemetry = ["wandb>=0.17"]
+
 [tool.uv.sources]
 bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
 

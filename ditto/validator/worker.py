@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ditto.chain import ChainError
@@ -25,6 +27,13 @@ from ditto.validator.errors import (
     WeightSubmissionError,
 )
 from ditto.validator.signing import sign_score
+from ditto.validator.telemetry import (
+    ScoredAgentStat,
+    SweepStats,
+    TelemetryConfig,
+    ValidatorTelemetry,
+    scored_agent_stat,
+)
 from ditto.validator.weights import compute_weights
 
 if TYPE_CHECKING:
@@ -42,6 +51,15 @@ _WEIGHT_SET_ATTEMPTS = 3
 _WEIGHT_SET_RETRY_SECONDS = 2.0
 
 
+@dataclass(frozen=True)
+class _WeightOutcome:
+    """What :meth:`ValidatorWorker._update_weights` produced, for telemetry."""
+
+    leaderboard: list[tuple[str, float]] = field(default_factory=list)
+    weights: dict[str, float] = field(default_factory=dict)
+    submitted: bool = False
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -53,6 +71,7 @@ class ValidatorWorker:
         chain: ChainClient | None,
         keypair: Any,
         weight_setter: Any | None = None,
+        telemetry: ValidatorTelemetry | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -63,6 +82,13 @@ class ValidatorWorker:
         # injected setter (e.g. the bittensor-SDK fallback on the localnet).
         # Both expose ``async def put_weights(dict[str, float])``.
         self._weight_setter: Any = weight_setter if weight_setter is not None else chain
+        # Public telemetry sink. A disabled instance is a cheap no-op, so the
+        # sweep can call it unconditionally.
+        self._telemetry: ValidatorTelemetry = telemetry or ValidatorTelemetry(
+            TelemetryConfig(mode="disabled", project="", entity=None, run_name=None),
+            validator_hotkey=config.validator_hotkey,
+            netuid=config.netuid,
+        )
 
     async def run_once(self) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
@@ -72,31 +98,49 @@ class ValidatorWorker:
         :meth:`_update_weights`), so an empty queue no longer means "set no
         weights" — the reigning champion keeps its emission.
         """
+        started = time.monotonic()
         queue = await self._platform.get_queue()
+        scored: list[ScoredAgentStat] = []
+        failed = 0
         for item in queue.items:
             try:
-                await self._score_agent(item)
+                report = await self._score_agent(item)
+                scored.append(scored_agent_stat(item.miner_hotkey, report))
             except (DittobenchError, PlatformError) as e:
                 logger.warning("scoring agent %s failed: %s", item.agent_id, e)
+                failed += 1
                 continue
 
-        await self._update_weights()
+        outcome = await self._update_weights()
+        self._telemetry.record_sweep(
+            SweepStats(
+                sweep_duration_s=time.monotonic() - started,
+                queue_depth=len(queue.items),
+                failed_count=failed,
+                scored=scored,
+                leaderboard=outcome.leaderboard,
+                weights=outcome.weights,
+                weights_submitted=outcome.submitted,
+            )
+        )
         return len(queue.items)
 
-    async def _update_weights(self) -> None:
+    async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.
 
         Reads the platform's best-score-per-miner ledger and folds it into the
         KOTH+ATH weight vector. On a ledger-read failure it leaves the current
         on-chain weights untouched (rather than zeroing everyone) and lets the
-        next epoch retry.
+        next epoch retry. Returns what happened (leaderboard + weights + whether
+        submitted) for telemetry.
         """
         try:
             ledger = await self._platform.get_ledger()
         except PlatformError as e:
             logger.warning("ledger fetch failed; weights unchanged this epoch: %s", e)
-            return
+            return _WeightOutcome()
 
+        leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
         weights = compute_weights(
             ledger.entries,
             margin=self._config.koth_margin,
@@ -105,10 +149,13 @@ class ValidatorWorker:
         )
         if not weights:
             logger.info("ledger has no positive scores; skipping put_weights")
-            return
-        await self._put_weights_with_retry(weights)
+            return _WeightOutcome(leaderboard=leaderboard)
+        submitted = await self._put_weights_with_retry(weights)
+        return _WeightOutcome(
+            leaderboard=leaderboard, weights=weights, submitted=submitted
+        )
 
-    async def _put_weights_with_retry(self, weights: dict[str, float]) -> None:
+    async def _put_weights_with_retry(self, weights: dict[str, float]) -> bool:
         """Submit weights, retrying a transient chain failure a few times.
 
         The ledger is durable, so even if every attempt fails the next epoch
@@ -120,7 +167,7 @@ class ValidatorWorker:
             try:
                 await self._weight_setter.put_weights(weights)
                 logger.info("submitted weights for %d miner(s)", len(weights))
-                return
+                return True
             except (ChainError, WeightSubmissionError) as e:
                 if attempt >= _WEIGHT_SET_ATTEMPTS:
                     logger.error(
@@ -129,7 +176,7 @@ class ValidatorWorker:
                         attempt,
                         e,
                     )
-                    return
+                    return False
                 logger.warning(
                     "put_weights attempt %d/%d failed; retrying: %s",
                     attempt,
@@ -137,6 +184,7 @@ class ValidatorWorker:
                     e,
                 )
                 await asyncio.sleep(_WEIGHT_SET_RETRY_SECONDS)
+        return False
 
     async def _score_agent(self, item: ValidatorQueueItem) -> ScoreReport:
         artifact = await self._platform.get_artifact(item.agent_id)
