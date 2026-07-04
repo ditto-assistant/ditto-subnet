@@ -193,6 +193,14 @@ The realistic, self-contained path: run the platform locally, register a miner,
 upload, and run a validator against your own API. Assumes `ditto-subnet` and
 `ditto-platform` are on `dev`.
 
+> **✅ Verified on the dev localnet (2026-07-02, Peyton).** This exact flow ran
+> green end-to-end: starter-kit tarball → miner-CLI upload to the local platform →
+> manual promote via `/api/v1/screener/.../result` → validator worker → **signed
+> score persisted, agent `scored`**. Result: composite `0.633`, tool_mean `0.833`,
+> memory_mean `0.333`, median `13569ms`, `n=12`, `run_size=small` (DittoBench run
+> `b164b096…`). Three local accommodations were needed — they're folded into the
+> steps + footguns below (tarball cap, port `:8000`, validator-permit bypass).
+
 ### 4a. Run the platform API on the dev chain (`ditto-platform`, `dev`)
 
 ```bash
@@ -212,6 +220,12 @@ python -m ditto.api_server --dev
 # verify: GET /health → {"status":"ok","db":"ok","chain":"ok", ...}
 # validator endpoints are under /api/v1 (/validator/queue, /validator/agent/{id}/artifact|score)
 ```
+
+> **Port `:8000` is effectively hardcoded.** The miner CLI's `local` profile locks
+> the API URL to `http://localhost:8000` (§2, no override flag). If another service
+> already owns `:8000`, either free it, or bind the platform elsewhere (Peyton used
+> `:8010`) and edit `ditto/miner_cli/network.py`'s `local.api_url` to match — the
+> `--chain-endpoint` flag only moves the *chain* target, not the API URL.
 
 ### 4b. Fund + register the MINER wallet (SDK path — btcli metagraph is broken)
 
@@ -244,7 +258,19 @@ cargo run -- submit          # writes dittobench-submission.tgz (tar of the whol
 You submit the **entire buildable project** with the `Dockerfile` at the tarball
 root (`ditto-harness` is a pinned private git dep the build fetches via a
 `gh_token` secret — you do **not** bundle it, and you do **not** submit a lone
-`baseline.rs`). Cap is **≤ 2 MiB**; the platform re-verifies the SHA-256.
+`baseline.rs`).
+
+> **⚠️ Tarball-cap mismatch (real, hit in the verified run).** The platform rejects
+> anything over **2 MiB** (`api_server/endpoints/upload.py:MAX_TARBALL_SIZE_BYTES`),
+> but the **baseline starter-kit tarball is ~4.8 MB** (it bundles the ONNX
+> cross-encoder + MLP weight fixtures). The miner CLI's pre-flight caps at
+> **200 MiB** (`miner_cli/tar_validator.py:MAX_TARBALL_SIZE_BYTES`) and its comment
+> wrongly claims it mirrors the server — so `ditto verify` passes and the platform
+> then rejects the upload. The baseline submission **cannot** meet the documented
+> 2 MiB cap as-is. Peyton's workaround: align the local platform cap with the CLI
+> cap. **This needs a real decision** (raise the platform cap vs. slim the baseline
+> vs. externalize the model weights) — flagged to Dan/Nick, not something to paper
+> over silently. The platform still re-verifies the SHA-256 either way.
 
 ### 4d. Upload as a miner (`ditto-subnet`, `dev`)
 
@@ -291,8 +317,15 @@ Docker, seeds a fresh haystack, runs tool+memory cases, and LLM-judges (`run_siz
 
 > **Local-validator gotcha:** a validator you stand up fresh has `vpermit=False,
 > stake=0` (staking disabled on localnet), so `set_weights` returns `(False,
-> None)`. Either use the already-staked deployed `5Eex…` validator, or use
-> Alice/sudo to enable subtoken → stake your validator hotkey → wait a tempo.
+> None)`. Three ways through: use the already-staked deployed `5Eex…` validator;
+> use Alice/sudo to enable subtoken → stake your hotkey → wait a tempo; or, for a
+> pure-local run, the dev bypass **`DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR=1`**
+> (used in the verified run — relaxes the validator-permit auth check on localnet;
+> see dittobench-api#11 / starter-kit#8). **Dev/localnet only — never in prod.**
+
+> **Inference provider:** the verified run used **Chutes** (not just OpenRouter)
+> for the harness + judge — local `dittobench-api` gained Chutes support in
+> dittobench-api#11 and starter-kit#8. OpenRouter (BYOK) remains the default.
 
 ---
 
@@ -316,6 +349,10 @@ Know these so real behavior doesn't read as your setup being broken:
   unsigned). Integrity hardening is pending.
 - 🟡 **No `tarball_sha256` passed to the engine** yet (tag-collision / no
   integrity check on the built blob).
+- 🟡 **Tarball-cap mismatch (CLI 200 MiB vs platform 2 MiB), and the baseline
+  submission (~4.8 MB) exceeds the platform cap.** `ditto verify` passes then
+  `/upload/*` rejects; the CLI comment falsely claims the caps match. Hit + worked
+  around in the verified localnet run (§4c). Needs a cap/packaging decision.
 - **k=3 sharding + median-of-3, deterministic weight curve, plagiarism/first-seen
   detection, emission tuning:** not built. `weights.py` is an explicit placeholder.
 - **First real DittoBench E2E run (non-mock, tarball → docker → judge → weights) is
@@ -350,6 +387,9 @@ match + hotkey guard.
 - **A fresh local validator can't set weights** (staking disabled → no vpermit); use the staked deployed validator or Alice/sudo-gate one.
 - **Emission = 0** → incentive 1.0 but no alpha; that's expected, not your bug.
 - **Weights zero next epoch** (§5 CRITICAL) — don't read the drop-off as a mistake.
+- **`ditto verify` passing ≠ the platform will accept it** — the CLI cap (200 MiB) is 100× the platform cap (2 MiB); the ~4.8 MB baseline clears pre-flight then gets rejected (§4c).
+- **Port `:8000` is locked** in the CLI's `local` profile — free it or edit `network.py` (§4a); `--chain-endpoint` won't help.
+- **`DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR=1` is a dev-only bypass** for the validator permit — localnet practice only, never prod.
 
 ## 8. Sources
 
