@@ -267,10 +267,12 @@ root (`ditto-harness` is a pinned private git dep the build fetches via a
 > **200 MiB** (`miner_cli/tar_validator.py:MAX_TARBALL_SIZE_BYTES`) and its comment
 > wrongly claims it mirrors the server — so `ditto verify` passes and the platform
 > then rejects the upload. The baseline submission **cannot** meet the documented
-> 2 MiB cap as-is. Peyton's workaround: align the local platform cap with the CLI
-> cap. **This needs a real decision** (raise the platform cap vs. slim the baseline
-> vs. externalize the model weights) — flagged to Dan/Nick, not something to paper
-> over silently. The platform still re-verifies the SHA-256 either way.
+> 2 MiB cap as-is. **Platform-side support is now in ditto-platform#15** (an upload
+> **cap env override** + upload-transaction cleanup), so a localnet run can raise
+> the cap without a code edit. The underlying decision still stands (permanent cap
+> vs. slim the baseline vs. externalize the model weights) — the CLI's 200 MiB
+> pre-flight and the false "mirrors the server" comment should be reconciled too.
+> The platform re-verifies the SHA-256 either way.
 
 ### 4d. Upload as a miner (`ditto-subnet`, `dev`)
 
@@ -321,7 +323,8 @@ Docker, seeds a fresh haystack, runs tool+memory cases, and LLM-judges (`run_siz
 > use Alice/sudo to enable subtoken → stake your hotkey → wait a tempo; or, for a
 > pure-local run, the dev bypass **`DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR=1`**
 > (used in the verified run — relaxes the validator-permit auth check on localnet;
-> see dittobench-api#11 / starter-kit#8). **Dev/localnet only — never in prod.**
+> platform-side support in ditto-platform#15, with dittobench-api#11 /
+> starter-kit#8). **Dev/localnet only — never in prod.**
 
 > **Inference provider:** the verified run used **Chutes** (not just OpenRouter)
 > for the harness + judge — local `dittobench-api` gained Chutes support in
