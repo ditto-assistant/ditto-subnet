@@ -255,13 +255,23 @@ persists on-chain.
       near-dups (cross-miner) in `ath_pending_review`; a manual
       `scripts/resolve_review.py` clears/bans. This is a **signal, not a
       detector** — it can't see a re-indented or renamed copy of a different size.
-- [ ] Add a content-level signal computed where the tarball is already unpacked
-      (screener / dittobench): normalized source-tree hash, token/AST similarity,
-      or embedding distance; feed a duplicate score into the review decision.
-- [ ] Persist `first_seen` provenance robustly (it currently rides `created_at`).
-- **Files:** `ditto-platform/ditto/api_server/scoring_gate.py` (decision),
-  screener/dittobench (content fingerprint). **Acceptance:** a renamed/reindented
-  copy of the current champion is flagged, not paid.
+- [x] **Normalized-content signal (platform).** `/upload/agent` fingerprints each
+      tarball into a normalized per-file content-hash set (indentation/whitespace +
+      filename insensitive; bomb-capped, fail-open) and persists it
+      (`agents.content_fingerprint` JSONB). The gate holds a cross-miner near-dup when
+      score proximity **and** content-Jaccard ≥ 0.90 both hold, so a re-indented/renamed
+      copy whose byte size drifted past the old heuristic is now flagged.
+      **Files:** `ditto-platform/ditto/api_server/fingerprint.py`, `scoring_gate.py`,
+      migration `c4e8b1a06d72`.
+- [ ] **Semantic/AST near-dup** (identifier renaming, logic reordering) — the remaining
+      layer, computed where the tree is unpacked (screener / dittobench): token/AST
+      similarity or embedding distance; feed a duplicate score into the review decision.
+- [x] `first_seen` provenance: assessed — `agents.created_at` has no `onupdate`, so it
+      is already an immutable first-seen; the KOTH tie-break reads it directly. No
+      dedicated column needed unless a backfill/re-import path is added later.
+- **Acceptance:** a renamed/reindented copy of the current champion is flagged, not
+  paid — **met** for reformatting/renaming; identifier-level obfuscation awaits the
+  semantic layer.
 
 #### C2 — Signature replay-cache / nonce enforcement  ·  PARTIAL
 - [ ] Signatures now bind the full payload (agent + composite + seed), closing

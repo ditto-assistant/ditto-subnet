@@ -68,7 +68,7 @@ The spine from `NEXT-STEPS.md §2`, marked to today:
 | 3 | **Screener worker** (automate `uploaded → evaluating`) | ❌ (manual today) |
 | 4 | **Emissions on** + **testnet migration** | ❌ (blocker — see below) |
 | 5 | **Multi-validator** consensus (k=3 + median) | ❌ (single validator) |
-| 6 | **Content-level plagiarism** detection | ⚠️ heuristic only (size+score) |
+| 6 | **Content-level plagiarism** detection | ⚠️ platform content-fingerprint ✅ · semantic/AST ❌ |
 | 7 | Observability + autoupdater + HA | ⚠️ transparency ✅ · autoupdater/HA ❌ |
 | 8 | **Mainnet (finney) cutover** | ❌ |
 
@@ -95,8 +95,14 @@ We are through **step 1**; steps 2–4 are the near-term focus.
 4. **Multi-validator (k=3 + median-of-3)** *(ditto-subnet + platform)* — shard the queue
    across validators, finalize on the median. Endpoints still use stub names. Needed for
    a trustless subnet; a single owner-validator is a centralization + liveness risk.
-5. **Content-level plagiarism** *(platform)* — first-seen + margin defeat verbatim
-   copies, but semantic near-dup is only a size+score heuristic. For a
+5. **Content-level plagiarism** *(platform ✅ / screener+dittobench ⏳)* — first-seen +
+   margin defeat verbatim copies. The platform now also fingerprints each upload
+   (normalized per-file content-hash set, indentation/rename-insensitive) and the
+   anti-copy gate holds a cross-miner near-dup when score proximity **and** high
+   content-Jaccard both hold — so a re-indented/renamed copy no longer slips past the
+   old size heuristic (`ditto/api_server/fingerprint.py`, `scoring_gate.py`). What
+   remains is **semantic/AST** near-dup (identifier-renaming, logic reordering),
+   computed where the tree is already unpacked (screener/dittobench). For a
    downloadable-artifact subnet this is the existential risk at scale.
 6. **Ops** *(infra)* — git-watching autoupdater (manual systemd updates today),
    alerting, HA. Re-enable **commit-reveal** for production (the worker gains a reveal
