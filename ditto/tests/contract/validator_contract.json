@@ -344,6 +344,34 @@
           "latency_ms"
         ],
         "type": "object"
+      },
+      "CodeFingerprint": {
+        "properties": {
+          "card": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "k": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "m": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "v": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "v",
+          "k",
+          "card"
+        ],
+        "type": "object"
       }
     },
     "properties": {
@@ -382,6 +410,17 @@
         "maximum": 9223372036854775807,
         "minimum": -9223372036854775808,
         "type": "integer"
+      },
+      "structural_fingerprint": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CodeFingerprint"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "tool_mean": {
         "maximum": 1.0,
@@ -467,6 +506,34 @@
         ],
         "type": "object"
       },
+      "CodeFingerprint": {
+        "properties": {
+          "card": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "k": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "m": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "v": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "v",
+          "k",
+          "card"
+        ],
+        "type": "object"
+      },
       "ScoreReport": {
         "properties": {
           "composite": {
@@ -504,6 +571,17 @@
             "maximum": 9223372036854775807,
             "minimum": -9223372036854775808,
             "type": "integer"
+          },
+          "structural_fingerprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CodeFingerprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "tool_mean": {
             "maximum": 1.0,

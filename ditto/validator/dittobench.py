@@ -73,6 +73,7 @@ class DittobenchClient:
             n=10,
             generated_at=datetime.now(UTC),
             per_case=[],
+            structural_fingerprint=None,
         )
 
     async def _submit(
