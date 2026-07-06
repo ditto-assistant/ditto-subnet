@@ -177,6 +177,26 @@ class CaseScore(BaseModel):
         return v if v is not None else []
 
 
+class CodeFingerprint(BaseModel):
+    """A bottom-k MinHash (KMV) sketch of a submission's source.
+
+    Mirrors the DittoBench ``CodeFingerprint`` wire shape (``pkg/protocol``) and is
+    byte-compatible with the platform's own fingerprint sketch, so the anti-copy
+    gate compares them with one code path. Advisory moderation metadata only —
+    never part of the score, and deliberately *not* covered by the report signature
+    (see :class:`SubmitScoreRequest`). ``v`` is the sketch-format version, ``k`` the
+    bottom-k budget, ``card`` the true shingle-set cardinality, and ``m`` the sorted
+    bottom-``k`` shingle hashes.
+    """
+
+    v: Annotated[int, Field(ge=0, description="Sketch-format version.")]
+    k: Annotated[int, Field(ge=1, description="Bottom-k sketch budget.")]
+    card: Annotated[int, Field(ge=0, description="True shingle-set cardinality.")]
+    m: Annotated[
+        list[str], Field(default_factory=list, description="Sorted bottom-k hashes.")
+    ]
+
+
 class ScoreReport(BaseModel):
     """A completed DittoBench evaluation result for one agent.
 
@@ -214,6 +234,18 @@ class ScoreReport(BaseModel):
     per_case: Annotated[
         list[CaseScore],
         Field(default_factory=list, description="Optional per-case breakdown."),
+    ]
+    structural_fingerprint: Annotated[
+        CodeFingerprint | None,
+        Field(
+            default=None,
+            description=(
+                "Optional AST-level structural sketch of the crate, computed by the "
+                "scoring engine. Advisory anti-copy metadata; not covered by the "
+                "signature and never affects the score. Null on the local "
+                "harness_url path or when the crate has no parseable Rust."
+            ),
+        ),
     ]
 
 

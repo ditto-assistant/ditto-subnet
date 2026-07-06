@@ -135,6 +135,7 @@ def _report(run_id: str, composite: float) -> ScoreReport:
         n=30,
         generated_at=datetime.now(UTC),
         per_case=[],
+        structural_fingerprint=None,
     )
 
 
