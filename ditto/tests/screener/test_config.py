@@ -32,6 +32,9 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.docker_bin == "docker"
     assert cfg.container_port == 8080
     assert cfg.gh_token_file is None
+    # Must default to (at least) the platform's 20 MiB upload cap, else the gate
+    # false-fails legitimately-uploaded tarballs.
+    assert cfg.max_tarball_bytes == 20 * 1024 * 1024
     assert cfg.signing_source_present()
 
 
