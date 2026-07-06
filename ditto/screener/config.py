@@ -70,8 +70,10 @@ class ScreenerConfig:
     """Port the harness serves on inside the container (contract: ``8080``)."""
 
     max_tarball_bytes: int
-    """Reject an artifact larger than this before building (matches the upload cap
-    with headroom; the queue item is miner-reported but the download is real)."""
+    """Reject an artifact larger than this before building. It is a download DoS
+    bound and MUST be >= the platform's upload cap (``DITTO_MAX_TARBALL_SIZE_BYTES``,
+    default 20 MiB) — a smaller value here false-fails a tarball the platform
+    legitimately accepted. Defaults to the platform's 20 MiB; raise both together."""
 
     # --- Cadence / limits ---
     poll_seconds: float
@@ -140,7 +142,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         health_path=os.environ.get("SCREENER_HEALTH_PATH", "/health"),
         container_port=_parse_int("SCREENER_CONTAINER_PORT", "8080"),
         max_tarball_bytes=_parse_int(
-            "SCREENER_MAX_TARBALL_BYTES", str(4 * 1024 * 1024)
+            # Match the platform's default upload cap (20 MiB); a smaller value
+            # false-fails legitimately-uploaded tarballs. Keep >= the platform cap.
+            "SCREENER_MAX_TARBALL_BYTES",
+            str(20 * 1024 * 1024),
         ),
         poll_seconds=_parse_float("SCREENER_POLL_SECONDS", "30"),
         queue_limit=_parse_int("SCREENER_QUEUE_LIMIT", "20"),
