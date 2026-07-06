@@ -95,6 +95,36 @@ async def test_pass_builds_and_serves(
     assert res == GateResult(True, "")
 
 
+async def test_smoke_env_injected_into_run(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """The dummy LLM key must reach the serve container as ``-e K=V`` so the
+    reference harness (LLM Baseline built before /health binds) can boot."""
+    tar = _make_tar({"Dockerfile": b"FROM scratch\n"})
+    sha = hashlib.sha256(tar).hexdigest()
+    run_calls: list[list[str]] = []
+
+    async def _run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
+        run_calls.append(args)
+        if args[0] == "build" and stdin is not None:
+            stdin.read()
+        if args[0] == "port":
+            return (0, "127.0.0.1:49999")
+        return (0, "")
+
+    cfg = make_config(smoke_env=(("OPENROUTER_API_KEY", "sk-dummy"), ("FOO", "bar")))
+    gate = _gate_with(cfg, _run, tar=tar)
+    async with gate._client:
+        res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
+    assert res.passed
+    run_args = next(a for a in run_calls if a[0] == "run")
+    # The tag stays last; each pair is injected as an "-e K=V" before it.
+    assert run_args[-1].startswith("ditto-screen/")
+    assert "-e" in run_args
+    assert "OPENROUTER_API_KEY=sk-dummy" in run_args
+    assert "FOO=bar" in run_args
+
+
 async def test_sha_mismatch_fails_before_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
