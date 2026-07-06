@@ -109,7 +109,7 @@ Verdicts: **DONE / PARTIAL / MISSING**.
 | Miner upload (payment, size/sha cap, S3) | **DONE** | `/upload/*`; deferred tar-manifest/import-allowlist checks remain (by design). |
 | Submission contract | **DONE** | Whole buildable crate as one gzipped tarball; documented + enforced at upload. |
 | Screener **endpoints** (`uploaded → evaluating`) | **DONE** | Signed verdict (binds `passed`), idempotent, 409 on conflict, row-locked. |
-| Screener **worker** (lint/compile/build gate) | **MISSING** | No Rust screener process exists → `uploaded → evaluating` is **manual**. |
+| Screener **worker** (lint/compile/build gate) | **BUILT (deploy pending)** | `python -m ditto.screener` — docker-build + `/health` gate, signed verdict (subnet #32). Not yet deployed (infra role pending) → promotion still manual in practice. |
 | dittobench scoring engine | **DONE + deployed** | Full `run_size` pipeline; mode-B tarball ingest; co-located on the validator VM. |
 | Validator worker (queue → score → sign → weights) | **DONE + live** | uid 4, netuid 3 dev localnet, mock **off**, polling the platform. |
 | Best-score ledger (`/scoring/scores`) | **DONE** | Persistent, self-verifying (stores signatures), whole-row consistent. |
@@ -141,8 +141,9 @@ Everything else is parallelizable, but this is the spine — each gates the next
    matters if scoring doesn't actually run.*
 2. **OpenRouter cost cap + egress allowlist** (§C3). Before running real scoring
    at any volume — unbounded LLM spend is a live financial risk.
-3. **Screener worker** (§A2). Automate `uploaded → evaluating` so the pipeline
-   flows without a human.
+3. **Screener worker** (§A2). ✅ Built + merged (subnet #32); **deploy it** (infra
+   role + converge) to automate `uploaded → evaluating` so the pipeline flows
+   without a human.
 4. **Testnet migration** (§E). Emission already flows on localnet (§B1); move off
    the dev localnet to a real network **under the subnet owner's UID** (no separate
    validator registration/burn) and re-tune the pool there.
@@ -181,18 +182,25 @@ persists on-chain.
 - **Acceptance:** a real (non-mock) composite for a real harness is visible in
   the ledger and drives a persistent on-chain weight.
 
-#### A2 — Screener worker (Rust lint/compile/build gate)  ·  MISSING
+#### A2 — Screener worker (build gate)  ·  BUILT (deploy pending)
 **Goal:** automate `uploaded → evaluating` (today it's manual).
-- [ ] A daemon that polls `GET /screener/queue`, pulls the artifact, runs the
-      cheap gate (tarball manifest sanity, `docker build` succeeds, image serves
-      `/health`+`/seed`+`/run`), and POSTs a **signed** verdict to
-      `POST /screener/agent/{id}/result` (sign `{screener_hotkey}:{agent_id}:{passed}`).
-- [ ] Persist a failure reason for miners; add a stale-claim reset sweep.
-- [ ] Consider a distinct `screener_permit` vs the validator permit (today the
-      screener reuses the validator permit check).
-- **Files (new):** a screener package in `ditto-subnet` (Rust or Python — our
-  call); platform side is done (`endpoints/screener.py`). **Acceptance:**
-  submissions flow to `evaluating` with no human.
+- [x] **Daemon built + merged (subnet #32):** `python -m ditto.screener` (Python,
+      mirrors the validator worker) polls `GET /screener/queue`, pulls the artifact,
+      verifies sha256, and runs the gate — `docker build` with the tarball as the
+      build context on **stdin** (Docker unpacks it in its own sandbox), BuildKit +
+      optional `gh_token` secret for the private ditto-harness dep, then runs the
+      image with a memory/pids cap and polls `/health`. Posts a **signed** verdict
+      (`{screener_hotkey}:{agent_id}:{passed}`) to `POST /screener/agent/{id}/result`.
+      Pass = builds AND serves; no LLM key needed. `ditto/screener/`, 24 tests.
+- [ ] **Deploy it:** an infra `screener_worker` Ansible role (mirror
+      `validator_worker`; reuse the validator hotkey — it holds the permit on netuid
+      3 — so no new secret) + converge. Until then promotion is still manual in practice.
+- [ ] Deeper gate: `POST /seed`/`/run` smoke, a failure-reason persist, a stale-claim
+      reset sweep; a distinct `screener_permit` vs the validator permit.
+- [ ] A contract-test guard for the screener wire models (mirrored by hand today).
+- **Files:** `ditto-subnet/ditto/screener/`, `ditto/api_models/screener.py`; platform
+  side done (`endpoints/screener.py`). **Acceptance:** submissions flow to
+  `evaluating` with no human — met once the role is converged.
 
 #### A3 — Multi-validator: k=3 sharded queue + median-of-3  ·  MISSING
 **Goal:** decentralize scoring per `PROJECT.md` D2/D3.
