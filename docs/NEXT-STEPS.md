@@ -13,8 +13,8 @@ draft. Goal: take Subnet 118 from a working dev-chain walking skeleton to a
 > **no upstream constraint we can't change**. Where earlier docs deferred a knob
 > to "the team" or treated emissions / the scorer / chain config as givens, those
 > are now **direct levers we control**. Plan accordingly: the only real
-> dependencies are external *services* (a registered hotkey with stake, Pylon
-> write creds, an OpenRouter key) — not other people.
+> dependencies are external *services* (the subnet owner UID staked to the permit
+> threshold, Pylon write creds, an OpenRouter key) — not other people.
 
 > **TL;DR — where we are.** The end-to-end pipeline
 > (miner → platform → screener → validator → dittobench → chain) is plumbed and
@@ -24,10 +24,10 @@ draft. Goal: take Subnet 118 from a working dev-chain walking skeleton to a
 > now come from a persistent best-score ledger, so a scored agent keeps its
 > emission instead of being zeroed after one epoch. What stands between us and
 > production is not net-new architecture — it's (1) a **first real end-to-end
-> scoring run** with the non-mock scorer, (2) **multi-validator consensus**
-> (k=3 + median), (3) **hardening** (cost caps, sandbox, plagiarism at the
-> content level), (4) **observability + ops**, and (5) the **testnet → finney
-> migration** with real emissions turned on.
+> scoring run** with the non-mock scorer ✅ done, (2) **multi-validator consensus**
+> (k=3 + median), (3) **hardening** (cost caps ✅, sandbox egress, plagiarism at the
+> content level ✅), (4) **observability + ops**, and (5) the **testnet → finney
+> migration** (emission already flows on localnet; runs under the owner UID).
 
 ---
 
@@ -116,16 +116,16 @@ Verdicts: **DONE / PARTIAL / MISSING**.
 | **Incentive mechanism (KOTH + ATH gate)** | **DONE** | 90/10 split, 1% relative margin, first-seen wins; deterministic fold, validator-side. **Merged (PR #10/#22).** |
 | Weight-ingestion (one-epoch-weight bug) | **FIXED** | Weights recomputed from the durable ledger every epoch; bounded `put_weights` retry. |
 | Trust-boundary hardening (sig binding, row locks) | **DONE** | Score/verdict signatures bind the full payload; both status txns row-locked. |
-| Anti-copy (exact-hash + size/score heuristic) | **PARTIAL** | Cross-miner exact-sha256 + near-dup → `ath_pending_review`; **content-level near-dup NOT done**. |
+| Anti-copy (exact-hash + size/score + content fingerprint) | **DONE** (tuning left) | Cross-miner exact-sha256 + size/score + **two-channel content fingerprint** (lexical + AST) → `ath_pending_review`. Merged 2026-07-05 (dittobench #12, subnet #29/#30, platform #16). Thresholds untuned; review manual. |
 | First **real** end-to-end scoring run | **MISSING** | The 6/30 E2E used the mock scorer; no agent has flowed the real tarball→docker→judge path since deploy. **#1 milestone.** |
 | Multi-validator (k=3 + median-of-3) | **MISSING** | Single validator; one score row per agent. Endpoints still use stub names. |
 | OpenRouter cost cap (`max_tokens` + per-run token budget) | **DONE** | Per-call `max_tokens` + per-run token budget on the dittobench LLM client (`LLM_MAX_TOKENS` / `LLM_RUN_TOKEN_BUDGET`); a looping harness fails the run instead of burning unbounded spend. |
 | OpenRouter/sandbox **egress allowlist** | **MISSING** | Sandbox container still runs on the default bridge (full egress); a host-allowlist needs an egress proxy. Cost cap above bounds spend in the meantime. |
 | Sandbox hardening (seccomp/gVisor/egress) | **DEFERRED** | `docker build --memory 2g`, no-new-privileges, private net; deeper isolation deferred in code comments. |
-| Plagiarism / first-seen at content level | **PARTIAL** | First-seen (`created_at`) + margin defeat verbatim copies; semantic near-dup is heuristic only. |
-| Emission economics (non-zero netuid emission) | **MISSING** | `SubnetTaoInEmission[3] = 0` → winners don't accrue alpha yet. **Ours to tune.** |
+| Plagiarism / first-seen at content level | **DONE** (tuning left) | First-seen (`created_at`) + margin defeat verbatim copies; lexical + AST content fingerprint now catches reindent/reformat/rename/pad near-dups. Thresholds want tuning against a real corpus. |
+| Emission economics (non-zero netuid emission) | **DONE on localnet** | `SubnetTaoInEmission[3]` non-zero → winners accrue alpha on netuid 3. Re-tune per network on migration. |
 | Commit-reveal (production reveal step) | **MISSING** | Off on dev netuid 3; production needs a first-class reveal. |
-| Observability (W&B, dashboard, metrics, alerts) | **MINIMAL** | stdlib logging only. |
+| Observability (W&B, dashboard, metrics, alerts) | **PARTIAL** | W&B telemetry + public dashboard LIVE on dev (2026-07-06); richer metrics/alerts still TODO. |
 | Deploy automation + autoupdater | **PARTIAL** | Terraform/Ansible dev deploy done (gated); no git-watching autoupdater. |
 | Testnet → finney migration | **MISSING** | Everything runs on the dev localnet (netuid 3). |
 | Pylon **identity (write)** creds | **MISSING** | Only a read token provisioned; the SDK weight path is the dev fallback. |
@@ -143,13 +143,15 @@ Everything else is parallelizable, but this is the spine — each gates the next
    at any volume — unbounded LLM spend is a live financial risk.
 3. **Screener worker** (§A2). Automate `uploaded → evaluating` so the pipeline
    flows without a human.
-4. **Emissions on** (§B1) + **testnet migration** (§E). A subnet with zero
-   emission incentivizes nothing; move off the dev localnet to a real network.
+4. **Testnet migration** (§E). Emission already flows on localnet (§B1); move off
+   the dev localnet to a real network **under the subnet owner's UID** (no separate
+   validator registration/burn) and re-tune the pool there.
 5. **Multi-validator consensus (k=3 + median)** (§A3). Decentralize scoring;
    move from one owner validator to the set.
 6. **Content-level plagiarism detection** (§C1) — **done** (lexical + structural/AST
-   fingerprint channels); threshold tuning against a real corpus remains. The
-   existential risk for a downloadable-artifact subnet at scale.
+   fingerprint channels); remaining work is threshold tuning against a real corpus +
+   automating the review queue. The existential risk for a downloadable-artifact
+   subnet at scale is now covered.
 7. **Observability + autoupdater + HA** (§D). Operate it like production.
 8. **Mainnet (finney) cutover** (§E4).
 
@@ -204,6 +206,11 @@ persists on-chain.
       (`request-evaluation`, `submit-score`) in a lockstep cross-repo change
       (both `api_models/validator.py` copies + golden + subnet client).
 - [ ] Onboard >1 validator and confirm Yuma converges on the KOTH champion.
+      **Localnet test keys:** create **2 new hotkeys under the existing localnet
+      validator coldkey** and register them on netuid 3 (fallback if that misbehaves:
+      generate a fresh coldkey/hotkey pair and transfer localnet TAO to it from the
+      current validator key). Gives 3 distinct validator hotkeys to exercise the
+      median fold without any new funding.
 - **Files:** `ditto-platform/ditto/api_server/endpoints/validator.py`, the
   `scores` schema (add lease table/columns), `ditto-subnet/ditto/validator/`.
   **Acceptance:** 3 validators independently score, the ledger finalizes a
@@ -219,12 +226,14 @@ persists on-chain.
 
 ### B. Incentive & economics
 
-#### B1 — Turn on emissions (non-zero netuid share)  ·  MISSING  ·  🔴
+#### B1 — Emissions on (non-zero netuid share)  ·  DONE on localnet  ·  tune per-network
 **Goal:** winners actually accrue alpha.
-- [ ] Tune the netuid-3 (then testnet/finney) alpha pool / `TaoWeight` so
-      `SubnetTaoInEmission` is non-zero (today it's 0 → no alpha flows even though
-      consensus picks the winner, `Incentive[3] = 65535`).
-- [ ] Re-run and confirm the winning miner's `TotalHotkeyAlpha` increases.
+- [x] **`SubnetTaoInEmission[3]` is non-zero on the dev localnet** — alpha flows to
+      the winner (consensus already picks it, `Incentive[3] = 65535`). The earlier
+      "= 0" reading was stale.
+- [ ] Confirm the winning miner's `TotalHotkeyAlpha` increases on each real run, and
+      **re-tune the alpha pool / `TaoWeight`** when migrating to testnet/finney (the
+      split is ours to set directly on each network).
 - **Ref:** `STATE-OF-THE-SUBNET.md` §"For Ethan" (exact on-chain values — now
   ours to set directly).
 
@@ -278,6 +287,8 @@ compared cross-miner with one Jaccard/containment estimator.
       lexical (0.75 / 0.95) and structural (0.85 / 0.98) tolerances are conservative
       guesses. Holds are human-reviewed (not auto-bans), so the risk is a few false
       holds, but the tolerances want validation once real submissions exist.
+- [ ] **Automate the review queue** — `ath_pending_review` is drained by hand
+      (`scripts/resolve_review.py`); a reviewer UI/workflow removes the manual step.
 - [x] `first_seen` provenance: assessed — `agents.created_at` has no `onupdate`, so it
       is already an immutable first-seen; the KOTH tie-break reads it directly. No
       dedicated column needed unless a backfill/re-import path is added later.
@@ -348,12 +359,17 @@ compared cross-miner with one Jaccard/containment estimator.
 
 ### D. Reliability & operations
 
-#### D1 — Observability  ·  MINIMAL  ·  🔴 before scale
-- [ ] Validator: structured logging, W&B run logging (per-epoch scores, champion,
-      weights), and metrics (sweep duration, put_weights success, ledger size).
+#### D1 — Observability  ·  PARTIAL  ·  telemetry + dashboard live
+- [x] **W&B run logging LIVE (dev, 2026-07-06):** validator publishes aggregate
+      sweep stats (per-agent composite + tool/memory + per-category means,
+      leaderboard, weight vector, sweep health) to `heyditto/ditto-sn118`. Opt-in
+      per host (`validator_wandb_enabled`); infra PRs #7/#8, platform PR #17.
+- [x] **Public winner/leaderboard dashboard** live (reads `/public/leaderboard`);
+      "full telemetry" link resolves to the W&B project.
+- [ ] Validator: richer structured logging + metrics (sweep duration, put_weights
+      success, ledger size) beyond the W&B tables.
 - [ ] Platform: request metrics, error rates, DB health; wire to the existing
       **Datadog** MCP if used for alerting.
-- [ ] A **public winner/leaderboard dashboard** (reads `/scoring/scores`).
 
 #### D2 — Deployment lifecycle / autoupdater  ·  PARTIAL
 - [ ] Git-watching autoupdater for the validator (today systemd, manual updates).
@@ -389,9 +405,11 @@ compared cross-miner with one Jaccard/containment estimator.
       in production (today only a read token exists; the SDK path is the dev
       fallback). **Files:** infra `platform.env.j2`, `ditto-subnet/ditto/validator/config.py`.
 
-#### E2 — Testnet registration + permit + stake  ·  MISSING
-- [ ] Register the SN118 validator hotkey on testnet, obtain a `validator_permit`,
-      stake. (Dev has this on the localnet netuid 3.)
+#### E2 — Testnet permit + stake (subnet owner UID)  ·  MISSING
+- [ ] Validation runs under the **subnet owner's UID** — **no separate validator
+      hotkey registration or registration burn.** Ensure the owner hotkey holds
+      enough stake to clear the `validator_permit` threshold on testnet (then
+      finney). (Owner UID already validates on localnet netuid 3.)
 
 #### E3 — Chain parameters  ·  MISSING
 - [ ] Set tempo, immunity period, weights-rate-limit, validator-permit threshold,
@@ -435,12 +453,13 @@ compared cross-miner with one Jaccard/containment estimator.
 
 ## 5. Hard external blockers to go-live (not code)
 
-1. A **registered SN118 validator hotkey with permit + stake** on the target
-   network (testnet, then finney).
+1. **Subnet owner UID staked to the `validator_permit` threshold** on the target
+   network (testnet, then finney) — validation runs under the owner UID, so **no
+   separate validator hotkey registration or registration burn.**
 2. **Pylon identity (write) credentials** (E1).
 3. An **OpenRouter key** for the dittobench `run_size` pipeline **plus a cost cap**
    (C3) before running at volume.
-4. **Non-zero netuid emission** configured (B1).
+4. ~~Non-zero netuid emission~~ — **done on localnet** (B1); re-tune per network.
 
 ## 6. References
 

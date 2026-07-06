@@ -1,6 +1,6 @@
 # SN118 — Credentialed Handoff
 
-**As of 2026-07-02.** Audience: the operator who holds (or can obtain) the
+**As of 2026-07-06.** Audience: the operator who holds (or can obtain) the
 **production credentials, chain keys, and infra access**. This document is the
 bridge between the code — which is where it needs to be for the next steps — and
 the things that **cannot be done from a keyboard alone**. It is deliberately
@@ -26,9 +26,16 @@ work:
 
 The pipeline (miner → platform → screener → validator → dittobench → chain) is
 plumbed and the validator has run **live on the dev localnet (netuid 3)** with the
-mock scorer off. Nothing below is blocked on *net-new architecture* — it is
-blocked on **credentials, a registered/staked hotkey, non-zero emission, and a
-first real scoring run.**
+mock scorer off.
+
+**Landed since (through 2026-07-06):** the first **real E2E scoring run** (2026-07-03),
+public transparency (leaderboard/health API + dashboard + opt-in W&B telemetry), and
+the **two-channel content-plagiarism gate** (lexical + AST fingerprint; C1). Two
+earlier "blockers" turned out not to be: emission **already flows on localnet**
+(`SubnetTaoInEmission[3]` non-zero), and production validation runs under the
+**subnet owner UID** (no separate validator registration/burn). What remains is
+credential/infra wiring — Pylon write creds, per-network staking + tuning, cost
+cap, and the network migration.
 
 ---
 
@@ -39,14 +46,15 @@ each is provisioned, the mapped capability stays on its dev fallback (or off).
 
 | Secret / access | Goes where | Unblocks | Today |
 | --- | --- | --- | --- |
-| **Registered SN118 validator hotkey** (mnemonic) **with `validator_permit` + stake** on the target network | `VALIDATOR_MNEMONIC` (or `VALIDATOR_WALLET_NAME` + `VALIDATOR_WALLET_HOTKEY`); must match `VALIDATOR_HOTKEY` | Weight-setting on that network | Have it on localnet netuid 3 only |
+| **Subnet owner hotkey** (mnemonic) **staked to the `validator_permit` threshold** on the target network — validation runs under the **owner UID**, so **no separate validator registration/burn** | `VALIDATOR_MNEMONIC` (or `VALIDATOR_WALLET_NAME` + `VALIDATOR_WALLET_HOTKEY`); must match `VALIDATOR_HOTKEY` | Weight-setting on that network | Owner UID validates on localnet netuid 3 |
 | **Pylon identity (write) creds** | `PYLON_IDENTITY_NAME`, `PYLON_IDENTITY_TOKEN` (Secret Manager → `platform.env`) | Production `put_weights` via Pylon (commit-reveal handled by Pylon) | Only a **read** token exists; SDK path is the dev fallback |
 | **OpenRouter API key** (with an **account-level spend cap** set on OpenRouter's side) | `VALIDATOR_OPENROUTER_KEY` (subnet validator, which forwards it) and/or `OPENROUTER_API_KEY` (dittobench-api's own env / the crate) | `run_size` scoring (generator + judge) | Needed for any real run |
 | **GitHub token (read)** for pulling `ditto-harness` during `docker build` | dittobench-api `GitHubTokenFile` → BuildKit `--secret gh_token` | Crate builds that depend on the reference harness | Provisioned in dev; confirm on target host |
 | **GCP infra access** (Terraform apply, Secret Manager, systemd) | n/a (operator identity) | Deploy + the `enable_validator` gate | Dev deploy done, gated |
 | **Prod Postgres credentials** | `POSTGRES_*` (`.env` / Secret Manager) | Platform DB (ledger, agents, bans) | Dev DB only |
 | **S3/MinIO storage creds** | `STORAGE_*` on the platform | Tarball storage + presigned URLs | Dev MinIO only |
-| **TAO for registration burn** | the coldkey funding the hotkey | Registering the hotkey on testnet/finney | localnet only |
+| **TAO to stake the owner hotkey** to the permit threshold | the owner coldkey | Meeting `validator_permit` on testnet/finney (no *registration* burn — owner UID already exists) | localnet only |
+| **W&B API key** | `WANDB_API_KEY` (Secret Manager → validator env) | Opt-in aggregate telemetry + dashboard link | ✅ provisioned — `docs/wandb-keys.yml` (gitignored) |
 
 > **Secret hygiene:** all of the above live in **GCP Secret Manager** on the dev
 > deploy; keep them there, never in the repo. The validator hotkey has already
@@ -100,23 +108,24 @@ its own. Until A2 is built you must promote submissions **by hand** (an operator
 DB action on the platform side). Note this so a real miner submission isn't left
 stuck in `uploaded`. Building the Rust/Python screener daemon is the durable fix.
 
-### Hop 4 — Turn on emissions (roadmap B1) · 🔴
-Consensus already picks the winner (`Incentive[3] = 65535`) but
-**`SubnetTaoInEmission = 0`**, so **no alpha flows**. This is a chain-config change
-you now own:
+### Hop 4 — Emissions (roadmap B1) · ✅ done on localnet
+Consensus picks the winner (`Incentive[3] = 65535`) **and
+`SubnetTaoInEmission[3]` is non-zero**, so **alpha flows** on netuid 3 (the earlier
+"= 0" reading was stale). Remaining is per-network tuning, which you own:
 
-1. Set the netuid's alpha-pool / `TaoWeight` so `SubnetTaoInEmission` is non-zero
-   (exact values + backup notes: [`STATE-OF-THE-SUBNET.md`](STATE-OF-THE-SUBNET.md)
-   §"For Ethan").
-2. Re-run and confirm the winning miner's `TotalHotkeyAlpha` **increases**.
+1. Confirm the winning miner's `TotalHotkeyAlpha` **increases** on each real run.
+2. On migration, **re-tune** the netuid's alpha-pool / `TaoWeight` for the target
+   network (exact values + backup notes:
+   [`STATE-OF-THE-SUBNET.md`](STATE-OF-THE-SUBNET.md) §"For Ethan").
 
 ### Hop 5 — Network migration (roadmap E)
 Move off the dev localnet:
 
 1. **E1 — Pylon identity (write) creds** provisioned (§1) so `put_weights` works
    in production instead of the SDK fallback.
-2. **E2 — Register** the validator hotkey on **testnet**, obtain a
-   `validator_permit`, **stake**.
+2. **E2 — Stake the subnet owner hotkey** on **testnet** to clear the
+   `validator_permit` threshold. **No validator registration or registration burn** —
+   validation runs under the owner UID (same as localnet).
 3. **E3 — Chain params:** set tempo, immunity period, weights-rate-limit,
    validator-permit threshold, and **enable commit-reveal** (roadmap B2 — dev has
    it off; the worker offloads reveal to Pylon in identity mode).
@@ -126,8 +135,12 @@ Move off the dev localnet:
 ### Hop 6 — Decentralize (roadmap A3) · engineering + onboarding
 Multi-validator (k=3 sharded queue + median-of-3) is **not built** — it needs a
 lease table, the stub→target endpoint rename, and the median fold. It is an
-engineering task (flagged in §3) that then needs **≥1 additional validator
-onboarded** (a credential/partner action once the package in roadmap D3 exists).
+engineering task (flagged in §3). **To test it on localnet with no new funding:**
+create **2 new hotkeys under the existing localnet validator coldkey** and register
+them on netuid 3 (fallback if that misbehaves: generate a fresh coldkey/hotkey pair
+and transfer localnet TAO to it from the current validator key). That gives 3
+distinct validator hotkeys to exercise the median fold. Production still needs **≥1
+additional independent validator onboarded** (a partner action once roadmap D3 exists).
 
 ### Hop 7 — Mainnet (finney) cutover (roadmap E4)
 Repeat Hop 5 against finney SN118, run the deploy runbook, verify each hop, and
@@ -178,13 +191,14 @@ mypy + pytest equivalent (subnet) must be green.
 
 ## 5. Hard external blockers to go-live (the short list)
 
-1. A **registered SN118 validator hotkey with permit + stake** on the target
-   network (testnet, then finney).
+1. The **subnet owner hotkey staked to the `validator_permit` threshold** on the
+   target network (testnet, then finney) — validation runs under the owner UID, so
+   **no separate validator registration or registration burn**.
 2. **Pylon identity (write) credentials** (§1 / roadmap E1).
 3. An **OpenRouter key** for `run_size` **plus** an account-level cost cap.
-4. **Non-zero netuid emission** configured (Hop 4 / roadmap B1).
+4. ~~Non-zero netuid emission~~ — **done on localnet** (Hop 4 / B1); re-tune per network.
 
-Everything else on the critical path is unblocked once these four exist.
+Everything else on the critical path is unblocked once these exist.
 
 ---
 
