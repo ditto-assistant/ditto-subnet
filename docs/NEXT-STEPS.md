@@ -147,8 +147,9 @@ Everything else is parallelizable, but this is the spine — each gates the next
    emission incentivizes nothing; move off the dev localnet to a real network.
 5. **Multi-validator consensus (k=3 + median)** (§A3). Decentralize scoring;
    move from one owner validator to the set.
-6. **Content-level plagiarism detection** (§C1). The existential risk for a
-   downloadable-artifact subnet at scale.
+6. **Content-level plagiarism detection** (§C1) — **done** (lexical + structural/AST
+   fingerprint channels); threshold tuning against a real corpus remains. The
+   existential risk for a downloadable-artifact subnet at scale.
 7. **Observability + autoupdater + HA** (§D). Operate it like production.
 8. **Mainnet (finney) cutover** (§E4).
 
@@ -249,19 +250,41 @@ persists on-chain.
 
 ### C. Anti-gaming & trust
 
-#### C1 — Content-level plagiarism / near-dup detection  ·  PARTIAL  ·  🔴 at scale
-**Goal:** upgrade the heuristic gate to catch lightly-tweaked copies.
-- [ ] Today: `scoring_gate.py` holds exact-sha256 copies and size+score-proximity
-      near-dups (cross-miner) in `ath_pending_review`; a manual
-      `scripts/resolve_review.py` clears/bans. This is a **signal, not a
-      detector** — it can't see a re-indented or renamed copy of a different size.
-- [ ] Add a content-level signal computed where the tarball is already unpacked
-      (screener / dittobench): normalized source-tree hash, token/AST similarity,
-      or embedding distance; feed a duplicate score into the review decision.
-- [ ] Persist `first_seen` provenance robustly (it currently rides `created_at`).
-- **Files:** `ditto-platform/ditto/api_server/scoring_gate.py` (decision),
-  screener/dittobench (content fingerprint). **Acceptance:** a renamed/reindented
-  copy of the current champion is flagged, not paid.
+#### C1 — Content-level plagiarism / near-dup detection  ·  DONE (tuning left)  ·  🔴 at scale
+**Goal:** upgrade the heuristic gate to catch lightly-tweaked copies. Two
+fingerprint channels now do, each feeding the human-reviewed `ath_pending_review`
+hold (`scripts/resolve_review.py` clears/bans). Both are computed once, stored, and
+compared cross-miner with one Jaccard/containment estimator.
+- [x] **Lexical channel (platform).** `/upload/agent` fingerprints each tarball into a
+      shingle MinHash sketch: per-file k-line shingles with all intra-line whitespace
+      removed, so re-indent / tabs / line-endings / operator-spacing reformat and
+      localized edits wash out; bottom-k (KMV) sketch `{v,k,card,m}` in
+      `agents.content_fingerprint`. The gate holds on high **Jaccard** (edited copy) or
+      **containment** (copy padded with junk files). Bomb/DoS-capped (incl. member
+      flood), CPU offloaded off the event loop, fail-open.
+      **Files:** `ditto-platform/ditto/api_server/fingerprint.py`, `scoring_gate.py`,
+      migration `c4e8b1a06d72`.
+- [x] **Structural / AST channel (dittobench → validator → platform).** dittobench parses
+      the built crate with tree-sitter-rust and emits a shingle MinHash of the
+      **named node-type stream** (identifiers/literals discarded), so it additionally
+      survives **identifier renaming + reformatting** (proven: a renamed+reformatted
+      crate yields an identical sketch). Forwarded UNSIGNED on `ScoreReport`
+      (`structural_fingerprint`) — no signing-version skew — persisted at score time in
+      `agents.structural_fingerprint`; the gate adds a structural arm at higher
+      thresholds (0.85 / 0.98) since unrelated crates share more parse-tree shape than
+      text. **Files:** `dittobench-api/internal/astfp`, `pkg/protocol`,
+      `ditto-subnet/ditto/api_models/validator.py`, platform gate, migration `d5f2a3b91e64`.
+- [ ] **Threshold tuning** against a real score/similarity corpus (ties to B3): the
+      lexical (0.75 / 0.95) and structural (0.85 / 0.98) tolerances are conservative
+      guesses. Holds are human-reviewed (not auto-bans), so the risk is a few false
+      holds, but the tolerances want validation once real submissions exist.
+- [x] `first_seen` provenance: assessed — `agents.created_at` has no `onupdate`, so it
+      is already an immutable first-seen; the KOTH tie-break reads it directly. No
+      dedicated column needed unless a backfill/re-import path is added later.
+- **Acceptance:** a renamed/reindented/reformatted copy of the current champion is
+  flagged, not paid — **met** across both channels (lexical for text edits + padding,
+  structural for identifier renaming). Logic-reordering *within* a shingle window and
+  deep semantic equivalence remain out of scope.
 
 #### C2 — Signature replay-cache / nonce enforcement  ·  PARTIAL
 - [ ] Signatures now bind the full payload (agent + composite + seed), closing
