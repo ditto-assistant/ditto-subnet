@@ -28,6 +28,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "pids_limit": 512,
         "health_path": "/health",
         "container_port": 8080,
+        "smoke_env": (("OPENROUTER_API_KEY", "sk-screener-smoke"),),
         "max_tarball_bytes": 4 * 1024 * 1024,
         "poll_seconds": 0.01,
         "queue_limit": 20,

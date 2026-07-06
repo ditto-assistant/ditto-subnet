@@ -69,6 +69,17 @@ class ScreenerConfig:
     container_port: int
     """Port the harness serves on inside the container (contract: ``8080``)."""
 
+    smoke_env: tuple[tuple[str, str], ...]
+    """Env vars injected (``docker run -e K=V``) into the serve-smoke container.
+
+    The reference harness builds its full LLM-backed ``Baseline`` — which reads
+    ``OPENROUTER_API_KEY`` — *before* it binds the ``/health`` listener, so a
+    container run with no key exits before serving and the smoke check times out
+    with a connect error. The gate never calls ``/run``, so a **dummy** key is
+    enough: it lets the server boot and answer ``/health`` without ever making an
+    LLM call. Defaults to a placeholder ``OPENROUTER_API_KEY``; override via
+    ``SCREENER_SMOKE_ENV`` (comma-separated ``K=V`` pairs) for other providers."""
+
     max_tarball_bytes: int
     """Reject an artifact larger than this before building. It is a download DoS
     bound and MUST be >= the platform's upload cap (``DITTO_MAX_TARBALL_SIZE_BYTES``,
@@ -114,6 +125,23 @@ def _parse_int(name: str, default: str) -> int:
         raise ScreenerConfigError(f"{name} must be an integer, got {raw!r}") from e
 
 
+def _parse_env_pairs(name: str, default: str) -> tuple[tuple[str, str], ...]:
+    """Parse ``K=V,K2=V2`` env-var pairs (for the smoke container's ``-e``)."""
+    raw = os.environ.get(name, default)
+    pairs: list[tuple[str, str]] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise ScreenerConfigError(
+                f"{name} must be comma-separated K=V pairs, got {item!r}"
+            )
+        pairs.append((key.strip(), value))
+    return tuple(pairs)
+
+
 def parse_screener_config_from_env() -> ScreenerConfig:
     """Build a :class:`ScreenerConfig` from ``SCREENER_*`` / ``NETUID`` env.
 
@@ -141,6 +169,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         pids_limit=_parse_int("SCREENER_PIDS_LIMIT", "512"),
         health_path=os.environ.get("SCREENER_HEALTH_PATH", "/health"),
         container_port=_parse_int("SCREENER_CONTAINER_PORT", "8080"),
+        smoke_env=_parse_env_pairs(
+            # A dummy LLM key so the reference harness (which builds its
+            # OpenRouter-backed Baseline before binding /health) can boot far
+            # enough to serve /health; the gate never calls /run so it is unused.
+            "SCREENER_SMOKE_ENV",
+            "OPENROUTER_API_KEY=sk-screener-smoke",
+        ),
         max_tarball_bytes=_parse_int(
             # Match the platform's default upload cap (20 MiB); a smaller value
             # false-fails legitimately-uploaded tarballs. Keep >= the platform cap.

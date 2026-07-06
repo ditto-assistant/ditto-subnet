@@ -201,8 +201,13 @@ class BuildGate:
             str(self._config.pids_limit),
             "--publish",
             f"127.0.0.1::{port}",
-            tag,
         ]
+        # Inject smoke env (e.g. a dummy OPENROUTER_API_KEY): the reference
+        # harness builds its LLM-backed Baseline before binding /health, so
+        # without a key it exits before serving and the probe never connects.
+        for key, value in self._config.smoke_env:
+            run_args += ["-e", f"{key}={value}"]
+        run_args.append(tag)
         code, out = await self._run(run_args, timeout=self._config.run_timeout_seconds)
         if code != 0:
             return False, f"container did not start: {_log_tail(out)}"
