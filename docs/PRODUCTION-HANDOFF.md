@@ -76,7 +76,7 @@ The spine from `NEXT-STEPS.md §2`, marked to today:
 | --- | --- | --- |
 | 1 | First real E2E scoring run | ✅ **done** (2026-07-03) |
 | 2 | OpenRouter cost cap + **egress allowlist** | cost cap ✅ · egress allowlist ❌ |
-| 3 | **Screener worker** (automate `uploaded → evaluating`) | ❌ (manual today) |
+| 3 | **Screener worker** (automate `uploaded → evaluating`) | ⚠️ worker built + merged (subnet #32) · infra role + deploy pending |
 | 4 | **Emissions** + **testnet migration** | emission ✅ live on localnet · testnet migration ❌ |
 | 5 | **Multi-validator** consensus (k=3 + median) | ❌ (single validator; localnet test keys recipe below) |
 | 6 | **Content-level plagiarism** detection | ✅ lexical + structural/AST fingerprint channels · tuning ⏳ |
@@ -94,10 +94,12 @@ focus is steps 2–3 (egress allowlist, screener worker) then the testnet hop.
    runs on the default bridge with full egress. Needs a host-allowlist egress proxy
    (OpenRouter + package registries only). The cost cap bounds *spend* today, not
    *destinations*. **Do before running real scoring at volume.**
-2. **Screener worker** *(ditto-subnet, new Rust daemon)* — poll `GET /screener/queue`,
-   pull the artifact, run lint/compile/build, post the signed verdict to flip
-   `uploaded → evaluating`. Removes the human from the loop. Platform endpoints already
-   exist and are signed/row-locked.
+2. **Screener worker** *(ditto-subnet)* — **the daemon is built + merged (subnet #32):**
+   `python -m ditto.screener` polls `GET /screener/queue`, pulls the artifact, runs a
+   `docker build` + `/health` serve check, and posts the signed verdict to flip
+   `uploaded → evaluating`. Removes the human from the loop. **Left:** an infra
+   `screener_worker` Ansible role + converge (it can reuse the validator hotkey, which
+   already holds the permit on netuid 3) to actually run it.
 3. **Testnet migration** *(chain + infra)* — emission already flows on localnet
    (`SubnetTaoInEmission[3]` is non-zero; winners accrue alpha), so this is a *move*,
    not a *turn-on*. Validation runs under the **subnet owner's UID** — no separate
