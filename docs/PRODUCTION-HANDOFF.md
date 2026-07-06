@@ -1,15 +1,7 @@
 # SN118 — Production Handoff
 
-**As of 2026-07-04.** A concise, current snapshot of where Subnet 118 is and the
-ordered path to a finney launch. This supersedes the *status* in
-[`STATE-OF-THE-SUBNET.md`](STATE-OF-THE-SUBNET.md) (2026-06-30, pre-DittoBench).
-For the deep, task-level roadmap see [`NEXT-STEPS.md`](NEXT-STEPS.md); for the
-credential/network "hops" see [`CREDENTIALED-HANDOFF.md`](CREDENTIALED-HANDOFF.md).
-
-> **We own the entire subnet end to end** — miner CLI, platform API, screener,
-> validator + weight fold, the dittobench scorer, chain params, and emissions.
-> The only real dependencies are external *services* (a registered hotkey with
-> stake, Pylon write creds, OpenRouter, W&B), not other teams.
+**As of 2026-07-06.** A current snapshot of where Subnet 118 is and the
+ordered path to a finney launch.
 
 ---
 
@@ -19,10 +11,12 @@ The full pipeline — miner → platform → validator → **real DittoBench sco
 signed ledger → KOTH weights → chain — **works end to end and is proven live** on
 the dev localnet (netuid 3, validator uid 4). A real (non-mock) agent scored
 **composite 0.587**, its signed score landed in the ledger, and the validator set
-weights on chain unattended. What stands between us and finney is **not new
-architecture** — it's turning on emissions, moving to a real network with a
-registered/staked hotkey, decentralizing to multiple validators, and productionizing
-(cost egress, plagiarism, ops).
+weights on chain unattended. Emission already flows on the dev localnet
+(`SubnetTaoInEmission[3]` is non-zero — winners accrue alpha). What stands between
+us and finney is **not new architecture** — it's moving to a real network **under
+the subnet owner's UID** (no separate validator registration/burn needed),
+decentralizing to multiple validators, and productionizing (cost egress,
+plagiarism tuning, ops).
 
 ---
 
@@ -32,7 +26,8 @@ registered/staked hotkey, decentralizing to multiple validators, and productioni
   streams agent + payment proof. Proven against the live API.
 - **Platform API** — on-chain payment verification (replay-protected), object
   storage, the validator queue, the **self-verifying signed score ledger**, the
-  anti-copy gate, banned-hotkeys. Deployed, **auto-deploys from `dev`** to
+  anti-copy gate (now **two-channel content fingerprint** — see below),
+  banned-hotkeys. Deployed, **auto-deploys from `dev`** to
   `platform-api-dev.heyditto.ai` (Caddy TLS; `main` → prod, not yet cut over).
 - **DittoBench scoring engine** — real `docker build` of a submitted harness in a
   sandbox, seeded tool + memory cases, LLM judge → `ScoreReport`. Co-located on the
@@ -47,13 +42,29 @@ registered/staked hotkey, decentralizing to multiple validators, and productioni
   auto-submit gap to a validator/platform **signing-version skew** (validator signed
   a 2-field payload, platform verified 5); fixed by redeploying `dev`. Real signed
   composite persists in the ledger and drove an on-chain weight.
+- **Content-level plagiarism — two-channel fingerprint (shipped 2026-07-05, live on dev):**
+  the anti-copy gate now runs a **content fingerprint** in addition to the old
+  sha256 + size/score heuristics. Two channels, each a bottom-k MinHash (KMV)
+  sketch compared by one estimator (Jaccard + conditioned-KMV containment):
+  - **Lexical** (platform, at upload) — per-file k-line shingles with all
+    intra-line whitespace stripped → survives reindent/reformat/file-rename and,
+    via containment, junk-file padding.
+  - **Structural / AST** (dittobench scorer, at score) — tree-sitter-rust
+    named-node-type k-node shingles → additionally survives identifier renaming;
+    travels on `ScoreReport` as **unsigned advisory** metadata.
+  A cross-miner near-duplicate is **held in `ath_pending_review` for human
+  review — never autobanned.** Merged across all three repos (dittobench #12,
+  subnet #29/#30, platform #16). **Left:** thresholds are conservative
+  placeholders wanting tuning against a real corpus, and the review queue is
+  drained by hand (no reviewer UI/automation yet).
 - **Public transparency (shipped this week, live on dev):**
   - `GET /api/v1/public/leaderboard` + `GET /api/v1/public/health` — no-auth,
     aggregate-only, cached.
   - **Dashboard** served same-origin by the platform at
     `https://platform-api-dev.heyditto.ai/`.
-  - **W&B telemetry** module in the validator — opt-in, off by default; **merged,
-    awaiting infra enablement** (see below).
+  - **W&B telemetry** — **LIVE on the dev validator (2026-07-06)**: publishing
+    aggregate sweep stats to `heyditto/ditto-sn118`, and the dashboard's "full
+    telemetry" link resolves to it. (Still opt-in / off by default per host.)
 
 ---
 
@@ -66,13 +77,14 @@ The spine from `NEXT-STEPS.md §2`, marked to today:
 | 1 | First real E2E scoring run | ✅ **done** (2026-07-03) |
 | 2 | OpenRouter cost cap + **egress allowlist** | cost cap ✅ · egress allowlist ❌ |
 | 3 | **Screener worker** (automate `uploaded → evaluating`) | ❌ (manual today) |
-| 4 | **Emissions on** + **testnet migration** | ❌ (blocker — see below) |
-| 5 | **Multi-validator** consensus (k=3 + median) | ❌ (single validator) |
+| 4 | **Emissions** + **testnet migration** | emission ✅ live on localnet · testnet migration ❌ |
+| 5 | **Multi-validator** consensus (k=3 + median) | ❌ (single validator; localnet test keys recipe below) |
 | 6 | **Content-level plagiarism** detection | ✅ lexical + structural/AST fingerprint channels · tuning ⏳ |
-| 7 | Observability + autoupdater + HA | ⚠️ transparency ✅ · autoupdater/HA ❌ |
+| 7 | Observability + autoupdater + HA | ⚠️ transparency ✅ · W&B telemetry ✅ live (dev) · autoupdater/HA ❌ |
 | 8 | **Mainnet (finney) cutover** | ❌ |
 
-We are through **step 1**; steps 2–4 are the near-term focus.
+We are through **step 1**; emission is already live on localnet, so the near-term
+focus is steps 2–3 (egress allowlist, screener worker) then the testnet hop.
 
 ---
 
@@ -86,15 +98,18 @@ We are through **step 1**; steps 2–4 are the near-term focus.
    pull the artifact, run lint/compile/build, post the signed verdict to flip
    `uploaded → evaluating`. Removes the human from the loop. Platform endpoints already
    exist and are signed/row-locked.
-3. **Emissions on + testnet migration** *(chain + infra)* — **the gating blocker.**
-   `SubnetTaoInEmission[3] = 0`, so winners accrue no alpha. Tune the alpha-pool /
-   `TaoWeight`; then register the validator hotkey (with `validator_permit` + stake) on
-   **testnet**, point the deploy at it (`SUBTENSOR_NETWORK`/`NETUID`), flip
-   `enable_validator`, and re-run a real E2E there. Requires **TAO for the registration
-   burn** and a funding coldkey.
+3. **Testnet migration** *(chain + infra)* — emission already flows on localnet
+   (`SubnetTaoInEmission[3]` is non-zero; winners accrue alpha), so this is a *move*,
+   not a *turn-on*. Validation runs under the **subnet owner's UID** — no separate
+   validator hotkey registration or registration burn. Confirm/tune the alpha-pool /
+   `TaoWeight` on the target network, point the deploy at it (`SUBTENSOR_NETWORK`/
+   `NETUID`), flip `enable_validator`, and re-run a real E2E there.
 4. **Multi-validator (k=3 + median-of-3)** *(ditto-subnet + platform)* — shard the queue
    across validators, finalize on the median. Endpoints still use stub names. Needed for
    a trustless subnet; a single owner-validator is a centralization + liveness risk.
+   **To test on localnet:** create 2 new hotkeys under the *existing* localnet validator
+   coldkey and register them on netuid 3 (fallback if that misbehaves: generate a fresh
+   coldkey/hotkey pair and transfer localnet TAO to it from the current validator key).
 5. **Content-level plagiarism** *(platform + dittobench ✅ — tuning ⏳)* — first-seen +
    margin defeat verbatim copies; two fingerprint channels now catch tweaked ones and
    feed a human-reviewed hold:
@@ -106,14 +121,19 @@ We are through **step 1**; steps 2–4 are the near-term focus.
      computed where the crate is unpacked; additionally survives identifier renaming.
      Forwarded UNSIGNED on the score report (no signing skew).
      `dittobench-api/internal/astfp`, gate structural channel.
-   What remains is **threshold tuning against a real score/similarity corpus** (ties to
-   B3) — defaults are conservative and holds are human-reviewed, not auto-bans.
+   **Remaining:** (a) **tune thresholds** (`_DEFAULT_*_TOL` in `scoring_gate.py`) against
+   a real score/similarity corpus — conservative defaults today, holds human-reviewed not
+   auto-banned (ties to B3); (b) **drain the review queue** — `ath_pending_review` is
+   worked by hand, needs a reviewer UI/workflow; (c) optional token-level channel for
+   reorder-within-window evasion. For a downloadable-artifact subnet this remains the
+   existential risk at scale.
 6. **Ops** *(infra)* — git-watching autoupdater (manual systemd updates today),
    alerting, HA. Re-enable **commit-reveal** for production (the worker gains a reveal
    step) and decide the **Pylon identity write-path** vs. the bittensor-SDK weight path
    (only a *read* token is provisioned today; SDK is the dev fallback).
-7. **Finney cutover** *(everything)* — repeat the testnet hop against finney SN118, run
-   the deploy runbook, verify each hop, run a real E2E on mainnet.
+7. **Finney cutover** *(everything)* — repeat the testnet hop against finney SN118 (again
+   under the **subnet owner's UID**, no validator registration burn), run the deploy
+   runbook, verify each hop, run a real E2E on mainnet.
 
 ---
 
@@ -121,27 +141,36 @@ We are through **step 1**; steps 2–4 are the near-term focus.
 
 These gate production regardless of engineering; secure them in parallel:
 
-- **Registered SN118 validator hotkey** with `validator_permit` + stake on the target
-  network (testnet, then finney). Have it on **localnet netuid 3 only**.
-- **TAO** to fund the registration burn + stake.
-- **Non-zero netuid emission** configured (step 3).
+- **Subnet owner UID / hotkey** on the target network — validation runs under it, so
+  there is **no separate validator hotkey registration or registration burn**. (We hold
+  it on localnet netuid 3 today.) Stake it enough to meet the `validator_permit`
+  threshold on the target network.
 - **Pylon identity (write) credentials** for the production `put_weights` path.
-- **W&B account** — a team/entity + **public** `ditto-sn118` project + API key (see next).
+- ~~Non-zero netuid emission~~ — **done on localnet** (`SubnetTaoInEmission[3]` non-zero);
+  confirm/tune the pool on the target network.
+- ~~W&B account~~ — **provisioned + wired live** (see below).
 
 ---
 
-## Enabling W&B telemetry (module merged; wiring left)
+## W&B telemetry — LIVE on dev (2026-07-06)
 
-The validator publishes aggregate-only stats when enabled; off by default. To light up:
+The dev validator publishes aggregate-only sweep stats to **`heyditto/ditto-sn118`**
+and the dashboard's "full telemetry" link resolves to it. All wiring done:
 
-1. **Account:** create a W&B team + **public** project `ditto-sn118` + an API key.
-2. **Infra (validator systemd env + Secret Manager):** add `WANDB_API_KEY` to Secret
-   Manager; set `WANDB_MODE=online`, `WANDB_PROJECT=ditto-sn118`, `WANDB_ENTITY=<team>`;
-   and make the validator install run **`uv sync --extra telemetry`** — `wandb` is an
-   opt-in extra, so without it the sink no-ops even when `online`.
-3. **Platform:** set the GitHub Actions **variable** `DITTO_DASHBOARD_WANDB_URL =
-   https://wandb.ai/<entity>/ditto-sn118`; the next `dev` deploy upserts it into the VM
-   `.env` and the dashboard's "full telemetry" link resolves.
+1. **Account:** ✅ key at `docs/wandb-keys.yml` (gitignored); project
+   `heyditto/ditto-sn118` created (`access: USER_READ` — verify world-public in the
+   W&B UI if fully open viewing is wanted).
+2. **Infra:** ✅ Secret Manager `validator-wandb-key` (+ runtime-SA accessor, captured
+   in Terraform, infra PR #8); `validator_worker` role wires `WANDB_MODE/PROJECT/ENTITY`
+   + `uv sync --extra telemetry` (infra PR #7); enabled per host via
+   `validator_wandb_enabled` (dev on). Converged 2026-07-06 → run `validator-5EexQS8U`
+   syncing.
+3. **Platform:** ✅ GH Actions var `DITTO_DASHBOARD_WANDB_URL =
+   https://wandb.ai/heyditto/ditto-sn118`; deployed to `ditto-platform-dev` (platform
+   PR #17 also added `workflow_dispatch` for manual redeploys).
+
+**To enable on another validator host:** set `validator_wandb_enabled: true` in its
+host_vars and converge (the `validator-wandb-key` secret + accessor already exist).
 
 ---
 

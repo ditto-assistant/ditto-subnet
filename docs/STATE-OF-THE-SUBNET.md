@@ -90,16 +90,23 @@ emission tuning, and productionization onto testnet → mainnet.
 
 ## For Ethan — emission tuning (goal #5, specifics)
 
-The miner is the on-chain consensus winner (`Incentive[3] = 65535`), but no alpha is flowing:
+> **RESOLVED (2026-07-06).** `SubnetTaoInEmission[3]` is now **non-zero** on localnet
+> netuid 3 — the subnet receives a per-block emission and the winning miner's alpha
+> accrues. The zero-emission diagnosis below is kept as history; the remaining work is
+> **per-network** tuning (re-check the pool / `TaoWeight` on testnet, then finney), not a
+> localnet fix.
+
+The miner is the on-chain consensus winner (`Incentive[3] = 65535`). Original diagnosis
+(when alpha was **not** yet flowing):
 
 - `BlockEmission` (global) = `1 TAO/block` — the chain *is* minting.
 - `FirstEmissionBlockNumber[3] = 597799` — the subnet is already "started" (`start_call` is a no-op).
-- **But** `SubnetTaoInEmission[3] = 0` and `SubnetAlphaOutEmission[3] = 0`, and the miner's
-  `TotalHotkeyAlpha` did not change across blocks — the subnet's **emission share is computing to
-  zero**, most likely from the alpha pool price / `TaoWeight` setup (`SubnetTAO ≈ 7108τ`,
+- At the time, `SubnetTaoInEmission[3] = 0` and `SubnetAlphaOutEmission[3] = 0`, and the miner's
+  `TotalHotkeyAlpha` did not change across blocks — the subnet's emission share was computing to
+  zero, most likely from the alpha pool price / `TaoWeight` setup (`SubnetTAO ≈ 7108τ`,
   `SubnetAlphaIn ≈ 3.47e18` → a very low alpha price).
-- **Ask:** tune the netuid-3 alpha pool / emission split so the subnet receives a non-zero per-block
-  emission; then a re-run should show the winning miner's alpha accrue.
+- **Fix applied:** the netuid-3 alpha pool / emission split was tuned so the subnet receives a
+  non-zero per-block emission; re-tune the same knobs when migrating to testnet/finney.
 
 ---
 
