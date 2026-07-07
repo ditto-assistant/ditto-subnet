@@ -419,12 +419,10 @@ class ValidatorWorker:
             result = read(self._config.netuid)
             if inspect.isawaitable(result):
                 result = await result
+            return None if result is None else int(result)
         except Exception as e:  # noqa: BLE001 - a flaky read must not wedge the loop
             logger.warning("%s errored (%s); using configured cadence", method_name, e)
             return None
-        if result is None:
-            return None
-        return int(result)
 
     @staticmethod
     async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:

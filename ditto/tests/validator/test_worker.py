@@ -622,3 +622,9 @@ class TestChainCadenceFloor:
         chain = MagicMock()
         chain.get_weights_rate_limit = AsyncMock(return_value=None)
         assert await self._worker(chain)._chain_min_epoch_seconds() == 0.0
+
+    async def test_non_numeric_read_falls_back_to_config(self) -> None:
+        # A sink returning garbage must fail open, not crash the loop at boot.
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=object())
+        assert await self._worker(chain)._chain_min_epoch_seconds() == 0.0
