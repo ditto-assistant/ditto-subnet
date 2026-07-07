@@ -94,9 +94,9 @@ tool catalog):
 | Memory-tool routing (subjects-first: `search_subjects` → `search_memories_in_subjects`; `fetch_memories` for full text) | ~ single-hop only | ✅ multi-hop trajectory cases |
 | Full-catalog tool selection (18 tools; web vs memory vs agent-job routing traps) | ~ 8/18 reachable | ✅ every tool a correct answer for some category |
 | Argument correctness | ❌ unscored | ✅ deterministic required/forbidden + value checks |
-| Tool-use *of results* (answer must incorporate what the tool returned) | ❌ tools are miner-local stubs | Phase C: validator-served tool execution (§7) |
+| Tool-use *of results* (answer must incorporate what the tool returned) | ❌ tools are miner-local stubs | ✅ Phase C: validator-served tool execution + result-usage scoring (§7) |
 | Latency / cost discipline | ~ reported, uncapped in score | ✅ reported + hard budget gates; stays **out of composite** for now |
-| Multi-graph isolation (KG scoping, no cross-user leakage) | ❌ | Phase C candidate (needs `user_id` on `RunRequest`) |
+| Multi-graph isolation (KG scoping, no cross-user leakage) | ❌ | ✅ Phase C: `user_id` on `RunRequest`, second-persona isolation cases (§7) |
 
 ---
 
@@ -415,9 +415,10 @@ staged (Tier C) seeding; dataset hashing/persistence; 50/50 composite
 rebalance; KOTH margin + score_tol retune from measured σ; starter-kit docs
 + local-eval parity release. *Retires W1, W2, W5, W6.*
 
-**Phase C — observed execution**: validator-served `tool_endpoint`, scored
-result-usage, `user_id`/multi-graph isolation cases. *Retires the last of W3
-and unlocks capability 13/11.*
+**Phase C — observed execution** (bench_version 4, **implemented**):
+validator-served `tool_endpoint` with observed-call scoring, result-usage
+scoring, `user_id`/multi-graph isolation cases. *Retires the last of W3 and
+unlocks capability 13/11.* (§11.4 has the per-WP status.)
 
 Phase A can land behind the current `run_size=full` profile while the §2.1
 full-scale E2E proof proceeds — it changes no wire shapes. Phase B is the real
@@ -552,12 +553,27 @@ the calibration harness continuously).
 | B8 | Mechanism retune from measured σ: `VALIDATOR_KOTH_MARGIN` ≥ 3σ/composite; platform `score_tol` to match; decide median-of-3 sub-seeds (§10.2) only if σ > 0.01 | `ditto-subnet` `ditto/validator/{config,weights}.py`; `ditto-platform` `ditto/api_server/scoring_gate.py:39` | §8 gate 1 met; ROAD-TO-PRODUCTION `B-KOTH` closeable |
 | B9 | Version-bump re-score sweep: validator re-evaluates eligible ledger agents (champion + tail minimum) when its bench_version exceeds the ledger's; fold ignores stale versions | `ditto-subnet` `ditto/validator/worker.py`, `weights.py` | Bump on a localnet ledger triggers re-eval then a clean fold |
 
-**Phase C — observed execution (bench_version 4)** — design §7; spec the mock
-tool server (per-case fixtures from the persona universe) before coding.
-WPs: C1 `tool_endpoint` mock server + observed-call scoring; C2 result-usage
-scoring (answers must incorporate returned content); C3 `user_id` on
-`RunRequest` + multi-graph isolation cases. Old harnesses: selection-only,
-capped ceiling — never an error.
+**Phase C — observed execution (bench_version 4)** — design §7. **Implemented on
+`dittobench-api` `nick/benchmark-v2`** (unit-tested; keyed `run_size` E2E
+pending):
+- **C1 ✅** — `internal/toolexec` mock tool endpoint (`RunRequest.tool_endpoint`)
+  serves deterministic seed-derived results AND records the authoritative
+  observed trajectory (`scorer.ScoreToolCaseObserved`); an observable case whose
+  harness ignores the endpoint is capped at `scorer.UnobservedCeiling` (0.5).
+  Memory tools are not served (would leak the answer).
+- **C2 ✅** — result-usage: `datagen` `*_result_usage` categories whose answer
+  requires a fabricated per-seed "needle" (`toolexec.NeedleFor`), scored
+  `0.4·trajectory + 0.6·answer-carries-needle` (deterministic, no judge).
+- **C3 ✅** — `internal/gen/isolation.go` seeds a second persona under a distinct
+  `user_id` (`RunRequest.user_id`) and adds cross-user isolation cases (both
+  directions); isolation cases force the graded judge. Reference harness
+  (`dittobench-starter-kit`) executes through `tool_endpoint` + honors `user_id`.
+  Telemetry (`ditto-subnet` `telemetry.py`): `observed_tool_cases`,
+  `capped_tool_cases`, `isolation_cases`.
+
+Old harnesses: selection-only, capped ceiling — never an error. **Remaining**:
+keyed `run_size` E2E against a real retrieval harness; local starter-kit
+`evaluate` parity for observed execution.
 
 ### 11.5 Verification commands
 

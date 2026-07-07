@@ -74,6 +74,12 @@ class ScoredAgentStat:
     bench_version: int = 0
     injection_attempts: int = 0
     paraphrase_fallbacks: int = 0
+    # Phase C observed execution (bench_version 4): how many tool cases ran under
+    # observed execution vs. were capped (harness didn't use the endpoint), and how
+    # many multi-graph isolation cases ran. Zero on pre-Phase-C scorers.
+    observed_tool_cases: int = 0
+    capped_tool_cases: int = 0
+    isolation_cases: int = 0
 
 
 @dataclass(frozen=True)
@@ -131,6 +137,9 @@ def scored_agent_stat(
         bench_version=_int(details.get("bench_version")),
         injection_attempts=_int(details.get("injection_attempts")),
         paraphrase_fallbacks=fallbacks,
+        observed_tool_cases=_int(details.get("observed_tool_cases")),
+        capped_tool_cases=_int(details.get("capped_tool_cases")),
+        isolation_cases=_int(details.get("isolation_cases")),
     )
 
 
@@ -226,6 +235,9 @@ class ValidatorTelemetry:
                 "bench_version",
                 "injection_attempts",
                 "paraphrase_fallbacks",
+                "observed_tool_cases",
+                "capped_tool_cases",
+                "isolation_cases",
             ]
         )
         cat_tbl = wandb.Table(columns=["miner", "agent", "category", "mean"])
@@ -243,6 +255,9 @@ class ValidatorTelemetry:
                 s.bench_version,
                 s.injection_attempts,
                 s.paraphrase_fallbacks,
+                s.observed_tool_cases,
+                s.capped_tool_cases,
+                s.isolation_cases,
             )
             for category, mean in sorted(s.per_category.items()):
                 cat_tbl.add_data(s.miner_hotkey, s.agent_id, category, mean)
