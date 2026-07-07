@@ -1,0 +1,202 @@
+# Road to Production — SN118
+
+**Snapshot: 2026-07-07.** The single, current checklist of everything remaining
+before a mainnet (finney) rollout. This is the *forward-looking* companion to
+`NEXT-STEPS.md` (which carries the full history + rationale); when the two
+disagree, this file is newer. Status verbs: **DONE** (built + verified) ·
+**CODE-DONE** (merged, not yet proven on a live network) · **PARTIAL** ·
+**TODO** · **DECISION** (needs a human call).
+
+---
+
+## 1. Where we are (verified)
+
+The whole pipeline now runs **unattended, non-mock, end to end on the dev
+localnet**:
+
+```
+miner upload → screener (auto build-gate) → validator sweep → dittobench
+  (docker build · seed · run · LLM judge) → signed composite → scores ledger
+  → KOTH+ATH weights → set_weights ACCEPTED on-chain
+```
+
+- **A1 first real E2E — PROVEN (2026-07-07)** at `run_size=small`: agent
+  `2b52b610` produced a real composite **0.522**, signed (sr25519) into the
+  `scores` ledger, and drove an on-chain `set_weights` accept. *Full-size proof
+  is in flight (Phase 2, see §2.1).*
+- **Screener** live on `ditto-validator-dev`; two live bugs fixed (20 MiB cap;
+  dummy LLM key so the harness boots `/health`).
+- **Validator chain-conformance** (version_key pin, `validator_permit`
+  self-check, tempo-decoupled sweep vs weight cadence) merged + deployed.
+- **dittobench** cost-capped (`LLM_MAX_TOKENS` / `LLM_RUN_TOKEN_BUDGET`),
+  tarball-sha cross-checked, error paths redacted.
+- **Anti-copy** two-channel fingerprint gate (lexical + AST) merged.
+- **Emissions** flow on the localnet; **W&B telemetry + public dashboard** live.
+- **Banned-hotkeys** table + enforcement live.
+
+Everything below is what stands between that and a real network.
+
+---
+
+## 2. Critical path to mainnet (ordered — each gates the next)
+
+1. **Full-scale E2E proof** (§2.1) — prove the real production `run_size=full`
+   path end to end, incl. the just-fixed `/seed` body limit.
+2. **Sandbox egress allowlist + isolation** (§3, C-ISO) — before running real
+   scoring at any volume; untrusted miner code currently has full network egress.
+3. **Pylon write credentials on testnet** (§5, E1) — the production weight path
+   is 100% delegated to Pylon and **unverified in-repo**; standing it up on
+   testnet is the first real test of normalization / u16 / commit-reveal /
+   version_key. *Highest-leverage single item.*
+4. **Testnet cutover under the subnet-owner UID** (§5, E2) — move off the dev
+   localnet; no separate validator registration/burn.
+5. **Commit-reveal weights** (§4, W-CR) — enable + implement the reveal step for
+   the target network.
+6. **Multi-validator consensus (k=3 + median-of-3)** (§3, F-MV) — decentralize
+   scoring off the single owner validator.
+7. **Mainnet (finney) cutover + real E2E on-chain** (§5, E4).
+
+Everything outside this spine (ops hardening, tuning, docs) parallelizes.
+
+---
+
+## 2.1 Phase 2 — full-scale E2E proof · IN PROGRESS
+
+**Goal:** one agent flows the entire path at `run_size=full` and lands a real
+composite + resolved on-chain weight.
+
+- [x] Root-cause + fix the full-run blocker: the reference harness used axum's
+      2 MB default body limit, so a full seed haystack (842 pairs / 2258
+      subjects) 413'd at the **seeding** stage — every starter-kit miner.
+      Fixed in `dittobench-starter-kit#9` (`DefaultBodyLimit::max(256 MiB)`).
+- [x] Validator reconverged to `run_size=full`; screener + conformance code live.
+- [x] Submission tarball built from the fixed kit + pre-flight passed.
+- [ ] **Miner submits** the tarball (funded coldkey + a hotkey **registered on
+      netuid 3**; the dev-API/localnet-chain wiring). Owner-run (key custody).
+- [ ] Agent auto-flows screener (compiles #9) → `evaluating` → full scoring →
+      real full composite in the ledger.
+- [ ] **Merge cleanup:** `dittobench-starter-kit#9` merged; its compile is
+      validated by the screener build at submit time.
+- **Acceptance:** a real `full` composite for a real harness in the ledger, and
+  the champion weight resolves to the miner's UID on-chain (needs the miner
+  registered — see the localnet gap below).
+
+**Localnet weight-resolution gap:** in the small proof the scored miner hotkey
+was *not* registered on netuid 3, so its 0.9 champion weight mapped to no UID and
+was skipped (only the validator's tail 0.1 landed). Register submitting miners on
+the localnet, or accept it as a localnet-only artifact that disappears on a real
+network where miners register to submit.
+
+---
+
+## 3. Robustness & anti-gaming (before real volume)
+
+| ID | Item | Status | Notes |
+|----|------|--------|-------|
+| C-ISO | **Sandbox egress allowlist + seccomp/gVisor** | **TODO 🔴** | dittobench builds + runs attacker-controlled tarballs on the host daemon with full egress. Needs an egress proxy/allowlist + deeper isolation. Cost cap bounds spend meanwhile but not exfiltration/abuse. **Top robustness gap.** |
+| C-REPLAY | **Signature replay-cache / nonce+expiry** | **PARTIAL** | Sigs bind the full payload (no cross-agent replay), but add a server-side nonce+expiry replay cache so a captured signed message can't be re-applied. |
+| C-TUNE | **Plagiarism threshold tuning + review automation** | **PARTIAL** | Two-channel fingerprint gate merged; lexical (0.75/0.95) + structural (0.85/0.98) tolerances are conservative guesses — tune against a real corpus. `ath_pending_review` drained by hand (`scripts/resolve_review.py`); build a reviewer workflow. |
+| C-RATE | **API abuse controls** | **TODO** | Global + per-hotkey rate limits, request-size limits, auth throttling on public platform endpoints (today: permit-check + signatures only). |
+| C-VERIFY | **Verifiable / replicable scoring** | **DECISION** | Scoring is trusted to the single dittobench operator today. Reproducible seeds are already in the ledger; decide whether/when to build toward replicable scoring (couples to multi-validator). Our call, our timeline. |
+| F-MV | **Multi-validator: k=3 sharded queue + median-of-3** | **TODO** | Lease-based assignment to 3 distinct validators, finalize the median of 3 signed scores, migrate stub→target endpoint names, onboard >1 validator. Decentralizes trust off the single owner validator. |
+| V-ROBUST | **Weight-setting robustness (residual)** | **PARTIAL** | version_key/permit/tempo done; still: read on-chain tempo/`weights_rate_limit` directly (today a hand-set proxy) + exponential backoff on rate-limit rejection; min-stake check alongside the permit. |
+
+---
+
+## 4. Bittensor-ecosystem conformance
+
+The production weight path **delegates all chain conformance to Pylon**
+(normalization, u16, UID resolution, commit-reveal, version_key) and does **not
+verify any of it in-repo** — so testnet is the first real test. The in-repo
+SDK/localnet path is a declared fallback.
+
+| ID | Item | Status | Notes |
+|----|------|--------|-------|
+| W-VK | version_key pin | **CODE-DONE** | SDK path stamps `version_key` (default `ditto.__spec_version__`, env `VALIDATOR_WEIGHT_VERSION_KEY`). Confirm the Pylon-derived version_key matches on testnet. |
+| W-PERMIT | validator_permit self-check | **CODE-DONE** | Skips (fail-open) when the hotkey lacks a permit. Add a min-stake arm. |
+| W-CADENCE | Tempo-decoupled cadence | **CODE-DONE** | `VALIDATOR_SWEEP_SECONDS` (120s) vs `VALIDATOR_EPOCH_SECONDS` (3600s). Align epoch to the target network's real tempo/rate-limit once set. |
+| W-CR | **Commit-reveal** | **TODO 🔴** | Off on dev netuid 3; production needs a first-class reveal step + the chain param enabled. Without it, weights are copy-able (front-runnable). |
+| W-PYLON | **Verify Pylon delegation on testnet** | **TODO 🔴** | Prove normalization/u16/`max_weight_limit`/commit-reveal/version_key actually do the right thing against a live chain via Pylon identity-write. Gated on E1. |
+| W-PARAMS | Chain hyperparameters | **TODO** | Set tempo, immunity period, weights-rate-limit, validator-permit threshold, registration burn + recycle for the target network. |
+
+---
+
+## 5. Network migration (testnet → finney)
+
+| ID | Item | Status | Notes |
+|----|------|--------|-------|
+| E1 | **Pylon identity (write) credentials** | **TODO 🔴 blocker** | Only a read token exists; the SDK path is the dev fallback. Provision `PYLON_IDENTITY_*` write creds so the production weight path works — and verify it (W-PYLON). |
+| E2 | Testnet permit + stake (owner UID) | **TODO** | Validation runs under the **subnet owner's UID** — no separate validator registration/burn. Stake the owner hotkey past the `validator_permit` threshold. |
+| E3 | Chain parameters on target network | **TODO** | See W-PARAMS + enable commit-reveal (W-CR); re-tune the alpha pool / `TaoWeight` per network. |
+| E4 | **Mainnet (finney) cutover** | **TODO** | Point platform + validator at finney SN118, flip `enable_validator`, run the deploy runbook, verify each hop, run a real E2E on mainnet. |
+| B-KOTH | Validate KOTH+ATH params vs real scores | **TODO** | Once real composites exist, sanity-check the 1% margin + 90/10 split against the observed score spread + between-seed variance; tune via `VALIDATOR_KOTH_*`. |
+| B-TAIL | Participation-tail economics | **DECISION** | Tail size, min-score floor, or pure winner-take-all at mainnet. |
+
+---
+
+## 6. Reliability & operations
+
+| ID | Item | Status | Notes |
+|----|------|--------|-------|
+| O-OBS | Observability (metrics + alerts) | **PARTIAL** | W&B + public dashboard live. Add validator metrics (sweep duration, put_weights success, ledger size), platform request/error/DB metrics, and real alerting (Datadog MCP available). |
+| O-DB | Production Postgres | **TODO** | Automated backups + PITR, migration runbook, connection pooling, retention/archival for `scores`/`agents`, a read replica for the public ledger read. |
+| O-HA | HA / DR / cost ceilings | **TODO** | Platform API redundancy, dittobench scaling, queue durability, DR/state-reconstruction, LLM/VM/storage budget ceilings + alerts. |
+| O-UPD | Deploy lifecycle / autoupdater | **PARTIAL** | Terraform/Ansible dev deploy done (gated; TF needs `-var=enable_validator=true` — a plain apply wants to destroy validator resources). No git-watching autoupdater; verify zero-downtime restart weight-set safety. |
+| O-SEC | Secrets management & rotation | **PARTIAL** | All secrets in GCP Secret Manager. Document + exercise a rotation runbook (hotkey mnemonic, OpenRouter key, GH token, W&B key). |
+| O-VAL | Third-party validator onboarding | **TODO** | Reproducible "run a validator" package: docs, hardware reqs, config, key custody (worker is already stateless HTTP + chain). |
+| Q-CI | E2E integration suite in CI (localnet) | **TODO** | Exercise the full pipeline behind the `e2e`/`localnet` markers, gated in CI. |
+| Q-CHAOS | Load & chaos testing | **TODO** | Many miners/validators; inject chain outages, dittobench failures, partial writes; confirm no lost-update / no zeroed-chain / graceful degradation. |
+
+---
+
+## 7. Screener & scoring follow-ups
+
+| ID | Item | Status | Notes |
+|----|------|--------|-------|
+| S-CONTRACT | Screener wire-model contract guard | **TODO** | Models mirrored by hand between platform + subnet; add a golden/contract test like the validator's. |
+| S-GATE | Deeper screener gate | **TODO** | `POST /seed`/`/run` smoke, a failure-reason persist, a stale-claim reset sweep, a distinct `screener_permit` vs the validator permit. |
+| S-RETRY | Bounded re-score on transient failure | **TODO** | A miner whose harness errors mid-scoring is re-swept and re-run (full datagen + LLM cost) every epoch. Add a retry bound / terminal `evaluation_failed` after N attempts so a broken agent doesn't burn tokens forever. *(Surfaced by the full-run seeding failure.)* |
+| M-CLI | Miner CLI completion | **PARTIAL** | Deferred upload validations (tar manifest, import allowlist, schema diff) pending the harness interface; miner UX (clearer errors, status/logs). |
+
+---
+
+## 8. Documentation & ecosystem
+
+- **Miner onboarding** — build-a-harness guide, submission contract, practice
+  endpoint, scoring rubric (0.6 tool / 0.4 memory), KOTH rules.
+- **Validator onboarding** — run-a-validator guide (O-VAL).
+- **Subnet landing / lightpaper** — what SN118 rewards and why (best-artifact
+  competition + KOTH+ATH anti-copy rationale).
+
+---
+
+## 9. Open decisions needing a human
+
+1. **Trust model** — owner-centralized scorer (today) vs permissionless-verifiable
+   scoring (C-VERIFY). Gates how much of F-MV / C-VERIFY to build now.
+2. **Participation-tail economics** (B-TAIL).
+3. **Registration / immunity / emission-split** target values per network.
+4. **Endpoint-name migration timing** (stub → target, tied to F-MV).
+5. **run_size for production** — `full` is the real config (slow, real LLM spend);
+   confirm before mainnet.
+
+---
+
+## 10. Definition of "production ready" (exit checklist)
+
+- [ ] Full-scale (`run_size=full`) E2E proven end to end (§2.1).
+- [ ] Sandbox egress-restricted + isolated (C-ISO).
+- [ ] Weights set via **verified** Pylon identity-write on testnet, with
+      commit-reveal on and version_key confirmed (W-CR, W-PYLON, E1).
+- [ ] ≥3 validators converging on the KOTH champion via median-of-3 (F-MV).
+- [ ] Observability + alerting + DB backups + a rotation runbook (O-*).
+- [ ] A green localnet E2E + chaos suite in CI (Q-CI, Q-CHAOS).
+- [ ] Miner + validator onboarding docs published (§8).
+- [ ] Mainnet cutover runbook executed with a real on-chain E2E (E4).
+
+---
+
+*Ownership: we own the whole stack — platform, screener, validator, miner CLI,
+dittobench scorer, chain/emissions config, and every economic knob. The §2
+sequence is how one team drives it to production; there are no external owners to
+hand a workstream to.*
