@@ -35,10 +35,20 @@ from ditto.validator.telemetry import (
     ValidatorTelemetry,
     scored_agent_stat,
 )
-from ditto.validator.weights import compute_weights
+from ditto.validator.weights import (
+    DEFAULT_BENCH_VERSION,
+    agents_needing_rescore,
+    compute_weights,
+)
 
 if TYPE_CHECKING:
-    from ditto.api_models.validator import ScoreReport, ValidatorQueueItem
+    from uuid import UUID
+
+    from ditto.api_models.validator import (
+        LedgerResponse,
+        ScoreReport,
+        ValidatorQueueItem,
+    )
     from ditto.chain import ChainClient
     from ditto.validator.config import ValidatorConfig
     from ditto.validator.dittobench import DittobenchClient
@@ -90,6 +100,12 @@ class ValidatorWorker:
             validator_hotkey=config.validator_hotkey,
             netuid=config.netuid,
         )
+        # The newest bench_version this validator's scorer has produced (learned
+        # from each scored run's details). Drives the §9 re-score sweep: ledger
+        # entries scored below this are stale and re-evaluated before the fold.
+        # Starts at the baseline so a just-booted validator that has not scored
+        # anything yet never mistakes the whole ledger for stale.
+        self._current_bench_version = DEFAULT_BENCH_VERSION
 
     async def run_once(self, *, set_weights: bool = True) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
@@ -147,6 +163,13 @@ class ValidatorWorker:
             logger.warning("ledger fetch failed; weights unchanged this epoch: %s", e)
             return _WeightOutcome()
 
+        # §9 version-bump re-score: if the ledger surfaces bench_version and its
+        # champion/tail were scored under an older version than this validator's
+        # scorer now produces, re-evaluate them so the fold compares like with
+        # like. Inert until the platform surfaces per-entry versions (compute the
+        # fold ignores stale versions regardless — see compute_weights).
+        ledger = await self._rescore_stale_champion_and_tail(ledger)
+
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
         weights = compute_weights(
             ledger.entries,
@@ -165,6 +188,57 @@ class ValidatorWorker:
         return _WeightOutcome(
             leaderboard=leaderboard, weights=weights, submitted=submitted
         )
+
+    async def _rescore_stale_champion_and_tail(
+        self, ledger: LedgerResponse
+    ) -> LedgerResponse:
+        """Re-evaluate the champion + participation-tail agents whose ledger
+        bench_version is older than this validator's current scorer version
+        (BENCHMARK-V2 §9 step 2), then re-fetch the ledger so the fold sees the
+        refreshed scores. A no-op — with no re-fetch — when the ledger carries no
+        per-entry version (the platform surfacing it is optional per §7) or when
+        nothing is stale. One agent failing to re-score is logged and skipped; it
+        must never stall weight-setting.
+        """
+        entries = ledger.entries
+        # Only act once the ledger actually distinguishes versions; otherwise we
+        # cannot tell stale from current and must not re-score on every epoch.
+        if not any(getattr(e, "bench_version", None) is not None for e in entries):
+            return ledger
+        stale = agents_needing_rescore(
+            entries,
+            current_version=self._current_bench_version,
+            margin=self._config.koth_margin,
+            tail_size=self._config.koth_tail_size,
+        )
+        if not stale:
+            return ledger
+        logger.info(
+            "bench_version %d re-score sweep: %d stale champion/tail agent(s)",
+            self._current_bench_version,
+            len(stale),
+        )
+        rescored = 0
+        for e in stale:
+            try:
+                await self._evaluate_and_submit(e.agent_id, e.sha256, e.miner_hotkey)
+                rescored += 1
+            except (PlatformError, DittobenchError) as exc:
+                logger.warning(
+                    "re-score of stale agent %s failed; leaving its ledger score: %s",
+                    e.agent_id,
+                    exc,
+                )
+        if rescored == 0:
+            return ledger
+        try:
+            return await self._platform.get_ledger()
+        except PlatformError as exc:
+            logger.warning(
+                "ledger re-fetch after re-score failed; folding pre-re-score: %s",
+                exc,
+            )
+            return ledger
 
     async def _validator_permitted(self) -> bool:
         """Best-effort self-check that our hotkey may set weights this epoch.
@@ -238,16 +312,25 @@ class ValidatorWorker:
         return False
 
     async def _score_agent(self, item: ValidatorQueueItem) -> ScoreReport:
-        artifact = await self._platform.get_artifact(item.agent_id)
-        # The queue item and the artifact response both carry the registered
-        # digest; a mismatch means the platform is inconsistent about which blob
-        # this agent is, so refuse to score rather than sign a score for an
-        # ambiguous artifact. (The scorer re-verifies the bytes too — this is the
-        # cheap cross-check before we even hand off the URL.)
-        if item.sha256.lower() != artifact.sha256.lower():
+        return await self._evaluate_and_submit(
+            item.agent_id, item.sha256, item.miner_hotkey
+        )
+
+    async def _evaluate_and_submit(
+        self, agent_id: UUID, expected_sha256: str, miner_hotkey: str
+    ) -> ScoreReport:
+        """Fetch an agent's artifact, score it, sign, and submit. Shared by the
+        queue sweep (:meth:`_score_agent`) and the §9 version-bump re-score."""
+        artifact = await self._platform.get_artifact(agent_id)
+        # The caller and the artifact response both carry the registered digest; a
+        # mismatch means the platform is inconsistent about which blob this agent
+        # is, so refuse to score rather than sign a score for an ambiguous
+        # artifact. (The scorer re-verifies the bytes too — this is the cheap
+        # cross-check before we even hand off the URL.)
+        if expected_sha256.lower() != artifact.sha256.lower():
             raise PlatformError(
-                f"sha256 mismatch for agent {item.agent_id}: "
-                f"queue={item.sha256} artifact={artifact.sha256}"
+                f"sha256 mismatch for agent {agent_id}: "
+                f"expected={expected_sha256} artifact={artifact.sha256}"
             )
         report = await self._dittobench.score_tarball(
             tarball_url=artifact.download_url, tarball_sha256=artifact.sha256
@@ -255,22 +338,27 @@ class ValidatorWorker:
         signature = sign_score(
             self._keypair,
             validator_hotkey=self._config.validator_hotkey,
-            agent_id=item.agent_id,
+            agent_id=agent_id,
             run_id=report.run_id,
             composite=report.composite,
             seed=report.seed,
         )
-        await self._platform.submit_score(
-            item.agent_id, signature=signature, report=report
-        )
+        await self._platform.submit_score(agent_id, signature=signature, report=report)
         details = getattr(self._dittobench, "last_details", None)
         bench_version = (
             details.get("bench_version") if isinstance(details, dict) else None
         )
+        # Learn the scorer's current bench_version so the re-score sweep knows
+        # which ledger entries are stale.
+        if (
+            isinstance(bench_version, int)
+            and bench_version > self._current_bench_version
+        ):
+            self._current_bench_version = bench_version
         logger.info(
             "scored agent %s (miner=%s composite=%.3f bench_version=%s)",
-            item.agent_id,
-            item.miner_hotkey,
+            agent_id,
+            miner_hotkey,
             report.composite,
             bench_version,
         )
