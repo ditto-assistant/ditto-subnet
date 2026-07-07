@@ -67,6 +67,12 @@ class ValidatorConfig:
     pylon_identity_token: str
     """Pylon identity token paired with ``pylon_identity_name``."""
 
+    pylon_open_access_token: str | None
+    """Pylon open-access (read) token. Optional, but without it the worker's
+    validator-permit self-check (a Pylon open-access ``get_recent_neurons`` read)
+    cannot run in identity mode and fails open. Set ``PYLON_OPEN_ACCESS_TOKEN`` so
+    the self-check works in production, where identity is the weight path."""
+
     subtensor_network: str
     """Subtensor network identifier for the substrate event reads.
 
@@ -105,6 +111,17 @@ class ValidatorConfig:
     koth_champion_share: float
     """Fraction of weight the ATH champion receives; the rest splits over the
     tail. ``0.9`` = 90% champion / 10% tail."""
+
+    koth_dethrone_z: float
+    """z-multiplier for the **statistical** half of the dethroning band (v3 #2,
+    ``docs/BENCHMARK-V3-IDEAS.md`` §2.2). A challenger must beat the incumbent by
+    more than ``max(koth_margin * incumbent, koth_dethrone_z * sqrt(se_c² +
+    se_champ²))`` — the larger of the flat relative margin and the combined
+    measurement uncertainty, when the ledger surfaces a per-entry
+    ``composite_stderr``. A **consensus knob** (every validator must agree) like
+    ``koth_margin``. Inert until the platform surfaces stderr — with no stderr the
+    band is the flat relative margin, byte-identical to today. ``1.64`` ≈ one-sided
+    95%; ``0`` disables the statistical half."""
 
     min_stake_tao: float
     """Minimum stake (TAO) this validator expects on its own hotkey before it
@@ -207,10 +224,22 @@ def parse_validator_config_from_env() -> ValidatorConfig:
 
     # KOTH+ATH mechanism knobs. Every validator must agree on these or Yuma
     # consensus clips the deviator, so they are env-tunable but default to the
-    # team-locked values (90/10 split, 1% margin).
-    koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.01")
+    # team-locked values (90/10 split).
+    #
+    # Margin retune for DittoBench v2 / bench_version 3 (BENCHMARK-V2 §6.2, B8):
+    # the dethrone margin must exceed the between-seed composite noise so a
+    # verbatim copy cannot win a lucky seed. v1's 1% margin assumed a small σ it
+    # never had. v2 targets between-seed σ ≤ 0.01 composite (§8 gate 1) and sets
+    # the margin to ≥ 3σ/composite: at composite ~0.6, 3·0.01/0.6 = 5%. The
+    # offline calibrator (dittobench-api cmd/benchcal) reports a hermetic
+    # composite σ ≈ 0.017 as a weak-harness upper bound; the champion-region σ
+    # from the hosted 30-seed frozen-starter-kit run MUST reconfirm ≤ 0.01 before
+    # mainnet — if it is higher, raise this margin (and adopt median-of-3
+    # sub-seeds, §10.2) and re-match the platform score_tol.
+    koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.05")
     koth_tail_size = _parse_int("VALIDATOR_KOTH_TAIL_SIZE", "4")
     koth_champion_share = _parse_float("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")
+    koth_dethrone_z = _parse_float("VALIDATOR_KOTH_DETHRONE_Z", "1.64")
     # ``math.isfinite`` rejects NaN/Inf, which slip past a bare ``<= 0`` (e.g.
     # ``nan <= 0`` is False) and would silently disable the ATH gate — a
     # consensus-divergence footgun since the fold multiplies by ``1 + margin``.
@@ -226,6 +255,13 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         raise ValidatorConfigError(
             "VALIDATOR_KOTH_CHAMPION_SHARE must be a finite number in (0, 1], "
             f"got {koth_champion_share}"
+        )
+    # z >= 0; 0 disables the statistical band (pure relative margin). NaN/Inf
+    # would poison the deterministic fold, so reject them (consensus footgun).
+    if not math.isfinite(koth_dethrone_z) or koth_dethrone_z < 0:
+        raise ValidatorConfigError(
+            "VALIDATOR_KOTH_DETHRONE_Z must be a finite number >= 0, "
+            f"got {koth_dethrone_z}"
         )
     min_stake_tao = _parse_float("VALIDATOR_MIN_STAKE_TAO", "0")
     if not math.isfinite(min_stake_tao) or min_stake_tao < 0:
@@ -252,6 +288,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_url=os.environ.get("PYLON_URL", "http://localhost:8001"),
         pylon_identity_name=pylon_identity_name,
         pylon_identity_token=pylon_identity_token,
+        pylon_open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         use_sdk_weights=use_sdk_weights,
         weight_version_key=_parse_int(
@@ -260,6 +297,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_margin=koth_margin,
         koth_tail_size=koth_tail_size,
         koth_champion_share=koth_champion_share,
+        koth_dethrone_z=koth_dethrone_z,
         min_stake_tao=min_stake_tao,
         sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),

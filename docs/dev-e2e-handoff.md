@@ -25,10 +25,13 @@ against the dev local chain, and what still needs finishing. Assumes `ditto-subn
   (from the VM): `https://polkadot.js.org/apps/?rpc=ws://127.0.0.1:9944`.
 
 ## Status
-- **Intake half works end-to-end:** `ditto upload` → eval fee paid on the dev chain → on-chain
-  payment verified → agent stored (DB + MinIO), verified on netuid 3.
-- **Validator → weights → emissions: not yet** — blocked on the localnet's disabled staking (the
-  validator can't get a vpermit). See "What's left".
+- **FULL loop works end-to-end on the dev chain (2026-07-07).** `ditto upload` → eval fee paid →
+  on-chain payment verified → agent stored → manual promotion → validator **signed score** in the
+  ledger → **KOTH `put_weights` via the Pylon identity write path** → `Weights[3][4]=[(6,65535)]`
+  on chain. Staking is **already enabled** here (validator UID 4 has `validator_permit=true`,
+  stake ~22001τ), so the old vpermit blocker is resolved. Proven with the **mock scorer**
+  (`VALIDATOR_DITTOBENCH_MOCK=1`); real DittoBench scoring needs the OpenRouter key.
+- The only manual step left in the loop is **screener promotion** (`uploaded → evaluating`).
 
 ## Tooling (Apple Silicon)
 - **colima** + the **docker compose v2 plugin** (`~/.docker/cli-plugins/docker-compose`) provide the
@@ -94,15 +97,21 @@ VALIDATOR_PLATFORM_API_URL=http://localhost:8000 NETUID=3 VALIDATOR_DITTOBENCH_M
 ```
 One sweep: pull the queue → mock-score → submit_score → set weights.
 
-## What's left (validator → weights → emissions)
-1. **Staking is disabled** on this localnet (`add_stake` → `SubtokenDisabled`), so the validator has
-   `vpermit=False, stake=0` and `set_weights` returns `(False, None)`. **Gate to emissions:** use
-   **Alice/sudo** to enable subtoken → stake the validator → wait a tempo for the vpermit +
-   `weights_rate_limit` (=100 blocks).
-2. **No screener + a stubbed queue.** Confirm `/validator/queue` returns agents in `evaluating`
-   (it was stubbed in early WIP); de-stub it if needed (query `evaluating` agents + presigned
-   artifact URL), and transition the uploaded agent `uploaded → evaluating` manually until a screener
-   exists.
-3. **Worker weight step.** The worker calls `ChainClient.put_weights` (Pylon identity). For the
-   localnet, use the **bittensor-SDK fallback** (`Subtensor.set_weights`) to avoid Pylon
-   write-identity setup; the miner UID comes from Pylon (not `btcli metagraph`).
+## Weight path (validator → weights → emissions) — RESOLVED
+1. ~~**Staking is disabled**~~ — **already enabled** on this localnet. Validator UID 4
+   (`5EexQS8…`) has `validator_permit=true`, stake ~22001τ, so `put_weights` applies. Pylon
+   applies after the `weights_rate_limit` (~a few blocks; logged "still got N blocks left to go" →
+   "apply_weights finished successfully").
+2. **Screener is still manual.** `/validator/queue` returns agents in `evaluating`; promote by hand
+   (`UPDATE agents SET status='evaluating' WHERE agent_id='…'`) until a screener worker exists.
+3. **Weight path = Pylon identity (write), validated.** Set `PYLON_IDENTITY_NAME=validator` +
+   `PYLON_IDENTITY_TOKEN=<token>` (+ keep `PYLON_OPEN_ACCESS_TOKEN`) and leave
+   `VALIDATOR_USE_SDK_WEIGHTS` **unset**. Stand the write identity up on the platform's Pylon
+   container (`PYLON_IDENTITIES` + `PYLON_ID_VALIDATOR_*` + a read-only wallet mount) — see
+   [`CREDENTIALED-HANDOFF.md`](CREDENTIALED-HANDOFF.md) Hop 5/E1 for the full recipe. The SDK
+   fallback (`VALIDATOR_USE_SDK_WEIGHTS=1`) remains available but is no longer needed here.
+
+## What's left
+- **Real DittoBench scoring** in place of the mock: set `VALIDATOR_OPENROUTER_KEY` +
+  `VALIDATOR_DITTOBENCH_API_URL` and flip `VALIDATOR_DITTOBENCH_MOCK` off (Hop 1/2).
+- **A screener worker** to automate `uploaded → evaluating`.

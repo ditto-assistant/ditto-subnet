@@ -90,6 +90,10 @@ async def _amain() -> int:
                     netuid=config.netuid,
                     identity_name=config.pylon_identity_name,
                     identity_token=config.pylon_identity_token,
+                    # Carry the open-access read token so the worker's
+                    # validator-permit self-check (an open-access neurons read)
+                    # runs in identity mode instead of failing open.
+                    open_access_token=config.pylon_open_access_token,
                     subtensor_network=config.subtensor_network,
                 )
                 logger.info("weight mode: Pylon identity (put_weights)")

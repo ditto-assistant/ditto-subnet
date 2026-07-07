@@ -380,6 +380,18 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "details": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "generated_at": {
         "format": "date-time",
         "type": "string"
@@ -540,6 +552,18 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "type": "number"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "generated_at": {
             "format": "date-time",

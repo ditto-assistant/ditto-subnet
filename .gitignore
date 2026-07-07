@@ -33,3 +33,6 @@ docker-compose.*.override.yml
 
 # Local credential drops — never commit
 docs/wandb-keys.yml
+
+# Local validator env (holds OpenRouter key + Pylon tokens)
+validator.env
