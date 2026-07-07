@@ -5,8 +5,10 @@ engineering alike. Rationale in [`ROAD-TO-PRODUCTION.md`](ROAD-TO-PRODUCTION.md)
 [`NEXT-STEPS.md`](NEXT-STEPS.md).
 
 > **Infra & secrets → Nick.** Nick has GCP access and applies all infra/secret
-> actions (GCP Secret Manager + re-converge). **Any infra action below can be done
-> first thing tomorrow (2026-07-07).** Items needing it are marked **→ Nick**.
+> actions (GCP Secret Manager + re-converge), doable **first thing tomorrow
+> (2026-07-07)**. Nick can **generate every credential except the Pylon write
+> creds** — the **one external dependency** (from the Pylon team). Gated items
+> marked **→ Nick**.
 
 Keys: ✅ done · 🔶 code-done, needs a live network/infra · ⬜ to do · ◆ decision.
 
@@ -30,12 +32,15 @@ registration/burn).
 
 ---
 
-## 1. Credentials (all → Nick for GCP Secret Manager)
+## 1. Credentials
+
+Nick generates + applies all of these → GCP Secret Manager, **except Pylon write
+creds** (the lone external dependency).
 
 | Secret | Env | Unblocks | Today |
 | --- | --- | --- | --- |
 | **Owner hotkey** staked to the permit threshold (owner UID, no burn) | `VALIDATOR_MNEMONIC` / wallet | Weight-setting | localnet |
-| **Pylon write creds** | `PYLON_IDENTITY_NAME/TOKEN` | Prod `put_weights` | read-only only; **prod path unverified** |
+| **Pylon write creds** 🔴 *only external dep* | `PYLON_IDENTITY_NAME/TOKEN` | Prod `put_weights` | read-only only; **prod path unverified** |
 | **OpenRouter key** + account spend cap | `VALIDATOR_OPENROUTER_KEY` | `run_size` scoring | dev key; needs the cap |
 | **GitHub read token** | BuildKit `gh_token` | private-dep builds | set |
 | **Prod Postgres** | `POSTGRES_*` | platform DB | dev only |
@@ -142,8 +147,9 @@ CI: platform/subnet full-repo `mypy` (py3.11+3.12); dittobench-api `go build/vet
 - [ ] Miner + validator onboarding docs
 - [ ] Finney cutover with a real on-chain full E2E (Hop 7)
 
-**Hard blockers → Nick (GCP Secret Manager):** Pylon write creds · owner hotkey
-staked · OpenRouter key + cost cap · prod Postgres + S3/MinIO.
+**Only external blocker: Pylon write creds** (from the Pylon team). Nick generates
+everything else — owner hotkey staked · OpenRouter key + cap · prod Postgres ·
+S3/MinIO — first thing 2026-07-07.
 
 ---
 
