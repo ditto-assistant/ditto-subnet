@@ -122,11 +122,18 @@ class TestAggregateReduction:
             "bench_version": 2,
             "injection_attempts": 3,
             "paraphrase": {"attempted": 40, "applied": 35, "fallback": 5},
+            # Phase C observed-execution telemetry.
+            "observed_tool_cases": 12,
+            "capped_tool_cases": 2,
+            "isolation_cases": 4,
         }
         stat = scored_agent_stat("5Miner", _report(), details)
         assert stat.bench_version == 2
         assert stat.injection_attempts == 3
         assert stat.paraphrase_fallbacks == 5
+        assert stat.observed_tool_cases == 12
+        assert stat.capped_tool_cases == 2
+        assert stat.isolation_cases == 4
 
     def test_scored_agent_stat_defaults_without_details(self) -> None:
         # Older scorers (no details) default to zeros, never crash.
@@ -134,6 +141,9 @@ class TestAggregateReduction:
         assert stat.bench_version == 0
         assert stat.injection_attempts == 0
         assert stat.paraphrase_fallbacks == 0
+        assert stat.observed_tool_cases == 0
+        assert stat.capped_tool_cases == 0
+        assert stat.isolation_cases == 0
         # Malformed details are coerced, not fatal.
         weird = scored_agent_stat("5Miner", _report(), {"bench_version": "oops"})
         assert weird.bench_version == 0
