@@ -247,14 +247,16 @@ Cross-repo footprint:
 
 Each phase is independently shippable and calibrated before the next.
 
-- S0 — foundation (in progress).
+- S0 — foundation (done).
   - Done. S0.1 this design doc.
-  - Partial. S0.2 normalized-source hash (L3a): `compute_normalized_source_hash`
-    added in `ditto-platform/api_server/fingerprint.py` (comment/whitespace/file-
-    order canonicalization, string- and lifetime-safe, 8 tests). Remaining: the
-    gate wiring, i.e. an `agents.normalized_source_hash` column, its migration,
-    and a `scoring_gate` rule. The auto-reject tier is deferred to S4; until then
-    the rule holds like the exact-`sha256` rule.
+  - Done. S0.2 normalized-source hash (L3a). `compute_normalized_source_hash` in
+    `ditto-platform/api_server/fingerprint.py` (comment/whitespace/file-order
+    canonicalization, string- and lifetime-safe, 8 tests) is wired into the gate:
+    an `agents.normalized_source_hash` column and migration, computed at upload and
+    surfaced on the eligible ledger, plus a `scoring_gate` rule that holds an
+    exact-repack equality match in `ath_pending_review` like the exact-`sha256`
+    rule (no score-proximity requirement). The auto-reject tier is deferred to S4;
+    until then the rule holds for human review.
   - Done. S0.3 `clonecal` eval harness and labeled corpus:
     `ditto-platform/anticopy/clonecal.py` provides the obfuscation ladder (tier 1
     cosmetic, tier 2 rename), pluggable `Signal`s (L3a and L1 wired; L2/L3c/L4
