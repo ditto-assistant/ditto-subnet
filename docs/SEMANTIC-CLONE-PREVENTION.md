@@ -268,15 +268,22 @@ time a real clone slips through, add its transform to the ladder and re-calibrat
 
 Each phase is independently shippable and calibrated before the next.
 
-- **S0 — foundation (START NOW).**
-  - S0.1 this design doc.
-  - S0.2 **normalized-source hash (L3a)** in `fingerprint.py` + gate wiring as an
-    exact-repack auto-reject; tests. *(Small, safe, immediate.)*
-  - S0.3 **`clonecal` eval harness + labeled corpus** — the obfuscation ladder
-    generator over the reference harness + the pairwise-similarity scorer +
-    per-signal ROC. *Calibrates everything downstream; nothing else ships un-cal.*
-  - **Acceptance:** L3a catches ladder tier 1 repacks with zero FP on
-    independents; `clonecal` reproduces the current L1/L2 tolerances' ROC.
+- **S0 — foundation (IN PROGRESS).**
+  - ✅ S0.1 this design doc.
+  - 🟡 S0.2 **normalized-source hash (L3a)** — `compute_normalized_source_hash`
+    landed in `ditto-platform/api_server/fingerprint.py` (comment/whitespace/file-
+    order canonicalization, string+lifetime safe, 8 tests). **Still to do:** the
+    gate wiring (an `agents.normalized_source_hash` column + migration + a
+    `scoring_gate` rule; auto-reject tier deferred to S4 — for now it holds like
+    the exact-`sha256` rule).
+  - ✅ S0.3 **`clonecal` eval harness + labeled corpus** —
+    `ditto-platform/anticopy/clonecal.py`: obfuscation ladder (tier 1 cosmetic,
+    tier 2 rename), pluggable `Signal`s (L3a + L1 wired; L2/L3c/L4 append later),
+    labeled corpus builder, precision/recall sweep selecting **max recall s.t. a
+    precision floor**. Demo corpus: L3a precision 1.000 / recall 0.500. 10 tests.
+  - **Acceptance:** L3a catches ladder tier-1 repacks with zero FP on independents
+    ✅ (demo); next, seed `clonecal` with real reference-harness crates + wire L2
+    so it reproduces the current L1/L2 tolerances' ROC.
 - **S1 — strategy-static (L3b).** Prompt/config/dependency extraction +
   fingerprint, wired as a review-band signal. **Acceptance:** catches tier-4
   prompt/config theft; FP within budget on convergent independents.
