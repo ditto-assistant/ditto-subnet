@@ -267,9 +267,16 @@ Each phase is independently shippable and calibrated before the next.
     (met on the demo corpus). Next: seed `clonecal` with real reference-harness
     crates and wire the L2 signal so it reproduces the current L1/L2 tolerances'
     ROC.
-- S1 — strategy-static (L3b). Prompt/config/dependency extraction and
-  fingerprint, wired as a review-band signal. Acceptance: detects tier-4
-  prompt/config theft; FP within budget on convergent independents.
+- S1 — strategy-static (L3b), in progress.
+  - Done. S1 #1 prompt fingerprint primitive. `compute_prompt_fingerprint` in
+    `ditto-platform/api_server/fingerprint.py` extracts string literals (ordinary
+    and Rust raw), keeps prompt-length ones (≥ 8 words), word-shingles them (5-word
+    windows), and returns a bottom-k sketch compared by `content_similarity`
+    (version `"p1"`, isolated from the lexical/structural channels). Not yet gated.
+  - Remaining: config/dependency extraction; a `clonecal` signal + corpus that
+    exercises prompt reuse under code renaming (S1 #2); gate fusion once
+    calibrated (S1 #3). Acceptance: detects tier-4 prompt/config theft; FP within
+    budget on convergent independents under the ≥2-signal fusion rule.
 - S2 — code-embedding (L3c). Code-embedding similarity as a review-band signal;
   select and host the embedding model. Acceptance: raises tier-3 recall without
   breaching the FP budget under the ≥2-signal fusion rule.
