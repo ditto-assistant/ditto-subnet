@@ -99,7 +99,7 @@ network where miners register to submit.
 | C-RATE | **API abuse controls** | **TODO** | Global + per-hotkey rate limits, request-size limits, auth throttling on public platform endpoints (today: permit-check + signatures only). |
 | C-VERIFY | **Verifiable / replicable scoring** | **DECISION** | Scoring is trusted to the single dittobench operator today. Reproducible seeds are already in the ledger; decide whether/when to build toward replicable scoring (couples to multi-validator). Our call, our timeline. |
 | F-MV | **Multi-validator: k=3 sharded queue + median-of-3** | **TODO** | Lease-based assignment to 3 distinct validators, finalize the median of 3 signed scores, migrate stub→target endpoint names, onboard >1 validator. Decentralizes trust off the single owner validator. |
-| V-ROBUST | **Weight-setting robustness (residual)** | **PARTIAL** | version_key/permit/tempo done; still: read on-chain tempo/`weights_rate_limit` directly (today a hand-set proxy) + exponential backoff on rate-limit rejection; min-stake check alongside the permit. |
+| V-ROBUST | **Weight-setting robustness (residual)** | **CODE-DONE** | version_key/permit/tempo done. Residuals merged in [#39](https://github.com/ditto-assistant/ditto-subnet/pull/39): on-chain tempo/`weights_rate_limit` read stretches the effective epoch, exponential backoff (block-time base on rate-limit rejection), `VALIDATOR_MIN_STAKE_TAO` self-check arm. Unproven on a live network (testnet, with W-PYLON). |
 
 ---
 
@@ -113,8 +113,8 @@ SDK/localnet path is a declared fallback.
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
 | W-VK | version_key pin | **CODE-DONE** | SDK path stamps `version_key` (default `ditto.__spec_version__`, env `VALIDATOR_WEIGHT_VERSION_KEY`). Confirm the Pylon-derived version_key matches on testnet. |
-| W-PERMIT | validator_permit self-check | **CODE-DONE** | Skips (fail-open) when the hotkey lacks a permit. Add a min-stake arm. |
-| W-CADENCE | Tempo-decoupled cadence | **CODE-DONE** | `VALIDATOR_SWEEP_SECONDS` (120s) vs `VALIDATOR_EPOCH_SECONDS` (3600s). Align epoch to the target network's real tempo/rate-limit once set. |
+| W-PERMIT | validator_permit self-check | **CODE-DONE** | Skips (fail-open) when the hotkey lacks a permit. Min-stake arm (`VALIDATOR_MIN_STAKE_TAO`) added in PR #39. |
+| W-CADENCE | Tempo-decoupled cadence | **CODE-DONE** | `VALIDATOR_SWEEP_SECONDS` (120s) vs `VALIDATOR_EPOCH_SECONDS` (3600s). PR #39 additionally reads the target network's on-chain `weights_rate_limit` and stretches the effective epoch to it. |
 | W-CR | **Commit-reveal** | **TODO 🔴** | Off on dev netuid 3; production needs a first-class reveal step + the chain param enabled. Without it, weights are copy-able (front-runnable). |
 | W-PYLON | **Verify Pylon delegation on testnet** | **TODO 🔴** | Prove normalization/u16/`max_weight_limit`/commit-reveal/version_key actually do the right thing against a live chain via Pylon identity-write. Gated on E1. |
 | W-PARAMS | Chain hyperparameters | **TODO** | Set tempo, immunity period, weights-rate-limit, validator-permit threshold, registration burn + recycle for the target network. |
@@ -143,7 +143,7 @@ SDK/localnet path is a declared fallback.
 | O-HA | HA / DR / cost ceilings | **TODO** | Platform API redundancy, dittobench scaling, queue durability, DR/state-reconstruction, LLM/VM/storage budget ceilings + alerts. |
 | O-UPD | Deploy lifecycle / autoupdater | **PARTIAL** | Terraform/Ansible dev deploy done (gated; TF needs `-var=enable_validator=true` — a plain apply wants to destroy validator resources). No git-watching autoupdater; verify zero-downtime restart weight-set safety. |
 | O-SEC | Secrets management & rotation | **PARTIAL** | All secrets in GCP Secret Manager. Document + exercise a rotation runbook (hotkey mnemonic, OpenRouter key, GH token, W&B key). |
-| O-VAL | Third-party validator onboarding | **TODO** | Reproducible "run a validator" package: docs, hardware reqs, config, key custody (worker is already stateless HTTP + chain). |
+| O-VAL | Third-party validator onboarding | **PARTIAL** | Run-a-validator guide drafted (`docs/VALIDATOR-ONBOARDING.md`): requirements, full env reference, key custody, verification. Still needed: the k=3 "onboard to the queue" flow (gated on F-MV) + publish. |
 | Q-CI | E2E integration suite in CI (localnet) | **TODO** | Exercise the full pipeline behind the `e2e`/`localnet` markers, gated in CI. |
 | Q-CHAOS | Load & chaos testing | **TODO** | Many miners/validators; inject chain outages, dittobench failures, partial writes; confirm no lost-update / no zeroed-chain / graceful degradation. |
 
@@ -153,18 +153,20 @@ SDK/localnet path is a declared fallback.
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| S-CONTRACT | Screener wire-model contract guard | **TODO** | Models mirrored by hand between platform + subnet; add a golden/contract test like the validator's. |
+| S-CONTRACT | Screener wire-model contract guard | **DONE** | Golden generated from the platform checkout + drift test + `scripts/gen_screener_contract.py`, mirroring the validator guard ([#40](https://github.com/ditto-assistant/ditto-subnet/pull/40)). |
 | S-GATE | Deeper screener gate | **TODO** | `POST /seed`/`/run` smoke, a failure-reason persist, a stale-claim reset sweep, a distinct `screener_permit` vs the validator permit. |
 | S-RETRY | Bounded re-score on transient failure | **TODO** | A miner whose harness errors mid-scoring is re-swept and re-run (full datagen + LLM cost) every epoch. Add a retry bound / terminal `evaluation_failed` after N attempts so a broken agent doesn't burn tokens forever. *(Surfaced by the full-run seeding failure.)* |
-| M-CLI | Miner CLI completion | **PARTIAL** | Deferred upload validations (tar manifest, import allowlist, schema diff) pending the harness interface; miner UX (clearer errors, status/logs). |
+| M-CLI | Miner CLI completion | **PARTIAL** | Deferred upload validations (tar manifest, import allowlist, schema diff) pending the harness interface; miner UX (clearer errors, status/logs). Stale 200 MB local cap (vs the platform's 20 MiB) fixed in [#41](https://github.com/ditto-assistant/ditto-subnet/pull/41) — `ditto verify` no longer passes tarballs the server rejects. |
 
 ---
 
 ## 8. Documentation & ecosystem
 
-- **Miner onboarding** — build-a-harness guide, submission contract, practice
-  endpoint, scoring rubric (0.6 tool / 0.4 memory), KOTH rules.
-- **Validator onboarding** — run-a-validator guide (O-VAL).
+- **Miner onboarding** — **drafted** (`docs/MINER-FAQ.md`): full pipeline
+  walkthrough, submission contract, scoring rubric (0.6 tool / 0.4 memory),
+  KOTH rules, anti-copy, transparency/verification. Still needed: a
+  build-a-harness guide (with the starter kit) + a practice endpoint + publish.
+- **Validator onboarding** — **drafted** (`docs/VALIDATOR-ONBOARDING.md`, O-VAL).
 - **Subnet landing / lightpaper** — what SN118 rewards and why (best-artifact
   competition + KOTH+ATH anti-copy rationale).
 
