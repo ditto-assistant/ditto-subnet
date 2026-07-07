@@ -38,6 +38,11 @@ class DittobenchClient:
     def __init__(self, config: ValidatorConfig, client: httpx.AsyncClient) -> None:
         self._config = config
         self._client = client
+        # Raw, opaque ``details`` blob from the most recent scored run (bench
+        # version, paraphrase/injection telemetry, token totals). Not part of the
+        # signed/DB ScoreReport contract — captured here only so the validator can
+        # surface it in aggregate W&B telemetry (A10, BENCHMARK-V2 §9).
+        self.last_details: dict[str, object] = {}
 
     async def score_tarball(
         self, *, tarball_url: str, tarball_sha256: str | None = None
@@ -54,6 +59,7 @@ class DittobenchClient:
         swapped blob or a URL-basename tag collision could be scored.
         """
         if self._config.dittobench_mock:
+            self.last_details = {}
             return self._mock_report()
         run_id = await self._submit(
             tarball_url=tarball_url, tarball_sha256=tarball_sha256
@@ -118,6 +124,12 @@ class DittobenchClient:
             data = resp.json()
             status = data.get("status")
             if status == _DONE:
+                rep = data.get("report")
+                self.last_details = (
+                    rep["details"]
+                    if isinstance(rep, dict) and isinstance(rep.get("details"), dict)
+                    else {}
+                )
                 return self._parse_report(data)
             if status == _FAILED:
                 raise DittobenchError(

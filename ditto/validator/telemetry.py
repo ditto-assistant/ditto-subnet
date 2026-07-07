@@ -69,6 +69,11 @@ class ScoredAgentStat:
     median_ms: int
     seed: int
     run_id: str
+    # Aggregate telemetry from the scorer's opaque ``details`` blob (A10). Zero
+    # when the scorer predates the field (older bench versions).
+    bench_version: int = 0
+    injection_attempts: int = 0
+    paraphrase_fallbacks: int = 0
 
 
 @dataclass(frozen=True)
@@ -95,8 +100,23 @@ def per_category_means(report: ScoreReport) -> dict[str, float]:
     return {cat: sums[cat] / counts[cat] for cat in sums if counts[cat]}
 
 
-def scored_agent_stat(miner_hotkey: str, report: ScoreReport) -> ScoredAgentStat:
-    """Reduce a full ScoreReport to the aggregate ScoredAgentStat we publish."""
+def _int(value: object) -> int:
+    """Coerce a details value to a non-negative int (0 on anything unexpected)."""
+    try:
+        n = int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return 0
+    return n if n >= 0 else 0
+
+
+def scored_agent_stat(
+    miner_hotkey: str, report: ScoreReport, details: dict[str, object] | None = None
+) -> ScoredAgentStat:
+    """Reduce a full ScoreReport (+ the scorer's opaque details) to the aggregate
+    ScoredAgentStat we publish."""
+    details = details or {}
+    para = details.get("paraphrase")
+    fallbacks = _int(para.get("fallback")) if isinstance(para, dict) else 0
     return ScoredAgentStat(
         miner_hotkey=miner_hotkey,
         agent_id=report.run_id,  # opaque handle; the real agent_id stays private
@@ -108,6 +128,9 @@ def scored_agent_stat(miner_hotkey: str, report: ScoreReport) -> ScoredAgentStat
         median_ms=report.median_ms,
         seed=report.seed,
         run_id=report.run_id,
+        bench_version=_int(details.get("bench_version")),
+        injection_attempts=_int(details.get("injection_attempts")),
+        paraphrase_fallbacks=fallbacks,
     )
 
 
@@ -200,6 +223,9 @@ class ValidatorTelemetry:
                 "median_ms",
                 "seed",
                 "run_id",
+                "bench_version",
+                "injection_attempts",
+                "paraphrase_fallbacks",
             ]
         )
         cat_tbl = wandb.Table(columns=["miner", "agent", "category", "mean"])
@@ -214,6 +240,9 @@ class ValidatorTelemetry:
                 s.median_ms,
                 s.seed,
                 s.run_id,
+                s.bench_version,
+                s.injection_attempts,
+                s.paraphrase_fallbacks,
             )
             for category, mean in sorted(s.per_category.items()):
                 cat_tbl.add_data(s.miner_hotkey, s.agent_id, category, mean)

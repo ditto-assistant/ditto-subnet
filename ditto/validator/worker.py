@@ -109,7 +109,10 @@ class ValidatorWorker:
         for item in queue.items:
             try:
                 report = await self._score_agent(item)
-                scored.append(scored_agent_stat(item.miner_hotkey, report))
+                details = getattr(self._dittobench, "last_details", None)
+                if not isinstance(details, dict):
+                    details = {}
+                scored.append(scored_agent_stat(item.miner_hotkey, report, details))
             except (DittobenchError, PlatformError) as e:
                 logger.warning("scoring agent %s failed: %s", item.agent_id, e)
                 failed += 1
@@ -260,11 +263,16 @@ class ValidatorWorker:
         await self._platform.submit_score(
             item.agent_id, signature=signature, report=report
         )
+        details = getattr(self._dittobench, "last_details", None)
+        bench_version = (
+            details.get("bench_version") if isinstance(details, dict) else None
+        )
         logger.info(
-            "scored agent %s (miner=%s composite=%.3f)",
+            "scored agent %s (miner=%s composite=%.3f bench_version=%s)",
             item.agent_id,
             item.miner_hotkey,
             report.composite,
+            bench_version,
         )
         return report
 

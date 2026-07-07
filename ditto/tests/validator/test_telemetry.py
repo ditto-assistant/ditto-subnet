@@ -116,6 +116,28 @@ class TestAggregateReduction:
         # No field carries per-case expected/called (the answer key).
         assert not hasattr(stat, "per_case")
 
+    def test_scored_agent_stat_carries_details_telemetry(self) -> None:
+        # The scorer's opaque details blob (A10) surfaces as aggregate scalars.
+        details = {
+            "bench_version": 2,
+            "injection_attempts": 3,
+            "paraphrase": {"attempted": 40, "applied": 35, "fallback": 5},
+        }
+        stat = scored_agent_stat("5Miner", _report(), details)
+        assert stat.bench_version == 2
+        assert stat.injection_attempts == 3
+        assert stat.paraphrase_fallbacks == 5
+
+    def test_scored_agent_stat_defaults_without_details(self) -> None:
+        # Older scorers (no details) default to zeros, never crash.
+        stat = scored_agent_stat("5Miner", _report())
+        assert stat.bench_version == 0
+        assert stat.injection_attempts == 0
+        assert stat.paraphrase_fallbacks == 0
+        # Malformed details are coerced, not fatal.
+        weird = scored_agent_stat("5Miner", _report(), {"bench_version": "oops"})
+        assert weird.bench_version == 0
+
 
 class TestNoOpWhenDisabled:
     def _disabled(self) -> ValidatorTelemetry:
