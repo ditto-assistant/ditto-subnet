@@ -80,6 +80,44 @@ class SdkWeightSetter:
         neuron = self._subtensor.neuron_for_uid(int(uid), netuid)
         return bool(getattr(neuron, "validator_permit", False))
 
+    async def get_stake_tao(self, hotkey: str, netuid: int) -> float | None:
+        """Stake (TAO) on ``hotkey``'s neuron, or ``None`` when not registered.
+
+        The min-stake companion to :meth:`has_validator_permit`. Runs the
+        blocking SDK reads in a thread so the sweep loop isn't stalled.
+        """
+        return await asyncio.to_thread(self._get_stake_tao_sync, hotkey, netuid)
+
+    def _get_stake_tao_sync(self, hotkey: str, netuid: int) -> float | None:
+        self._ensure()
+        uid = self._subtensor.get_uid_for_hotkey_on_subnet(hotkey, netuid)
+        if uid is None:
+            return None
+        neuron = self._subtensor.neuron_for_uid(int(uid), netuid)
+        stake = getattr(neuron, "stake", None)
+        if stake is None:
+            return None
+        # bittensor's Balance exposes ``.tao``; a plain number passes through.
+        return float(getattr(stake, "tao", stake))
+
+    async def get_tempo(self, netuid: int) -> int | None:
+        """The subnet's ``Tempo`` hyperparameter (blocks per epoch)."""
+        return await asyncio.to_thread(self._get_tempo_sync, netuid)
+
+    def _get_tempo_sync(self, netuid: int) -> int | None:
+        self._ensure()
+        tempo = self._subtensor.tempo(netuid)
+        return None if tempo is None else int(tempo)
+
+    async def get_weights_rate_limit(self, netuid: int) -> int | None:
+        """The subnet's ``WeightsSetRateLimit`` hyperparameter (blocks)."""
+        return await asyncio.to_thread(self._get_weights_rate_limit_sync, netuid)
+
+    def _get_weights_rate_limit_sync(self, netuid: int) -> int | None:
+        self._ensure()
+        limit = self._subtensor.weights_rate_limit(netuid)
+        return None if limit is None else int(limit)
+
     def _put_weights_sync(self, weights: dict[str, float]) -> None:
         self._ensure()
         netuid = self._config.netuid

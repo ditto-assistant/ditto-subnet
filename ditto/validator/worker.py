@@ -48,8 +48,37 @@ logger = logging.getLogger(__name__)
 
 # A transient chain/Pylon failure setting weights is retried a few times within
 # the epoch; the ledger is durable so the next epoch recovers regardless.
+# Retries back off exponentially (base * 2**(attempt-1)); a rate-limit
+# rejection uses the longer block-time base since retrying inside the same
+# block is a guaranteed second rejection.
 _WEIGHT_SET_ATTEMPTS = 3
 _WEIGHT_SET_RETRY_SECONDS = 2.0
+_WEIGHT_SET_RATE_LIMIT_RETRY_SECONDS = 12.0
+
+# Substrate block time; converts the chain's block-denominated
+# ``weights_rate_limit`` into the loop's seconds-denominated cadence.
+_BLOCK_SECONDS = 12.0
+
+# Substrings that identify a chain rate-limit rejection across the surfaces we
+# submit through (subtensor's ``SettingWeightsTooFast`` error, SDK / Pylon
+# message variants).
+_RATE_LIMIT_MARKERS = ("rate limit", "ratelimit", "too fast", "toofast")
+
+
+def _is_rate_limit_error(error: Exception) -> bool:
+    """Whether a weight-submission failure looks like a chain rate-limit."""
+    message = str(error).lower()
+    return any(marker in message for marker in _RATE_LIMIT_MARKERS)
+
+
+def _retry_delay_seconds(attempt: int, error: Exception) -> float:
+    """Backoff before retry ``attempt + 1``: exponential over the error's base."""
+    base = (
+        _WEIGHT_SET_RATE_LIMIT_RETRY_SECONDS
+        if _is_rate_limit_error(error)
+        else _WEIGHT_SET_RETRY_SECONDS
+    )
+    return base * 2 ** (attempt - 1)
 
 
 @dataclass(frozen=True)
@@ -154,9 +183,10 @@ class ValidatorWorker:
         if not weights:
             logger.info("ledger has no positive scores; skipping put_weights")
             return _WeightOutcome(leaderboard=leaderboard)
-        if not await self._validator_permitted():
-            # No permit → the chain would reject the submission anyway; skip it
-            # (loudly) rather than burn an epoch on a guaranteed rejection.
+        if not await self._validator_permitted() or not await self._stake_sufficient():
+            # No permit / demonstrably short stake → the chain would reject the
+            # submission anyway; skip it (loudly) rather than burn an epoch on a
+            # guaranteed rejection.
             return _WeightOutcome(leaderboard=leaderboard, weights=weights)
         submitted = await self._put_weights_with_retry(weights)
         return _WeightOutcome(
@@ -203,6 +233,50 @@ class ValidatorWorker:
             )
         return True
 
+    async def _stake_sufficient(self) -> bool:
+        """Best-effort self-check that our hotkey clears the min-stake bar.
+
+        The companion arm to :meth:`_validator_permitted`: when
+        ``VALIDATOR_MIN_STAKE_TAO`` is set (> 0), read our own stake through the
+        weight sink and skip submission when it is demonstrably below the
+        threshold. Same **fail-open** posture as the permit check — an
+        unavailable or failing read proceeds and lets the chain enforce.
+        """
+        min_stake = self._config.min_stake_tao
+        if min_stake <= 0:
+            return True
+        read = getattr(self._weight_setter, "get_stake_tao", None)
+        if read is None:
+            return True
+        hotkey = self._config.validator_hotkey
+        netuid = self._config.netuid
+        try:
+            stake = read(hotkey, netuid)
+            if inspect.isawaitable(stake):
+                stake = await stake
+        except Exception as e:  # noqa: BLE001 - a flaky read must not wedge weights
+            logger.warning("stake self-check errored (%s); proceeding", e)
+            return True
+        if stake is None:
+            logger.info(
+                "validator hotkey %s not found on netuid %s metagraph; "
+                "proceeding (chain enforces)",
+                hotkey,
+                netuid,
+            )
+            return True
+        if stake < min_stake:
+            logger.warning(
+                "validator hotkey %s stake %.4f TAO is below the configured "
+                "minimum %.4f TAO on netuid %s; skipping weight submission",
+                hotkey,
+                stake,
+                min_stake,
+                netuid,
+            )
+            return False
+        return True
+
     async def _put_weights_with_retry(self, weights: dict[str, float]) -> bool:
         """Submit weights, retrying a transient chain failure a few times.
 
@@ -225,13 +299,16 @@ class ValidatorWorker:
                         e,
                     )
                     return False
+                delay = _retry_delay_seconds(attempt, e)
                 logger.warning(
-                    "put_weights attempt %d/%d failed; retrying: %s",
+                    "put_weights attempt %d/%d failed%s; retrying in %.1fs: %s",
                     attempt,
                     _WEIGHT_SET_ATTEMPTS,
+                    " (rate-limited)" if _is_rate_limit_error(e) else "",
+                    delay,
                     e,
                 )
-                await asyncio.sleep(_WEIGHT_SET_RETRY_SECONDS)
+                await asyncio.sleep(delay)
         return False
 
     async def _score_agent(self, item: ValidatorQueueItem) -> ScoreReport:
@@ -269,23 +346,32 @@ class ValidatorWorker:
         return report
 
     async def run_forever(self, stop: asyncio.Event) -> None:
-        """Score every ``sweep_seconds``; set weights every ``epoch_seconds``.
+        """Score every ``sweep_seconds``; set weights every effective epoch.
 
         Scoring cadence is decoupled from the weight-set cadence: the queue is
         drained promptly (a submission is scored within ~one sweep) while
-        weights are pushed no more often than the epoch interval — roughly the
-        subnet tempo — so the loop doesn't fight the chain's ``weights_rate_limit``.
-        The first sweep sets weights so a fresh start doesn't wait a full epoch.
-        Runs until ``stop`` is set (SIGTERM drain).
+        weights are pushed no more often than the effective epoch interval —
+        the configured ``epoch_seconds`` stretched to the subnet's on-chain
+        ``weights_rate_limit`` window (re-read once per epoch) — so the loop
+        doesn't fight the chain's rate limiter. The first sweep sets weights so
+        a fresh start doesn't wait a full epoch. Runs until ``stop`` is set
+        (SIGTERM drain).
         """
-        # ``-epoch_seconds`` so the first sweep is immediately "due".
-        last_weight_set = time.monotonic() - self._config.epoch_seconds
+        last_weight_set: float | None = None
+        chain_floor = await self._chain_min_epoch_seconds()
         while not stop.is_set():
-            due = time.monotonic() - last_weight_set >= self._config.epoch_seconds
+            epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
+            due = (
+                last_weight_set is None
+                or time.monotonic() - last_weight_set >= epoch_seconds
+            )
             try:
                 n = await self.run_once(set_weights=due)
                 if due:
                     last_weight_set = time.monotonic()
+                    # Once per epoch is a cheap read and tracks a live
+                    # hyperparameter change within one weight-set window.
+                    chain_floor = await self._chain_min_epoch_seconds()
                 logger.info(
                     "sweep complete: %d agent(s)%s",
                     n,
@@ -294,6 +380,49 @@ class ValidatorWorker:
             except Exception:  # noqa: BLE001 - a sweep must never kill the loop
                 logger.exception("sweep failed; retrying next sweep")
             await self._sleep_or_stop(stop, self._config.sweep_seconds)
+
+    async def _chain_min_epoch_seconds(self) -> float:
+        """The chain-enforced floor (seconds) on the weight-set cadence.
+
+        Reads the subnet's ``weights_rate_limit`` (and ``tempo``, for the log
+        line) through the active weight sink and converts blocks to seconds.
+        Replaces the hand-set ``VALIDATOR_EPOCH_SECONDS``-only proxy: the loop
+        uses ``max(epoch_seconds, this floor)``. **Fail-open:** an unavailable
+        or failing read returns ``0.0`` so the configured cadence still drives
+        the loop.
+        """
+        rate_limit = await self._read_chain_blocks("get_weights_rate_limit")
+        if rate_limit is None:
+            return 0.0
+        tempo = await self._read_chain_blocks("get_tempo")
+        floor = float(rate_limit) * _BLOCK_SECONDS
+        log = logger.warning if floor > self._config.epoch_seconds else logger.info
+        log(
+            "chain cadence for netuid %s: weights_rate_limit=%d block(s) "
+            "(~%.0fs) tempo=%s block(s); configured epoch_seconds=%d -> "
+            "effective %.0fs",
+            self._config.netuid,
+            rate_limit,
+            floor,
+            tempo if tempo is not None else "?",
+            self._config.epoch_seconds,
+            max(float(self._config.epoch_seconds), floor),
+        )
+        return floor
+
+    async def _read_chain_blocks(self, method_name: str) -> int | None:
+        """Call an optional block-count read on the weight sink, fail-open."""
+        read = getattr(self._weight_setter, method_name, None)
+        if read is None:
+            return None
+        try:
+            result = read(self._config.netuid)
+            if inspect.isawaitable(result):
+                result = await result
+            return None if result is None else int(result)
+        except Exception as e:  # noqa: BLE001 - a flaky read must not wedge the loop
+            logger.warning("%s errored (%s); using configured cadence", method_name, e)
+            return None
 
     @staticmethod
     async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:

@@ -19,10 +19,12 @@ class _FakeSubtensor:
         uid_map: dict[str, int],
         success: bool = True,
         permits: dict[str, bool] | None = None,
+        stakes: dict[str, Any] | None = None,
     ) -> None:
         self._uid_map = uid_map
         self._success = success
         self._permits = permits or {}
+        self._stakes = stakes or {}
         self.calls: list[dict[str, Any]] = []
 
     def get_uid_for_hotkey_on_subnet(self, hotkey: str, _netuid: int) -> int | None:
@@ -31,7 +33,14 @@ class _FakeSubtensor:
     def neuron_for_uid(self, uid: int, _netuid: int) -> Any:
         hotkey = next((hk for hk, u in self._uid_map.items() if u == uid), None)
         permit = bool(hotkey is not None and self._permits.get(hotkey, False))
-        return SimpleNamespace(validator_permit=permit)
+        stake = self._stakes.get(hotkey) if hotkey is not None else None
+        return SimpleNamespace(validator_permit=permit, stake=stake)
+
+    def tempo(self, _netuid: int) -> int:
+        return 360
+
+    def weights_rate_limit(self, _netuid: int) -> int:
+        return 100
 
     def set_weights(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
@@ -42,6 +51,7 @@ def _setter(
     uid_map: dict[str, int],
     success: bool = True,
     permits: dict[str, bool] | None = None,
+    stakes: dict[str, Any] | None = None,
 ) -> tuple[SdkWeightSetter, _FakeSubtensor]:
     config = SimpleNamespace(
         netuid=3,
@@ -50,7 +60,7 @@ def _setter(
         weight_version_key=42,
     )
     setter = SdkWeightSetter(config, keypair=object())  # type: ignore[arg-type]
-    fake = _FakeSubtensor(uid_map, success=success, permits=permits)
+    fake = _FakeSubtensor(uid_map, success=success, permits=permits, stakes=stakes)
     # Pre-inject so _ensure() skips real bittensor construction.
     setter._subtensor = fake
     setter._wallet = object()
@@ -106,3 +116,21 @@ class TestSdkWeightSetter:
         setter, _ = _setter({"hkA": 3}, success=False)
         with pytest.raises(WeightSubmissionError):
             await setter.put_weights({"hkA": 1.0})
+
+    async def test_get_stake_tao_plain_number(self) -> None:
+        setter, _ = _setter({"5Vali": 1}, stakes={"5Vali": 123.5})
+        assert await setter.get_stake_tao("5Vali", 3) == 123.5
+
+    async def test_get_stake_tao_unwraps_balance(self) -> None:
+        # bittensor's Balance exposes ``.tao``; the setter must unwrap it.
+        setter, _ = _setter({"5Vali": 1}, stakes={"5Vali": SimpleNamespace(tao=42.0)})
+        assert await setter.get_stake_tao("5Vali", 3) == 42.0
+
+    async def test_get_stake_tao_unregistered_is_none(self) -> None:
+        setter, _ = _setter({})
+        assert await setter.get_stake_tao("5Vali", 3) is None
+
+    async def test_get_tempo_and_rate_limit(self) -> None:
+        setter, _ = _setter({})
+        assert await setter.get_tempo(3) == 360
+        assert await setter.get_weights_rate_limit(3) == 100
