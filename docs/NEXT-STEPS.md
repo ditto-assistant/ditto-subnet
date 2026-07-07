@@ -1,5 +1,10 @@
 # Ditto SN118 — Production-Readiness Roadmap
 
+> ⏩ **For the current, prioritized "what's left before rollout" checklist, see
+> [`ROAD-TO-PRODUCTION.md`](ROAD-TO-PRODUCTION.md) (2026-07-07).** This file
+> carries the full history + rationale; ROAD-TO-PRODUCTION is the forward-looking
+> snapshot and is newer where the two disagree.
+
 **As of 2026-07-02.** Audience: the next engineer/agent picking up SN118. This is
 the **authoritative roadmap** and supersedes the "what's left" sections of
 [`STATE-OF-THE-SUBNET.md`](STATE-OF-THE-SUBNET.md) and any earlier `NEXT-STEPS`
