@@ -91,6 +91,7 @@ class DittobenchClient:
             generated_at=datetime.now(UTC),
             per_case=[],
             structural_fingerprint=None,
+            details=None,
         )
 
     async def _submit(

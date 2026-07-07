@@ -526,3 +526,65 @@ class TestGetBlockTimestamp:
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainConnectionError):
                 await client.get_block_timestamp("0xblock")
+
+
+class TestGetStakeTao:
+    """Tests for ChainClient.get_stake_tao (metagraph walk)."""
+
+    async def test_returns_stake_for_registered_hotkey(
+        self, install_pylon_module: AsyncMock
+    ):
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response({"5HK1": make_pylon_neuron(stake=123.5)})
+        )
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_stake_tao("5HK1", 118) == 123.5
+
+    async def test_returns_none_when_unregistered(
+        self, install_pylon_module: AsyncMock
+    ):
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response({"5HK1": make_pylon_neuron()})
+        )
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_stake_tao("5UNREGISTERED", 118) is None
+
+
+@pytest.mark.usefixtures("install_pylon_module")
+class TestSubnetHyperparams:
+    """Tests for get_tempo / get_weights_rate_limit (Pylon-gap substrate reads)."""
+
+    async def test_get_tempo_unwraps_value(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.return_value = MagicMock(value=360)
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_tempo(118) == 360
+        kwargs = install_substrate_module.query.await_args.kwargs
+        assert kwargs["module"] == "SubtensorModule"
+        assert kwargs["storage_function"] == "Tempo"
+        assert kwargs["params"] == [118]
+
+    async def test_get_weights_rate_limit_unwraps_value(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = MagicMock(value=100)
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_weights_rate_limit(118) == 100
+        kwargs = install_substrate_module.query.await_args.kwargs
+        assert kwargs["storage_function"] == "WeightsSetRateLimit"
+
+    async def test_empty_storage_is_none(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.return_value = None
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_weights_rate_limit(118) is None
+
+    async def test_timeout_wrapped(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.side_effect = TimeoutError()
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainTimeoutError):
+                await client.get_tempo(118)
+
+    async def test_connection_error_wrapped(self, install_substrate_module: AsyncMock):
+        install_substrate_module.query.side_effect = RuntimeError("node down")
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainConnectionError):
+                await client.get_weights_rate_limit(118)
