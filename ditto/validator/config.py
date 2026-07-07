@@ -13,6 +13,7 @@ import math
 import os
 from dataclasses import dataclass
 
+from ditto import __spec_version__
 from ditto.validator.errors import ValidatorConfigError
 
 
@@ -79,6 +80,17 @@ class ValidatorConfig:
     stood up on the dev chain, so the worker calls ``Subtensor.set_weights``
     directly. Pylon identity creds are not required in this mode."""
 
+    weight_version_key: int
+    """Mechanism version stamped on ``set_weights`` (the SDK path).
+
+    Bittensor's ``version_key`` lets validators signal which mechanism version
+    they scored under; the chain groups weights by it so an old validator that
+    hasn't upgraded doesn't get averaged against a new mechanism. Defaults to
+    ``ditto.__spec_version__`` so it advances with the package version. Every
+    validator on a network must agree, like the KOTH knobs. (The Pylon path
+    derives its own ``version_key`` from subnet hyperparams, so this applies to
+    the SDK/localnet path.)"""
+
     # --- Incentive mechanism (KOTH + ATH gate) ---
     koth_margin: float
     """Relative margin a challenger must beat the incumbent by to dethrone it.
@@ -95,8 +107,19 @@ class ValidatorConfig:
     tail. ``0.9`` = 90% champion / 10% tail."""
 
     # --- Cadence / limits ---
+    sweep_seconds: int
+    """Seconds between scoring sweeps — how fast the ``evaluating`` queue drains.
+
+    Decoupled from ``epoch_seconds`` so scoring latency isn't the (much longer)
+    weight-set cadence: a submission is picked up within ~one sweep, while
+    weights are still only pushed every ``epoch_seconds``. Keep this <=
+    ``epoch_seconds``."""
+
     epoch_seconds: int
-    """Seconds to sleep between scoring sweeps (approx the subnet tempo)."""
+    """Minimum seconds between on-chain weight submissions (the weight-set
+    cadence). Weights are recomputed from the durable ledger and pushed no more
+    often than this — approximately the subnet tempo / ``weights_rate_limit``
+    window, so the loop doesn't fight the chain's rate limiter."""
 
     queue_limit: int
     """Max agents to pull from ``/validator/queue`` per sweep."""
@@ -217,9 +240,13 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_identity_token=pylon_identity_token,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         use_sdk_weights=use_sdk_weights,
+        weight_version_key=_parse_int(
+            "VALIDATOR_WEIGHT_VERSION_KEY", str(__spec_version__)
+        ),
         koth_margin=koth_margin,
         koth_tail_size=koth_tail_size,
         koth_champion_share=koth_champion_share,
+        sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),
         queue_limit=int(os.environ.get("VALIDATOR_QUEUE_LIMIT", "50")),
         dittobench_poll_seconds=float(

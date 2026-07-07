@@ -32,6 +32,19 @@ class TestKothConfig:
         assert cfg.koth_margin == 0.01
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
+        # Weight-set cadence is decoupled from the (faster) scoring sweep.
+        assert cfg.sweep_seconds == 120
+        assert cfg.epoch_seconds == 3600
+        # version_key defaults to the package spec version so it advances with
+        # releases; every validator on a network must agree on it.
+        from ditto import __spec_version__
+
+        assert cfg.weight_version_key == __spec_version__
+
+    def test_weight_version_key_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_WEIGHT_VERSION_KEY", "7")
+        assert parse_validator_config_from_env().weight_version_key == 7
 
     @pytest.mark.parametrize("val", ["nan", "inf", "-inf", "0", "-0.5"])
     def test_bad_margin_rejected(

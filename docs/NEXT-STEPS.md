@@ -109,7 +109,7 @@ Verdicts: **DONE / PARTIAL / MISSING**.
 | Miner upload (payment, size/sha cap, S3) | **DONE** | `/upload/*`; deferred tar-manifest/import-allowlist checks remain (by design). |
 | Submission contract | **DONE** | Whole buildable crate as one gzipped tarball; documented + enforced at upload. |
 | Screener **endpoints** (`uploaded → evaluating`) | **DONE** | Signed verdict (binds `passed`), idempotent, 409 on conflict, row-locked. |
-| Screener **worker** (lint/compile/build gate) | **BUILT (deploy pending)** | `python -m ditto.screener` — docker-build + `/health` gate, signed verdict (subnet #32). Not yet deployed (infra role pending) → promotion still manual in practice. |
+| Screener **worker** (lint/compile/build gate) | **DONE + live** | `python -m ditto.screener` — docker-build + `/health` gate, signed verdict (subnet #32). Deployed on `ditto-validator-dev` (infra #9); two live bugs fixed (4→20 MiB cap #34; dummy LLM key for the serve smoke #35). Proven: real agent built (private ditto-harness dep) + served /health → `evaluating`. |
 | dittobench scoring engine | **DONE + deployed** | Full `run_size` pipeline; mode-B tarball ingest; co-located on the validator VM. |
 | Validator worker (queue → score → sign → weights) | **DONE + live** | uid 4, netuid 3 dev localnet, mock **off**, polling the platform. |
 | Best-score ledger (`/scoring/scores`) | **DONE** | Persistent, self-verifying (stores signatures), whole-row consistent. |
@@ -125,6 +125,7 @@ Verdicts: **DONE / PARTIAL / MISSING**.
 | Plagiarism / first-seen at content level | **DONE** (tuning left) | First-seen (`created_at`) + margin defeat verbatim copies; lexical + AST content fingerprint now catches reindent/reformat/rename/pad near-dups. Thresholds want tuning against a real corpus. |
 | Emission economics (non-zero netuid emission) | **DONE on localnet** | `SubnetTaoInEmission[3]` non-zero → winners accrue alpha on netuid 3. Re-tune per network on migration. |
 | Commit-reveal (production reveal step) | **MISSING** | Off on dev netuid 3; production needs a first-class reveal. |
+| Chain-conformance hardening (version_key, permit self-check, tempo cadence) | **DONE (code)** | `version_key` pinned to `ditto.__spec_version__` on the SDK path; pre-submit `validator_permit` self-check (fail-open, both sinks); scoring sweep decoupled from the weight-set cadence (`VALIDATOR_SWEEP_SECONDS` vs `VALIDATOR_EPOCH_SECONDS`) so a submission is scored within ~one sweep instead of waiting a full epoch. Pylon path still delegates version_key/commit-reveal internally — verify on testnet (E1). |
 | Observability (W&B, dashboard, metrics, alerts) | **PARTIAL** | W&B telemetry + public dashboard LIVE on dev (2026-07-06); richer metrics/alerts still TODO. |
 | Deploy automation + autoupdater | **PARTIAL** | Terraform/Ansible dev deploy done (gated); no git-watching autoupdater. |
 | Testnet → finney migration | **MISSING** | Everything runs on the dev localnet (netuid 3). |
@@ -249,7 +250,31 @@ persists on-chain.
 - [ ] Add a first-class reveal step to the worker (dev netuid 3 has commit-reveal
       **off**; production needs it). SDK path sets weights directly today; the
       Pylon path delegates reveal to Pylon.
+- [x] **`version_key` pinned** on the SDK path (`set_weights(version_key=...)`,
+      default `ditto.__spec_version__`, env `VALIDATOR_WEIGHT_VERSION_KEY`) so the
+      chain groups our weights by mechanism version instead of averaging against a
+      validator on a different version. The Pylon path derives its own version_key
+      from subnet hyperparams — **verify that matches** on testnet.
 - **Files:** `ditto-subnet/ditto/validator/{worker,sdk_weights}.py`, `ditto/chain`.
+
+#### B2a — Weight-setting robustness (conformance self-checks)  ·  DONE (code) · verify on testnet
+- [x] **`validator_permit` self-check** before submitting: read the metagraph
+      through the active sink (`ChainClient.has_validator_permit` /
+      `SdkWeightSetter.has_validator_permit`) and skip (loudly) when the hotkey
+      lacks a permit, rather than burning an epoch on a guaranteed rejection.
+      **Fail-open** on a flaky read so it never wedges weight-setting.
+- [x] **Tempo-aware cadence:** scoring sweeps (`VALIDATOR_SWEEP_SECONDS`, default
+      120s) are decoupled from on-chain weight submission (`VALIDATOR_EPOCH_SECONDS`,
+      default 3600s ≈ tempo), so the queue drains promptly without pushing weights
+      faster than the chain's `weights_rate_limit` window. First sweep still sets
+      weights so a fresh start doesn't wait a full epoch.
+- [ ] **Still open:** read the on-chain tempo / `weights_rate_limit` directly
+      (today `epoch_seconds` is a hand-set proxy); exponential backoff on a
+      rate-limit rejection; a min-stake check alongside the permit. Verify the
+      Pylon path's normalization / u16 / `max_weight_limit` on testnet (E1) — the
+      validator delegates all of it and does not verify it in-repo.
+- **Files:** `ditto-subnet/ditto/validator/{worker,sdk_weights,config}.py`,
+  `ditto/chain/client.py`.
 
 #### B3 — Validate KOTH+ATH parameters against real score distributions  ·  NEW
 - [ ] Once real composites exist (A1), sanity-check the **1% margin** and
@@ -422,6 +447,11 @@ compared cross-miner with one Jaccard/containment estimator.
 #### E3 — Chain parameters  ·  MISSING
 - [ ] Set tempo, immunity period, weights-rate-limit, validator-permit threshold,
       and **enable commit-reveal** (B2) for the target network.
+- [ ] Once the network's tempo / weights-rate-limit are set, align
+      `VALIDATOR_EPOCH_SECONDS` to that window (the validator now honors a
+      configurable weight-set cadence, B2a) and set `VALIDATOR_WEIGHT_VERSION_KEY`
+      to the mechanism version every validator agrees on (defaults to the package
+      spec version; the Pylon path derives its own — confirm they match).
 
 #### E4 — Mainnet (finney) cutover  ·  MISSING
 - [ ] Point the platform + validator at finney SN118, flip `enable_validator`,

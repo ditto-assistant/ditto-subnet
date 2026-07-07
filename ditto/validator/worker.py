@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import time
 from dataclasses import dataclass, field
@@ -90,13 +91,16 @@ class ValidatorWorker:
             netuid=config.netuid,
         )
 
-    async def run_once(self) -> int:
+    async def run_once(self, *, set_weights: bool = True) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
 
-        Scoring persists each agent's composite to the platform; weight-setting
-        then reads the durable ledger and runs every epoch (see
-        :meth:`_update_weights`), so an empty queue no longer means "set no
-        weights" — the reigning champion keeps its emission.
+        Scoring persists each agent's composite to the platform. When
+        ``set_weights`` is True the sweep also recomputes weights from the
+        durable ledger and submits them (see :meth:`_update_weights`), so an
+        empty queue no longer means "set no weights" — the reigning champion
+        keeps its emission. ``run_forever`` scores every sweep but only sets
+        weights when the epoch (weight-set) interval is due, so scoring latency
+        isn't tied to the much longer weight cadence.
         """
         started = time.monotonic()
         queue = await self._platform.get_queue()
@@ -111,7 +115,7 @@ class ValidatorWorker:
                 failed += 1
                 continue
 
-        outcome = await self._update_weights()
+        outcome = await self._update_weights() if set_weights else _WeightOutcome()
         self._telemetry.record_sweep(
             SweepStats(
                 sweep_duration_s=time.monotonic() - started,
@@ -150,10 +154,54 @@ class ValidatorWorker:
         if not weights:
             logger.info("ledger has no positive scores; skipping put_weights")
             return _WeightOutcome(leaderboard=leaderboard)
+        if not await self._validator_permitted():
+            # No permit → the chain would reject the submission anyway; skip it
+            # (loudly) rather than burn an epoch on a guaranteed rejection.
+            return _WeightOutcome(leaderboard=leaderboard, weights=weights)
         submitted = await self._put_weights_with_retry(weights)
         return _WeightOutcome(
             leaderboard=leaderboard, weights=weights, submitted=submitted
         )
+
+    async def _validator_permitted(self) -> bool:
+        """Best-effort self-check that our hotkey may set weights this epoch.
+
+        Reads the metagraph through whichever weight sink is active (the Pylon
+        ``ChainClient`` or the SDK setter — both expose ``has_validator_permit``)
+        and skips submission when the validator hotkey demonstrably lacks a
+        ``validator_permit``. **Fail-open:** if the check is unavailable or
+        errors (undeterminable, transient chain read), proceed and let the chain
+        enforce — the goal is a clear log line, not a second gate that can wedge
+        weight-setting on a flaky read.
+        """
+        check = getattr(self._weight_setter, "has_validator_permit", None)
+        if check is None:
+            return True
+        hotkey = self._config.validator_hotkey
+        netuid = self._config.netuid
+        try:
+            result = check(hotkey, netuid)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as e:  # noqa: BLE001 - a flaky read must not wedge weights
+            logger.warning("validator permit self-check errored (%s); proceeding", e)
+            return True
+        if result is False:
+            logger.warning(
+                "validator hotkey %s lacks a validator_permit on netuid %s; "
+                "skipping weight submission (stake below the permit threshold?)",
+                hotkey,
+                netuid,
+            )
+            return False
+        if result is None:
+            logger.info(
+                "validator hotkey %s not found on netuid %s metagraph; "
+                "proceeding (chain enforces)",
+                hotkey,
+                netuid,
+            )
+        return True
 
     async def _put_weights_with_retry(self, weights: dict[str, float]) -> bool:
         """Submit weights, retrying a transient chain failure a few times.
@@ -221,14 +269,31 @@ class ValidatorWorker:
         return report
 
     async def run_forever(self, stop: asyncio.Event) -> None:
-        """Sweep, then sleep ~epoch, until ``stop`` is set (SIGTERM drain)."""
+        """Score every ``sweep_seconds``; set weights every ``epoch_seconds``.
+
+        Scoring cadence is decoupled from the weight-set cadence: the queue is
+        drained promptly (a submission is scored within ~one sweep) while
+        weights are pushed no more often than the epoch interval — roughly the
+        subnet tempo — so the loop doesn't fight the chain's ``weights_rate_limit``.
+        The first sweep sets weights so a fresh start doesn't wait a full epoch.
+        Runs until ``stop`` is set (SIGTERM drain).
+        """
+        # ``-epoch_seconds`` so the first sweep is immediately "due".
+        last_weight_set = time.monotonic() - self._config.epoch_seconds
         while not stop.is_set():
+            due = time.monotonic() - last_weight_set >= self._config.epoch_seconds
             try:
-                n = await self.run_once()
-                logger.info("sweep complete: %d agent(s)", n)
+                n = await self.run_once(set_weights=due)
+                if due:
+                    last_weight_set = time.monotonic()
+                logger.info(
+                    "sweep complete: %d agent(s)%s",
+                    n,
+                    " (weights set)" if due else "",
+                )
             except Exception:  # noqa: BLE001 - a sweep must never kill the loop
-                logger.exception("sweep failed; retrying next epoch")
-            await self._sleep_or_stop(stop, self._config.epoch_seconds)
+                logger.exception("sweep failed; retrying next sweep")
+            await self._sleep_or_stop(stop, self._config.sweep_seconds)
 
     @staticmethod
     async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:
