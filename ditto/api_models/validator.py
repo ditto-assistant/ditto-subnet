@@ -22,7 +22,7 @@ through this endpoint unchanged.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -244,6 +244,20 @@ class ScoreReport(BaseModel):
                 "scoring engine. Advisory anti-copy metadata; not covered by the "
                 "signature and never affects the score. Null on the local "
                 "harness_url path or when the crate has no parseable Rust."
+            ),
+        ),
+    ]
+    details: Annotated[
+        dict[str, Any] | None,
+        Field(
+            default=None,
+            description=(
+                "Optional opaque run telemetry from the scoring engine — the "
+                "models used, bench_version, dataset_sha256, per-category means, "
+                "paraphrase / lexical-gap stats, and token spend. Advisory only: "
+                "not covered by the signature and never affects the score. "
+                "Persisted verbatim to scores.details for the transparency "
+                "leaderboard."
             ),
         ),
     ]
