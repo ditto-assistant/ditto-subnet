@@ -14,13 +14,24 @@ from ditto.validator.sdk_weights import SdkWeightSetter
 class _FakeSubtensor:
     """Records set_weights calls; maps a fixed set of hotkeys to UIDs."""
 
-    def __init__(self, uid_map: dict[str, int], success: bool = True) -> None:
+    def __init__(
+        self,
+        uid_map: dict[str, int],
+        success: bool = True,
+        permits: dict[str, bool] | None = None,
+    ) -> None:
         self._uid_map = uid_map
         self._success = success
+        self._permits = permits or {}
         self.calls: list[dict[str, Any]] = []
 
     def get_uid_for_hotkey_on_subnet(self, hotkey: str, _netuid: int) -> int | None:
         return self._uid_map.get(hotkey)
+
+    def neuron_for_uid(self, uid: int, _netuid: int) -> Any:
+        hotkey = next((hk for hk, u in self._uid_map.items() if u == uid), None)
+        permit = bool(hotkey is not None and self._permits.get(hotkey, False))
+        return SimpleNamespace(validator_permit=permit)
 
     def set_weights(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
@@ -28,13 +39,18 @@ class _FakeSubtensor:
 
 
 def _setter(
-    uid_map: dict[str, int], success: bool = True
+    uid_map: dict[str, int],
+    success: bool = True,
+    permits: dict[str, bool] | None = None,
 ) -> tuple[SdkWeightSetter, _FakeSubtensor]:
     config = SimpleNamespace(
-        netuid=3, subtensor_network="ws://localhost:9944", validator_hotkey="5Vali"
+        netuid=3,
+        subtensor_network="ws://localhost:9944",
+        validator_hotkey="5Vali",
+        weight_version_key=42,
     )
     setter = SdkWeightSetter(config, keypair=object())  # type: ignore[arg-type]
-    fake = _FakeSubtensor(uid_map, success=success)
+    fake = _FakeSubtensor(uid_map, success=success, permits=permits)
     # Pre-inject so _ensure() skips real bittensor construction.
     setter._subtensor = fake
     setter._wallet = object()
@@ -50,6 +66,25 @@ class TestSdkWeightSetter:
         assert call["netuid"] == 3
         assert call["uids"] == [3, 7]
         assert call["weights"] == [0.9, 0.1]
+
+    async def test_stamps_version_key(self) -> None:
+        # The configured mechanism version must ride every set_weights call so
+        # the chain groups our weights by version.
+        setter, fake = _setter({"hkA": 3})
+        await setter.put_weights({"hkA": 1.0})
+        assert fake.calls[0]["version_key"] == 42
+
+    async def test_has_validator_permit_true(self) -> None:
+        setter, _ = _setter({"5Vali": 1}, permits={"5Vali": True})
+        assert await setter.has_validator_permit("5Vali", 3) is True
+
+    async def test_has_validator_permit_false(self) -> None:
+        setter, _ = _setter({"5Vali": 1}, permits={"5Vali": False})
+        assert await setter.has_validator_permit("5Vali", 3) is False
+
+    async def test_has_validator_permit_unregistered_is_none(self) -> None:
+        setter, _ = _setter({})  # 5Vali not registered
+        assert await setter.has_validator_permit("5Vali", 3) is None
 
     async def test_skips_unregistered_hotkeys(self) -> None:
         setter, fake = _setter({"hkA": 3})  # hkB not registered

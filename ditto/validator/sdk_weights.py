@@ -64,6 +64,22 @@ class SdkWeightSetter:
             return
         await asyncio.to_thread(self._put_weights_sync, weights)
 
+    async def has_validator_permit(self, hotkey: str, netuid: int) -> bool | None:
+        """Whether ``hotkey`` holds a validator permit on ``netuid``.
+
+        ``None`` when the hotkey isn't registered (so the caller can't decide).
+        Runs the blocking SDK reads in a thread so the sweep loop isn't stalled.
+        """
+        return await asyncio.to_thread(self._has_validator_permit_sync, hotkey, netuid)
+
+    def _has_validator_permit_sync(self, hotkey: str, netuid: int) -> bool | None:
+        self._ensure()
+        uid = self._subtensor.get_uid_for_hotkey_on_subnet(hotkey, netuid)
+        if uid is None:
+            return None
+        neuron = self._subtensor.neuron_for_uid(int(uid), netuid)
+        return bool(getattr(neuron, "validator_permit", False))
+
     def _put_weights_sync(self, weights: dict[str, float]) -> None:
         self._ensure()
         netuid = self._config.netuid
@@ -98,6 +114,9 @@ class SdkWeightSetter:
                 netuid=netuid,
                 uids=uids,
                 weights=values,
+                # Stamp the mechanism version so the chain doesn't average our
+                # weights against a validator scoring under a different version.
+                version_key=self._config.weight_version_key,
                 wait_for_inclusion=True,
                 # Don't block the sweep on finalization / commit-reveal execution;
                 # inclusion of the (commit or direct) extrinsic is enough here.

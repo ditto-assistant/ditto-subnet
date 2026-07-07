@@ -161,6 +161,24 @@ class ChainClient:
         neurons = await self.get_recent_neurons(netuid)
         return any(n.hotkey == hotkey for n in neurons)
 
+    async def has_validator_permit(self, hotkey: str, netuid: int) -> bool | None:
+        """Whether ``hotkey`` holds a validator permit on ``netuid``.
+
+        ``None`` when the hotkey isn't found on the metagraph (registration is a
+        precondition of a permit, so the caller can treat "not found" as "cannot
+        determine" rather than a hard "no"). A validator uses this to self-check
+        it may set weights before submitting.
+
+        Raises:
+            ChainConnectionError: When Pylon is unreachable.
+            ChainTimeoutError: When the request exceeds the configured timeout.
+        """
+        neurons = await self.get_recent_neurons(netuid)
+        for n in neurons:
+            if n.hotkey == hotkey:
+                return n.validator_permit
+        return None
+
     # --- Block + extrinsic reads ---
 
     async def get_latest_block(self) -> BlockInfo:

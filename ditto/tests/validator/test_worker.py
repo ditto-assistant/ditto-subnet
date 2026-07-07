@@ -142,9 +142,13 @@ def _report(run_id: str, composite: float) -> ScoreReport:
 def _config() -> MagicMock:
     cfg = MagicMock()
     cfg.validator_hotkey = _VALIDATOR_HOTKEY
+    cfg.netuid = 3
     cfg.koth_margin = 0.01
     cfg.koth_tail_size = 4
     cfg.koth_champion_share = 0.9
+    cfg.weight_version_key = 1
+    cfg.sweep_seconds = 120
+    cfg.epoch_seconds = 3600
     return cfg
 
 
@@ -294,6 +298,88 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
         assert await worker.run_once() == 0
+        chain.put_weights.assert_not_awaited()
+
+    async def test_no_permit_skips_weight_submission(self) -> None:
+        # A validator hotkey without a permit must not burn an epoch submitting
+        # weights the chain will reject; skip loudly instead.
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(items=[], ledger=ledger)
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        chain.has_validator_permit = AsyncMock(return_value=False)
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        assert await worker.run_once() == 0
+        chain.has_validator_permit.assert_awaited_once()
+        chain.put_weights.assert_not_awaited()
+
+    async def test_permit_present_sets_weights(self) -> None:
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(items=[], ledger=ledger)
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        chain.has_validator_permit = AsyncMock(return_value=True)
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        assert await worker.run_once() == 0
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
+
+    async def test_permit_check_error_fails_open(self) -> None:
+        # A flaky metagraph read must not wedge weight-setting; proceed and let
+        # the chain enforce.
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(items=[], ledger=ledger)
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        chain.has_validator_permit = AsyncMock(side_effect=ChainError("pylon down"))
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        assert await worker.run_once() == 0
+        chain.put_weights.assert_awaited_once()
+
+    async def test_set_weights_false_scores_without_touching_weights(self) -> None:
+        # The scoring-only sweep (between weight-set epochs) drains the queue but
+        # does not read the ledger or submit weights.
+        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
+        platform = _platform_with_ledger(items=[item], ledger=ledger)
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        keypair = MagicMock()
+        keypair.sign = MagicMock(return_value=b"\x01" * 64)
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=keypair,
+        )
+        n = await worker.run_once(set_weights=False)
+        assert n == 1
+        assert platform.submit_score.await_count == 1
+        platform.get_ledger.assert_not_awaited()
         chain.put_weights.assert_not_awaited()
 
     async def test_one_agent_failure_does_not_block_weights(self) -> None:
