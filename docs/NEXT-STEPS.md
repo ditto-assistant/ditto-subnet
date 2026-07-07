@@ -117,7 +117,7 @@ Verdicts: **DONE / PARTIAL / MISSING**.
 | Weight-ingestion (one-epoch-weight bug) | **FIXED** | Weights recomputed from the durable ledger every epoch; bounded `put_weights` retry. |
 | Trust-boundary hardening (sig binding, row locks) | **DONE** | Score/verdict signatures bind the full payload; both status txns row-locked. |
 | Anti-copy (exact-hash + size/score + content fingerprint) | **DONE** (tuning left) | Cross-miner exact-sha256 + size/score + **two-channel content fingerprint** (lexical + AST) → `ath_pending_review`. Merged 2026-07-05 (dittobench #12, subnet #29/#30, platform #16). Thresholds untuned; review manual. |
-| First **real** end-to-end scoring run | **MISSING** | The 6/30 E2E used the mock scorer; no agent has flowed the real tarball→docker→judge path since deploy. **#1 milestone.** |
+| First **real** end-to-end scoring run | **DONE (small) 2026-07-07** | Agent `2b52b610` flowed the full non-mock path (screener→sweep→build→seed→run→LLM judge): real **composite=0.522**, signed, in the `scores` ledger, weights folded + `set_weights` **accepted on-chain**. Run at `small`; **full** proof pending a miner rebuilt from `dittobench-starter-kit#9` (the default 2 MB `/seed` body limit blocks full-size haystacks). |
 | Multi-validator (k=3 + median-of-3) | **MISSING** | Single validator; one score row per agent. Endpoints still use stub names. |
 | OpenRouter cost cap (`max_tokens` + per-run token budget) | **DONE** | Per-call `max_tokens` + per-run token budget on the dittobench LLM client (`LLM_MAX_TOKENS` / `LLM_RUN_TOKEN_BUDGET`); a looping harness fails the run instead of burning unbounded spend. |
 | OpenRouter/sandbox **egress allowlist** | **MISSING** | Sandbox container still runs on the default bridge (full egress); a host-allowlist needs an egress proxy. Cost cap above bounds spend in the meantime. |
@@ -166,22 +166,32 @@ you land them.
 
 ### A. Functional completeness
 
-#### A1 — First real end-to-end scoring run  ·  MISSING  ·  🔴 top priority
+#### A1 — First real end-to-end scoring run  ·  DONE (small) 2026-07-07 · full pending
 **Goal:** one agent flows the entire non-mock path and its composite lands +
 persists on-chain.
-- [ ] Promote one agent through the live path: screener (manual until A2) →
+- [x] Promoted agent `2b52b610` through the live path: **auto-screener** →
       validator queue → `get_artifact` → dittobench `tarball_url` →
-      `docker build` (pulling `ditto-harness` via the GH token) → seeded
+      `docker build` (pulled `ditto-harness` via the GH token) → seeded
       datagen → tool + memory cases → LLM judge → `ScoreReport`.
-- [ ] Confirm the signed score is accepted at `POST /validator/.../score`, the
-      row lands in `scores`, and the agent appears in `GET /scoring/scores`.
-- [ ] Confirm the worker computes KOTH weights (0.9 to the champion) and
-      `put_weights` succeeds, and that the weight **persists across the next
-      epoch** (the whole point of the ledger fix).
+- [x] Signed score accepted, row in `scores` (**composite 0.522**, tool 0.758 /
+      mem 0.167, 128-char sr25519 sig, run 89f6060c), agent → `scored`.
+- [x] Worker folded KOTH weights from the ledger and `set_weights` was
+      **accepted on-chain** (`msg=Success`). *Cross-epoch persistence + champion
+      weight actually landing needs the scored miner hotkey registered on the
+      localnet — today `5CLUBKGj…` is unregistered so its 0.9 mapped to no UID and
+      was skipped (localnet setup gap, not a code bug).*
+- [ ] **Full-size proof (Phase 2):** rerun at `run_size=full` with a miner built
+      from `dittobench-starter-kit#9`. The first full run exposed a
+      production-blocking bug: the reference harness router used axum's **2 MB
+      default body limit**, so a full seed haystack (842 pairs / 2258 subjects)
+      POSTed to `/seed` 413'd at the **seeding** stage — for every starter-kit
+      miner. Fixed in #9 (`DefaultBodyLimit::max(256 MiB)`); already-submitted
+      agents bake in the old limit, so full needs a rebuilt miner.
 - **Files:** `ditto-subnet/ditto/validator/{worker,dittobench,platform}.py`;
-  runbook `infra/docs/validator-deploy.md`, `ditto-subnet/docs/dev-e2e-handoff.md`.
+  `dittobench-starter-kit/src/bin/dittobench-miner.rs`; runbook `dev-e2e-handoff.md`.
 - **Acceptance:** a real (non-mock) composite for a real harness is visible in
-  the ledger and drives a persistent on-chain weight.
+  the ledger and drives an on-chain weight — **met at `small`**; full-scale
+  seeding proven once #9 ships in a submitted miner.
 
 #### A2 — Screener worker (build gate)  ·  BUILT (deploy pending)
 **Goal:** automate `uploaded → evaluating` (today it's manual).
