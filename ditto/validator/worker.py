@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ditto.chain import ChainError
+from ditto.validator.crn import crn_seed
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
@@ -215,15 +216,27 @@ class ValidatorWorker:
         )
         if not stale:
             return ledger
+        # v3 #1 (CRN): score the whole stale champion+tail set on ONE deterministic
+        # common seed so their refreshed composites face the identical dataset and
+        # become directly comparable. The seed is a pure hash of the compared
+        # agent ids + version, so every validator derives the same one (consensus-
+        # safe) — see ditto/validator/crn.py.
+        sweep_seed = crn_seed(
+            (str(e.agent_id) for e in stale), version=self._current_bench_version
+        )
         logger.info(
-            "bench_version %d re-score sweep: %d stale champion/tail agent(s)",
+            "bench_version %d re-score sweep: %d stale champion/tail agent(s) "
+            "(CRN seed=%d)",
             self._current_bench_version,
             len(stale),
+            sweep_seed,
         )
         rescored = 0
         for e in stale:
             try:
-                await self._evaluate_and_submit(e.agent_id, e.sha256, e.miner_hotkey)
+                await self._evaluate_and_submit(
+                    e.agent_id, e.sha256, e.miner_hotkey, seed=sweep_seed
+                )
                 rescored += 1
             except (PlatformError, DittobenchError) as exc:
                 logger.warning(
@@ -319,10 +332,20 @@ class ValidatorWorker:
         )
 
     async def _evaluate_and_submit(
-        self, agent_id: UUID, expected_sha256: str, miner_hotkey: str
+        self,
+        agent_id: UUID,
+        expected_sha256: str,
+        miner_hotkey: str,
+        *,
+        seed: int | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. Shared by the
-        queue sweep (:meth:`_score_agent`) and the §9 version-bump re-score."""
+        queue sweep (:meth:`_score_agent`) and the §9 version-bump re-score.
+
+        ``seed`` pins the dataset seed (v3 #1 CRN): the re-score sweep passes one
+        common seed for the whole champion+tail set so their composites are
+        directly comparable. The queue sweep leaves it ``None`` (fresh per-run
+        seed, anti-overfit)."""
         artifact = await self._platform.get_artifact(agent_id)
         # The caller and the artifact response both carry the registered digest; a
         # mismatch means the platform is inconsistent about which blob this agent
@@ -335,7 +358,9 @@ class ValidatorWorker:
                 f"expected={expected_sha256} artifact={artifact.sha256}"
             )
         report = await self._dittobench.score_tarball(
-            tarball_url=artifact.download_url, tarball_sha256=artifact.sha256
+            tarball_url=artifact.download_url,
+            tarball_sha256=artifact.sha256,
+            seed=seed,
         )
         signature = sign_score(
             self._keypair,

@@ -45,7 +45,11 @@ class DittobenchClient:
         self.last_details: dict[str, object] = {}
 
     async def score_tarball(
-        self, *, tarball_url: str, tarball_sha256: str | None = None
+        self,
+        *,
+        tarball_url: str,
+        tarball_sha256: str | None = None,
+        seed: int | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
@@ -57,12 +61,19 @@ class DittobenchClient:
         forwarded so the scorer re-verifies the fetched bytes against it and
         pins the Docker build tag to the content hash — closing the gap where a
         swapped blob or a URL-basename tag collision could be scored.
+
+        ``seed`` pins the dataset seed (v3 #1, Common Random Numbers): pass the
+        SAME seed when re-scoring the champion + challengers so they face the
+        identical fresh dataset and their composites become directly comparable
+        (``BENCHMARK-V3-IDEAS.md`` §2.1). ``None`` lets dittobench-api draw its own
+        fresh per-run seed (the default, anti-overfit path). Requires an
+        api that honors the field; older ones ignore it and draw fresh.
         """
         if self._config.dittobench_mock:
             self.last_details = {}
             return self._mock_report()
         run_id = await self._submit(
-            tarball_url=tarball_url, tarball_sha256=tarball_sha256
+            tarball_url=tarball_url, tarball_sha256=tarball_sha256, seed=seed
         )
         return await self._poll(run_id)
 
@@ -83,7 +94,11 @@ class DittobenchClient:
         )
 
     async def _submit(
-        self, *, tarball_url: str, tarball_sha256: str | None = None
+        self,
+        *,
+        tarball_url: str,
+        tarball_sha256: str | None = None,
+        seed: int | None = None,
     ) -> str:
         body: dict[str, object] = {
             "tarball_url": tarball_url,
@@ -92,6 +107,8 @@ class DittobenchClient:
         }
         if tarball_sha256:
             body["tarball_sha256"] = tarball_sha256
+        if seed is not None:
+            body["seed"] = seed
         url = f"{self._config.dittobench_api_url}/v1/submit"
         try:
             resp = await self._client.post(url, json=body)
