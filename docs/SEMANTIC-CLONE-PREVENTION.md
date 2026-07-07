@@ -273,10 +273,17 @@ Each phase is independently shippable and calibrated before the next.
     and Rust raw), keeps prompt-length ones (≥ 8 words), word-shingles them (5-word
     windows), and returns a bottom-k sketch compared by `content_similarity`
     (version `"p1"`, isolated from the lexical/structural channels). Not yet gated.
-  - Remaining: config/dependency extraction; a `clonecal` signal + corpus that
-    exercises prompt reuse under code renaming (S1 #2); gate fusion once
-    calibrated (S1 #3). Acceptance: detects tier-4 prompt/config theft; FP within
-    budget on convergent independents under the ≥2-signal fusion rule.
+  - Done. S1 #2 `clonecal` calibration. `L3b_prompt_jaccard` / `_containment`
+    signals wired; the demo corpus embeds distinct per-seed prompts and a
+    convergent-independent pair (shared harness preamble, distinct strategy). On
+    that corpus L3b reaches precision 1.0 / recall 1.0 — catching both ladder tiers
+    where L3a and L1 sit at recall 0.5, because the tier-2 rename defeats them but
+    preserves the prompt. On the convergent pair L3b fires (0.82) while L1 and L3a
+    are 0.0: no single signal is both firing and correct, so L3b stays review-band.
+  - Remaining: config/dependency extraction; gate fusion (S1 #3) — the ≥2-signal
+    hold band so L3b can contribute to a hold alongside L1/L2. Acceptance: detects
+    tier-4 prompt/config theft; FP within budget on convergent independents under
+    the ≥2-signal fusion rule.
 - S2 — code-embedding (L3c). Code-embedding similarity as a review-band signal;
   select and host the embedding model. Acceptance: raises tier-3 recall without
   breaching the FP budget under the ≥2-signal fusion rule.
