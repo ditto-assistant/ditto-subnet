@@ -18,6 +18,7 @@ change, mirroring the platform's ledger read.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -62,13 +63,19 @@ def compute_weights(
     margin: float,
     tail_size: int,
     champion_share: float,
+    dethrone_z: float = 0.0,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
     ``entries`` is the ledger: one best-scoring agent per miner. The champion is
     found by folding entries in **first-seen order** (``first_seen`` then
     ``agent_id`` to break timestamp ties) and dethroning the running champion
-    only when a later entry's composite exceeds it by ``margin`` relative. The
+    only when a later entry's composite clears the **indifference band**
+    (:func:`_beats`): the larger of the flat relative ``margin`` and, when the
+    ledger surfaces per-entry ``composite_stderr`` and ``dethrone_z > 0``, the
+    statistical band ``dethrone_z * sqrt(se_c² + se_champ²)`` — so a challenger
+    inside the measurement noise cannot flip the crown (v3 #2). With no stderr the
+    band is exactly ``margin`` relative, identical to the pre-v3 rule. The
     champion gets ``champion_share``; the next ``tail_size`` miners by composite
     split ``1 - champion_share`` equally.
 
@@ -89,7 +96,7 @@ def compute_weights(
     # Champion: fold in creation order; a later entry must beat the running
     # champion by the relative margin to take the crown. Order-independent of
     # when each agent happened to be scored — only creation order matters.
-    champion = _champion(scored, margin)
+    champion = _champion(scored, margin, dethrone_z)
     weights: dict[str, float] = {champion.miner_hotkey: champion_share}
 
     # Tail: the next distinct miners by composite (highest first), excluding the
@@ -105,13 +112,54 @@ def compute_weights(
     return weights
 
 
-def _champion(entries: Sequence[LedgerEntry], margin: float) -> LedgerEntry:
+def _entry_stderr(entry: LedgerEntry) -> float | None:
+    """The entry's composite standard error, or None when the platform ledger
+    does not carry one. Read via getattr so the wire model can stay untouched
+    (the platform surfacing ``composite_stderr`` is optional per
+    BENCHMARK-V3-IDEAS §2.2 — until then the statistical band is inert and the
+    fold uses the flat relative margin, byte-identical to today). Non-finite or
+    negative values are treated as absent (a consensus-safe guard)."""
+    v = getattr(entry, "composite_stderr", None)
+    if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0.0:
+        return float(v)
+    return None
+
+
+def _beats(
+    challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
+) -> bool:
+    """Whether ``challenger`` dethrones ``champion`` (v3 #2). The lead must exceed
+    the **indifference band** = max(flat relative margin, statistical band):
+
+        band = max( margin * champion.composite,
+                    dethrone_z * sqrt(se_challenger² + se_champion²) )
+
+    The statistical term is a two-sample z-test on the composite difference; it
+    applies only when BOTH entries carry a ``composite_stderr`` and
+    ``dethrone_z > 0``. With no stderr (or z=0) the band is exactly the flat
+    relative margin, so ``challenger.composite > champion.composite*(1+margin)`` —
+    identical to the pre-v3 rule. Pure and deterministic (consensus-safe)."""
+    band = champion.composite * margin
+    if dethrone_z > 0.0:
+        se_c = _entry_stderr(challenger)
+        se_champ = _entry_stderr(champion)
+        if se_c is not None and se_champ is not None:
+            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
+            if stat_band > band:
+                band = stat_band
+    return challenger.composite - champion.composite > band
+
+
+def _champion(
+    entries: Sequence[LedgerEntry], margin: float, dethrone_z: float = 0.0
+) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
-    order, dethroning only on a > relative-margin beat."""
+    order, dethroning only when a later entry clears the indifference band
+    (:func:`_beats`)."""
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
     champ = ordered[0]
     for e in ordered[1:]:
-        if e.composite > champ.composite * (1.0 + margin):
+        if _beats(e, champ, margin, dethrone_z):
             champ = e
     return champ
 
@@ -132,6 +180,7 @@ def agents_needing_rescore(
     current_version: int,
     margin: float,
     tail_size: int,
+    dethrone_z: float = 0.0,
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
     bench_version than ``current_version`` — they must be re-evaluated before the
@@ -147,6 +196,6 @@ def agents_needing_rescore(
     scored = [e for e in entries if e.composite > 0.0]
     if not scored:
         return []
-    champion = _champion(scored, margin)
+    champion = _champion(scored, margin, dethrone_z)
     rewarded = [champion, *_tail(scored, champion, tail_size)]
     return [e for e in rewarded if _entry_version(e) < current_version]

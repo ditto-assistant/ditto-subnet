@@ -176,6 +176,7 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             tail_size=self._config.koth_tail_size,
             champion_share=self._config.koth_champion_share,
+            dethrone_z=self._config.koth_dethrone_z,
         )
         if not weights:
             logger.info("ledger has no positive scores; skipping put_weights")
@@ -210,6 +211,7 @@ class ValidatorWorker:
             current_version=self._current_bench_version,
             margin=self._config.koth_margin,
             tail_size=self._config.koth_tail_size,
+            dethrone_z=self._config.koth_dethrone_z,
         )
         if not stale:
             return ledger

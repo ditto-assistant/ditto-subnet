@@ -146,6 +146,7 @@ def _config() -> MagicMock:
     cfg.koth_margin = 0.01
     cfg.koth_tail_size = 4
     cfg.koth_champion_share = 0.9
+    cfg.koth_dethrone_z = 1.64
     cfg.weight_version_key = 1
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600

@@ -106,6 +106,17 @@ class ValidatorConfig:
     """Fraction of weight the ATH champion receives; the rest splits over the
     tail. ``0.9`` = 90% champion / 10% tail."""
 
+    koth_dethrone_z: float
+    """z-multiplier for the **statistical** half of the dethroning band (v3 #2,
+    ``docs/BENCHMARK-V3-IDEAS.md`` §2.2). A challenger must beat the incumbent by
+    more than ``max(koth_margin * incumbent, koth_dethrone_z * sqrt(se_c² +
+    se_champ²))`` — the larger of the flat relative margin and the combined
+    measurement uncertainty, when the ledger surfaces a per-entry
+    ``composite_stderr``. A **consensus knob** (every validator must agree) like
+    ``koth_margin``. Inert until the platform surfaces stderr — with no stderr the
+    band is the flat relative margin, byte-identical to today. ``1.64`` ≈ one-sided
+    95%; ``0`` disables the statistical half."""
+
     # --- Cadence / limits ---
     sweep_seconds: int
     """Seconds between scoring sweeps — how fast the ``evaluating`` queue drains.
@@ -213,6 +224,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.05")
     koth_tail_size = _parse_int("VALIDATOR_KOTH_TAIL_SIZE", "4")
     koth_champion_share = _parse_float("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")
+    koth_dethrone_z = _parse_float("VALIDATOR_KOTH_DETHRONE_Z", "1.64")
     # ``math.isfinite`` rejects NaN/Inf, which slip past a bare ``<= 0`` (e.g.
     # ``nan <= 0`` is False) and would silently disable the ATH gate — a
     # consensus-divergence footgun since the fold multiplies by ``1 + margin``.
@@ -228,6 +240,13 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         raise ValidatorConfigError(
             "VALIDATOR_KOTH_CHAMPION_SHARE must be a finite number in (0, 1], "
             f"got {koth_champion_share}"
+        )
+    # z >= 0; 0 disables the statistical band (pure relative margin). NaN/Inf
+    # would poison the deterministic fold, so reject them (consensus footgun).
+    if not math.isfinite(koth_dethrone_z) or koth_dethrone_z < 0:
+        raise ValidatorConfigError(
+            "VALIDATOR_KOTH_DETHRONE_Z must be a finite number >= 0, "
+            f"got {koth_dethrone_z}"
         )
 
     config = ValidatorConfig(
@@ -257,6 +276,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_margin=koth_margin,
         koth_tail_size=koth_tail_size,
         koth_champion_share=koth_champion_share,
+        koth_dethrone_z=koth_dethrone_z,
         sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),
         queue_limit=int(os.environ.get("VALIDATOR_QUEUE_LIMIT", "50")),
