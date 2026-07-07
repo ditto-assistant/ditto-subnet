@@ -401,6 +401,13 @@ sweep**:
    fold; miners notified via MINER-FAQ/changelog with ≥ 1 week notice.
 3. The weight fold only compares entries of the max bench_version present.
 
+**Pre-launch exception (current state).** This policy protects a *live* ledger.
+No miner has yet scored against benchmark v2, so the whole v2 redesign (Phases
+A/B/C) is stamped **`bench_version = 2`** and held there — there is no ledger to
+keep comparable and nothing to re-score, and minting versions 3/4 would only add
+throwaway sweeps. The per-change bump discipline (2 → 3 → …) begins with the
+first scoring change made *after* v2 is live and a miner has scored against it.
+
 **Phase A — harden v1 in place** (fast, no protocol change): stratified
 memory sampling; generated abstention questions (revive the dead judge
 clause); graded memory credit; argument + trajectory scoring (multi-hop cases
@@ -415,7 +422,7 @@ staged (Tier C) seeding; dataset hashing/persistence; 50/50 composite
 rebalance; KOTH margin + score_tol retune from measured σ; starter-kit docs
 + local-eval parity release. *Retires W1, W2, W5, W6.*
 
-**Phase C — observed execution** (bench_version 4, **implemented**):
+**Phase C — observed execution** (**implemented**, held at bench_version 2):
 validator-served `tool_endpoint` with observed-call scoring, result-usage
 scoring, `user_id`/multi-graph isolation cases. *Retires the last of W3 and
 unlocks capability 13/11.* (§11.4 has the per-WP status.)
@@ -514,9 +521,12 @@ Branch conventions: `ditto-subnet` and `ditto-platform` use
       garbage score recorded).
 - [ ] `run_size=small` stays cheap (few LLM calls) — the screener/smoke path
       and local iteration depend on it.
-- [ ] Every scoring-affecting change bumps `bench_version` (§9). Phase A ships
-      as bench_version 2, Phase B as 3, Phase C as 4 — do not blend a
-      scoring change into an unbumped release.
+- [ ] Every scoring-affecting change bumps `bench_version` (§9) — ONCE v2 is
+      live and a miner has scored against it. Pre-launch, Phases A/B/C are all
+      held at bench_version 2 (no ledger to keep comparable, nothing to
+      re-score); the escalation resumes from version 3 for the first scoring
+      change after v2 goes live. Never blend a scoring change into an unbumped
+      release once the bumping has started.
 
 ### 11.4 Work packages
 
@@ -538,7 +548,7 @@ with tests. Repo is `dittobench-api` unless stated.
 | A9 | Calibration harness: `cmd/benchcal` (or script) — N seeds × pinned harness image ⇒ per-suite/type means, between-seed σ, report JSON | new; drives §8 gates 1–3 | 30-seed σ report for v1 and for A-patched bench committed to the repo |
 | A10 | `bench_version` + telemetry in `details` (dataset fallback counts, judge audit stats, token totals); passthrough in validator W&B | `internal/scorer/scorer.go` (`Aggregate`), `ditto-subnet` `ditto/validator/{dittobench.py,wandb…}` | Ledger `details` carries `bench_version: 2`; subnet tests green (`make lint typecheck test`) |
 
-**Phase B — the data engine (bench_version 3)** — all ⇒ A9 (measure against
+**Phase B — the data engine (bench_version 2)** — all ⇒ A9 (measure against
 the calibration harness continuously).
 
 | WP | Task | Anchors | Done when |
@@ -553,7 +563,7 @@ the calibration harness continuously).
 | B8 | Mechanism retune from measured σ: `VALIDATOR_KOTH_MARGIN` ≥ 3σ/composite; platform `score_tol` to match; decide median-of-3 sub-seeds (§10.2) only if σ > 0.01 | `ditto-subnet` `ditto/validator/{config,weights}.py`; `ditto-platform` `ditto/api_server/scoring_gate.py:39` | §8 gate 1 met; ROAD-TO-PRODUCTION `B-KOTH` closeable |
 | B9 | Version-bump re-score sweep: validator re-evaluates eligible ledger agents (champion + tail minimum) when its bench_version exceeds the ledger's; fold ignores stale versions | `ditto-subnet` `ditto/validator/worker.py`, `weights.py` | Bump on a localnet ledger triggers re-eval then a clean fold |
 
-**Phase C — observed execution (bench_version 4)** — design §7. **Implemented on
+**Phase C — observed execution (bench_version 2)** — design §7. **Implemented on
 `dittobench-api` `nick/benchmark-v2`** (unit-tested; keyed `run_size` E2E
 pending):
 - **C1 ✅** — `internal/toolexec` mock tool endpoint (`RunRequest.tool_endpoint`)

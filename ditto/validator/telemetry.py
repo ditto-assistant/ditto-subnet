@@ -74,7 +74,7 @@ class ScoredAgentStat:
     bench_version: int = 0
     injection_attempts: int = 0
     paraphrase_fallbacks: int = 0
-    # Phase C observed execution (bench_version 4): how many tool cases ran under
+    # Phase C observed execution (bench_version 2): how many tool cases ran under
     # observed execution vs. were capped (harness didn't use the endpoint), and how
     # many multi-graph isolation cases ran. Zero on pre-Phase-C scorers.
     observed_tool_cases: int = 0
