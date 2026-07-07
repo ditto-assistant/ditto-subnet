@@ -29,7 +29,9 @@ class TestKothConfig:
     def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
         cfg = parse_validator_config_from_env()
-        assert cfg.koth_margin == 0.01
+        # v2 / bench_version 3 retune: 5% margin ≥ 3σ/composite at the σ ≤ 0.01
+        # target (was 1%; see config.py B8 note).
+        assert cfg.koth_margin == 0.05
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
         # Weight-set cadence is decoupled from the (faster) scoring sweep.

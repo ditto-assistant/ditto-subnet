@@ -198,8 +198,19 @@ def parse_validator_config_from_env() -> ValidatorConfig:
 
     # KOTH+ATH mechanism knobs. Every validator must agree on these or Yuma
     # consensus clips the deviator, so they are env-tunable but default to the
-    # team-locked values (90/10 split, 1% margin).
-    koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.01")
+    # team-locked values (90/10 split).
+    #
+    # Margin retune for DittoBench v2 / bench_version 3 (BENCHMARK-V2 §6.2, B8):
+    # the dethrone margin must exceed the between-seed composite noise so a
+    # verbatim copy cannot win a lucky seed. v1's 1% margin assumed a small σ it
+    # never had. v2 targets between-seed σ ≤ 0.01 composite (§8 gate 1) and sets
+    # the margin to ≥ 3σ/composite: at composite ~0.6, 3·0.01/0.6 = 5%. The
+    # offline calibrator (dittobench-api cmd/benchcal) reports a hermetic
+    # composite σ ≈ 0.017 as a weak-harness upper bound; the champion-region σ
+    # from the hosted 30-seed frozen-starter-kit run MUST reconfirm ≤ 0.01 before
+    # mainnet — if it is higher, raise this margin (and adopt median-of-3
+    # sub-seeds, §10.2) and re-match the platform score_tol.
+    koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.05")
     koth_tail_size = _parse_int("VALIDATOR_KOTH_TAIL_SIZE", "4")
     koth_champion_share = _parse_float("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")
     # ``math.isfinite`` rejects NaN/Inf, which slip past a bare ``<= 0`` (e.g.
