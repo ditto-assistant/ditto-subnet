@@ -67,6 +67,12 @@ class ValidatorConfig:
     pylon_identity_token: str
     """Pylon identity token paired with ``pylon_identity_name``."""
 
+    pylon_open_access_token: str | None
+    """Pylon open-access (read) token. Optional, but without it the worker's
+    validator-permit self-check (a Pylon open-access ``get_recent_neurons`` read)
+    cannot run in identity mode and fails open. Set ``PYLON_OPEN_ACCESS_TOKEN`` so
+    the self-check works in production, where identity is the weight path."""
+
     subtensor_network: str
     """Subtensor network identifier for the substrate event reads.
 
@@ -268,6 +274,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_url=os.environ.get("PYLON_URL", "http://localhost:8001"),
         pylon_identity_name=pylon_identity_name,
         pylon_identity_token=pylon_identity_token,
+        pylon_open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         use_sdk_weights=use_sdk_weights,
         weight_version_key=_parse_int(
