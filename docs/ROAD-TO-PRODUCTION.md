@@ -4,9 +4,8 @@
 before a mainnet (finney) rollout. This is the *forward-looking* companion to
 `NEXT-STEPS.md` (which carries the full history + rationale); when the two
 disagree, this file is newer. Status verbs: **DONE** (built + verified) ·
-**CODE-DONE** (merged, not yet proven on a live network) · **PR #N open**
-(implemented, awaiting review) · **PARTIAL** · **TODO** · **DECISION** (needs a
-human call).
+**CODE-DONE** (merged, not yet proven on a live network) · **PARTIAL** ·
+**TODO** · **DECISION** (needs a human call).
 
 ---
 
@@ -100,7 +99,7 @@ network where miners register to submit.
 | C-RATE | **API abuse controls** | **TODO** | Global + per-hotkey rate limits, request-size limits, auth throttling on public platform endpoints (today: permit-check + signatures only). |
 | C-VERIFY | **Verifiable / replicable scoring** | **DECISION** | Scoring is trusted to the single dittobench operator today. Reproducible seeds are already in the ledger; decide whether/when to build toward replicable scoring (couples to multi-validator). Our call, our timeline. |
 | F-MV | **Multi-validator: k=3 sharded queue + median-of-3** | **TODO** | Lease-based assignment to 3 distinct validators, finalize the median of 3 signed scores, migrate stub→target endpoint names, onboard >1 validator. Decentralizes trust off the single owner validator. |
-| V-ROBUST | **Weight-setting robustness (residual)** | **PR #39 open** | version_key/permit/tempo done. Residuals implemented in [#39](https://github.com/ditto-assistant/ditto-subnet/pull/39) (awaiting review): on-chain tempo/`weights_rate_limit` read stretches the effective epoch, exponential backoff (block-time base on rate-limit rejection), `VALIDATOR_MIN_STAKE_TAO` self-check arm. Unproven on a live network (testnet, with W-PYLON). |
+| V-ROBUST | **Weight-setting robustness (residual)** | **CODE-DONE** | version_key/permit/tempo done. Residuals merged in [#39](https://github.com/ditto-assistant/ditto-subnet/pull/39): on-chain tempo/`weights_rate_limit` read stretches the effective epoch, exponential backoff (block-time base on rate-limit rejection), `VALIDATOR_MIN_STAKE_TAO` self-check arm. Unproven on a live network (testnet, with W-PYLON). |
 
 ---
 
@@ -154,7 +153,7 @@ SDK/localnet path is a declared fallback.
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| S-CONTRACT | Screener wire-model contract guard | **PR #40 open** | Golden generated from the platform checkout + drift test + `scripts/gen_screener_contract.py`, mirroring the validator guard ([#40](https://github.com/ditto-assistant/ditto-subnet/pull/40), awaiting review). |
+| S-CONTRACT | Screener wire-model contract guard | **DONE** | Golden generated from the platform checkout + drift test + `scripts/gen_screener_contract.py`, mirroring the validator guard ([#40](https://github.com/ditto-assistant/ditto-subnet/pull/40)). |
 | S-GATE | Deeper screener gate | **TODO** | `POST /seed`/`/run` smoke, a failure-reason persist, a stale-claim reset sweep, a distinct `screener_permit` vs the validator permit. |
 | S-RETRY | Bounded re-score on transient failure | **TODO** | A miner whose harness errors mid-scoring is re-swept and re-run (full datagen + LLM cost) every epoch. Add a retry bound / terminal `evaluation_failed` after N attempts so a broken agent doesn't burn tokens forever. *(Surfaced by the full-run seeding failure.)* |
 | M-CLI | Miner CLI completion | **PARTIAL** | Deferred upload validations (tar manifest, import allowlist, schema diff) pending the harness interface; miner UX (clearer errors, status/logs). Stale 200 MB local cap (vs the platform's 20 MiB) fixed in [#41](https://github.com/ditto-assistant/ditto-subnet/pull/41) — `ditto verify` no longer passes tarballs the server rejects. |
