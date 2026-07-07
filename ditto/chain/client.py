@@ -41,6 +41,11 @@ _OWNER_STORAGE = "Owner"
 _TIMESTAMP_MODULE = "Timestamp"
 _TIMESTAMP_NOW_STORAGE = "Now"
 
+# --- substrate storage identifiers for subnet hyperparameter reads ---
+
+_TEMPO_STORAGE = "Tempo"
+_WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
+
 
 class ChainClient:
     """Async context manager wrapping Pylon for chain access.
@@ -178,6 +183,78 @@ class ChainClient:
             if n.hotkey == hotkey:
                 return n.validator_permit
         return None
+
+    async def get_stake_tao(self, hotkey: str, netuid: int) -> float | None:
+        """Stake (TAO) on ``hotkey``'s neuron, or ``None`` when not registered.
+
+        A validator uses this alongside :meth:`has_validator_permit` to
+        self-check it clears the subnet's stake threshold before submitting
+        weights.
+
+        Raises:
+            ChainConnectionError: When Pylon is unreachable.
+            ChainTimeoutError: When the request exceeds the configured timeout.
+        """
+        neurons = await self.get_recent_neurons(netuid)
+        for n in neurons:
+            if n.hotkey == hotkey:
+                return n.stake
+        return None
+
+    # --- Subnet hyperparameter reads (Pylon gap) ---
+
+    async def get_tempo(self, netuid: int) -> int | None:
+        """Read the subnet's ``Tempo`` hyperparameter (blocks per epoch).
+
+        Pylon does not expose subnet hyperparams, so this reads
+        ``SubtensorModule.Tempo(netuid)`` at the latest block via
+        ``async-substrate-interface`` (same gap-filler shape as
+        :meth:`check_extrinsic_success`). ``None`` when the storage entry is
+        empty (unknown netuid).
+
+        Raises:
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the query exceeds its timeout.
+        """
+        raw = await self._query_subtensor_storage(_TEMPO_STORAGE, netuid)
+        return None if raw is None else int(raw)
+
+    async def get_weights_rate_limit(self, netuid: int) -> int | None:
+        """Read the subnet's ``WeightsSetRateLimit`` hyperparameter (blocks).
+
+        The minimum number of blocks the chain enforces between two weight
+        submissions from the same hotkey. The validator stretches its
+        weight-set cadence to at least this window so it never knowingly
+        submits into a guaranteed rate-limit rejection. ``None`` when the
+        storage entry is empty (unknown netuid).
+
+        Raises:
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the query exceeds its timeout.
+        """
+        raw = await self._query_subtensor_storage(_WEIGHTS_RATE_LIMIT_STORAGE, netuid)
+        return None if raw is None else int(raw)
+
+    async def _query_subtensor_storage(self, storage_function: str, netuid: int) -> Any:
+        """Query ``SubtensorModule.<storage_function>(netuid)`` at the latest block."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+                result = await substrate.query(
+                    module=_SUBTENSOR_MODULE,
+                    storage_function=storage_function,
+                    params=[netuid],
+                )
+        except TimeoutError as e:
+            raise ChainTimeoutError(
+                f"{storage_function}(netuid={netuid}) timed out"
+            ) from e
+        except Exception as e:
+            raise ChainConnectionError(
+                f"{storage_function}(netuid={netuid}) failed: {e}"
+            ) from e
+        return _unwrap_substrate_value(result)
 
     # --- Block + extrinsic reads ---
 

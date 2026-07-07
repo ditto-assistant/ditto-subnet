@@ -106,6 +106,13 @@ class ValidatorConfig:
     """Fraction of weight the ATH champion receives; the rest splits over the
     tail. ``0.9`` = 90% champion / 10% tail."""
 
+    min_stake_tao: float
+    """Minimum stake (TAO) this validator expects on its own hotkey before it
+    submits weights. ``0`` disables the check (the localnet has staking
+    disabled). A companion to the ``validator_permit`` self-check: on a real
+    network a permit implies stake, but the stake read gives an early, explicit
+    log line when the hotkey has demonstrably fallen below the threshold."""
+
     # --- Cadence / limits ---
     sweep_seconds: int
     """Seconds between scoring sweeps — how fast the ``evaluating`` queue drains.
@@ -118,8 +125,10 @@ class ValidatorConfig:
     epoch_seconds: int
     """Minimum seconds between on-chain weight submissions (the weight-set
     cadence). Weights are recomputed from the durable ledger and pushed no more
-    often than this — approximately the subnet tempo / ``weights_rate_limit``
-    window, so the loop doesn't fight the chain's rate limiter."""
+    often than this. The worker also reads the subnet's on-chain
+    ``weights_rate_limit`` each epoch and stretches the effective cadence to
+    whichever is longer, so this value is a floor, not a promise — the loop
+    never knowingly fights the chain's rate limiter."""
 
     queue_limit: int
     """Max agents to pull from ``/validator/queue`` per sweep."""
@@ -218,6 +227,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             "VALIDATOR_KOTH_CHAMPION_SHARE must be a finite number in (0, 1], "
             f"got {koth_champion_share}"
         )
+    min_stake_tao = _parse_float("VALIDATOR_MIN_STAKE_TAO", "0")
+    if not math.isfinite(min_stake_tao) or min_stake_tao < 0:
+        raise ValidatorConfigError(
+            f"VALIDATOR_MIN_STAKE_TAO must be a finite number >= 0, got {min_stake_tao}"
+        )
 
     config = ValidatorConfig(
         platform_api_url=_require(
@@ -246,6 +260,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_margin=koth_margin,
         koth_tail_size=koth_tail_size,
         koth_champion_share=koth_champion_share,
+        min_stake_tao=min_stake_tao,
         sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),
         queue_limit=int(os.environ.get("VALIDATOR_QUEUE_LIMIT", "50")),

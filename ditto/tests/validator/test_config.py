@@ -87,3 +87,24 @@ class TestKothConfig:
         monkeypatch.setenv("VALIDATOR_KOTH_TAIL_SIZE", "4.5")
         with pytest.raises(ValidatorConfigError):
             parse_validator_config_from_env()
+
+
+class TestMinStakeConfig:
+    def test_default_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_MIN_STAKE_TAO", raising=False)
+        assert parse_validator_config_from_env().min_stake_tao == 0.0
+
+    def test_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_MIN_STAKE_TAO", "1000")
+        assert parse_validator_config_from_env().min_stake_tao == 1000.0
+
+    @pytest.mark.parametrize("val", ["nan", "inf", "-1", "abc"])
+    def test_bad_min_stake_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, val: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_MIN_STAKE_TAO", val)
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()

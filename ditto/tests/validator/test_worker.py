@@ -147,6 +147,7 @@ def _config() -> MagicMock:
     cfg.koth_tail_size = 4
     cfg.koth_champion_share = 0.9
     cfg.weight_version_key = 1
+    cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
     return cfg
@@ -356,6 +357,91 @@ class TestRunOnce:
         assert await worker.run_once() == 0
         chain.put_weights.assert_awaited_once()
 
+    async def test_stake_below_minimum_skips_weight_submission(self) -> None:
+        # With VALIDATOR_MIN_STAKE_TAO set, a demonstrably short stake must not
+        # burn an epoch on a guaranteed chain rejection.
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(items=[], ledger=ledger)
+        cfg = _config()
+        cfg.min_stake_tao = 1000.0
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        chain.has_validator_permit = AsyncMock(return_value=True)
+        chain.get_stake_tao = AsyncMock(return_value=10.0)
+
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        assert await worker.run_once() == 0
+        chain.get_stake_tao.assert_awaited_once()
+        chain.put_weights.assert_not_awaited()
+
+    async def test_stake_above_minimum_sets_weights(self) -> None:
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(items=[], ledger=ledger)
+        cfg = _config()
+        cfg.min_stake_tao = 1000.0
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        chain.has_validator_permit = AsyncMock(return_value=True)
+        chain.get_stake_tao = AsyncMock(return_value=5000.0)
+
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        assert await worker.run_once() == 0
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
+
+    async def test_stake_check_error_fails_open(self) -> None:
+        # Same fail-open posture as the permit check: a flaky read proceeds.
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(items=[], ledger=ledger)
+        cfg = _config()
+        cfg.min_stake_tao = 1000.0
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        chain.has_validator_permit = AsyncMock(return_value=True)
+        chain.get_stake_tao = AsyncMock(side_effect=ChainError("pylon down"))
+
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        assert await worker.run_once() == 0
+        chain.put_weights.assert_awaited_once()
+
+    async def test_min_stake_disabled_never_reads_stake(self) -> None:
+        # min_stake_tao=0 (the default; localnet has staking disabled) must not
+        # even touch the stake read.
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(items=[], ledger=ledger)
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+        chain.has_validator_permit = AsyncMock(return_value=True)
+        chain.get_stake_tao = AsyncMock(return_value=0.0)
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        assert await worker.run_once() == 0
+        chain.get_stake_tao.assert_not_awaited()
+        chain.put_weights.assert_awaited_once()
+
     async def test_set_weights_false_scores_without_touching_weights(self) -> None:
         # The scoring-only sweep (between weight-set epochs) drains the queue but
         # does not read the ledger or submit weights.
@@ -474,3 +560,65 @@ class TestRunOnce:
         # Must not raise — the durable ledger means next epoch retries.
         await worker.run_once()
         assert chain.put_weights.await_count == worker_mod._WEIGHT_SET_ATTEMPTS
+
+
+class TestRetryBackoff:
+    def test_transient_backoff_is_exponential(self) -> None:
+        err = ChainError("connection reset")
+        delays = [worker_mod._retry_delay_seconds(a, err) for a in (1, 2, 3)]
+        assert delays == [2.0, 4.0, 8.0]
+
+    def test_rate_limit_backoff_uses_block_time_base(self) -> None:
+        # A rate-limit rejection retried inside the same block is a guaranteed
+        # second rejection, so it backs off from a full block time.
+        err = ChainError("subtensor returned: SettingWeightsTooFast")
+        delays = [worker_mod._retry_delay_seconds(a, err) for a in (1, 2)]
+        assert delays == [12.0, 24.0]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "SettingWeightsTooFast",
+            "weights rate limit exceeded",
+            "RateLimitExceeded",
+            "you are setting weights too fast",
+        ],
+    )
+    def test_rate_limit_detection(self, message: str) -> None:
+        assert worker_mod._is_rate_limit_error(ChainError(message))
+
+    def test_ordinary_error_is_not_rate_limit(self) -> None:
+        assert not worker_mod._is_rate_limit_error(ChainError("pylon 502"))
+
+
+class TestChainCadenceFloor:
+    def _worker(self, chain: MagicMock) -> ValidatorWorker:
+        return ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+    async def test_floor_is_rate_limit_blocks_times_block_time(self) -> None:
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=100)
+        chain.get_tempo = AsyncMock(return_value=360)
+        assert await self._worker(chain)._chain_min_epoch_seconds() == 1200.0
+
+    async def test_missing_read_method_falls_back_to_config(self) -> None:
+        # A sink without the hyperparameter reads (older setter) keeps the
+        # configured cadence: floor 0 means max() picks epoch_seconds.
+        chain = MagicMock(spec=["put_weights"])
+        assert await self._worker(chain)._chain_min_epoch_seconds() == 0.0
+
+    async def test_read_error_falls_back_to_config(self) -> None:
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(side_effect=ChainError("down"))
+        assert await self._worker(chain)._chain_min_epoch_seconds() == 0.0
+
+    async def test_unknown_netuid_falls_back_to_config(self) -> None:
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        assert await self._worker(chain)._chain_min_epoch_seconds() == 0.0
