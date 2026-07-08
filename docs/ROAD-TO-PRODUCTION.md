@@ -1,11 +1,23 @@
 # Road to Production — SN118
 
-**Snapshot: 2026-07-07.** The single, current checklist of everything remaining
+**Snapshot: 2026-07-08.** The single, current checklist of everything remaining
 before a mainnet (finney) rollout. This is the *forward-looking* companion to
 `NEXT-STEPS.md` (which carries the full history + rationale); when the two
 disagree, this file is newer. Status verbs: **DONE** (built + verified) ·
 **CODE-DONE** (merged, not yet proven on a live network) · **PARTIAL** ·
 **TODO** · **DECISION** (needs a human call).
+
+> **⚠ There is no testnet — only the dev localnet and prod (finney).** Every
+> pre-prod rehearsal happens on the localnet; **finney is the first real chain**
+> the production weight path (Pylon delegation, commit-reveal, real `version_key`,
+> u16 normalization) ever touches. There is no testnet dress rehearsal, so the
+> localnet rehearsal must be maximized and the finney bring-up must be *guarded*
+> (low stake / small run / verify each hop before full). Earlier revisions of
+> this doc assumed a `testnet → finney` step; that step does not exist.
+>
+> **2026-07-08 updates:** C-ISO applied + verified on the dev validator (§3);
+> E1 Pylon write-path is self-serve + infra-prepped (§5); the migration spine is
+> re-framed localnet → finney below.
 
 ---
 
@@ -41,20 +53,25 @@ Everything below is what stands between that and a real network.
 ## 2. Critical path to mainnet (ordered — each gates the next)
 
 1. **Full-scale E2E proof** (§2.1) — prove the real production `run_size=full`
-   path end to end, incl. the just-fixed `/seed` body limit.
-2. **Sandbox egress allowlist + isolation** (§3, C-ISO) — before running real
-   scoring at any volume; untrusted miner code currently has full network egress.
-3. **Pylon write credentials on testnet** (§5, E1) — the production weight path
-   is 100% delegated to Pylon and **unverified in-repo**; standing it up on
-   testnet is the first real test of normalization / u16 / commit-reveal /
-   version_key. *Highest-leverage single item.*
-4. **Testnet cutover under the subnet-owner UID** (§5, E2) — move off the dev
-   localnet; no separate validator registration/burn.
-5. **Commit-reveal weights** (§4, W-CR) — enable + implement the reveal step for
-   the target network.
-6. **Multi-validator consensus (k=3 + median-of-3)** (§3, F-MV) — decentralize
+   path end to end, incl. the just-fixed `/seed` body limit. *(localnet)*
+2. **Sandbox egress allowlist + isolation** (§3, C-ISO) — ✅ **DONE**: applied +
+   verified on the dev validator (2026-07-08). Optional deeper isolation
+   (seccomp/gVisor) remains.
+3. **Commit-reveal weights** (§4, W-CR) — enable + implement the reveal step.
+   Because finney is the first real chain (no testnet), the reveal path can only
+   be *fully* exercised on finney, so land + review the code before cutover.
+4. **Maximize the localnet rehearsal of the Pylon weight path** (§4/§5, E1/W-PYLON)
+   — the production weight path is 100% delegated to Pylon; `put_weights` is
+   already validated live on the localnet. Push localnet coverage as far as it
+   goes (identity write, permit/stake self-checks, version_key stamping) so the
+   finney-only unknowns (real commit-reveal, u16 at scale, chain `version_key`)
+   are the *only* things first seen on finney. *Highest-leverage rehearsal.*
+5. **Multi-validator consensus (k=3 + median-of-3)** (§3, F-MV) — decentralize
    scoring off the single owner validator.
-7. **Mainnet (finney) cutover + real E2E on-chain** (§5, E4).
+6. **Guarded finney cutover under the subnet-owner UID + real E2E on-chain**
+   (§5, E4) — **the only real-chain step; there is no testnet before it.** Bring
+   it up guarded: small `run_size` / low stake first, verify each hop (Pylon
+   write, normalization, commit-reveal, weight resolution to UID) before full.
 
 Everything outside this spine (ops hardening, tuning, docs) parallelizes.
 
@@ -93,13 +110,13 @@ network where miners register to submit.
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| C-ISO | **Sandbox egress allowlist + seccomp/gVisor** | **PARTIAL** | Was "full egress, nothing built." Reality: sandbox-side plumbing is landed (`dittobench-api/internal/sandbox`: `--cap-drop ALL`, `--network`, proxy-env injection, `--pids-limit`, `no-new-privileges`, all env-gated) **and** the allowlisting egress proxy is now built (`cmd/egress-proxy`, [dittobench-api#21] — fail-closed CONNECT-only hostname allowlist, tested). Remaining = **infra enforcement**: create the `ditto-sandbox` docker network, run the proxy on it, install nft/iptables `DROP`-except-(proxy, host-gateway) on the validator VM, and set `DITTOBENCH_SANDBOX_EGRESS_NETWORK/_EGRESS_PROXY/_HARDEN` (Ansible). Optional deeper isolation (seccomp default-deny profile, gVisor/Kata, read-only rootfs) tracked in that repo's `docs/sandbox-egress-hardening.md`. Still the top robustness gap until the firewall lands. |
+| C-ISO | **Sandbox egress allowlist + seccomp/gVisor** | **DONE** (deeper isolation optional) | **Applied + verified on the dev validator 2026-07-08** (infra#12). Sandbox-side plumbing (`dittobench-api/internal/sandbox`: `--cap-drop ALL`, `--network`, proxy-env injection, `--pids-limit`, `no-new-privileges`) + the allowlisting proxy (`cmd/egress-proxy`, dittobench-api#21) + the host enforcement (Ansible `dittobench` role: `ditto-sandbox` docker network, proxy systemd unit, `DOCKER-USER` firewall that DROPs sandbox egress except → the proxy). Live smoke test passed: allowlisted `openrouter.ai` via proxy → 200; non-allowlisted → denied; **direct dial → blocked (fail-closed)**. Optional deeper isolation (seccomp default-deny profile, gVisor/Kata, read-only rootfs) tracked in `dittobench-api/docs/sandbox-egress-hardening.md`. |
 | C-REPLAY | **Signature replay-cache / nonce+expiry** | **PARTIAL** | Sigs bind the full payload (no cross-agent replay), but add a server-side nonce+expiry replay cache so a captured signed message can't be re-applied. |
 | C-TUNE | **Plagiarism threshold tuning + review automation** | **PARTIAL** | Two-channel fingerprint gate merged; lexical (0.75/0.95) + structural (0.85/0.98) tolerances are conservative guesses — tune against a real corpus. `ath_pending_review` drained by hand (`scripts/resolve_review.py`); build a reviewer workflow. |
 | C-RATE | **API abuse controls** | **TODO** | Global + per-hotkey rate limits, request-size limits, auth throttling on public platform endpoints (today: permit-check + signatures only). |
 | C-VERIFY | **Verifiable / replicable scoring** | **DECISION** | Scoring is trusted to the single dittobench operator today. Reproducible seeds are already in the ledger; decide whether/when to build toward replicable scoring (couples to multi-validator). Our call, our timeline. |
 | F-MV | **Multi-validator: k=3 sharded queue + median-of-3** | **TODO** | Lease-based assignment to 3 distinct validators, finalize the median of 3 signed scores, migrate stub→target endpoint names, onboard >1 validator. Decentralizes trust off the single owner validator. |
-| V-ROBUST | **Weight-setting robustness (residual)** | **CODE-DONE** | version_key/permit/tempo done. Residuals merged in [#39](https://github.com/ditto-assistant/ditto-subnet/pull/39): on-chain tempo/`weights_rate_limit` read stretches the effective epoch, exponential backoff (block-time base on rate-limit rejection), `VALIDATOR_MIN_STAKE_TAO` self-check arm. Unproven on a live network (testnet, with W-PYLON). |
+| V-ROBUST | **Weight-setting robustness (residual)** | **CODE-DONE** | version_key/permit/tempo done. Residuals merged in [#39](https://github.com/ditto-assistant/ditto-subnet/pull/39): on-chain tempo/`weights_rate_limit` read stretches the effective epoch, exponential backoff (block-time base on rate-limit rejection), `VALIDATOR_MIN_STAKE_TAO` self-check arm. Unproven on a live network — first proven at finney cutover (no testnet), with W-PYLON. |
 
 ---
 
@@ -107,28 +124,31 @@ network where miners register to submit.
 
 The production weight path **delegates all chain conformance to Pylon**
 (normalization, u16, UID resolution, commit-reveal, version_key) and does **not
-verify any of it in-repo** — so testnet is the first real test. The in-repo
-SDK/localnet path is a declared fallback.
+verify any of it in-repo**. With **no testnet**, the localnet is the only
+rehearsal and **finney is the first real chain** this path touches — so verify
+everything the localnet *can* exercise there, and treat the finney-only pieces
+(real commit-reveal, chain `version_key`, u16 at production scale) as guarded
+first-runs on finney. The in-repo SDK/localnet path is a declared fallback.
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| W-VK | version_key pin | **CODE-DONE** | SDK path stamps `version_key` (default `ditto.__spec_version__`, env `VALIDATOR_WEIGHT_VERSION_KEY`). Confirm the Pylon-derived version_key matches on testnet. |
+| W-VK | version_key pin | **CODE-DONE** | SDK path stamps `version_key` (default `ditto.__spec_version__`, env `VALIDATOR_WEIGHT_VERSION_KEY`). Confirm the Pylon-derived version_key matches at finney cutover (no testnet to confirm it on first). |
 | W-PERMIT | validator_permit self-check | **CODE-DONE** | Skips (fail-open) when the hotkey lacks a permit. Min-stake arm (`VALIDATOR_MIN_STAKE_TAO`) added in PR #39. |
 | W-CADENCE | Tempo-decoupled cadence | **CODE-DONE** | `VALIDATOR_SWEEP_SECONDS` (120s) vs `VALIDATOR_EPOCH_SECONDS` (3600s). PR #39 additionally reads the target network's on-chain `weights_rate_limit` and stretches the effective epoch to it. |
 | W-CR | **Commit-reveal** | **TODO 🔴** | Off on dev netuid 3; production needs a first-class reveal step + the chain param enabled. Without it, weights are copy-able (front-runnable). |
-| W-PYLON | **Verify Pylon delegation on testnet** | **TODO 🔴** | Prove normalization/u16/`max_weight_limit`/commit-reveal/version_key actually do the right thing against a live chain via Pylon identity-write. Gated on E1. |
+| W-PYLON | **Verify Pylon delegation (localnet → finney)** | **PARTIAL** | `put_weights` via Pylon identity is validated live on the localnet (2026-07-07); infra prep merged (infra#12). What the localnet *cannot* prove — real commit-reveal, chain `version_key`, u16 `max_weight_limit` normalization at scale — has **no testnet to prove it on**, so it is a guarded first-run at finney cutover (E4). Push localnet coverage as far as possible first. |
 | W-PARAMS | Chain hyperparameters | **TODO** | Set tempo, immunity period, weights-rate-limit, validator-permit threshold, registration burn + recycle for the target network. |
 
 ---
 
-## 5. Network migration (testnet → finney)
+## 5. Network migration (localnet → finney — no testnet)
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| E1 | **Pylon identity (write) credentials** | **PARTIAL — self-serve, NOT an external dependency** | Corrected: the Pylon write token is a **self-generated bearer secret** (`openssl rand -base64 32`) — Pylon holds the mounted hotkey and signs `set_weights` itself; the token just authorizes the client. Pattern confirmed from resi-labs-ai/RESI-models (same `backenddevelopersltd/bittensor-pylon` image) and **validated live on dev localnet 2026-07-07** (real `put_weights`, no SDK fallback). Remaining work is per-network, not a blocker: generate the testnet/finney token, set `PYLON_IDENTITIES` + `PYLON_IDENTITY_NAME/TOKEN` + `PYLON_OPEN_ACCESS_TOKEN`, mount the hotkey wallet RO, and verify against a live testnet chain (W-PYLON). |
-| E2 | Testnet permit + stake (owner UID) | **TODO** | Validation runs under the **subnet owner's UID** — no separate validator registration/burn. Stake the owner hotkey past the `validator_permit` threshold. |
-| E3 | Chain parameters on target network | **TODO** | See W-PARAMS + enable commit-reveal (W-CR); re-tune the alpha pool / `TaoWeight` per network. |
-| E4 | **Mainnet (finney) cutover** | **TODO** | Point platform + validator at finney SN118, flip `enable_validator`, run the deploy runbook, verify each hop, run a real E2E on mainnet. |
+| E1 | **Pylon identity (write) credentials** | **PARTIAL — self-serve + infra-prepped, NOT an external dependency** | The Pylon write token is a **self-generated bearer secret** (`openssl rand -base64 32`) — Pylon holds the mounted hotkey and signs `set_weights` itself; the token just authorizes the client. Confirmed from resi-labs-ai/RESI-models (same `backenddevelopersltd/bittensor-pylon` image) and **validated live on the dev localnet 2026-07-07** (real `put_weights`, no SDK fallback). Deployed-infra prep merged (infra#12: `validator_pylon` sidecar role + worker client-env + two TF token secrets + runbook), gated off. Remaining is a per-network flag-flip: generate the finney token, set `validator_pylon_identity_enabled: true` + `validator_use_sdk_weights: false` in the finney host_vars, populate secrets, converge. **No testnet — first live-chain proof is finney (W-PYLON, E4).** |
+| E2 | Finney permit + stake (owner UID) | **TODO** | Validation runs under the **subnet owner's UID** — no separate validator registration/burn. Stake the owner hotkey past the `validator_permit` threshold on finney (no testnet stake step first). |
+| E3 | Chain parameters on finney | **TODO** | See W-PARAMS + enable commit-reveal (W-CR); re-tune the alpha pool / `TaoWeight`. Set directly on finney (owner sudo) — no testnet to trial them on. |
+| E4 | **Guarded finney cutover** | **TODO** | The only real-chain step. Point platform + validator at finney SN118, flip `enable_validator`, run the deploy runbook, and **verify each hop guarded** (small `run_size` / low stake first): Pylon write → normalization/u16 → commit-reveal → weight resolves to the champion UID → then full. No testnet dress rehearsal precedes this. |
 | B-KOTH | Validate KOTH+ATH params vs real scores | **TODO** | Once real composites exist, sanity-check the 1% margin + 90/10 split against the observed score spread + between-seed variance; tune via `VALIDATOR_KOTH_*`. |
 | B-TAIL | Participation-tail economics | **DECISION** | Tail size, min-score floor, or pure winner-take-all at mainnet. |
 
@@ -187,9 +207,10 @@ SDK/localnet path is a declared fallback.
 ## 10. Definition of "production ready" (exit checklist)
 
 - [ ] Full-scale (`run_size=full`) E2E proven end to end (§2.1).
-- [ ] Sandbox egress-restricted + isolated (C-ISO).
-- [ ] Weights set via **verified** Pylon identity-write on testnet, with
-      commit-reveal on and version_key confirmed (W-CR, W-PYLON, E1).
+- [x] Sandbox egress-restricted + isolated (C-ISO) — applied + verified on dev
+      2026-07-08; deeper isolation (seccomp/gVisor) optional.
+- [ ] Weights set via **verified** Pylon identity-write on **finney** (no
+      testnet), with commit-reveal on and version_key confirmed (W-CR, W-PYLON, E1).
 - [ ] ≥3 validators converging on the KOTH champion via median-of-3 (F-MV).
 - [ ] Observability + alerting + DB backups + a rotation runbook (O-*).
 - [ ] A green localnet E2E + chaos suite in CI (Q-CI, Q-CHAOS).
