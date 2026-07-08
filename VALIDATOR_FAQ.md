@@ -26,14 +26,21 @@ This mirrors the DittoBench practice validator that miners use to iterate. On-ch
 
 Plan for a **Linux host with Docker**. The validator runs a small stack plus a sandbox that builds and runs miner submissions, so it leans on CPU more than GPU.
 
+Suggested starting point. Adjust to your load and the number of miners on the subnet.
+
+- **8+ CPU cores.** Building each miner's Rust crate in the sandbox is the heaviest step.
+- **32 GB RAM.** 16 GB works for a single build at a time. 32 GB gives headroom for parallel builds plus Postgres and Ollama.
+- **100+ GB SSD.** Docker layers, crate build caches, and submission artifacts.
+- **No GPU.**
+- **Stable internet connection.**
+
 | Component | Why it's needed |
 | --- | --- |
 | **Docker Compose** | Runs Pylon, Postgres, object storage, and the per-submission build/run sandbox. |
 | **Ollama** | Memory-retrieval embeddings for scoring. Runs on CPU. |
 | **Python 3.11 or 3.12 + `uv`** | The subnet service itself. |
-| **Disk** | Compiling crates and caching Docker layers and submission artifacts. Give it headroom (tens of GB). |
 
-No GPU. Scoring calls OpenRouter for the chat and judge models and Ollama for embeddings.
+Scoring calls OpenRouter for the chat and judge models and Ollama for embeddings.
 
 ---
 
