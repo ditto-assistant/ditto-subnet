@@ -122,6 +122,10 @@
       "miner_hotkey": {
         "type": "string"
       },
+      "n": {
+        "minimum": 0,
+        "type": "integer"
+      },
       "run_id": {
         "type": "string"
       },
@@ -165,6 +169,7 @@
       "miner_hotkey",
       "agent_id",
       "composite",
+      "n",
       "first_seen",
       "sha256",
       "run_id",
@@ -207,6 +212,10 @@
           },
           "miner_hotkey": {
             "type": "string"
+          },
+          "n": {
+            "minimum": 0,
+            "type": "integer"
           },
           "run_id": {
             "type": "string"
@@ -251,6 +260,7 @@
           "miner_hotkey",
           "agent_id",
           "composite",
+          "n",
           "first_seen",
           "sha256",
           "run_id",
