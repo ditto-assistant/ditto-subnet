@@ -91,21 +91,44 @@ composite + resolved on-chain weight.
       Fixed in `dittobench-starter-kit#9` (`DefaultBodyLimit::max(256 MiB)`).
 - [x] Validator reconverged to `run_size=full`; screener + conformance code live.
 - [x] Submission tarball built from the fixed kit + pre-flight passed.
-- [ ] **Miner submits** the tarball (funded coldkey + a hotkey **registered on
-      netuid 3**; the dev-API/localnet-chain wiring). Owner-run (key custody).
+- [x] **Two C-ISO host-channel regressions found + fixed (2026-07-08, infra#13).**
+      C-ISO moved the harness off the default docker0 bridge onto the isolated
+      sandbox subnet, taking it outside the pre-existing `172.17.0.0/16` host
+      allow, so both host-local dittobench services it needs went dark: (a) the
+      **Ollama** embedding endpoint (memory seeding) — every full run 500'd at
+      `/seed` since ~18:32; (b) the Phase-C **`tool_endpoint`** (ephemeral host
+      port) — `observed=0`, so every observable tool case was capped at 0.5 and
+      the efficiency term lost. Both re-granted with scoped UFW **INPUT** allows
+      (host-local; external egress stays proxy-only). Verified live: full runs
+      now clear seeding and reach `done`; sandbox→host ephemeral probe blocked
+      before / reachable after.
+- [ ] **Miner submits a *working* harness** (funded coldkey + a hotkey
+      **registered on netuid 3**). Owner-run (key custody). The only agent in the
+      dev queue (`0453574c`, miner `5E7e…`) is a **broken stub** — it burns ~20k
+      LLM tokens but emits no valid tool calls and recalls nothing, so it
+      correctly scores `composite=0.000` (tool + memory both 0). Not a pipeline
+      bug; it just proves nothing about a *good* full run.
 - [ ] Agent auto-flows screener (compiles #9) → `evaluating` → full scoring →
       real full composite in the ledger.
-- [ ] **Merge cleanup:** `dittobench-starter-kit#9` merged; its compile is
-      validated by the screener build at submit time.
+- [ ] **Platform must surface `n` on `GET /scoring/scores`** (X-LEDGER-N below).
+      Today it doesn't, so the validator's `MIN_ELIGIBLE_CASES=100` floor
+      **fails open** and a small run (n=12) can be the on-chain champion —
+      exactly what happens now (uid 5 = 0.9 is driven by `5CLUBKGj`'s n=12
+      *small* run, not a full one).
 - **Acceptance:** a real `full` composite for a real harness in the ledger, and
-  the champion weight resolves to the miner's UID on-chain (needs the miner
-  registered — see the localnet gap below).
+  the champion weight resolves to the miner's UID on-chain.
 
-**Localnet weight-resolution gap:** in the small proof the scored miner hotkey
-was *not* registered on netuid 3, so its 0.9 champion weight mapped to no UID and
-was skipped (only the validator's tail 0.1 landed). Register submitting miners on
-the localnet, or accept it as a localnet-only artifact that disappears on a real
-network where miners register to submit.
+**Status 2026-07-08:** the *mechanism* is proven end-to-end — full-size
+datagen+seeding completes, weights resolve to a registered miner's UID on chain
+(uid 5 = 0.9), and that write now goes over the **Pylon identity path** (§2.4).
+What's left for a clean acceptance is content, not plumbing: a *good* agent
+scored at `full` (the queued one is broken) **and** the platform surfacing `n`
+so the full composite — not a stale small run — is the champion.
+
+**Localnet weight-resolution note:** a registered miner (`5CLUBKGj` = uid 5) now
+resolves its champion weight on chain (0.9); an *unregistered* scored hotkey
+(`5FHneW46`) is still correctly skipped from the weight vector — a localnet
+artifact that disappears where miners must register to submit.
 
 ---
 
@@ -113,7 +136,7 @@ network where miners register to submit.
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| C-ISO | **Sandbox egress allowlist + seccomp/gVisor** | **DONE** (deeper isolation optional) | **Applied + verified on the dev validator 2026-07-08** (infra#12). Sandbox-side plumbing (`dittobench-api/internal/sandbox`: `--cap-drop ALL`, `--network`, proxy-env injection, `--pids-limit`, `no-new-privileges`) + the allowlisting proxy (`cmd/egress-proxy`, dittobench-api#21) + the host enforcement (Ansible `dittobench` role: `ditto-sandbox` docker network, proxy systemd unit, `DOCKER-USER` firewall that DROPs sandbox egress except → the proxy). Live smoke test passed: allowlisted `openrouter.ai` via proxy → 200; non-allowlisted → denied; **direct dial → blocked (fail-closed)**. Optional deeper isolation (seccomp default-deny profile, gVisor/Kata, read-only rootfs) tracked in `dittobench-api/docs/sandbox-egress-hardening.md`. |
+| C-ISO | **Sandbox egress allowlist + seccomp/gVisor** | **DONE** (deeper isolation optional) | **Applied + verified on the dev validator 2026-07-08** (infra#12). Sandbox-side plumbing (`dittobench-api/internal/sandbox`: `--cap-drop ALL`, `--network`, proxy-env injection, `--pids-limit`, `no-new-privileges`) + the allowlisting proxy (`cmd/egress-proxy`, dittobench-api#21) + the host enforcement (Ansible `dittobench` role: `ditto-sandbox` docker network, proxy systemd unit, `DOCKER-USER` firewall that DROPs sandbox egress except → the proxy). Live smoke test passed: allowlisted `openrouter.ai` via proxy → 200; non-allowlisted → denied; **direct dial → blocked (fail-closed)**. **Follow-up (2026-07-08, infra#13):** moving the sandbox off the default docker0 bridge silently broke the two host-local dittobench services the harness needs (both were outside the pre-existing `172.17.0.0/16` allow) — Ollama (memory seeding, `/seed` 500s) and the Phase-C `tool_endpoint` (ephemeral host port → `observed=0`, tool cases capped). Re-granted with scoped UFW **INPUT** allows (host-local; external egress unchanged). Lesson: enabling C-ISO needs a same-host-service reachability check, not just an external-dial test. Optional deeper isolation (seccomp default-deny profile, gVisor/Kata, read-only rootfs) tracked in `dittobench-api/docs/sandbox-egress-hardening.md`. |
 | C-REPLAY | **Signature replay-cache / nonce+expiry** | **PARTIAL** | Sigs bind the full payload (no cross-agent replay), but add a server-side nonce+expiry replay cache so a captured signed message can't be re-applied. |
 | C-TUNE | **Plagiarism threshold tuning + review automation** | **PARTIAL** | Two-channel fingerprint gate merged; lexical (0.75/0.95) + structural (0.85/0.98) tolerances are conservative guesses — tune against a real corpus. `ath_pending_review` drained by hand (`scripts/resolve_review.py`); build a reviewer workflow. |
 | C-RATE | **API abuse controls** | **TODO** | Global + per-hotkey rate limits, request-size limits, auth throttling on public platform endpoints (today: permit-check + signatures only). |
@@ -139,7 +162,7 @@ first-runs on finney. The in-repo SDK/localnet path is a declared fallback.
 | W-PERMIT | validator_permit self-check | **CODE-DONE** | Skips (fail-open) when the hotkey lacks a permit. Min-stake arm (`VALIDATOR_MIN_STAKE_TAO`) added in PR #39. |
 | W-CADENCE | Tempo-decoupled cadence | **CODE-DONE** | `VALIDATOR_SWEEP_SECONDS` (120s) vs `VALIDATOR_EPOCH_SECONDS` (3600s). PR #39 additionally reads the target network's on-chain `weights_rate_limit` and stretches the effective epoch to it. |
 | W-CR | **Commit-reveal** | **CODE-DONE** | Corrected: under commit-reveal **v3** (bittensor 10.3.2) there is **no separate reveal call** — `set_weights`/Pylon do the timelock commit and the chain auto-reveals after `RevealPeriodEpochs`. The worker now **reads + logs** the CR mode each weight-set and guards it: `VALIDATOR_REQUIRE_COMMIT_REVEAL` logs an error (still submits — refusing would zero the chain) when CR is off but expected on. So the "first-class reveal step" earlier docs described is obsolete. Remaining is **operational**: enable the `CommitRevealWeightsEnabled` hyperparameter on finney (owner sudo, E3) + confirm at the guarded cutover (W-PYLON/E4). Off on dev netuid 3. |
-| W-PYLON | **Verify Pylon delegation (localnet → finney)** | **PARTIAL** | `put_weights` via Pylon identity is validated live on the localnet (2026-07-07); infra prep merged (infra#12). What the localnet *cannot* prove — real commit-reveal, chain `version_key`, u16 `max_weight_limit` normalization at scale — has **no testnet to prove it on**, so it is a guarded first-run at finney cutover (E4). Push localnet coverage as far as possible first. |
+| W-PYLON | **Verify Pylon delegation (localnet → finney)** | **PARTIAL — deployed-role validated on localnet** | `put_weights` via Pylon identity validated live on the localnet twice over: first by hand (2026-07-07), then **through the deployed `validator_pylon` Ansible sidecar role (2026-07-08, infra#13)** — dev validator flipped off the SDK fallback (`validator_use_sdk_weights: false`), sidecar materialized the hotkey from the mnemonic and connected to netuid 3, and the worker set weights via `ditto.chain.client put_weights submitted for netuid=3 with 2 entries`. So the *prod weight path + its provisioning role* are both exercised. What the localnet *cannot* prove — real commit-reveal, chain `version_key`, u16 `max_weight_limit` normalization at scale — has **no testnet to prove it on**, so it is a guarded first-run at finney cutover (E4). |
 | W-PARAMS | Chain hyperparameters | **TODO** | Set tempo, immunity period, weights-rate-limit, validator-permit threshold, registration burn + recycle for the target network. |
 
 ---
@@ -148,7 +171,7 @@ first-runs on finney. The in-repo SDK/localnet path is a declared fallback.
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| E1 | **Pylon identity (write) credentials** | **PARTIAL — self-serve + infra-prepped, NOT an external dependency** | The Pylon write token is a **self-generated bearer secret** (`openssl rand -base64 32`) — Pylon holds the mounted hotkey and signs `set_weights` itself; the token just authorizes the client. Confirmed from resi-labs-ai/RESI-models (same `backenddevelopersltd/bittensor-pylon` image) and **validated live on the dev localnet 2026-07-07** (real `put_weights`, no SDK fallback). Deployed-infra prep merged (infra#12: `validator_pylon` sidecar role + worker client-env + two TF token secrets + runbook), gated off. Remaining is a per-network flag-flip: generate the finney token, set `validator_pylon_identity_enabled: true` + `validator_use_sdk_weights: false` in the finney host_vars, populate secrets, converge. **No testnet — first live-chain proof is finney (W-PYLON, E4).** |
+| E1 | **Pylon identity (write) credentials** | **PARTIAL — self-serve + infra-prepped, NOT an external dependency** | The Pylon write token is a **self-generated bearer secret** (`openssl rand -base64 32`) — Pylon holds the mounted hotkey and signs `set_weights` itself; the token just authorizes the client. Confirmed from resi-labs-ai/RESI-models (same `backenddevelopersltd/bittensor-pylon` image) and **validated live on the dev localnet** — first by hand (2026-07-07), then **through the deployed `validator_pylon` sidecar role on the dev VM (2026-07-08, infra#13)**: tokens generated (`openssl rand -base64 32`) + stored in Secret Manager + SA-granted, `validator_pylon_identity_enabled: true` + `validator_use_sdk_weights: false`, converged, and the worker's real `put_weights` landed over the sidecar (no SDK fallback). So the flag-flip below is now a *proven* procedure, not just prepped. Remaining for finney is the same flip in the finney host_vars against real stake. **No testnet — first live-chain proof is finney (W-PYLON, E4).** |
 | E2 | Finney permit + stake (owner UID) | **TODO** | Validation runs under the **subnet owner's UID** — no separate validator registration/burn. Stake the owner hotkey past the `validator_permit` threshold on finney (no testnet stake step first). |
 | E3 | Chain parameters on finney | **TODO** | See W-PARAMS + enable commit-reveal (W-CR); re-tune the alpha pool / `TaoWeight`. Set directly on finney (owner sudo) — no testnet to trial them on. |
 | E4 | **Guarded finney cutover** | **TODO** | The only real-chain step. Point platform + validator at finney SN118, flip `enable_validator`, run the deploy runbook, and **verify each hop guarded** (small `run_size` / low stake first): Pylon write → normalization/u16 → commit-reveal → weight resolves to the champion UID → then full. No testnet dress rehearsal precedes this. |
@@ -237,7 +260,8 @@ contract/doc drifts and productionization gaps that amplify §3–§6. IDs are
 | X-SHADOW | **Semantic-clone gate is shadow-only** | **KNOWN (S2)** | Production anti-copy today = exact-bytes / repack / normalized-source / lexical / structural / size → *human review* (`ditto-platform/scoring_gate.py`). The **code-embedding vector is stored but not gating** (`upload.py:336-341`, disabled by default), the **prompt-fusion hold is deferred** pending an orthogonal signal (`scoring_gate.py:163-168`), and the embedder Cloud Run service is **gated OFF + unprovisioned** (`infra` `enable_embedder=false`). Expected per `SEMANTIC-CLONE-PREVENTION.md` S2, but state it plainly at launch: semantic clone *prevention* is not live; convergence-robust gating is blocked on X-TRAJ. Amplifies C-TUNE. |
 | X-HARDEN | **Platform public-endpoint hardening** | **TODO** | Before public exposure: unset `DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR` (`ditto-platform/endpoints/validator.py:133-143`); front the app with a reverse proxy for **TLS + rate limiting** — public GET endpoints have no app-level limits (`retrieval.py:4`, deferred to a proxy not yet stood up); and bind validator read-GETs to a per-request nonce/timestamp signature (today: `X-Validator-Hotkey` + permit only, `validator.py:27-29`). Amplifies C-RATE. |
 | X-BENCHHOST | **dittobench-api deploy target vs mode B** | **DOC** | Mode B (presigned `tarball_url`, the validator's real path) needs a Docker daemon; the README's "Deploy (Cloud Run)" section describes the **practice** service (no Docker → `harness_url` only). `infra` co-locates a **second** dittobench-api instance on the Docker-capable validator VM (`127.0.0.1:8080`), which is where mode-B scoring actually runs. Not a code gap — the README is correct that the Docker path is "the on-chain validator's path"; add a one-line pointer so the two deploy contexts aren't conflated. |
-| X-INFRA-PROD | **No production infra exists** | **TODO 🔴** | Largest gap cluster (feeds E1/E2/E4/O-*). `infra` is dev-only: dev+"prod" share the `ditto-app-dev` project + tfstate; validator & embedder are **gated OFF and unprovisioned**; the validator/screener target the **dev localnet (netuid 3)**, not finney 118; weights use the **SDK path, not Pylon identity** (`validator_use_sdk_weights=true`); the platform **DB password lands in tfstate**; Postgres is a **single non-HA VM** holding both dev+prod DBs; the validator **reuses the platform SA** (`validator.tf:66` flags "prod should use a dedicated SA"). A finney deploy needs a genuine prod-isolation story, not a flag flip. |
+| X-INFRA-PROD | **No production infra exists** | **TODO 🔴** | Largest gap cluster (feeds E1/E2/E4/O-*). `infra` is dev-only: dev+"prod" share the `ditto-app-dev` project + tfstate; validator & embedder are **gated OFF and unprovisioned**; the validator/screener target the **dev localnet (netuid 3)**, not finney 118; ~~weights use the SDK path~~ (dev now rehearses the **Pylon identity path** — infra#13, W-PYLON); the platform **DB password lands in tfstate**; Postgres is a **single non-HA VM** holding both dev+prod DBs; the validator **reuses the platform SA** (`validator.tf:66` flags "prod should use a dedicated SA"). A finney deploy needs a genuine prod-isolation story, not a flag flip. |
+| X-LEDGER-N | **Fold ledger doesn't surface `n` → eligibility fails open** | **PLATFORM 🔴** | `GET /scoring/scores` (the durable ledger the validator folds into weights) returns `composite` per miner but **not `n`** (case count). The validator's `MIN_ELIGIBLE_CASES = 100` floor (`weights.py:_entry_eligible`) reads `n` via `getattr` and **fails open when it's absent** — so a *small* run (n=12) counts as eligible and can be the on-chain champion. Live proof: uid 5 = 0.9 is currently driven by `5CLUBKGj`'s **n=12 small run**, not a full one. Fix on the platform: include `n` (and ideally `bench_version`, `run_size`) in the `/scoring/scores` entry shape (mirror in `ditto/api_models/validator.py`), so the floor actually bites. Blocks the §2.1 "full composite is the champion" acceptance. |
 
 **Reconciliation status (2026-07-08):** X-BENCHVER + X-TRAJ (doc) + X-BENCHHOST
 are being fixed now (comment/doc-only, one PR per repo). X-SHADOW / X-HARDEN /
