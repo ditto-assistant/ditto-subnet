@@ -16,8 +16,10 @@ from uuid import uuid4
 import pytest
 
 from ditto.validator.weights import (
+    MIN_ELIGIBLE_CASES,
     agents_needing_rescore,
     compute_weights,
+    filter_eligible,
     filter_to_latest_version,
     max_bench_version,
 )
@@ -28,10 +30,16 @@ _KOTH: dict[str, Any] = {"margin": 0.01, "tail_size": 4, "champion_share": 0.9}
 
 
 def _e(
-    miner: str, composite: float, *, version: int | None = None, minutes: int = 0
+    miner: str,
+    composite: float,
+    *,
+    version: int | None = None,
+    minutes: int = 0,
+    n: int | None = None,
 ) -> Any:
     """A duck-typed ledger entry. version=None models a platform that does not
-    surface bench_version (the field is simply absent)."""
+    surface bench_version (the field is simply absent); n=None likewise omits the
+    case count (the fold then treats the entry as eligible — fail open)."""
     ns = SimpleNamespace(
         miner_hotkey=miner,
         agent_id=uuid4(),
@@ -41,7 +49,34 @@ def _e(
     )
     if version is not None:
         ns.bench_version = version
+    if n is not None:
+        ns.n = n
     return ns
+
+
+class TestEligibilityFilter:
+    def test_missing_n_is_eligible(self) -> None:
+        # No case count ⇒ fail open ⇒ filter is identity (matches the version
+        # filter's treatment of a missing bench_version).
+        entries = [_e("a", 0.8), _e("b", 0.7)]
+        assert len(filter_eligible(entries)) == 2
+
+    def test_drops_below_floor(self) -> None:
+        entries = [
+            _e("full", 0.55, n=MIN_ELIGIBLE_CASES),
+            _e("smoke", 0.95, n=12),
+        ]
+        assert {e.miner_hotkey for e in filter_eligible(entries)} == {"full"}
+
+    def test_smoke_run_cannot_be_champion(self) -> None:
+        # A high-composite smoke run must earn nothing; the lower full run wins.
+        entries = [
+            _e("smoke", 0.95, version=2, minutes=0, n=12),
+            _e("full", 0.55, version=2, minutes=1, n=MIN_ELIGIBLE_CASES),
+        ]
+        w = compute_weights(entries, **_KOTH)
+        assert "smoke" not in w
+        assert w["full"] == pytest.approx(0.9)
 
 
 class TestVersionFilter:

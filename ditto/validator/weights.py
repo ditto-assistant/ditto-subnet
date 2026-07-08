@@ -33,6 +33,17 @@ if TYPE_CHECKING:
 # ledger with no version info the fold is unchanged (all one version).
 DEFAULT_BENCH_VERSION = 1
 
+# A run must administer the *full* benchmark to earn emissions. The dittobench-api
+# run-size profiles are small = 12 cases (6 tool + 6 memory), medium ~= 42, full =
+# 60 tool + 50 memory + 4 isolation ~= 114 (dittobench-api internal/gen/gen.go). A
+# smaller profile omits the hard anti-overfit memory categories entirely and its
+# tiny memory suite is trivially aced, so its composite is neither comparable nor
+# discriminative — folding it into weights would pay emissions for a smoke run. So
+# entries below this floor are dropped from the fold (they may still appear on the
+# leaderboard, marked provisional). Keep in sync with the platform's
+# MIN_ELIGIBLE_CASES (ditto-platform ditto/db/queries/scores.py).
+MIN_ELIGIBLE_CASES = 100
+
 
 def _entry_version(entry: LedgerEntry) -> int:
     """The entry's bench_version, or DEFAULT_BENCH_VERSION when the platform
@@ -46,6 +57,27 @@ def _entry_version(entry: LedgerEntry) -> int:
 def max_bench_version(entries: Sequence[LedgerEntry]) -> int:
     """The newest bench_version present in the ledger."""
     return max((_entry_version(e) for e in entries), default=DEFAULT_BENCH_VERSION)
+
+
+def _entry_eligible(entry: LedgerEntry) -> bool:
+    """Whether the entry's run administered the full benchmark and may earn
+    emissions (``n >= MIN_ELIGIBLE_CASES``). Read via getattr so the wire model
+    can stay untouched; an entry that carries **no** case count at all is treated
+    as eligible (fail open — mirrors :func:`_entry_version`'s handling of a missing
+    bench_version, so a ledger that does not surface ``n`` leaves the fold
+    unchanged). The real ``LedgerEntry`` always carries ``n`` (a required wire
+    field), so in production this drops exactly the runs that report ``n`` below
+    the floor — the smoke/practice profiles."""
+    n = getattr(entry, "n", None)
+    return not isinstance(n, int) or n >= MIN_ELIGIBLE_CASES
+
+
+def filter_eligible(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
+    """Keep only full-benchmark entries — the only runs that may rank or earn
+    emissions. A **deterministic, consensus-safe** filter (keys off the per-entry
+    case count in the shared ledger), mirroring :func:`filter_to_latest_version`,
+    so every validator folds the same subset."""
+    return [e for e in entries if _entry_eligible(e)]
 
 
 def filter_to_latest_version(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
@@ -81,7 +113,10 @@ def compute_weights(
 
     Only entries at the **max bench_version present** are folded (§9 step 3):
     scores under an older benchmark version are incomparable and dropped until a
-    re-score lifts them to the current version.
+    re-score lifts them to the current version. Entries below the full-benchmark
+    case floor (:func:`filter_eligible`) are likewise dropped: a smoke/practice
+    run omits the hard memory categories and is trivially aced, so it must never
+    become champion or take a tail slot.
 
     Non-positive composites are dropped (a zero-scoring miner earns nothing).
     Returns an empty dict when no miner scored above zero — the caller then skips
@@ -89,7 +124,8 @@ def compute_weights(
     returned vector, so only the ratios matter; when there is no tail the champion
     is the whole vector.
     """
-    scored = [e for e in filter_to_latest_version(entries) if e.composite > 0.0]
+    eligible = filter_eligible(filter_to_latest_version(entries))
+    scored = [e for e in eligible if e.composite > 0.0]
     if not scored:
         return {}
 
