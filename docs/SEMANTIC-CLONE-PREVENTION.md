@@ -92,6 +92,25 @@ covers how.
 New layers L3–L4 extend L0–L2. Each entry states what it detects, where it runs,
 and the transform required to defeat it while preserving the score.
 
+This document uses the layered `L0–L4` tier labels (and `S0–S4` for the phased
+work in §8) as its vocabulary. The **code** deliberately does not: identifiers,
+config, docstrings, and env vars name each signal by function, so a source file
+reads on its own without this doc open. Translation:
+
+| Tier (this doc) | Name in code | Where |
+| --- | --- | --- |
+| L0 | exact `sha256` | platform gate |
+| L1 | lexical / content fingerprint | `api_server/fingerprint.py::compute_content_fingerprint` |
+| L2 | structural fingerprint | dittobench `astfp` → `structural_fingerprint` |
+| L3a | normalized-source hash | `fingerprint.py::compute_normalized_source_hash` |
+| L3b | prompt fingerprint (prompt-surface) | `fingerprint.py::compute_prompt_fingerprint` |
+| L3c | code-embedding | `api_server/embedding/`; `CODE_EMBEDDER_*` env |
+| L4 | behavioral (tool-call trajectory) | validator CRN (future) |
+
+Related renames: the gate function is `evaluate_duplicate_signals`
+(`api_server/scoring_gate.py`), and the offline calibration harness is
+`ditto.anticopy.calibration` (run `python -m ditto.anticopy.calibration`).
+
 ### L3 — semantic-static (screener, before scoring)
 
 The screener unpacks the crate with a Rust toolchain
