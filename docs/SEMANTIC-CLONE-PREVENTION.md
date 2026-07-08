@@ -308,10 +308,20 @@ Each phase is independently shippable and calibrated before the next.
     to the model (comments and blank lines dropped, code kept; files sorted and
     joined without path names; capped to the backend context window). Model-free
     and unit-tested.
-  - Remaining: provision the embedding service (ops); compute + store a per-agent
-    vector at the screener; a cosine `clonecal` signal; then the ≥2-signal fusion
-    hold (prompt + embedding) calibrated on real crates. Acceptance: raises tier-3
-    recall without breaching the FP budget under the ≥2-signal fusion rule.
+  - Done. S2 #2–#4 client + infra. `ditto-platform/api_server/embedding/` — an
+    env-driven `EmbeddingConfig` (disabled unless `L3C_EMBEDDER_URL` is set), a
+    best-effort `Embedder` (null when disabled; TEI client otherwise), and a pure
+    `cosine`. The upload path embeds each crate and stores the vector +
+    `model@revision` tag on `agents.code_embedding` / `code_embed_model` in shadow
+    mode; the ledger surfaces both (same-model comparison only). `clonecal`
+    `embedding_signal(embed)` wires the cosine signal for calibration. The TEI
+    service ships as an opt-in `embedder` compose profile with `.env` + Make
+    targets + `docs/l3c-embedder.md`.
+  - Remaining: provision the service on the deployed host (infra repo — add
+    `embedder` to `DITTO_COMPOSE_SERVICES` + `L3C_EMBEDDER_*`); backfill embeddings
+    for existing agents (re-embed sweep); calibrate the prompt+embedding ≥2-signal
+    fusion on real crates; then activate the hold. Acceptance: raises tier-3 recall
+    without breaching the FP budget under the ≥2-signal fusion rule.
 - S3 — behavioral (L4a/b). Trajectory-digest emission, same-seed escalation job,
   and fusion into the gate. Acceptance: separates tier-5 clean-room clones from
   convergent independents at the target precision.
