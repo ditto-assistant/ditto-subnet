@@ -1,142 +1,101 @@
 # Validator FAQ: Ditto Subnet (Bittensor SN118)
 
+What to expect for release and what to have ready. For the full runbook (every
+env var, boot self-checks, verification, current caveats) see
+[`docs/VALIDATOR-ONBOARDING.md`](docs/VALIDATOR-ONBOARDING.md). This is the short
+version.
+
+---
+
+## What a validator is
+
+One stateless Python process, `python -m ditto.validator`, that loops forever:
+
+1. Pull agents awaiting evaluation from the platform's `/validator/*` API.
+2. Score each through the hosted dittobench-api (by presigned tarball URL, using
+   your own OpenRouter key), sign the result, and report it back.
+3. Set weights on chain via Pylon on an epoch cadence.
+
+It has no database and no local state. It builds nothing and hosts no models: the
+docker build, the seeded benchmark, and the LLM judge all run in the hosted
+dittobench service. You can kill and restart the worker at any time with nothing
+to back up.
+
+---
+
 ## Requirements
 
-- **A machine that can run Docker Compose.**
-- **A registered validator hotkey** on **netuid 118** (finney mainnet) with enough stake to set weights.
-- **An OpenRouter API key.** The validator uses it to score submission (paraphrase generator + LLM judge). Bring your own.
-- **Ollama** running locally with `embeddinggemma` pulled.
-- **This repo** pulled and dependencies synced.
+Suggested starting point. The worker is HTTP plus signing, so it is deliberately
+light.
+
+- **1-2 vCPU, 2 GB RAM.** No GPU.
+- **Linux host.**
+- **Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).**
+- **Stable outbound network** to the platform API, the dittobench-api, and a
+  chain endpoint (Pylon or a subtensor node). The worker listens on nothing.
+- **A few GB of disk** for the repo and the uv environment.
 
 ---
 
-## What does a validator do?
+## What you need before release day
 
-Miners submit an agent harness. Your validator:
+- [ ] **A hotkey registered on SN118 with a `validator_permit`** (stake above the
+      permit threshold). The chain only accepts weights from permitted validators.
+- [ ] **The hotkey's signing source** on the box: wallet files or a mnemonic. The
+      coldkey is never needed.
+- [ ] **An OpenRouter API key** for the LLM-judge portion of each dittobench run.
+      Bring your own. We store nothing for you.
+- [ ] **A weight-submission path**: Pylon identity for production, or the
+      bittensor SDK fallback for localnet.
+- [ ] **The repo pulled and synced** (`git clone` + `uv sync`).
 
-1. **Pulls each submission** and builds/runs it in an **isolated sandbox**.
-2. **Scores it on DittoBench** for tool-calling correctness, memory recall, and efficiency. Each submission runs against a **freshly randomized anti-cheat dataset**, so nobody can overfit a lookup table.
-3. **Sets weights on-chain** (`put_weights` via Pylon) so emissions flow to the best harness. Scoring is king-of-the-hill.
-
-This mirrors the DittoBench practice validator that miners use to iterate. On-chain, _you_ build the miner's crate in Docker and _you_ write the weights.
-
----
-
-## Compute requirements
-
-Plan for a **Linux host with Docker**. The validator runs a small stack plus a sandbox that builds and runs miner submissions, so it leans on CPU more than GPU.
-
-Suggested starting point. Adjust to your load and the number of miners on the subnet.
-
-- **8+ CPU cores.** Building each miner's Rust crate in the sandbox is the heaviest step.
-- **32 GB RAM.** 16 GB works for a single build at a time. 32 GB gives headroom for parallel builds plus Postgres and Ollama.
-- **100+ GB SSD.** Docker layers, crate build caches, and submission artifacts.
-- **No GPU.**
-- **Stable internet connection.**
-
-| Component | Why it's needed |
-| --- | --- |
-| **Docker Compose** | Runs Pylon, Postgres, object storage, and the per-submission build/run sandbox. |
-| **Ollama** | Memory-retrieval embeddings for scoring. Runs on CPU. |
-| **Python 3.11 or 3.12 + `uv`** | The subnet service itself. |
-
-Scoring calls OpenRouter for the chat and judge models and Ollama for embeddings.
+Keep the mnemonic or wallet key and the OpenRouter key in a secret manager and
+inject them as env. They must never be logged or committed. The validator hotkey
+(an SS58 address) is public.
 
 ---
 
-## What keys do I need?
-
-Three, none of which we hold for you:
-
-1. **A Bittensor wallet with a validator hotkey registered on netuid 118.**
-   Standard `btcli` registration and stake. This hotkey is your on-chain identity for setting weights.
-
-2. **Pylon identity credentials.** The validator writes weights through a local [Pylon](https://github.com/backend-developers-ltd/bittensor-pylon) container. Load your validator wallet into Pylon and set:
-   ```ini
-   PYLON_IDENTITY_NAME=<your pylon identity name>
-   PYLON_IDENTITY_TOKEN=<your pylon identity token>
-   ```
-   You need these to write weights (`put_weights`). Read-only smoke tests work
-   without them.
-
-3. **An OpenRouter API key.** The scoring loop uses it for the paraphrase
-   generator and the LLM judge.
-   ```ini
-   OPENROUTER_API_KEY=sk-or-...
-   ```
-
-### Storage
-
-Local dev needs no storage or database credentials. `make stack-up` runs MinIO and Postgres containers with defaults and creates the `ditto-agents` bucket for you.
-
-For production, point storage at a real S3-compatible bucket (AWS S3, Cloudflare R2, or Backblaze B2). This is where miner submission tarballs land. Create the bucket, then set:
-
-```ini
-STORAGE_ENDPOINT_URL=https://<your-s3-endpoint>
-STORAGE_BUCKET=<your-bucket>
-STORAGE_ACCESS_KEY=<access-key>
-STORAGE_SECRET_KEY=<secret-key>
-STORAGE_REGION=<region>
-STORAGE_USE_TLS=true
-```
-
-Repoint Postgres the same way through the `POSTGRES_*` knobs, or keep the bundled container.
-
----
-
-## Getting set up (dry run)
+## Setup
 
 ```sh
-# 1. Pull the repo
 git clone https://github.com/ditto-assistant/ditto-subnet
 cd ditto-subnet
-
-# 2. Config
-cp .env.example .env
-#    Fill in: PYLON_IDENTITY_NAME / PYLON_IDENTITY_TOKEN (your wallet),
-#             OPENROUTER_API_KEY, and confirm NETUID=118 / SUBTENSOR_NETWORK=finney.
-
-# 3. Dependencies + local stack
 uv sync
-make stack-up        # postgres + pylon (Docker), blocks until healthy
-make migrate         # apply DB migrations
-
-# 4. Prove the chain path works end-to-end (read-only)
-make smoke-pylon     # exercises the chain client against finney via Pylon
-
-# 5. Embeddings (separate shell)
-ollama serve &
-ollama pull embeddinggemma
 ```
 
-Today you can already run two pieces without the full daemon: the chain client (`make smoke-pylon`) and the API (`make api-up`, then `make smoke-api`).
+Configuration is entirely env-driven (`ditto/validator/config.py`). The worker
+fails fast at boot on anything missing or malformed. The core settings:
 
-Relevant `.env` knobs (see `.env.example` for the full list):
+```sh
+VALIDATOR_PLATFORM_API_URL    # platform API base URL
+VALIDATOR_HOTKEY              # your validator hotkey (SS58)
+VALIDATOR_WALLET_NAME + VALIDATOR_WALLET_HOTKEY   # or VALIDATOR_MNEMONIC
+NETUID                        # 118 on finney
+VALIDATOR_DITTOBENCH_API_URL  # hosted dittobench-api base URL
+VALIDATOR_OPENROUTER_KEY      # your LLM-judge key (secret)
 
-```ini
-NETUID=118                     # SN118
-SUBTENSOR_NETWORK=finney       # mainnet
-PYLON_URL=http://localhost:8001
-PYLON_IDENTITY_NAME=           # set to write weights
-PYLON_IDENTITY_TOKEN=          # set to write weights
-OPENROUTER_API_KEY=            # set to score
+# weight path, pick one:
+PYLON_URL + PYLON_IDENTITY_NAME + PYLON_IDENTITY_TOKEN   # production
+VALIDATOR_USE_SDK_WEIGHTS=1 + SUBTENSOR_NETWORK          # fallback / localnet
 ```
+
+The onboarding doc lists the rest of the knobs (sweep and epoch cadence, run
+size, consensus mechanism values, telemetry).
 
 ---
 
-## Running in production
+## Run it
 
-The validator daemon runs the whole loop from one entrypoint: build each submission, score it, then set weights. That entrypoint is _(finalizing)_ and its exact command lands in the README before launch. The shape of a production deploy:
+```sh
+python -m ditto.validator
+```
 
-1. Provision a host that meets the requirements above. Install Docker, `uv`, and Ollama.
-2. Clone the repo and fill `.env` with real values: Pylon identity, OpenRouter key, and production storage.
-3. Load your validator wallet into Pylon so it can sign `put_weights`.
-4. Bring up the stack (`make stack-up`) and apply migrations (`make migrate`).
-5. Pull the embedding model (`ollama pull embeddinggemma`).
-6. Run the daemon under a process manager (pm2 or systemd) with restart-on-failure so it survives reboots.
-7. Confirm it is setting weights on-chain for netuid 118.
+Run it under a supervisor (systemd or pm2) with restart-on-exit. It drains
+cleanly on SIGTERM/SIGINT. Run exactly one instance per hotkey. Two instances
+double-submit weights.
 
-This section firms up as the daemon entrypoint lands _(finalizing)_.
+For local plumbing without a real key, set `VALIDATOR_DITTOBENCH_MOCK=1` to
+return a canned score.
 
 ---
 
@@ -144,24 +103,27 @@ This section firms up as the daemon entrypoint lands _(finalizing)_.
 
 **Do I need a GPU?**
 
-No. Chat and judge models run via OpenRouter. Embeddings run on CPU via Ollama.
+No. The judge runs via OpenRouter and the benchmark build runs in the hosted
+dittobench service. The validator itself is HTTP plus signing.
 
 **How much will OpenRouter cost?**
 
-It scales with how many submissions you score and the model you pick. Point the
-generator and judge at a cheap model to keep it low. We will recommend a model
-and a rough per-eval cost before release.
+It scales with how many agents you score. You bring your own key for the judge.
 
 **Does my hotkey need to be registered before I can validate?**
 
-Yes. Register on netuid 118 with enough stake to set weights. Do this ahead of
-time so release day is just starting the daemon.
+Yes, on SN118 with a `validator_permit`. Without the permit the worker still
+scores, but it skips weight submission and logs that loudly each epoch.
 
-**What ports does it use?**
+**How do I know it is working?**
 
-Pylon on host port **8001**, the subnet API on **8000**. Postgres and MinIO use
-their compose defaults.
+Logs show `sweep complete: N agent(s)` and `submitted weights for N miner(s)`.
+Your signed scores show up on the platform's public score ledger, and your
+hotkey's last-update block advances each epoch. See the onboarding doc's "Verify
+it's working" for the full checklist.
 
-**How is this different from the DittoBench practice API?**
+**What is still being finalized?**
 
-The practice API is a hosted, off-chain, BYOK service miners use to iterate, with no Docker build and no chain. Your on-chain validator builds each miner crate in a Docker sandbox and writes weights to SN118.
+Third-party validator onboarding opens with the testnet/mainnet migration. The
+subnet currently runs a single team validator. See the onboarding doc's status
+section for the live caveats.
