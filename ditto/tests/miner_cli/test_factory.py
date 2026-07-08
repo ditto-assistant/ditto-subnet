@@ -31,6 +31,16 @@ class TestCreateMinerCliConfig:
         assert config.network.name == "test"
         assert config.network.subtensor_network == "test"
 
+    def test_dev_namespace_targets_deployed_dev_platform(self) -> None:
+        # The deployed dev platform is a decoupled API (dev host) + localnet
+        # chain: its subtensor identifier is "local" and the raw ws endpoint is
+        # supplied via --chain-endpoint, not committed here.
+        config = create_miner_cli_config(make_ns(network="dev"))
+
+        assert config.network.name == "dev"
+        assert config.network.api_url == "https://platform-api-dev.heyditto.ai"
+        assert config.network.subtensor_network == "local"
+
     def test_unknown_network_raises(self) -> None:
         from ditto.miner_cli.errors import NetworkResolutionError
 

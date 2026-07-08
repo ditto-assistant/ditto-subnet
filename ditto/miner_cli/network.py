@@ -41,6 +41,11 @@ NETWORKS: dict[str, NetworkConfig] = {
         api_url="http://localhost:8000",
         subtensor_network="local",
     ),
+    "dev": NetworkConfig(
+        name="dev",
+        api_url="https://platform-api-dev.heyditto.ai",
+        subtensor_network="local",
+    ),
 }
 """Canonical (API URL, subtensor network) pairs keyed by user-facing name.
 
@@ -48,7 +53,11 @@ NETWORKS: dict[str, NetworkConfig] = {
 until the API host is provisioned. The ``local`` entry points at the
 local docker-compose stack used by integration tests and manual smoke;
 the matching subtensor must be supplied by the developer (bittensor's
-localnet workflow, not bundled in this repo).
+localnet workflow, not bundled in this repo). ``dev`` targets the
+deployed dev platform (``platform-api-dev.heyditto.ai``); its chain is
+the dev localnet, so pass ``--chain-endpoint`` with that node's ws
+endpoint (``subtensor_network`` is ``local``, the raw endpoint is not
+committed here).
 """
 
 
