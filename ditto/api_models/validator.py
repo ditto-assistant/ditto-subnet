@@ -330,6 +330,17 @@ class LedgerEntry(BaseModel):
     composite: Annotated[
         float, Field(ge=0.0, le=1.0, description="Best composite score in [0,1].")
     ]
+    n: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Cases scored in the winning run. The validator's eligibility "
+                "floor (MIN_ELIGIBLE_CASES): a run below it is a smoke/practice "
+                "profile and is dropped from the weight fold, so it can never rank."
+            ),
+        ),
+    ]
     first_seen: Annotated[
         datetime,
         Field(description="Agent upload time (UTC); the KOTH first-seen tie-break."),
@@ -382,6 +393,7 @@ class LedgerResponse(BaseModel):
                         ),
                         "agent_id": "550e8400-e29b-41d4-a716-446655440000",
                         "composite": 0.82,
+                        "n": 114,
                         "first_seen": "2026-06-08T12:00:00Z",
                         "sha256": "deadbeef" * 8,
                         "size_bytes": 524288,

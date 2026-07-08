@@ -34,11 +34,13 @@ def _entry(
     *,
     first_seen: datetime = _T0,
     agent_id: UUID | None = None,
+    n: int = 128,
 ) -> LedgerEntry:
     return LedgerEntry(
         miner_hotkey=miner,
         agent_id=agent_id or uuid4(),
         composite=composite,
+        n=n,
         first_seen=first_seen,
         sha256="ab" * 32,
         size_bytes=524288,
