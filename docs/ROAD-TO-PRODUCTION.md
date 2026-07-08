@@ -198,6 +198,29 @@ SDK/localnet path is a declared fallback.
 
 ---
 
+## 11. Cross-repo contract & doc reconciliations (2026-07-08 audit)
+
+A full-stack read across all six repos (`ditto-subnet`, `ditto-platform`,
+`infra`, `dittobench-api`, `ditto-harness`, `dittobench-starter-kit`) surfaced
+the items below. None is a runtime defect in the proven localnet path; they are
+contract/doc drifts and productionization gaps that amplify §3–§6. IDs are
+`X-*` so they don't collide with the spine items.
+
+| ID | Item | Status | Notes |
+|----|------|--------|-------|
+| X-BENCHVER | **`bench_version` mislabel** | **RECONCILING** | The live benchmark is `bench_version = 2` (authoritative in `dittobench-api/pkg/protocol/epoch.go:31`; mirrored by `ditto-platform` `endpoints/public.py:54` and the dashboard). Four **comments** wrongly label DittoBench v2 as "bench_version 3": `ditto-platform` (`docs/submission-contract.md:66`, `scoring_gate.py:40`) + `ditto-subnet` (`ditto/validator/config.py:229`, `ditto/tests/validator/test_config.py:32`). No runtime mismatch — relabel the comments to `2`. The bump policy correctly *resumes* at 3 for the first scoring change **after** v2 is live (`epoch.go:11-17`, `BENCHMARK-V2.md:527`). |
+| X-TRAJ | **Behavioral anti-copy channel exports names only** | **DECISION 🔴** | The tool-call trajectory is our only forge-proof runtime copy signal, and it gates the prompt-fusion hold in `SEMANTIC-CLONE-PREVENTION.md`. But the forwarded `ScoreReport`/`CaseScore` carries only the ordered observed tool **names** (`CaseScore.Called []string`, `dittobench-api/pkg/protocol/protocol.go:218`); the full `(name, args, hop)` is *recorded* server-side (`ToolExecRequest`) but **not exported**. `PROTOCOL.md:205-210` overstates it as an `(name, args, hop)` sequence forwarded to the platform. Decision: enrich the export (per-case args/hop) before building the behavioral gate, or the convergence-robust signal that unblocks the prompt-fusion hold can only compare name-sequences. Doc corrected to match today's shipped shape meanwhile. |
+| X-SHADOW | **Semantic-clone gate is shadow-only** | **KNOWN (S2)** | Production anti-copy today = exact-bytes / repack / normalized-source / lexical / structural / size → *human review* (`ditto-platform/scoring_gate.py`). The **code-embedding vector is stored but not gating** (`upload.py:336-341`, disabled by default), the **prompt-fusion hold is deferred** pending an orthogonal signal (`scoring_gate.py:163-168`), and the embedder Cloud Run service is **gated OFF + unprovisioned** (`infra` `enable_embedder=false`). Expected per `SEMANTIC-CLONE-PREVENTION.md` S2, but state it plainly at launch: semantic clone *prevention* is not live; convergence-robust gating is blocked on X-TRAJ. Amplifies C-TUNE. |
+| X-HARDEN | **Platform public-endpoint hardening** | **TODO** | Before public exposure: unset `DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR` (`ditto-platform/endpoints/validator.py:133-143`); front the app with a reverse proxy for **TLS + rate limiting** — public GET endpoints have no app-level limits (`retrieval.py:4`, deferred to a proxy not yet stood up); and bind validator read-GETs to a per-request nonce/timestamp signature (today: `X-Validator-Hotkey` + permit only, `validator.py:27-29`). Amplifies C-RATE. |
+| X-BENCHHOST | **dittobench-api deploy target vs mode B** | **DOC** | Mode B (presigned `tarball_url`, the validator's real path) needs a Docker daemon; the README's "Deploy (Cloud Run)" section describes the **practice** service (no Docker → `harness_url` only). `infra` co-locates a **second** dittobench-api instance on the Docker-capable validator VM (`127.0.0.1:8080`), which is where mode-B scoring actually runs. Not a code gap — the README is correct that the Docker path is "the on-chain validator's path"; add a one-line pointer so the two deploy contexts aren't conflated. |
+| X-INFRA-PROD | **No production infra exists** | **TODO 🔴** | Largest gap cluster (feeds E1/E2/E4/O-*). `infra` is dev-only: dev+"prod" share the `ditto-app-dev` project + tfstate; validator & embedder are **gated OFF and unprovisioned**; the validator/screener target the **dev localnet (netuid 3)**, not finney 118; weights use the **SDK path, not Pylon identity** (`validator_use_sdk_weights=true`); the platform **DB password lands in tfstate**; Postgres is a **single non-HA VM** holding both dev+prod DBs; the validator **reuses the platform SA** (`validator.tf:66` flags "prod should use a dedicated SA"). A finney deploy needs a genuine prod-isolation story, not a flag flip. |
+
+**Reconciliation status (2026-07-08):** X-BENCHVER + X-TRAJ (doc) + X-BENCHHOST
+are being fixed now (comment/doc-only, one PR per repo). X-SHADOW / X-HARDEN /
+X-INFRA-PROD are tracked here and sequence behind the §2 spine.
+
+---
+
 *Ownership: we own the whole stack — platform, screener, validator, miner CLI,
 dittobench scorer, chain/emissions config, and every economic knob. The §2
 sequence is how one team drives it to production; there are no external owners to
