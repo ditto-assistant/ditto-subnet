@@ -92,9 +92,7 @@ def _load_dotenv(path: Path) -> None:
 
 
 def _git(*args: str) -> str:
-    return subprocess.check_output(
-        ["git", *args], cwd=REPO_ROOT, text=True
-    ).strip()
+    return subprocess.check_output(["git", *args], cwd=REPO_ROOT, text=True).strip()
 
 
 def _remote_has_update(branch: str) -> bool:
@@ -115,7 +113,9 @@ def _remote_has_update(branch: str) -> bool:
 
 def _apply_update(branch: str) -> None:
     logger.info("update detected on origin/%s — pulling + syncing", branch)
-    subprocess.run(["git", "pull", "--ff-only", "origin", branch], cwd=REPO_ROOT, check=True)
+    subprocess.run(
+        ["git", "pull", "--ff-only", "origin", branch], cwd=REPO_ROOT, check=True
+    )
     subprocess.run(["uv", "sync"], cwd=REPO_ROOT, check=True)
 
 
@@ -174,7 +174,9 @@ def main() -> int:
                 time.sleep(min(5, interval - waited))
                 waited += 5
                 if proc.poll() is not None:
-                    logger.warning("validator exited (code=%s) — restarting", proc.returncode)
+                    logger.warning(
+                        "validator exited (code=%s) — restarting", proc.returncode
+                    )
                     proc = _launch()
             if _stopping:
                 break
