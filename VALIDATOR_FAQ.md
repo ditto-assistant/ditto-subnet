@@ -33,10 +33,9 @@ Miners submit an agent + memory **harness**. Your validator:
 3. **Sets weights on-chain** (`put_weights` via Pylon) so emissions flow to the
    best harness. Scoring is effectively winner-take-most.
 
-The scoring loop mirrors the hosted practice validator
-([`dittobench-api`](https://github.com/ditto-assistant/dittobench-api)) that
-miners already use to iterate — the difference on-chain is that _you_ build the
-miner's crate in Docker and _you_ write weights to the chain.
+The scoring loop mirrors the hosted DittoBench practice validator that miners
+already use to iterate — the difference on-chain is that _you_ build the miner's
+crate in Docker and _you_ write weights to the chain.
 
 ---
 
@@ -156,8 +155,8 @@ Pylon is on host port **8001**; the subnet API owns **8000**. Postgres/MinIO use
 their compose defaults.
 
 **What's the difference between this and the DittoBench practice API?**
-The [practice API](https://github.com/ditto-assistant/dittobench-api) is a hosted,
-off-chain, BYOK service miners use to iterate — no Docker build, no chain. Your
+The practice API is a hosted, off-chain, BYOK service miners use to iterate — no
+Docker build, no chain. Your
 on-chain validator does the real thing: builds each miner crate in a Docker
 sandbox and writes weights to SN118.
 
