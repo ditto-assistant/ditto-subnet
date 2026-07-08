@@ -294,10 +294,24 @@ Each phase is independently shippable and calibrated before the next.
     corroborate the prompt without holding on same-harness scaffolding. Acceptance:
     detects tier-4 prompt/config theft; FP within budget on convergent independents
     under the ≥2-signal fusion rule.
-- S2 — code-embedding (L3c). Code-embedding similarity as a review-band signal;
-  select and host the embedding model. Provides the first signal orthogonal to
-  convergence, which unblocks the S1 prompt-fusion hold. Acceptance: raises tier-3
-  recall without breaching the FP budget under the ≥2-signal fusion rule.
+- S2 — code-embedding (L3c), in progress. Code-embedding similarity as a
+  review-band signal; the first signal orthogonal to convergence, which unblocks
+  the S1 prompt-fusion hold.
+  - Model (Open decision 1, resolved): self-host. Primary Qwen3-Embedding-0.6B
+    (Apache-2.0, 32k context, MRL output dims, deployable via
+    text-embeddings-inference); CPU fallback jina-embeddings-v2-base-code (161M,
+    8192 context, Rust-aware, code-similarity trained). Hosted APIs (voyage-code-3,
+    zembed-1) rejected: embedding private miner crates off-platform is unacceptable
+    egress, and they are non-reproducible and per-call.
+  - Done. S2 #1 embedding-input builder. `compute_embedding_input` in
+    `ditto-platform/api_server/fingerprint.py` produces the deterministic text fed
+    to the model (comments and blank lines dropped, code kept; files sorted and
+    joined without path names; capped to the backend context window). Model-free
+    and unit-tested.
+  - Remaining: provision the embedding service (ops); compute + store a per-agent
+    vector at the screener; a cosine `clonecal` signal; then the ≥2-signal fusion
+    hold (prompt + embedding) calibrated on real crates. Acceptance: raises tier-3
+    recall without breaching the FP budget under the ≥2-signal fusion rule.
 - S3 — behavioral (L4a/b). Trajectory-digest emission, same-seed escalation job,
   and fusion into the gate. Acceptance: separates tier-5 clean-room clones from
   convergent independents at the target precision.
@@ -310,8 +324,13 @@ Each phase is independently shippable and calibrated before the next.
 
 ## 9. Open decisions
 
-1. Embedding model for L3c: hosted (OpenRouter, as the judge uses) versus a local
-   code-embedding model (reproducibility, cost, no egress). Current lean: local.
+1. Embedding model for L3c (resolved). Self-host, not hosted: agent crates are
+   private miner IP, so embedding them through a hosted API is unacceptable egress,
+   and hosted models are non-reproducible and per-call. Primary
+   Qwen3-Embedding-0.6B (Apache-2.0, 32k context, MRL dims 32–1024,
+   text-embeddings-inference); CPU fallback jina-embeddings-v2-base-code (161M,
+   8192 context, 31 languages incl. Rust, trained on code↔code pairs). See the S2
+   entry in Section 8.
 2. L4c: whether prompt/retrieval observability warrants a TLS-terminating proxy
    or a memory-tool redesign, or whether L3b (static prompt) plus L4a (trajectory)
    suffice. Deferred to S4 evidence.
