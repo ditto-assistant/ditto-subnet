@@ -19,8 +19,6 @@ the validator channel.
       embeddings, 768-dim).
 - [ ] **The repo pulled and dependencies synced** (`git clone` +
       [`uv sync`](https://github.com/astral-sh/uv)).
-- [ ] A few minutes with us the day before to walk through your `.env` and do a
-      dry run — that's what this doc is here to make painless.
 
 ---
 
