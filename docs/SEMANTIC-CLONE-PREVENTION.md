@@ -12,7 +12,7 @@ does not replace them. Companion to
 
 SN118 is a winner-take-all KOTH+ATH competition: the champion agent holds weight
 until dethroned. Two fingerprint channels currently guard the score-write path
-(`ditto-platform/api_server/scoring_gate.py`, `evaluate_antidup`):
+(`ditto-platform/api_server/scoring_gate.py`, `evaluate_duplicate_signals`):
 
 | Layer | Where | Signal | Tolerances | Not resistant to |
 |---|---|---|---|---|
