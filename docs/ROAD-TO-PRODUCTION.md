@@ -57,9 +57,12 @@ Everything below is what stands between that and a real network.
 2. **Sandbox egress allowlist + isolation** (§3, C-ISO) — ✅ **DONE**: applied +
    verified on the dev validator (2026-07-08). Optional deeper isolation
    (seccomp/gVisor) remains.
-3. **Commit-reveal weights** (§4, W-CR) — enable + implement the reveal step.
-   Because finney is the first real chain (no testnet), the reveal path can only
-   be *fully* exercised on finney, so land + review the code before cutover.
+3. **Commit-reveal weights** (§4, W-CR) — ✅ **code landed** (2026-07-08):
+   commit-reveal **v3** needs no reveal call (`set_weights`/Pylon do the timelock
+   commit; the chain auto-reveals), and the validator now **detects + logs +
+   guards** the CR mode (`VALIDATOR_REQUIRE_COMMIT_REVEAL`). Remaining is
+   operational, not code: enable the `CommitRevealWeightsEnabled` hyperparameter
+   on finney (E3) and confirm it at the guarded cutover (first real chain).
 4. **Maximize the localnet rehearsal of the Pylon weight path** (§4/§5, E1/W-PYLON)
    — the production weight path is 100% delegated to Pylon; `put_weights` is
    already validated live on the localnet. Push localnet coverage as far as it
@@ -135,7 +138,7 @@ first-runs on finney. The in-repo SDK/localnet path is a declared fallback.
 | W-VK | version_key pin | **CODE-DONE** | SDK path stamps `version_key` (default `ditto.__spec_version__`, env `VALIDATOR_WEIGHT_VERSION_KEY`). Confirm the Pylon-derived version_key matches at finney cutover (no testnet to confirm it on first). |
 | W-PERMIT | validator_permit self-check | **CODE-DONE** | Skips (fail-open) when the hotkey lacks a permit. Min-stake arm (`VALIDATOR_MIN_STAKE_TAO`) added in PR #39. |
 | W-CADENCE | Tempo-decoupled cadence | **CODE-DONE** | `VALIDATOR_SWEEP_SECONDS` (120s) vs `VALIDATOR_EPOCH_SECONDS` (3600s). PR #39 additionally reads the target network's on-chain `weights_rate_limit` and stretches the effective epoch to it. |
-| W-CR | **Commit-reveal** | **TODO 🔴** | Off on dev netuid 3; production needs a first-class reveal step + the chain param enabled. Without it, weights are copy-able (front-runnable). |
+| W-CR | **Commit-reveal** | **CODE-DONE** | Corrected: under commit-reveal **v3** (bittensor 10.3.2) there is **no separate reveal call** — `set_weights`/Pylon do the timelock commit and the chain auto-reveals after `RevealPeriodEpochs`. The worker now **reads + logs** the CR mode each weight-set and guards it: `VALIDATOR_REQUIRE_COMMIT_REVEAL` logs an error (still submits — refusing would zero the chain) when CR is off but expected on. So the "first-class reveal step" earlier docs described is obsolete. Remaining is **operational**: enable the `CommitRevealWeightsEnabled` hyperparameter on finney (owner sudo, E3) + confirm at the guarded cutover (W-PYLON/E4). Off on dev netuid 3. |
 | W-PYLON | **Verify Pylon delegation (localnet → finney)** | **PARTIAL** | `put_weights` via Pylon identity is validated live on the localnet (2026-07-07); infra prep merged (infra#12). What the localnet *cannot* prove — real commit-reveal, chain `version_key`, u16 `max_weight_limit` normalization at scale — has **no testnet to prove it on**, so it is a guarded first-run at finney cutover (E4). Push localnet coverage as far as possible first. |
 | W-PARAMS | Chain hyperparameters | **TODO** | Set tempo, immunity period, weights-rate-limit, validator-permit threshold, registration burn + recycle for the target network. |
 

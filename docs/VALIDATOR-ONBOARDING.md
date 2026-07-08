@@ -87,6 +87,7 @@ fails fast at boot on anything missing or malformed.
 | `VALIDATOR_EPOCH_SECONDS` (3600) | Weight-set cadence. Align to the target network's tempo / `weights_rate_limit`. |
 | `VALIDATOR_KOTH_MARGIN` (0.01) / `VALIDATOR_KOTH_TAIL_SIZE` (4) / `VALIDATOR_KOTH_CHAMPION_SHARE` (0.9) | The consensus-critical mechanism knobs. **Every validator on a network must run identical values** or Yuma clips you. Do not tune unilaterally. |
 | `VALIDATOR_WEIGHT_VERSION_KEY` (package spec version) | Mechanism version stamped on SDK-path `set_weights`; must also agree network-wide. |
+| `VALIDATOR_REQUIRE_COMMIT_REVEAL` (off) | Cutover guard. When set, the worker logs an error each weight-set if the chain reports commit-reveal **off** (weights would be front-runnable) — it still submits. Set on finney; leave off on the localnet. |
 | `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` (2400) | Hard cap per agent run (full builds are slow). |
 | `VALIDATOR_DITTOBENCH_MOCK` (off) | Canned scores, no dittobench/LLM key needed — local plumbing only, never on a real network. |
 | `VALIDATOR_LOG_LEVEL` (`INFO`) | Worker log level. |
@@ -142,9 +143,13 @@ Boot-time self-checks worth knowing:
   "onboard to the queue" section when that lands.
 - **Pylon identity-write is not yet provisioned** (E1); the SDK fallback is
   the proven path on the dev chain.
-- **Commit-reveal is off on dev** and will be enabled for production (W-CR);
-  the Pylon path detects it from subnet hyperparams, and the SDK path passes
-  through `set_weights`' commit-reveal handling.
+- **Commit-reveal is off on dev** and will be enabled for production (W-CR).
+  Under commit-reveal **v3** there is no separate reveal call — `set_weights` and
+  Pylon do the timelock commit and the chain auto-reveals. The worker reads the
+  `CommitRevealWeightsEnabled` hyperparameter and **logs the mode** each
+  weight-set; set `VALIDATOR_REQUIRE_COMMIT_REVEAL=1` on a network where you
+  expect commit-reveal on, and it logs loudly (still submitting) if the chain
+  reports it off.
 - Mechanism knobs (margin/tail/share, version_key) are team-locked values;
   changing them unilaterally makes your weights diverge from consensus.
 

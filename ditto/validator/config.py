@@ -86,6 +86,18 @@ class ValidatorConfig:
     stood up on the dev chain, so the worker calls ``Subtensor.set_weights``
     directly. Pylon identity creds are not required in this mode."""
 
+    require_commit_reveal: bool
+    """Cutover guard: expect commit-reveal to be ON for this network.
+
+    ``VALIDATOR_REQUIRE_COMMIT_REVEAL``. Under commit-reveal v3 (bittensor >= 9)
+    the weight sink (``set_weights`` / Pylon) does the timelock commit itself and
+    the chain auto-reveals after ``RevealPeriodEpochs`` — the worker makes **no**
+    separate reveal call. This flag is observability-only: when set and the chain
+    reports commit-reveal OFF, the worker logs an error each epoch (weights would
+    be front-runnable) but still submits — refusing would zero the chain, a worse
+    failure. Leave off on the localnet (commit-reveal is disabled there); set it
+    on finney so a mis-set hyperparameter is loud."""
+
     weight_version_key: int
     """Mechanism version stamped on ``set_weights`` (the SDK path).
 
@@ -208,6 +220,9 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     _truthy = {"1", "true", "yes"}
     dittobench_mock = os.environ.get("VALIDATOR_DITTOBENCH_MOCK", "").lower() in _truthy
     use_sdk_weights = os.environ.get("VALIDATOR_USE_SDK_WEIGHTS", "").lower() in _truthy
+    require_commit_reveal = (
+        os.environ.get("VALIDATOR_REQUIRE_COMMIT_REVEAL", "").lower() in _truthy
+    )
     dittobench_api_url = os.environ.get("VALIDATOR_DITTOBENCH_API_URL", "")
     openrouter_key = os.environ.get("VALIDATOR_OPENROUTER_KEY", "")
     if not dittobench_mock:
@@ -291,6 +306,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         use_sdk_weights=use_sdk_weights,
+        require_commit_reveal=require_commit_reveal,
         weight_version_key=_parse_int(
             "VALIDATOR_WEIGHT_VERSION_KEY", str(__spec_version__)
         ),
