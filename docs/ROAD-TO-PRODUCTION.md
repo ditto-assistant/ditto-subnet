@@ -110,11 +110,12 @@ composite + resolved on-chain weight.
       bug; it just proves nothing about a *good* full run.
 - [ ] Agent auto-flows screener (compiles #9) → `evaluating` → full scoring →
       real full composite in the ledger.
-- [ ] **Platform must surface `n` on `GET /scoring/scores`** (X-LEDGER-N below).
-      Today it doesn't, so the validator's `MIN_ELIGIBLE_CASES=100` floor
-      **fails open** and a small run (n=12) can be the on-chain champion —
-      exactly what happens now (uid 5 = 0.9 is driven by `5CLUBKGj`'s n=12
-      *small* run, not a full one).
+- [x] **Platform surfaces `n` on `GET /scoring/scores`** (X-LEDGER-N, DONE
+      2026-07-08 — platform#38 + subnet#65, merged + deployed). The validator's
+      `MIN_ELIGIBLE_CASES=100` floor now bites instead of failing open, so a
+      small run (n=12) can no longer be the on-chain champion. With no eligible
+      full run yet, the fold is correctly empty (the prior small-run champion is
+      no longer reinforced).
 - **Acceptance:** a real `full` composite for a real harness in the ledger, and
   the champion weight resolves to the miner's UID on-chain.
 
@@ -261,7 +262,7 @@ contract/doc drifts and productionization gaps that amplify §3–§6. IDs are
 | X-HARDEN | **Platform public-endpoint hardening** | **TODO** | Before public exposure: unset `DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR` (`ditto-platform/endpoints/validator.py:133-143`); front the app with a reverse proxy for **TLS + rate limiting** — public GET endpoints have no app-level limits (`retrieval.py:4`, deferred to a proxy not yet stood up); and bind validator read-GETs to a per-request nonce/timestamp signature (today: `X-Validator-Hotkey` + permit only, `validator.py:27-29`). Amplifies C-RATE. |
 | X-BENCHHOST | **dittobench-api deploy target vs mode B** | **DOC** | Mode B (presigned `tarball_url`, the validator's real path) needs a Docker daemon; the README's "Deploy (Cloud Run)" section describes the **practice** service (no Docker → `harness_url` only). `infra` co-locates a **second** dittobench-api instance on the Docker-capable validator VM (`127.0.0.1:8080`), which is where mode-B scoring actually runs. Not a code gap — the README is correct that the Docker path is "the on-chain validator's path"; add a one-line pointer so the two deploy contexts aren't conflated. |
 | X-INFRA-PROD | **No production infra exists** | **TODO 🔴** | Largest gap cluster (feeds E1/E2/E4/O-*). `infra` is dev-only: dev+"prod" share the `ditto-app-dev` project + tfstate; validator & embedder are **gated OFF and unprovisioned**; the validator/screener target the **dev localnet (netuid 3)**, not finney 118; ~~weights use the SDK path~~ (dev now rehearses the **Pylon identity path** — infra#13, W-PYLON); the platform **DB password lands in tfstate**; Postgres is a **single non-HA VM** holding both dev+prod DBs; the validator **reuses the platform SA** (`validator.tf:66` flags "prod should use a dedicated SA"). A finney deploy needs a genuine prod-isolation story, not a flag flip. |
-| X-LEDGER-N | **Fold ledger doesn't surface `n` → eligibility fails open** | **PLATFORM 🔴** | `GET /scoring/scores` (the durable ledger the validator folds into weights) returns `composite` per miner but **not `n`** (case count). The validator's `MIN_ELIGIBLE_CASES = 100` floor (`weights.py:_entry_eligible`) reads `n` via `getattr` and **fails open when it's absent** — so a *small* run (n=12) counts as eligible and can be the on-chain champion. Live proof: uid 5 = 0.9 is currently driven by `5CLUBKGj`'s **n=12 small run**, not a full one. Fix on the platform: include `n` (and ideally `bench_version`, `run_size`) in the `/scoring/scores` entry shape (mirror in `ditto/api_models/validator.py`), so the floor actually bites. Blocks the §2.1 "full composite is the champion" acceptance. |
+| X-LEDGER-N | **Fold ledger doesn't surface `n` → eligibility fails open** | **DONE (2026-07-08)** | `GET /scoring/scores` returned `composite` per miner but **not `n`**, so the validator's `MIN_ELIGIBLE_CASES = 100` floor (`weights.py:_entry_eligible`) read `n` via `getattr`, found it absent, and **failed open** — a *small* run (n=12) counted as eligible and drove the on-chain champion (uid 5 = 0.9 was `5CLUBKGj`'s n=12 run). Fixed: `n` (required `int`) added to the `LedgerEntry` wire model + endpoint mapping — platform#38 + subnet#65, merged to `dev` + deployed. Verified live: `/scoring/scores` now returns `n` (12/12/114); the fold drops both n=12 small runs and the n=114 zero-composite stub. **Remaining for §2.1 acceptance is content, not plumbing:** a *good* agent scored at `full` (none currently eligible → the fold is correctly empty; the stale on-chain 0.9 persists until a real full champion overwrites it — an empty fold is a no-op, not an active zero). |
 
 **Reconciliation status (2026-07-08):** X-BENCHVER + X-TRAJ (doc) + X-BENCHHOST
 are being fixed now (comment/doc-only, one PR per repo). X-SHADOW / X-HARDEN /
