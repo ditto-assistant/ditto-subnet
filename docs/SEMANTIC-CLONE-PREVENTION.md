@@ -280,13 +280,24 @@ Each phase is independently shippable and calibrated before the next.
     where L3a and L1 sit at recall 0.5, because the tier-2 rename defeats them but
     preserves the prompt. On the convergent pair L3b fires (0.82) while L1 and L3a
     are 0.0: no single signal is both firing and correct, so L3b stays review-band.
-  - Remaining: config/dependency extraction; gate fusion (S1 #3) — the ≥2-signal
-    hold band so L3b can contribute to a hold alongside L1/L2. Acceptance: detects
-    tier-4 prompt/config theft; FP within budget on convergent independents under
-    the ≥2-signal fusion rule.
+  - Done. S1 #3 gate plumbing (shadow mode). `agents.prompt_fingerprint` column
+    and migration; computed at upload, surfaced on the eligible ledger, and passed
+    to `evaluate_antidup`, which appends a prompt-overlap note to the audit reason
+    of a hold another rule already fired. The prompt sketch does not create a hold
+    on its own. Reason: the S1 #2 convergent case scores ~0.8 on the prompt signal
+    and structural is likewise shared by same-harness crates, so neither is
+    orthogonal to convergence; a prompt-based hold would false-positive on
+    convergent independents. Storing the sketch now gives every agent a prompt
+    fingerprint for later calibration.
+  - Deferred: config/dependency extraction; the active prompt-fusion hold (the
+    ≥2-signal band), which needs an orthogonal-to-convergence signal (L3c or L4) to
+    corroborate the prompt without holding on same-harness scaffolding. Acceptance:
+    detects tier-4 prompt/config theft; FP within budget on convergent independents
+    under the ≥2-signal fusion rule.
 - S2 — code-embedding (L3c). Code-embedding similarity as a review-band signal;
-  select and host the embedding model. Acceptance: raises tier-3 recall without
-  breaching the FP budget under the ≥2-signal fusion rule.
+  select and host the embedding model. Provides the first signal orthogonal to
+  convergence, which unblocks the S1 prompt-fusion hold. Acceptance: raises tier-3
+  recall without breaching the FP budget under the ≥2-signal fusion rule.
 - S3 — behavioral (L4a/b). Trajectory-digest emission, same-seed escalation job,
   and fusion into the gate. Acceptance: separates tier-5 clean-room clones from
   convergent independents at the target precision.
