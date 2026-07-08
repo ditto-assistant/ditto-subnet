@@ -226,7 +226,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     # consensus clips the deviator, so they are env-tunable but default to the
     # team-locked values (90/10 split).
     #
-    # Margin retune for DittoBench v2 / bench_version 3 (BENCHMARK-V2 §6.2, B8):
+    # Margin retune for DittoBench v2 / bench_version 2 (BENCHMARK-V2 §6.2, B8):
     # the dethrone margin must exceed the between-seed composite noise so a
     # verbatim copy cannot win a lucky seed. v1's 1% margin assumed a small σ it
     # never had. v2 targets between-seed σ ≤ 0.01 composite (§8 gate 1) and sets

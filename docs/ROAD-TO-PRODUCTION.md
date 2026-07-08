@@ -93,7 +93,7 @@ network where miners register to submit.
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| C-ISO | **Sandbox egress allowlist + seccomp/gVisor** | **TODO 🔴** | dittobench builds + runs attacker-controlled tarballs on the host daemon with full egress. Needs an egress proxy/allowlist + deeper isolation. Cost cap bounds spend meanwhile but not exfiltration/abuse. **Top robustness gap.** |
+| C-ISO | **Sandbox egress allowlist + seccomp/gVisor** | **PARTIAL** | Was "full egress, nothing built." Reality: sandbox-side plumbing is landed (`dittobench-api/internal/sandbox`: `--cap-drop ALL`, `--network`, proxy-env injection, `--pids-limit`, `no-new-privileges`, all env-gated) **and** the allowlisting egress proxy is now built (`cmd/egress-proxy`, [dittobench-api#21] — fail-closed CONNECT-only hostname allowlist, tested). Remaining = **infra enforcement**: create the `ditto-sandbox` docker network, run the proxy on it, install nft/iptables `DROP`-except-(proxy, host-gateway) on the validator VM, and set `DITTOBENCH_SANDBOX_EGRESS_NETWORK/_EGRESS_PROXY/_HARDEN` (Ansible). Optional deeper isolation (seccomp default-deny profile, gVisor/Kata, read-only rootfs) tracked in that repo's `docs/sandbox-egress-hardening.md`. Still the top robustness gap until the firewall lands. |
 | C-REPLAY | **Signature replay-cache / nonce+expiry** | **PARTIAL** | Sigs bind the full payload (no cross-agent replay), but add a server-side nonce+expiry replay cache so a captured signed message can't be re-applied. |
 | C-TUNE | **Plagiarism threshold tuning + review automation** | **PARTIAL** | Two-channel fingerprint gate merged; lexical (0.75/0.95) + structural (0.85/0.98) tolerances are conservative guesses — tune against a real corpus. `ath_pending_review` drained by hand (`scripts/resolve_review.py`); build a reviewer workflow. |
 | C-RATE | **API abuse controls** | **TODO** | Global + per-hotkey rate limits, request-size limits, auth throttling on public platform endpoints (today: permit-check + signatures only). |
@@ -125,7 +125,7 @@ SDK/localnet path is a declared fallback.
 
 | ID | Item | Status | Notes |
 |----|------|--------|-------|
-| E1 | **Pylon identity (write) credentials** | **TODO 🔴 blocker** | Only a read token exists; the SDK path is the dev fallback. Provision `PYLON_IDENTITY_*` write creds so the production weight path works — and verify it (W-PYLON). |
+| E1 | **Pylon identity (write) credentials** | **PARTIAL — self-serve, NOT an external dependency** | Corrected: the Pylon write token is a **self-generated bearer secret** (`openssl rand -base64 32`) — Pylon holds the mounted hotkey and signs `set_weights` itself; the token just authorizes the client. Pattern confirmed from resi-labs-ai/RESI-models (same `backenddevelopersltd/bittensor-pylon` image) and **validated live on dev localnet 2026-07-07** (real `put_weights`, no SDK fallback). Remaining work is per-network, not a blocker: generate the testnet/finney token, set `PYLON_IDENTITIES` + `PYLON_IDENTITY_NAME/TOKEN` + `PYLON_OPEN_ACCESS_TOKEN`, mount the hotkey wallet RO, and verify against a live testnet chain (W-PYLON). |
 | E2 | Testnet permit + stake (owner UID) | **TODO** | Validation runs under the **subnet owner's UID** — no separate validator registration/burn. Stake the owner hotkey past the `validator_permit` threshold. |
 | E3 | Chain parameters on target network | **TODO** | See W-PARAMS + enable commit-reveal (W-CR); re-tune the alpha pool / `TaoWeight` per network. |
 | E4 | **Mainnet (finney) cutover** | **TODO** | Point platform + validator at finney SN118, flip `enable_validator`, run the deploy runbook, verify each hop, run a real E2E on mainnet. |
@@ -195,6 +195,29 @@ SDK/localnet path is a declared fallback.
 - [ ] A green localnet E2E + chaos suite in CI (Q-CI, Q-CHAOS).
 - [ ] Miner + validator onboarding docs published (§8).
 - [ ] Mainnet cutover runbook executed with a real on-chain E2E (E4).
+
+---
+
+## 11. Cross-repo contract & doc reconciliations (2026-07-08 audit)
+
+A full-stack read across all six repos (`ditto-subnet`, `ditto-platform`,
+`infra`, `dittobench-api`, `ditto-harness`, `dittobench-starter-kit`) surfaced
+the items below. None is a runtime defect in the proven localnet path; they are
+contract/doc drifts and productionization gaps that amplify §3–§6. IDs are
+`X-*` so they don't collide with the spine items.
+
+| ID | Item | Status | Notes |
+|----|------|--------|-------|
+| X-BENCHVER | **`bench_version` mislabel** | **RECONCILING** | The live benchmark is `bench_version = 2` (authoritative in `dittobench-api/pkg/protocol/epoch.go:31`; mirrored by `ditto-platform` `endpoints/public.py:54` and the dashboard). Four **comments** wrongly label DittoBench v2 as "bench_version 3": `ditto-platform` (`docs/submission-contract.md:66`, `scoring_gate.py:40`) + `ditto-subnet` (`ditto/validator/config.py:229`, `ditto/tests/validator/test_config.py:32`). No runtime mismatch — relabel the comments to `2`. The bump policy correctly *resumes* at 3 for the first scoring change **after** v2 is live (`epoch.go:11-17`, `BENCHMARK-V2.md:527`). |
+| X-TRAJ | **Behavioral anti-copy channel exports names only** | **DECISION 🔴** | The tool-call trajectory is our only forge-proof runtime copy signal, and it gates the prompt-fusion hold in `SEMANTIC-CLONE-PREVENTION.md`. But the forwarded `ScoreReport`/`CaseScore` carries only the ordered observed tool **names** (`CaseScore.Called []string`, `dittobench-api/pkg/protocol/protocol.go:218`); the full `(name, args, hop)` is *recorded* server-side (`ToolExecRequest`) but **not exported**. `PROTOCOL.md:205-210` overstates it as an `(name, args, hop)` sequence forwarded to the platform. Decision: enrich the export (per-case args/hop) before building the behavioral gate, or the convergence-robust signal that unblocks the prompt-fusion hold can only compare name-sequences. Doc corrected to match today's shipped shape meanwhile. |
+| X-SHADOW | **Semantic-clone gate is shadow-only** | **KNOWN (S2)** | Production anti-copy today = exact-bytes / repack / normalized-source / lexical / structural / size → *human review* (`ditto-platform/scoring_gate.py`). The **code-embedding vector is stored but not gating** (`upload.py:336-341`, disabled by default), the **prompt-fusion hold is deferred** pending an orthogonal signal (`scoring_gate.py:163-168`), and the embedder Cloud Run service is **gated OFF + unprovisioned** (`infra` `enable_embedder=false`). Expected per `SEMANTIC-CLONE-PREVENTION.md` S2, but state it plainly at launch: semantic clone *prevention* is not live; convergence-robust gating is blocked on X-TRAJ. Amplifies C-TUNE. |
+| X-HARDEN | **Platform public-endpoint hardening** | **TODO** | Before public exposure: unset `DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR` (`ditto-platform/endpoints/validator.py:133-143`); front the app with a reverse proxy for **TLS + rate limiting** — public GET endpoints have no app-level limits (`retrieval.py:4`, deferred to a proxy not yet stood up); and bind validator read-GETs to a per-request nonce/timestamp signature (today: `X-Validator-Hotkey` + permit only, `validator.py:27-29`). Amplifies C-RATE. |
+| X-BENCHHOST | **dittobench-api deploy target vs mode B** | **DOC** | Mode B (presigned `tarball_url`, the validator's real path) needs a Docker daemon; the README's "Deploy (Cloud Run)" section describes the **practice** service (no Docker → `harness_url` only). `infra` co-locates a **second** dittobench-api instance on the Docker-capable validator VM (`127.0.0.1:8080`), which is where mode-B scoring actually runs. Not a code gap — the README is correct that the Docker path is "the on-chain validator's path"; add a one-line pointer so the two deploy contexts aren't conflated. |
+| X-INFRA-PROD | **No production infra exists** | **TODO 🔴** | Largest gap cluster (feeds E1/E2/E4/O-*). `infra` is dev-only: dev+"prod" share the `ditto-app-dev` project + tfstate; validator & embedder are **gated OFF and unprovisioned**; the validator/screener target the **dev localnet (netuid 3)**, not finney 118; weights use the **SDK path, not Pylon identity** (`validator_use_sdk_weights=true`); the platform **DB password lands in tfstate**; Postgres is a **single non-HA VM** holding both dev+prod DBs; the validator **reuses the platform SA** (`validator.tf:66` flags "prod should use a dedicated SA"). A finney deploy needs a genuine prod-isolation story, not a flag flip. |
+
+**Reconciliation status (2026-07-08):** X-BENCHVER + X-TRAJ (doc) + X-BENCHHOST
+are being fixed now (comment/doc-only, one PR per repo). X-SHADOW / X-HARDEN /
+X-INFRA-PROD are tracked here and sequence behind the §2 spine.
 
 ---
 
