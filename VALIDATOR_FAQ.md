@@ -65,8 +65,22 @@ Three, none of which we hold for you:
    OPENROUTER_API_KEY=sk-or-...
    ```
 
-You do **not** need S3/MinIO or database credentials. The local stack ships
-defaults via Docker Compose. In production you point storage at a real bucket, but that is optional to get started.
+### Storage
+
+Local dev needs no storage or database credentials. `make stack-up` runs MinIO and Postgres containers with defaults and creates the `ditto-agents` bucket for you.
+
+For production, point storage at a real S3-compatible bucket (AWS S3, Cloudflare R2, or Backblaze B2). This is where miner submission tarballs land. Create the bucket, then set:
+
+```ini
+STORAGE_ENDPOINT_URL=https://<your-s3-endpoint>
+STORAGE_BUCKET=<your-bucket>
+STORAGE_ACCESS_KEY=<access-key>
+STORAGE_SECRET_KEY=<secret-key>
+STORAGE_REGION=<region>
+STORAGE_USE_TLS=true
+```
+
+Repoint Postgres the same way through the `POSTGRES_*` knobs, or keep the bundled container.
 
 ---
 
@@ -95,7 +109,7 @@ ollama serve &
 ollama pull embeddinggemma
 ```
 
-At release the validator daemon runs the full loop from one entrypoint: build each submission, score it, then set weights _(finalizing: the exact command lands in the README before launch)_. Today you can already run two pieces: the chain client (`make smoke-pylon`) and the API (`make api-up`, then `make smoke-api`).
+Today you can already run two pieces without the full daemon: the chain client (`make smoke-pylon`) and the API (`make api-up`, then `make smoke-api`).
 
 Relevant `.env` knobs (see `.env.example` for the full list):
 
@@ -107,6 +121,22 @@ PYLON_IDENTITY_NAME=           # set to write weights
 PYLON_IDENTITY_TOKEN=          # set to write weights
 OPENROUTER_API_KEY=            # set to score
 ```
+
+---
+
+## Running in production
+
+The validator daemon runs the whole loop from one entrypoint: build each submission, score it, then set weights. That entrypoint is _(finalizing)_ and its exact command lands in the README before launch. The shape of a production deploy:
+
+1. Provision a host that meets the requirements above. Install Docker, `uv`, and Ollama.
+2. Clone the repo and fill `.env` with real values: Pylon identity, OpenRouter key, and production storage.
+3. Load your validator wallet into Pylon so it can sign `put_weights`.
+4. Bring up the stack (`make stack-up`) and apply migrations (`make migrate`).
+5. Pull the embedding model (`ollama pull embeddinggemma`).
+6. Run the daemon under a process manager (pm2 or systemd) with restart-on-failure so it survives reboots.
+7. Confirm it is setting weights on-chain for netuid 118.
+
+This section firms up as the daemon entrypoint lands _(finalizing)_.
 
 ---
 
