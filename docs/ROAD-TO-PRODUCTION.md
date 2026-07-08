@@ -52,8 +52,10 @@ Everything below is what stands between that and a real network.
 
 ## 2. Critical path to mainnet (ordered — each gates the next)
 
-1. **Full-scale E2E proof** (§2.1) — prove the real production `run_size=full`
-   path end to end, incl. the just-fixed `/seed` body limit. *(localnet)*
+1. **Full-scale E2E proof** (§2.1) — ✅ **DONE (2026-07-08)**: a real
+   `run_size=full` composite (0.694, n=114) for the reference harness became the
+   eligible champion and set weights on chain to the miner's UID (uid 6 = 1.0)
+   over the Pylon path. *(localnet)*
 2. **Sandbox egress allowlist + isolation** (§3, C-ISO) — ✅ **DONE**: applied +
    verified on the dev validator (2026-07-08). Optional deeper isolation
    (seccomp/gVisor) remains.
@@ -80,7 +82,7 @@ Everything outside this spine (ops hardening, tuning, docs) parallelizes.
 
 ---
 
-## 2.1 Phase 2 — full-scale E2E proof · IN PROGRESS
+## 2.1 Phase 2 — full-scale E2E proof · ✅ DONE (2026-07-08)
 
 **Goal:** one agent flows the entire path at `run_size=full` and lands a real
 composite + resolved on-chain weight.
@@ -102,34 +104,31 @@ composite + resolved on-chain weight.
       (host-local; external egress stays proxy-only). Verified live: full runs
       now clear seeding and reach `done`; sandbox→host ephemeral probe blocked
       before / reachable after.
-- [ ] **Miner submits a *working* harness** (funded coldkey + a hotkey
-      **registered on netuid 3**). Owner-run (key custody). The only agent in the
-      dev queue (`0453574c`, miner `5E7e…`) is a **broken stub** — it burns ~20k
-      LLM tokens but emits no valid tool calls and recalls nothing, so it
-      correctly scores `composite=0.000` (tool + memory both 0). Not a pipeline
-      bug; it just proves nothing about a *good* full run.
-- [ ] Agent auto-flows screener (compiles #9) → `evaluating` → full scoring →
-      real full composite in the ledger.
 - [x] **Platform surfaces `n` on `GET /scoring/scores`** (X-LEDGER-N, DONE
       2026-07-08 — platform#38 + subnet#65, merged + deployed). The validator's
       `MIN_ELIGIBLE_CASES=100` floor now bites instead of failing open, so a
-      small run (n=12) can no longer be the on-chain champion. With no eligible
-      full run yet, the fold is correctly empty (the prior small-run champion is
-      no longer reinforced).
-- **Acceptance:** a real `full` composite for a real harness in the ledger, and
-  the champion weight resolves to the miner's UID on-chain.
+      small run (n=12) can no longer be the on-chain champion.
+- [x] **Real full composite for a real harness, resolved on chain (2026-07-08).**
+      The reference harness (`0453574c`, "ditto-reference-harness-v2", miner
+      `5E7e9r…`) had scored `0.000` only because it ran *during* the C-ISO
+      regression window (seeding failed / `observed=0`). Once both fixes landed,
+      the validator re-scored it at `run_size=full`: **composite 0.694**
+      (tool 0.608, memory 0.783), **n=114**, **observed=48 / capped=2** — proving
+      both fixes live (ollama seeding → memory 0.783; tool_endpoint → observed=48,
+      not 0). It became the sole **eligible** ledger entry (the two n=12 small runs
+      dropped by the floor), so the fold crowned it and set weights on chain **via
+      Pylon** (`put_weights … 1 entries`). On-chain read: validator `uid 4 →
+      [(6, 65535)]` = **uid 6 (the miner) at weight 1.0**.
+- **Acceptance — MET:** a real `full` composite (0.694, n=114) for a real harness
+  is in the ledger, and the champion weight resolves to the miner's UID (uid 6)
+  on-chain, over the production Pylon path, with the eligibility floor enforced.
 
-**Status 2026-07-08:** the *mechanism* is proven end-to-end — full-size
-datagen+seeding completes, weights resolve to a registered miner's UID on chain
-(uid 5 = 0.9), and that write now goes over the **Pylon identity path** (§2.4).
-What's left for a clean acceptance is content, not plumbing: a *good* agent
-scored at `full` (the queued one is broken) **and** the platform surfacing `n`
-so the full composite — not a stale small run — is the champion.
-
-**Localnet weight-resolution note:** a registered miner (`5CLUBKGj` = uid 5) now
-resolves its champion weight on chain (0.9); an *unregistered* scored hotkey
-(`5FHneW46`) is still correctly skipped from the weight vector — a localnet
-artifact that disappears where miners must register to submit.
+**Follow-ups (non-blocking):** (a) the reference-harness `docker build` (ort/
+onnxruntime native link, `dittobench-starter-kit#7`) intermittently link-fails —
+a fresh upload (`e6dc4051`) hit it while the re-score of the already-built
+`0453574c` sailed through; harden the build or add a screener build retry.
+(b) S-RETRY: bound re-scoring so a genuinely broken agent doesn't re-run full
+datagen forever (§7).
 
 ---
 
