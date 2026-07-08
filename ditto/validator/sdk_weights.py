@@ -118,6 +118,36 @@ class SdkWeightSetter:
         limit = self._subtensor.weights_rate_limit(netuid)
         return None if limit is None else int(limit)
 
+    async def get_commit_reveal_enabled(self, netuid: int) -> bool | None:
+        """Whether the subnet runs commit-reveal (``CommitRevealWeightsEnabled``).
+
+        Observability only: ``set_weights`` already routes to the timelock
+        commit itself when this is on (commit-reveal v3), so the worker just
+        logs the mode. ``None`` when the read is undeterminable.
+        """
+        return await asyncio.to_thread(self._get_commit_reveal_enabled_sync, netuid)
+
+    def _get_commit_reveal_enabled_sync(self, netuid: int) -> bool | None:
+        self._ensure()
+        try:
+            # bittensor's commit_reveal_enabled asserts a non-None hyperparameter;
+            # treat any read failure as undeterminable rather than raising.
+            return bool(self._subtensor.commit_reveal_enabled(netuid))
+        except Exception:  # noqa: BLE001 - observability read must not raise
+            return None
+
+    async def get_reveal_period_epochs(self, netuid: int) -> int | None:
+        """The subnet's ``RevealPeriodEpochs`` (epochs from commit to reveal)."""
+        return await asyncio.to_thread(self._get_reveal_period_epochs_sync, netuid)
+
+    def _get_reveal_period_epochs_sync(self, netuid: int) -> int | None:
+        self._ensure()
+        try:
+            period = self._subtensor.get_subnet_reveal_period_epochs(netuid)
+        except Exception:  # noqa: BLE001 - advisory read must not raise
+            return None
+        return None if period is None else int(period)
+
     def _put_weights_sync(self, weights: dict[str, float]) -> None:
         self._ensure()
         netuid = self._config.netuid

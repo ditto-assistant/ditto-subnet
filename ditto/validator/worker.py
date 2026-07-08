@@ -216,6 +216,7 @@ class ValidatorWorker:
             # submission anyway; skip it (loudly) rather than burn an epoch on a
             # guaranteed rejection.
             return _WeightOutcome(leaderboard=leaderboard, weights=weights)
+        await self._log_commit_reveal_mode()
         submitted = await self._put_weights_with_retry(weights)
         return _WeightOutcome(
             leaderboard=leaderboard, weights=weights, submitted=submitted
@@ -368,6 +369,71 @@ class ValidatorWorker:
             )
             return False
         return True
+
+    async def _log_commit_reveal_mode(self) -> None:
+        """Observe + log whether this network runs commit-reveal.
+
+        Under commit-reveal v3 the active weight sink (``set_weights`` or Pylon)
+        does the timelock commit itself and the chain auto-reveals after
+        ``RevealPeriodEpochs`` — there is **no** separate reveal call for the
+        worker to make. This method only *reports* the mode so a cutover can
+        confirm commit-reveal is actually on; without it weights are copy-able
+        (front-runnable). When ``VALIDATOR_REQUIRE_COMMIT_REVEAL`` is set and the
+        chain reports commit-reveal off, it logs an error but still submits —
+        refusing would zero the chain, a worse failure. **Fail-open:** any read
+        error or a sink without the reader is a silent no-op.
+        """
+        read_enabled = getattr(self._weight_setter, "get_commit_reveal_enabled", None)
+        if read_enabled is None:
+            return
+        netuid = self._config.netuid
+        try:
+            enabled = read_enabled(netuid)
+            if inspect.isawaitable(enabled):
+                enabled = await enabled
+        except Exception as e:  # noqa: BLE001 - observability must not wedge weights
+            logger.warning("commit-reveal self-check errored (%s); proceeding", e)
+            return
+        # Real sinks return bool | None; be defensive about anything else.
+        if enabled is not None and not isinstance(enabled, bool):
+            enabled = None
+        if enabled is None:
+            log = logger.warning if self._config.require_commit_reveal else logger.info
+            log("commit-reveal state undeterminable on netuid %s; proceeding", netuid)
+            return
+        if enabled:
+            period = await self._read_reveal_period(netuid)
+            logger.info(
+                "commit-reveal ON (netuid %s, reveal period %s epochs): weights are "
+                "committed now and revealed on-chain after the reveal window",
+                netuid,
+                period if period is not None else "?",
+            )
+        elif self._config.require_commit_reveal:
+            logger.error(
+                "commit-reveal is OFF on netuid %s but VALIDATOR_REQUIRE_COMMIT_REVEAL "
+                "is set — weights are front-runnable; enable the "
+                "CommitRevealWeightsEnabled hyperparameter. Submitting anyway "
+                "(refusing would zero the chain)",
+                netuid,
+            )
+        else:
+            logger.info(
+                "commit-reveal OFF on netuid %s: weights applied directly", netuid
+            )
+
+    async def _read_reveal_period(self, netuid: int) -> int | None:
+        """Best-effort read of ``RevealPeriodEpochs`` for the mode log (advisory)."""
+        read = getattr(self._weight_setter, "get_reveal_period_epochs", None)
+        if read is None:
+            return None
+        try:
+            period = read(netuid)
+            if inspect.isawaitable(period):
+                period = await period
+        except Exception:  # noqa: BLE001 - advisory only
+            return None
+        return period if isinstance(period, int) else None
 
     async def _put_weights_with_retry(self, weights: dict[str, float]) -> bool:
         """Submit weights, retrying a transient chain failure a few times.

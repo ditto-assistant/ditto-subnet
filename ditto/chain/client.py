@@ -45,6 +45,8 @@ _TIMESTAMP_NOW_STORAGE = "Now"
 
 _TEMPO_STORAGE = "Tempo"
 _WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
+_COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
+_REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
 
 
 class ChainClient:
@@ -233,6 +235,39 @@ class ChainClient:
             ChainTimeoutError: When the query exceeds its timeout.
         """
         raw = await self._query_subtensor_storage(_WEIGHTS_RATE_LIMIT_STORAGE, netuid)
+        return None if raw is None else int(raw)
+
+    async def get_commit_reveal_enabled(self, netuid: int) -> bool | None:
+        """Read the subnet's ``CommitRevealWeightsEnabled`` hyperparameter.
+
+        When true, weight submissions are timelock-committed and the chain
+        reveals them after ``RevealPeriodEpochs`` (commit-reveal v3) — Pylon's
+        ``put_weights`` does the commit itself, so this is observability only:
+        the validator logs the mode so a cutover can confirm commit-reveal is
+        actually on (without it, weights are copy-able / front-runnable).
+        ``None`` when the storage entry is empty (unknown netuid).
+
+        Raises:
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the query exceeds its timeout.
+        """
+        raw = await self._query_subtensor_storage(
+            _COMMIT_REVEAL_ENABLED_STORAGE, netuid
+        )
+        return None if raw is None else bool(raw)
+
+    async def get_reveal_period_epochs(self, netuid: int) -> int | None:
+        """Read the subnet's ``RevealPeriodEpochs`` hyperparameter (epochs).
+
+        How many epochs after a commit the chain reveals the weights, under
+        commit-reveal. Advisory: logged alongside the commit-reveal mode.
+        ``None`` when the storage entry is empty (unknown netuid).
+
+        Raises:
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the query exceeds its timeout.
+        """
+        raw = await self._query_subtensor_storage(_REVEAL_PERIOD_STORAGE, netuid)
         return None if raw is None else int(raw)
 
     async def _query_subtensor_storage(self, storage_function: str, netuid: int) -> Any:

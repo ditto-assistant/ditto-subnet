@@ -20,11 +20,15 @@ class _FakeSubtensor:
         success: bool = True,
         permits: dict[str, bool] | None = None,
         stakes: dict[str, Any] | None = None,
+        cr_enabled: bool | None = True,
+        reveal_period: int = 2,
     ) -> None:
         self._uid_map = uid_map
         self._success = success
         self._permits = permits or {}
         self._stakes = stakes or {}
+        self._cr_enabled = cr_enabled
+        self._reveal_period = reveal_period
         self.calls: list[dict[str, Any]] = []
 
     def get_uid_for_hotkey_on_subnet(self, hotkey: str, _netuid: int) -> int | None:
@@ -42,6 +46,14 @@ class _FakeSubtensor:
     def weights_rate_limit(self, _netuid: int) -> int:
         return 100
 
+    def commit_reveal_enabled(self, _netuid: int) -> bool:
+        # Mirror bittensor: asserts a non-None hyperparameter (raises otherwise).
+        assert self._cr_enabled is not None
+        return self._cr_enabled
+
+    def get_subnet_reveal_period_epochs(self, _netuid: int) -> int:
+        return self._reveal_period
+
     def set_weights(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         return SimpleNamespace(success=self._success, error_message="boom")
@@ -52,6 +64,8 @@ def _setter(
     success: bool = True,
     permits: dict[str, bool] | None = None,
     stakes: dict[str, Any] | None = None,
+    cr_enabled: bool | None = True,
+    reveal_period: int = 2,
 ) -> tuple[SdkWeightSetter, _FakeSubtensor]:
     config = SimpleNamespace(
         netuid=3,
@@ -60,7 +74,14 @@ def _setter(
         weight_version_key=42,
     )
     setter = SdkWeightSetter(config, keypair=object())  # type: ignore[arg-type]
-    fake = _FakeSubtensor(uid_map, success=success, permits=permits, stakes=stakes)
+    fake = _FakeSubtensor(
+        uid_map,
+        success=success,
+        permits=permits,
+        stakes=stakes,
+        cr_enabled=cr_enabled,
+        reveal_period=reveal_period,
+    )
     # Pre-inject so _ensure() skips real bittensor construction.
     setter._subtensor = fake
     setter._wallet = object()
@@ -134,3 +155,20 @@ class TestSdkWeightSetter:
         setter, _ = _setter({})
         assert await setter.get_tempo(3) == 360
         assert await setter.get_weights_rate_limit(3) == 100
+
+    async def test_commit_reveal_enabled_true(self) -> None:
+        setter, _ = _setter({}, cr_enabled=True)
+        assert await setter.get_commit_reveal_enabled(3) is True
+
+    async def test_commit_reveal_enabled_false(self) -> None:
+        setter, _ = _setter({}, cr_enabled=False)
+        assert await setter.get_commit_reveal_enabled(3) is False
+
+    async def test_commit_reveal_enabled_undeterminable_is_none(self) -> None:
+        # bittensor asserts a non-None hyperparameter; a failing read -> None.
+        setter, _ = _setter({}, cr_enabled=None)
+        assert await setter.get_commit_reveal_enabled(3) is None
+
+    async def test_get_reveal_period_epochs(self) -> None:
+        setter, _ = _setter({}, reveal_period=7)
+        assert await setter.get_reveal_period_epochs(3) == 7
