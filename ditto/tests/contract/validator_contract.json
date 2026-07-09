@@ -1,0 +1,833 @@
+{
+  "ArtifactResponse": {
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "download_url": {
+        "type": "string"
+      },
+      "expires_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "sha256": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id",
+      "sha256",
+      "download_url",
+      "expires_at"
+    ],
+    "type": "object"
+  },
+  "CaseScore": {
+    "properties": {
+      "called": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "case_id": {
+        "type": "string"
+      },
+      "category": {
+        "type": "string"
+      },
+      "correct": {
+        "default": false,
+        "type": "boolean"
+      },
+      "expected": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "kind": {
+        "default": "",
+        "type": "string"
+      },
+      "latency_ms": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "notes": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "quality": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "score": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "tool_score": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      }
+    },
+    "required": [
+      "case_id",
+      "category",
+      "score",
+      "tool_score",
+      "latency_ms"
+    ],
+    "type": "object"
+  },
+  "LedgerEntry": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "composite": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "first_seen": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "n": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "seed": {
+        "type": "integer"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "signature": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "size_bytes": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      },
+      "validator_hotkey": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "miner_hotkey",
+      "agent_id",
+      "composite",
+      "n",
+      "first_seen",
+      "sha256",
+      "run_id",
+      "seed",
+      "validator_hotkey",
+      "status"
+    ],
+    "type": "object"
+  },
+  "LedgerResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      },
+      "LedgerEntry": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "first_seen": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "miner_hotkey": {
+            "type": "string"
+          },
+          "n": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "$ref": "#/$defs/AgentStatus"
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "miner_hotkey",
+          "agent_id",
+          "composite",
+          "n",
+          "first_seen",
+          "sha256",
+          "run_id",
+          "seed",
+          "validator_hotkey",
+          "status"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "age_seconds": {
+        "default": 0,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "count": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/LedgerEntry"
+        },
+        "type": "array"
+      },
+      "generated_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "stale": {
+        "default": false,
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "entries",
+      "count"
+    ],
+    "type": "object"
+  },
+  "ScoreReport": {
+    "$defs": {
+      "CaseScore": {
+        "properties": {
+          "called": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "correct": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "default": "",
+            "type": "string"
+          },
+          "latency_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "quality": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tool_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "case_id",
+          "category",
+          "score",
+          "tool_score",
+          "latency_ms"
+        ],
+        "type": "object"
+      },
+      "CodeFingerprint": {
+        "properties": {
+          "card": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "k": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "m": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "v": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "v",
+          "k",
+          "card"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "composite": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "details": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "generated_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "median_ms": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "memory_mean": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "n": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "per_case": {
+        "items": {
+          "$ref": "#/$defs/CaseScore"
+        },
+        "type": "array"
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "seed": {
+        "maximum": 9223372036854775807,
+        "minimum": -9223372036854775808,
+        "type": "integer"
+      },
+      "structural_fingerprint": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CodeFingerprint"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "tool_mean": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      }
+    },
+    "required": [
+      "run_id",
+      "seed",
+      "composite",
+      "tool_mean",
+      "memory_mean",
+      "median_ms",
+      "n",
+      "generated_at"
+    ],
+    "type": "object"
+  },
+  "SubmitScoreRequest": {
+    "$defs": {
+      "CaseScore": {
+        "properties": {
+          "called": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "correct": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "default": "",
+            "type": "string"
+          },
+          "latency_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "quality": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tool_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "case_id",
+          "category",
+          "score",
+          "tool_score",
+          "latency_ms"
+        ],
+        "type": "object"
+      },
+      "CodeFingerprint": {
+        "properties": {
+          "card": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "k": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "m": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "v": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "v",
+          "k",
+          "card"
+        ],
+        "type": "object"
+      },
+      "ScoreReport": {
+        "properties": {
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "median_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_mean": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "n": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "per_case": {
+            "items": {
+              "$ref": "#/$defs/CaseScore"
+            },
+            "type": "array"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "structural_fingerprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CodeFingerprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tool_mean": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "run_id",
+          "seed",
+          "composite",
+          "tool_mean",
+          "memory_mean",
+          "median_ms",
+          "n",
+          "generated_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "report": {
+        "$ref": "#/$defs/ScoreReport"
+      },
+      "signature": {
+        "pattern": "^[0-9a-fA-F]{128}$",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "signature",
+      "report"
+    ],
+    "type": "object"
+  },
+  "SubmitScoreResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "accepted": {
+        "type": "boolean"
+      },
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      }
+    },
+    "required": [
+      "agent_id",
+      "status",
+      "accepted"
+    ],
+    "type": "object"
+  },
+  "ValidatorQueueItem": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "created_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      }
+    },
+    "required": [
+      "agent_id",
+      "miner_hotkey",
+      "name",
+      "sha256",
+      "status",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "ValidatorQueueResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      },
+      "ValidatorQueueItem": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "miner_hotkey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/AgentStatus"
+          }
+        },
+        "required": [
+          "agent_id",
+          "miner_hotkey",
+          "name",
+          "sha256",
+          "status",
+          "created_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "count": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/ValidatorQueueItem"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "items",
+      "count"
+    ],
+    "type": "object"
+  }
+}

@@ -13,7 +13,7 @@ from ditto.api_models import (
     UploadCheckRequest,
     UploadCheckResponse,
 )
-from ditto.db.models import AgentStatus
+from ditto.api_models.agent_status import AgentStatus
 
 _GOOD_SS58 = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _GOOD_SHA256 = "1d8a3b6f04e2c7f9a51bd3e5c8f2a7b06d4e9c1f2a3b4c5d6e7f8a9b0c1d2e3f"

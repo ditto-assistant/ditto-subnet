@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ditto"
 version = "0.0.1"
-description = "Ditto Bittensor Subnet 118 — Go-based agent memory harness incentive layer."
+description = "Ditto Bittensor Subnet 118 (SN118): miner CLI + validator for the Rust agent-memory-harness incentive layer."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 authors = [{ name = "heyDitto" }]
@@ -13,19 +13,21 @@ dependencies = [
     "bittensor>=10.2.1",
     "bittensor-pylon-client",
     "async-substrate-interface",
-    "asyncpg>=0.30",
-    "sqlalchemy[asyncio]>=2.0",
-    "alembic>=1.13",
-    "fastapi>=0.110",
-    "python-multipart>=0.0.9",
-    "uvicorn[standard]>=0.27",
-    "prometheus-client>=0.20",
-    "tenacity>=8.0",
-    "aioboto3>=13.0",
+    "httpx>=0.27",
+    "pydantic>=2",
 ]
+
+[project.optional-dependencies]
+# Public wandb telemetry (opt-in). The validator imports wandb lazily and
+# degrades to a no-op when it is absent, so this is only needed to actually
+# publish stats: ``uv sync --extra telemetry`` (or ``pip install ditto[telemetry]``).
+telemetry = ["wandb>=0.17"]
 
 [tool.uv.sources]
 bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
+
+[project.scripts]
+ditto = "ditto.miner_cli.__main__:main"
 
 [dependency-groups]
 dev = [
@@ -35,8 +37,6 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
     "pre-commit>=3.7",
-    "aiosqlite>=0.20",
-    "httpx>=0.27",
 ]
 
 [tool.hatch.build.targets.wheel]

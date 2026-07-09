@@ -1,44 +1,54 @@
 # Ditto Subnet (Bittensor SN118)
 
-Go-based agent memory harness incentive layer. Miners submit a Go harness implementing the required MCP server + agent loop interfaces; validators run each submission in an isolated Docker sandbox, score across correctness / token cost / wall-clock, and the winner takes essentially all emissions.
+Rust agent-memory-harness incentive layer. Miners submit a Rust crate that depends on the
+`ditto-harness` library and overrides its extension traits; validators run each submission in an
+isolated sandbox, score across correctness / token cost / wall-clock, and the winner takes
+essentially all emissions.
+
+This repo holds the **miner CLI** and the **validator worker**. The platform **API server** lives in
+[`ditto-platform`](https://github.com/ditto-assistant/ditto-platform); the reference harness in
+[`ditto-harness`](https://github.com/ditto-assistant/ditto-harness).
+
+## Layout
+- `ditto/miner_cli/` — the `ditto` CLI: submit an agent, poll status, pre-flight a tarball.
+- `ditto/validator/` — the validator worker (`python -m ditto.validator`): pull agents from the
+  platform, score them via dittobench, set weights on chain via Pylon.
+- `ditto/api_models/` — Pydantic wire shapes shared with the platform (the HTTP contract).
+- `ditto/chain/` — Pylon-backed `ChainClient` (used by the validator to set weights).
 
 ## Quickstart
-
 ```sh
-cp .env.example .env
 uv sync
-make stack-up        # postgres + pylon, blocks until both report healthy
-make migrate         # apply alembic migrations
-make smoke-pylon     # verify ChainClient against finney via Pylon
-make test            # unit tests
+make test          # unit tests
 ```
 
-`make api-up` runs the FastAPI server in the foreground on `:8000`. In a separate terminal:
-
+## Miner CLI
+Installed as the `ditto` console script (`pyproject` `[project.scripts]`):
 ```sh
-make api-up          # foreground; Ctrl+C to stop
+ditto --network <finney|test|local> [--chain-endpoint ws://…] upload \
+  --path <agent.tar.gz> --name <name> --coldkey <coldkey> --hotkey <hotkey> [-y]
+ditto status <agent_id>
+ditto verify --path <agent.tar.gz>      # pre-flight checks only — no chain/API calls
 ```
+`--network` couples the API URL + subtensor network from a locked table (can't desync);
+`--chain-endpoint` overrides just the chain target (e.g. a hosted local subtensor) while keeping the
+`--network` API URL.
 
-Then back in the first terminal:
-
+## Validator worker
 ```sh
-make smoke-api       # curl /health to confirm the API is reachable
+python -m ditto.validator
 ```
-
-`make stack-down` stops the services. Postgres state persists in a named docker volume across restarts; `docker compose down -v` for a hard reset.
-
-The API server runs locally (not in compose) for fast iteration. Pylon shifts to host port 8001 so the API can own 8000.
+Env-driven (`VALIDATOR_*` / `PYLON_*` / `NETUID` / `SUBTENSOR_NETWORK`): polls the platform's
+`/validator/*` API, scores each agent via dittobench-api (set `VALIDATOR_DITTOBENCH_MOCK=1` to return
+a canned score for local testing), and sets weights via Pylon. See `ditto/validator/config.py` for
+all settings.
 
 ## Make targets
+- `make lint` — `ruff format --check` + `ruff check`
+- `make format` — `ruff format` + `ruff check --fix`
+- `make typecheck` — `mypy ditto/`
+- `make test` — the default `pytest` suite
 
-- `make lint` - `ruff format --check` + `ruff check`
-- `make format` - `ruff format` + `ruff check --fix`
-- `make typecheck` - `mypy ditto/`
-- `make test` - run the default `pytest` suite
-- `make test-integration` - run integration tests against the live stack
-- `make api-up` - run `python -m ditto.api_server` against the local stack
-- `make smoke-api` - curl `/health` to confirm the API is reachable
-- `make smoke-pylon` - exercise the chain client against the live Pylon
-- `make stack-up` / `make stack-down` - bring docker-compose services up / down
-- `make migrate` / `make migrate-down` - apply / roll back one alembic revision
-- `make migrate-history` / `make migrate-current` - alembic history + current head
+## Dev-chain end-to-end
+See [`docs/dev-e2e-handoff.md`](docs/dev-e2e-handoff.md) for running the full
+miner → API → validator loop against the dev local chain.
