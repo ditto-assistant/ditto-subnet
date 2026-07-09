@@ -154,6 +154,10 @@ def _config() -> MagicMock:
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
+    # Combined role (the historical single-process default): a scorer clears
+    # enable_weights, an independent validator clears enable_scoring.
+    cfg.enable_scoring = True
+    cfg.enable_weights = True
     return cfg
 
 
@@ -447,8 +451,8 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once()
 
     async def test_set_weights_false_scores_without_touching_weights(self) -> None:
-        # The scoring-only sweep (between weight-set epochs) drains the queue but
-        # does not read the ledger or submit weights.
+        # The scoring-only sweep (between weight-set epochs) drains the queue and
+        # re-scores stale champions (a ledger read) but never submits weights.
         item = _queue_item("5MinerA" + "x" * 41, "alpha")
         ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
         platform = _platform_with_ledger(items=[item], ledger=ledger)
@@ -469,7 +473,7 @@ class TestRunOnce:
         n = await worker.run_once(set_weights=False)
         assert n == 1
         assert platform.submit_score.await_count == 1
-        platform.get_ledger.assert_not_awaited()
+        platform.get_ledger.assert_awaited()  # read for the stale-champion re-score
         chain.put_weights.assert_not_awaited()
 
     async def test_one_agent_failure_does_not_block_weights(self) -> None:
@@ -564,6 +568,66 @@ class TestRunOnce:
         # Must not raise — the durable ledger means next epoch retries.
         await worker.run_once()
         assert chain.put_weights.await_count == worker_mod._WEIGHT_SET_ATTEMPTS
+
+
+class TestRoleSplit:
+    """The scoring / weight halves gate on enable_scoring / enable_weights, so one
+    process can be the central scorer, another an independent weights-only
+    validator, or (default) both."""
+
+    async def test_scoring_only_scores_but_never_sets_weights(self) -> None:
+        # Central scorer: drains the queue and submits signed scores, but with
+        # enable_weights cleared it never reads-and-folds for weights or touches
+        # the chain.
+        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        platform = _platform_with_ledger(
+            items=[item], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock(put_weights=AsyncMock())
+        keypair = MagicMock(sign=MagicMock(return_value=b"\x01" * 64))
+        cfg = _config()
+        cfg.enable_weights = False
+
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=keypair,
+        )
+        n = await worker.run_once()
+        assert n == 1
+        assert platform.submit_score.await_count == 1  # scored + persisted
+        chain.put_weights.assert_not_awaited()  # never touches the chain
+
+    async def test_weights_only_sets_weights_without_scoring(self) -> None:
+        # Independent validator: with enable_scoring cleared it never pulls the
+        # queue or scores, only reads the canonical ledger and sets weights.
+        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        platform = _platform_with_ledger(
+            items=[item], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock(put_weights=AsyncMock())
+        cfg = _config()
+        cfg.enable_scoring = False
+
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        n = await worker.run_once()
+        assert n == 0  # no queue pulled
+        platform.get_queue.assert_not_awaited()  # never hits the scoring queue
+        platform.submit_score.assert_not_awaited()
+        dittobench.score_tarball.assert_not_awaited()  # never scores
+        chain.put_weights.assert_awaited_once_with({"5MinerA" + "x" * 41: 0.9})
 
 
 class TestRetryBackoff:

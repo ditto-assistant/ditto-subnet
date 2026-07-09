@@ -42,6 +42,22 @@ class ValidatorConfig:
     For local end-to-end plumbing tests where no dittobench-api / OpenRouter
     key is available. Enabled via ``VALIDATOR_DITTOBENCH_MOCK``."""
 
+    # --- Roles (which halves of the loop this instance runs) ---
+    enable_scoring: bool
+    """Run the scoring sweep: pull the ``evaluating`` queue, score via
+    dittobench-api, submit signed scores, and re-score stale champions. The
+    central scorer sets this and clears ``enable_weights``
+    (``VALIDATOR_ENABLE_SCORING``, default true). A thin (weights-only) validator
+    clears this and needs no dittobench-api URL / OpenRouter key."""
+
+    enable_weights: bool
+    """Run the weight path: fold the durable ledger and set weights on chain.
+    Independent validators set this and clear ``enable_scoring``
+    (``VALIDATOR_ENABLE_WEIGHTS``, default true) — they consume the
+    centrally-computed ledger and never see the oracle. A scoring-only instance
+    clears this and needs no Pylon identity. Both true is the historical
+    single-process behaviour."""
+
     # --- Identity / chain ---
     validator_hotkey: str
     """This validator's SS58 hotkey (must match the loaded signing keypair)."""
@@ -223,17 +239,36 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     require_commit_reveal = (
         os.environ.get("VALIDATOR_REQUIRE_COMMIT_REVEAL", "").lower() in _truthy
     )
+
+    # Roles: an instance runs the scoring half, the weight half, or both. The
+    # central scorer is scoring-only; independent validators are weights-only;
+    # both (the default) is the historical single-process behaviour.
+    enable_scoring = (
+        os.environ.get("VALIDATOR_ENABLE_SCORING", "true").lower() in _truthy
+    )
+    enable_weights = (
+        os.environ.get("VALIDATOR_ENABLE_WEIGHTS", "true").lower() in _truthy
+    )
+    if not (enable_scoring or enable_weights):
+        raise ValidatorConfigError(
+            "at least one of VALIDATOR_ENABLE_SCORING / VALIDATOR_ENABLE_WEIGHTS "
+            "must be true"
+        )
+
+    # dittobench-api + OpenRouter are only needed by the scoring half (and not in
+    # mock mode). A weights-only validator consumes the ledger and needs neither.
     dittobench_api_url = os.environ.get("VALIDATOR_DITTOBENCH_API_URL", "")
     openrouter_key = os.environ.get("VALIDATOR_OPENROUTER_KEY", "")
-    if not dittobench_mock:
+    if enable_scoring and not dittobench_mock:
         _require("VALIDATOR_DITTOBENCH_API_URL", dittobench_api_url)
         _require("VALIDATOR_OPENROUTER_KEY", openrouter_key)
 
-    # Pylon identity is only needed for the Pylon ``put_weights`` path; the SDK
-    # weight fallback signs with the local hotkey, so don't require it there.
+    # Pylon identity is only needed by the weight half's Pylon ``put_weights``
+    # path; the SDK weight fallback signs with the local hotkey, and a
+    # scoring-only instance sets no weights at all, so don't require it there.
     pylon_identity_name = os.environ.get("PYLON_IDENTITY_NAME", "")
     pylon_identity_token = os.environ.get("PYLON_IDENTITY_TOKEN", "")
-    if not use_sdk_weights:
+    if enable_weights and not use_sdk_weights:
         _require("PYLON_IDENTITY_NAME", pylon_identity_name)
         _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
 
@@ -293,6 +328,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         openrouter_key=openrouter_key,
         run_size=run_size,
         dittobench_mock=dittobench_mock,
+        enable_scoring=enable_scoring,
+        enable_weights=enable_weights,
         validator_hotkey=_require(
             "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
         ),
