@@ -19,6 +19,7 @@ import inspect
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from ditto.chain import ChainError
@@ -46,9 +47,9 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from ditto.api_models.validator import (
+        JobResponse,
         LedgerResponse,
         ScoreReport,
-        ValidatorQueueItem,
     )
     from ditto.chain import ChainClient
     from ditto.validator.config import ValidatorConfig
@@ -161,17 +162,31 @@ class ValidatorWorker:
         failed = 0
         queue_depth = 0
         if self._config.enable_scoring:
-            queue = await self._platform.get_queue()
-            queue_depth = len(queue.items)
-            for item in queue.items:
+            # k=3 pull: request tickets until the platform says 204 (no work for
+            # us) or this sweep's cap is hit. Each ticket pins the dataset all
+            # three validators score, so scores stay comparable for the median.
+            while queue_depth < self._config.queue_limit:
+                job = await self._platform.request_job()
+                if job is None:
+                    break  # 204: no ticket available
+                queue_depth += 1
+                if job.deadline <= datetime.now(UTC):
+                    # Already lapsed (the platform will re-open it); don't waste a
+                    # full run on a score that would be invalidated as late.
+                    logger.warning(
+                        "ticket for agent %s already past deadline %s; skipping",
+                        job.agent_id,
+                        job.deadline.isoformat(),
+                    )
+                    continue
                 try:
-                    report = await self._score_agent(item)
+                    report = await self._score_job(job)
                     details = getattr(self._dittobench, "last_details", None)
                     if not isinstance(details, dict):
                         details = {}
-                    scored.append(scored_agent_stat(item.miner_hotkey, report, details))
+                    scored.append(scored_agent_stat(job.miner_hotkey, report, details))
                 except (DittobenchError, PlatformError) as e:
-                    logger.warning("scoring agent %s failed: %s", item.agent_id, e)
+                    logger.warning("scoring agent %s failed: %s", job.agent_id, e)
                     failed += 1
                     continue
             # Re-scoring stale champions is a scoring responsibility, done here
@@ -500,9 +515,15 @@ class ValidatorWorker:
                 await asyncio.sleep(delay)
         return False
 
-    async def _score_agent(self, item: ValidatorQueueItem) -> ScoreReport:
+    async def _score_job(self, job: JobResponse) -> ScoreReport:
+        """Score one issued ticket against its platform-pinned dataset."""
         return await self._evaluate_and_submit(
-            item.agent_id, item.sha256, item.miner_hotkey
+            job.agent_id,
+            job.sha256,
+            job.miner_hotkey,
+            seed=job.seed,
+            dataset_sha256=job.dataset_sha256,
+            run_size=job.run_size,
         )
 
     async def _evaluate_and_submit(
@@ -512,14 +533,17 @@ class ValidatorWorker:
         miner_hotkey: str,
         *,
         seed: int | None = None,
+        dataset_sha256: str | None = None,
+        run_size: str | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. Shared by the
-        queue sweep (:meth:`_score_agent`) and the §9 version-bump re-score.
+        ticket sweep (:meth:`_score_job`) and the §9 version-bump re-score.
 
-        ``seed`` pins the dataset seed (v3 #1 CRN): the re-score sweep passes one
-        common seed for the whole champion+tail set so their composites are
-        directly comparable. The queue sweep leaves it ``None`` (fresh per-run
-        seed, anti-overfit)."""
+        ``seed`` pins the dataset seed. ``dataset_sha256`` (from the ticket)
+        selects the canonical /v1/score path, where the engine regenerates that
+        exact dataset and fails on a hash mismatch (tamper-evidence). The re-score
+        sweep passes a common ``seed`` (CRN) but no ``dataset_sha256`` (its
+        comparison is across a fresh common dataset, not a platform-pinned one)."""
         artifact = await self._platform.get_artifact(agent_id)
         # The caller and the artifact response both carry the registered digest; a
         # mismatch means the platform is inconsistent about which blob this agent
@@ -535,6 +559,8 @@ class ValidatorWorker:
             tarball_url=artifact.download_url,
             tarball_sha256=artifact.sha256,
             seed=seed,
+            dataset_sha256=dataset_sha256,
+            run_size=run_size,
         )
         signature = sign_score(
             self._keypair,

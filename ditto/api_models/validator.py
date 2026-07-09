@@ -90,6 +90,41 @@ class ValidatorQueueResponse(BaseModel):
     )
 
 
+class JobResponse(BaseModel):
+    """Returned by ``POST /validator/job`` when a ticket is issued.
+
+    A ticket grants this validator the right to score one agent by ``deadline``;
+    the platform issues at most three per agent (the k=3 pool) and answers **204**
+    (no body) when there is no work. ``seed`` + ``dataset_sha256`` identify the
+    exact platform-pinned dataset all k=3 validators score (the scoring engine
+    regenerates it from ``seed`` and rejects a hash mismatch), and ``run_size`` is
+    the generator profile to use. These are null only for agents promoted before
+    the data-pipeline split, or when platform-side generation is disabled.
+    """
+
+    agent_id: Annotated[UUID, Field(description="Agent this ticket is for.")]
+    miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
+    sha256: Annotated[
+        str, Field(description="SHA-256 of the uploaded tarball, lowercase hex.")
+    ]
+    deadline: Annotated[
+        datetime,
+        Field(description="Score before this (UTC) or the ticket lapses."),
+    ]
+    seed: Annotated[
+        int | None,
+        Field(default=None, description="Platform-pinned dataset seed (regenerable)."),
+    ] = None
+    dataset_sha256: Annotated[
+        str | None,
+        Field(default=None, description="SHA-256 of the pinned dataset (tamper pin)."),
+    ] = None
+    run_size: Annotated[
+        str | None,
+        Field(default=None, description="Generator profile (small|medium|full)."),
+    ] = None
+
+
 class ArtifactResponse(BaseModel):
     """Returned by ``GET /validator/agent/{agent_id}/artifact``.
 

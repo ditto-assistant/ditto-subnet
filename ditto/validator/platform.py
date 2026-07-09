@@ -16,6 +16,7 @@ import httpx
 
 from ditto.api_models.validator import (
     ArtifactResponse,
+    JobResponse,
     LedgerResponse,
     ScoreReport,
     SubmitScoreRequest,
@@ -56,6 +57,27 @@ class PlatformClient:
                 f"queue rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return ValidatorQueueResponse.model_validate(resp.json())
+
+    async def request_job(self) -> JobResponse | None:
+        """Request a scoring ticket (the k=3 pull). ``None`` on 204 (no work).
+
+        POST /validator/job issues at most :data:`SCORING_QUORUM` tickets per
+        agent to distinct validators, so most calls return 204. A returned ticket
+        carries the pinned dataset (``seed`` + ``dataset_sha256`` + ``run_size``)
+        and the ``deadline`` to score by.
+        """
+        url = f"{self._base}{_PREFIX}/job"
+        try:
+            resp = await self._client.post(url, headers=self._headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"job request failed: {e}") from e
+        if resp.status_code == 204:
+            return None
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"job request rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return JobResponse.model_validate(resp.json())
 
     async def get_ledger(self) -> LedgerResponse:
         """Pull the best-score-per-miner ledger the worker folds into weights.
