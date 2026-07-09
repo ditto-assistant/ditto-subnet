@@ -82,6 +82,15 @@ NETUID=118
 
 No Pylon identity is required (it sets no weights).
 
+### Hosting the model gateway
+
+Under v2 the scorer runs the harness against one locked open-weight model and
+should grade with a self-hosted judge, both served from a local Ollama/vLLM
+gateway rather than a hosted API — this is what makes scores comparable and
+judging reproducible across the k=3 validators. See
+[VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md) for the full setup
+(gateway install, determinism knobs, and the env wiring).
+
 ## Cadence
 
 - `VALIDATOR_SWEEP_SECONDS` (default 120): how often the scorer drains the queue.
