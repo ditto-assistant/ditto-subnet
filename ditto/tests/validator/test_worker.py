@@ -349,6 +349,33 @@ class TestRunOnce:
         assert await worker.run_once() == 0
         chain.put_weights.assert_not_awaited()
 
+    async def test_stale_ledger_is_still_folded_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A platform-served last-known-good (stale) ledger must still set weights —
+        # the pool is durable — but log that the platform is degraded.
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
+        platform.get_ledger = AsyncMock(
+            return_value=LedgerResponse(
+                entries=ledger, count=len(ledger), stale=True, age_seconds=120
+            )
+        )
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        with caplog.at_level("WARNING"):
+            await worker.run_once()
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
+        assert any("STALE" in r.message for r in caplog.records)
+
     async def test_no_permit_skips_weight_submission(self) -> None:
         # A validator hotkey without a permit must not burn an epoch submitting
         # weights the chain will reject; skip loudly instead.

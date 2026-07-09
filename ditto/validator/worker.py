@@ -225,6 +225,16 @@ class ValidatorWorker:
             logger.warning("ledger fetch failed; weights unchanged this epoch: %s", e)
             return _WeightOutcome()
 
+        # The platform serves a last-known-good ledger (flagged stale) when its own
+        # DB read fails; folding it is safe (the pool is durable + slow-moving) but
+        # worth a loud line so an operator sees the platform is degraded.
+        if getattr(ledger, "stale", False):
+            logger.warning(
+                "scoring ledger is STALE (platform served a %ss-old snapshot); "
+                "folding it but the platform DB read is failing",
+                getattr(ledger, "age_seconds", "?"),
+            )
+
         # Re-scoring stale champions (§9 version-bump) is the scorer's job now,
         # run in the scoring sweep (see _rescore_stale_champions); the fold reads
         # whatever the scorer has already persisted. compute_weights ignores
