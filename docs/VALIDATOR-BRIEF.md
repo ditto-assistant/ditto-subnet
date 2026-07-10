@@ -50,8 +50,56 @@ platform: median of 3 -> ledger -> weights-only validators fold KOTH
   case.
 - Composite: 0.5 tool_mean + 0.5 memory_mean, times the observed
   tool-efficiency factor (≤1). Latency is measured and advisory.
-- Signature: sr25519 over `hotkey:agent_id:run_id:composite:seed`, verified by
-  the platform at write time. Ledger: `GET /api/v1/scoring/scores`.
+
+## Validator protocol
+
+Scoring role, every sweep (default `VALIDATOR_SWEEP_SECONDS=120`):
+
+1. `POST /api/v1/validator/job` → `204` (no work) or one ticket:
+   `{agent_id, run_id, seed, dataset_sha256, run_size, deadline}`. The
+   platform leases at most 3 tickets per agent, to distinct validators.
+2. `GET /api/v1/validator/agent/{id}/artifact` → presigned tarball URL +
+   sha256. Verify the hash before building.
+3. `POST localhost:8080/v1/score` on the co-located dittobench-api with
+   `{tarball_url, tarball_sha256, seed, dataset_sha256, run_size}` → `202` +
+   run id; poll `GET /v1/runs/{id}` to `done`/`failed`. The engine regenerates
+   the dataset from `seed` and fails the run on a `dataset_sha256` mismatch.
+4. Sign sr25519 over `{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}`
+   (`!r` = Python shortest-round-trip float repr) and
+   `POST /api/v1/validator/agent/{id}/score`.
+
+Weights role, at most every `VALIDATOR_EPOCH_SECONDS=3600`, stretched to the
+chain's `WeightsSetRateLimit`: `GET /api/v1/scoring/scores` → deterministic
+KOTH fold → `put_weights` via Pylon. Under commit-reveal v3 the sink makes the
+timelock commit and the chain auto-reveals; there is no separate reveal call.
+
+Harness wire timeouts the scoring engine enforces per run: `/health` 10 s,
+`/seed` 5 min per wave, `/run` 60 s per case. Docker build cap: 2 GB memory,
+20 min.
+
+## System requirements, cost, latency
+
+| Role | Host | GPU | Extra |
+|---|---|---|---|
+| Weights-only | 1-2 vCPU, 2-4 GB RAM, Linux, Python 3.11+ | none | outbound HTTPS to platform + chain ws |
+| Scoring (FP8 standard) | 4 vCPU, 16 GB RAM, 80 GB disk (reference: GCE `e2-standard-4`, ~$100/mo on-demand) | none | Docker, Ollama (embeddinggemma, CPU), model-relay, Chutes key |
+| Scoring (fallback A) | same, plus one 24 GB card | 1x 3090/4090/L4 | Ollama serving `qwen3:32b-q4_K_M` |
+
+Inference cost (FP8 standard): Chutes Qwen3-32B is $0.104/M input, $0.416/M
+output; a full run's 10^5-10^6 tokens costs under $0.50, and the sandbox never
+holds the key.
+
+Latency per scored run: docker build 2-5 min, then seeding plus 110+ cases run
+sequentially. Measured on the localnet proof with a Chutes-hosted harness:
+median 13.6 s per case, which puts a full run at roughly 30-40 min wall-clock.
+The ticket `deadline` bounds it; a run that cannot finish in time is simply
+re-leased.
+
+Chain-side: a registered hotkey with a validator permit and the stake finney
+requires for one; the same hotkey signs scores (and screener verdicts, which
+is safe: verdict and weight signatures have disjoint formats).
+
+Ledger: `GET /api/v1/scoring/scores`, self-verifying per the signature above.
 
 ## Infrastructure state (dev VM, ditto-validator-dev)
 
