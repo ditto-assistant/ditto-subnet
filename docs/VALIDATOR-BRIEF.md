@@ -16,14 +16,17 @@
    below, completing the anyone-can-re-grade loop.
 3. The fleet standard for the locked model is **Chutes FP8**:
    `Qwen/Qwen3-32B-TEE`, served in attested Intel TDX with per-token model
-   verification, reached through the local `model-relay`. A scoring validator
-   needs zero GPUs; at Chutes' Qwen3-32B pricing ($0.104/M input, $0.416/M
+   verification, reached through the local `model-relay`. A validator needs
+   zero GPUs; at Chutes' Qwen3-32B pricing ($0.104/M input, $0.416/M
    output) a full run's 10^5-10^6 tokens costs under $0.50. Local Ollama/vLLM
    remains a supported fallback but does not bit-match FP8, so it must not mix
    with relay-backed validators in the same k=3 set.
-4. Weights-only validators need no GPU, no key, no benchmark data. Env:
-   [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md). KOTH knobs are consensus
-   parameters (margin 0.05, champion share 0.9, tail 4); run defaults.
+4. There is one validator type, with two duties in one process: score when
+   the platform leases you a ticket (at most 3 leases per agent, so scoring
+   rotates), and set weights every interval regardless of whether you scored.
+   Env: [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md). KOTH knobs are
+   consensus parameters (margin 0.05, champion share 0.9, tail 4); run
+   defaults.
 5. bench_version stays 2 until after launch. Dataset hashes moved with datagen
    v0.4.0 on 2026-07-10; older cached hashes are stale.
 
@@ -38,7 +41,7 @@ platform: payment verify -> screener (docker build + /health)
 validator (x3): dittobench-api /v1/score
   -> regenerate dataset (hash mismatch fails loudly) -> build crate in sandbox
   -> run cases (observed execution) -> deterministic grade -> signed report
-platform: median of 3 -> ledger -> weights-only validators fold KOTH
+platform: median of 3 -> ledger + ATH winner -> every validator folds KOTH
   -> put_weights via Pylon -> chain
 ```
 
@@ -58,7 +61,11 @@ platform: median of 3 -> ledger -> weights-only validators fold KOTH
 
 ## Validator protocol
 
-Scoring role, every sweep (default `VALIDATOR_SWEEP_SECONDS=120`):
+One process, two duties. The `VALIDATOR_ENABLE_SCORING` /
+`VALIDATOR_ENABLE_WEIGHTS` flags exist as an ops escape hatch, but the fleet
+runs both on.
+
+Duty 1, scoring, every sweep (default `VALIDATOR_SWEEP_SECONDS=120`):
 
 1. `POST /api/v1/validator/job` → `204` (no work) or one ticket:
    `{agent_id, run_id, seed, dataset_sha256, run_size, deadline}`. The
@@ -78,10 +85,17 @@ Scoring role, every sweep (default `VALIDATOR_SWEEP_SECONDS=120`):
    (`!r` = Python shortest-round-trip float repr) and
    `POST /api/v1/validator/agent/{id}/score`.
 
-Weights role, at most every `VALIDATOR_EPOCH_SECONDS=3600`, stretched to the
-chain's `WeightsSetRateLimit`: `GET /api/v1/scoring/scores` → deterministic
-KOTH fold → `put_weights` via Pylon. Under commit-reveal v3 the sink makes the
-timelock commit and the chain auto-reveals; there is no separate reveal call.
+After the third score lands, the platform computes the median, updates the
+current ATH winner when the median beats it, and publishes all three scores
+plus the winner flag to wandb for miners.
+
+Duty 2, weights, at most every `VALIDATOR_EPOCH_SECONDS=3600`, stretched to
+the chain's `WeightsSetRateLimit`: `GET /api/v1/scoring/scores` → the
+deterministic KOTH fold derives the current ATH winner from the signed ledger
+(reproducing the platform's row rather than trusting it) → `put_weights` via
+Pylon. Every validator does this every interval, scored or not. Under
+commit-reveal v3 the sink makes the timelock commit and the chain
+auto-reveals; there is no separate reveal call.
 
 Harness wire timeouts the scoring engine enforces per run: `/health` 10 s,
 `/seed` 5 min per wave, `/run` 60 s per case. Docker build cap: 2 GB memory,
@@ -91,9 +105,8 @@ Harness wire timeouts the scoring engine enforces per run: `/health` 10 s,
 
 | Role | Host | GPU | Extra |
 |---|---|---|---|
-| Weights-only | 1-2 vCPU, 2-4 GB RAM, Linux, Python 3.11+ | none | outbound HTTPS to platform + chain ws |
-| Scoring (FP8 standard) | 4 vCPU, 16 GB RAM, 80 GB disk (reference: GCE `e2-standard-4`, ~$100/mo on-demand) | none | Docker, Ollama (embeddinggemma, CPU), model-relay, Chutes key |
-| Scoring (fallback A) | same, plus one 24 GB card | 1x 3090/4090/L4 | Ollama serving `qwen3:32b-q4_K_M` |
+| Validator (FP8 standard) | 4 vCPU, 16 GB RAM, 80 GB disk (reference: GCE `e2-standard-4`, ~$100/mo on-demand) | none | Docker, Ollama (embeddinggemma, CPU), model-relay, Chutes key |
+| Validator (fallback A) | same, plus one 24 GB card | 1x 3090/4090/L4 | Ollama serving `qwen3:32b-q4_K_M` |
 
 Inference cost (FP8 standard): Chutes Qwen3-32B is $0.104/M input, $0.416/M
 output; a full run's 10^5-10^6 tokens costs under $0.50, and the sandbox never
@@ -109,12 +122,13 @@ Chain-side: a registered hotkey with a validator permit and the stake finney
 requires for one; the same hotkey signs scores (and screener verdicts, which
 is safe: verdict and weight signatures have disjoint formats).
 
-Access model for the scoring role: the co-located engine builds from the
-`dittobench-api` repo, which is currently private (the infra role clones it
-with a read token). So today the scoring role is operator-run or by-invite;
-independent validators run weights-only and verify the ledger, which needs no
-private access. Since scoring went judge-free, everything answer-key-shaped
-lives in the public dittobench-datagen module, so the private repo holds
+Access model: the co-located engine builds from the `dittobench-api` repo,
+which is currently private (the infra role clones it with a read token).
+Since every validator carries the scoring duty, an independent validator
+cannot fully participate until they have that engine; today validators are
+operator-run or by-invite. Since scoring went judge-free, everything
+answer-key-shaped lives in the public dittobench-datagen module, so the
+private repo holds
 operational glue rather than secrets. Opening it (or shipping a signed binary
 or image) is what would let independents run scoring permissionlessly; it is
 listed as an open decision below.
@@ -152,9 +166,8 @@ ansible/playbooks/gcp-validator.yml` in the infra repo); the lock and relay
 activate themselves.
 
 This key blocks only OUR dev validator's lock flip and testing. It is not a
-blocker for independent validators: weights-only validators need no key at
-all, and an independent scoring validator brings their own Chutes key (or
-their own GPU on the fallback path) when they stand up their host.
+blocker for independent validators, who bring their own Chutes key (or their
+own GPU on the fallback path) when they stand up their host.
 
 ## Remaining gates to finney (validator-visible)
 
@@ -181,9 +194,8 @@ Each item names the repo and the concrete change so anyone can pick it up.
    run's transcript + dataset artifact to a public GCS bucket (dittobench-api
    writes artifacts wherever `DITTOBENCH_ARTIFACT_DIR` points; the bucket is
    the drop-in replacement).
-4. Median-of-3 proof: stand up two more scoring validators (any mix of
-   relay-backed hosts; `VALIDATOR_ENABLE_SCORING=true`,
-   `VALIDATOR_ENABLE_WEIGHTS=false`), let the platform lease all three
+4. Median-of-3 proof: stand up two more validators (any mix of relay-backed
+   hosts, both duties on), let the platform lease all three
    tickets per agent, and confirm identical composites in the ledger. Any
    spread beyond gate 2's band means a gateway mismatch.
 5. Finney cutover per infra `docs/cutover-runbook.md` (no testnet):
@@ -224,7 +236,7 @@ operative description.
 
 | Question | Doc |
 |---|---|
-| Run a weights-only validator | [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md) |
+| Run a validator | [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md) |
 | Host the locked model / hardware | [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md) |
 | Exact grading rules | dittobench-api docs/judge-determinism.md + PROTOCOL.md |
 | Model lock enforcement | dittobench-api docs/model-lock.md + docs/sandbox-egress-hardening.md |

@@ -1,25 +1,15 @@
 # Running a validator
 
-The validator worker (`python -m ditto.validator`) runs one or both halves of the
-scoring loop, selected by two role flags. This lets one deployment be the central
-scorer, another be an independent weights-only validator, or (the default) both
-in one process.
+There is one validator type. The worker (`python -m ditto.validator`) runs two
+duties in one process: score agents when the platform leases it a ticket (at
+most 3 leases per agent, so scoring rotates across the fleet), and set weights
+every interval regardless of whether it scored. The
+`VALIDATOR_ENABLE_SCORING` / `VALIDATOR_ENABLE_WEIGHTS` flags can split the
+duties for ops or testing, but the fleet runs both on (the default).
 
-| Role | `VALIDATOR_ENABLE_SCORING` | `VALIDATOR_ENABLE_WEIGHTS` | Runs |
-|---|---|---|---|
-| Central scorer | `true` | `false` | Pulls the `evaluating` queue, scores each agent via dittobench-api, persists signed scores, re-scores stale champions. Never touches the chain. |
-| Independent validator | `false` | `true` | Reads the canonical ledger, folds KOTH+ATH weights, sets them on chain. Never scores or sees the oracle. |
-| Combined (default) | `true` | `true` | Both, in one process. The historical single-node setup. |
+## The weights duty
 
-At least one must be `true`.
-
-## Independent (weights-only) validator
-
-This is the role external operators run. It consumes the platform's
-centrally-computed score ledger and sets weights. It needs **no** dittobench-api
-URL, **no** OpenRouter key, and never handles benchmark answers.
-
-What it does each epoch:
+Every validator, every epoch:
 
 1. `GET /api/v1/scoring/scores` — read the best-score-per-miner ledger.
 2. Fold it into the weight vector with `compute_weights` (KOTH champion + ATH
@@ -30,11 +20,9 @@ What it does each epoch:
 If the ledger read fails, it leaves the current on-chain weights untouched for the
 epoch rather than zeroing anyone; the next epoch recovers from the durable ledger.
 
-Required env:
+Required env (both duties; see the scoring section for the rest):
 
 ```
-VALIDATOR_ENABLE_SCORING=false
-VALIDATOR_ENABLE_WEIGHTS=true
 VALIDATOR_PLATFORM_API_URL=https://platform-api.heyditto.ai
 VALIDATOR_HOTKEY=<your SS58 hotkey>
 VALIDATOR_MNEMONIC=<hotkey mnemonic>        # or VALIDATOR_WALLET_NAME + _HOTKEY
@@ -53,34 +41,27 @@ The KOTH/ATH knobs (`VALIDATOR_KOTH_MARGIN`, `_TAIL_SIZE`, `_CHAMPION_SHARE`,
 or Yuma clips the deviator. Leave them at their defaults unless the team announces
 a change.
 
-### What it trusts
+### What the fold trusts
 
-An independent validator trusts the platform's score ledger. Scores are computed
-by the central scorer, signed with the scorer's on-chain hotkey, and verified by
-the platform at write time. The benchmark generator and answer keys never leave
-the private scoring service; a validator only ever sees composites, never the
-dataset or the oracle.
+The KOTH fold reads the platform's score ledger, which is self-verifying:
+every entry is signed by the scoring validator's on-chain hotkey and verified
+by the platform at write time, and the deterministic fold re-derives the ATH
+winner from those signed scores rather than trusting a platform-computed flag.
+Since scoring is judge-free, anyone can additionally re-grade a published
+transcript from the public dittobench-datagen module.
 
-## Central scorer
+## The scoring duty
 
-Run by the subnet operator as a single instance. It scores the queue and persists
-signed scores; it sets no weights.
+Every validator polls for tickets each sweep and scores through its co-located
+dittobench-api instance.
 
-Required env:
+Additional env on top of the weights duty's:
 
 ```
-VALIDATOR_ENABLE_SCORING=true
-VALIDATOR_ENABLE_WEIGHTS=false
-VALIDATOR_PLATFORM_API_URL=...
-VALIDATOR_DITTOBENCH_API_URL=...             # the private scoring service
-VALIDATOR_OPENROUTER_KEY=...                 # legacy only: needed just when the model lock is off
+VALIDATOR_DITTOBENCH_API_URL=http://localhost:8080   # your co-located engine
 VALIDATOR_RUN_SIZE=full
-VALIDATOR_HOTKEY=<scorer SS58 hotkey>        # signs each score
-VALIDATOR_MNEMONIC=...                        # or a wallet
-NETUID=118
+VALIDATOR_OPENROUTER_KEY=...                 # legacy only: needed just when the model lock is off
 ```
-
-No Pylon identity is required (it sets no weights).
 
 ### Hosting the model gateway
 
@@ -90,12 +71,11 @@ judge model and no LLM key are needed. The locked model is Qwen3-32B: one
 24 GB GPU self-hosted (Ollama/vLLM), or zero GPUs via the model-relay backed by
 Chutes' TEE-served catalog. See
 [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md) for hardware sizing,
-gateway options, artifact pinning, and the env wiring. Weights-only validators
-need no GPU at all.
+gateway options, artifact pinning, and the env wiring.
 
 ## Cadence
 
-- `VALIDATOR_SWEEP_SECONDS` (default 120): how often the scorer drains the queue.
+- `VALIDATOR_SWEEP_SECONDS` (default 120): how often the worker polls for tickets.
 - `VALIDATOR_EPOCH_SECONDS` (default 3600): the minimum weight-set interval. The
   worker also reads the subnet's on-chain `weights_rate_limit` each epoch and
   stretches the effective cadence to whichever is longer, so it never fights the
