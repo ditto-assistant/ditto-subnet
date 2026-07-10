@@ -215,13 +215,12 @@ Not gating, open for pickup:
 - 17 open dependabot findings in this repo (3 high).
 
 Open decision (Nick): whether to open-source `dittobench-api` or publish a
-signed binary/image so independents can run the scoring role without repo
-access. Judge-free scoring moved every secret-shaped component (generator,
-answer keys, grader) into the public dittobench-datagen module; what remains
-private is the sandbox/egress orchestration and deploy glue. Until decided,
-scoring stays operator-run and the decided model (central scoring, open
-weight-setting, dittobench-api docs/scoring-decentralization-brief.md) is the
-operative description.
+signed binary/image. Judge-free scoring moved every secret-shaped component
+(generator, answer keys, grader) into the public dittobench-datagen module;
+what remains private is the sandbox/egress orchestration and deploy glue.
+Since every validator carries the scoring duty, this decision is what gates
+independent validators joining at all; until then the fleet is operator-run
+or by-invite.
 
 ## Watch items
 
