@@ -116,9 +116,14 @@ Set on the dittobench-api scorer service (see dittobench-api
 ```
 DITTOBENCH_MODEL_LOCK=1
 HARNESS_MODEL=qwen3:32b-q4_K_M                   # A: the Ollama tag
-# HARNESS_MODEL=Qwen/Qwen3-32B-TEE               # C: the Chutes id (relay pins it anyway)
 HARNESS_PROVIDER=ollama
 HARNESS_GATEWAY_URL=http://host.docker.internal:11434
+
+# C (relay + Chutes): chat goes to the relay, embeddings stay on local Ollama.
+# HARNESS_MODEL=Qwen/Qwen3-32B-TEE
+# HARNESS_PROVIDER=chutes
+# HARNESS_GATEWAY_URL=http://host.docker.internal:11435
+# HARNESS_EMBED_URL=http://host.docker.internal:11434
 ```
 
 `HARNESS_MODEL` must name the model as the gateway knows it; the canonical id
