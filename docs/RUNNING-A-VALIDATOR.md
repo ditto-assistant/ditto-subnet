@@ -85,11 +85,14 @@ No Pylon identity is required (it sets no weights).
 ### Hosting the model gateway
 
 Under v2 the scorer runs the harness against one locked open-weight model and
-should grade with a self-hosted judge, both served from a local Ollama/vLLM
-gateway rather than a hosted API. This is what makes scores comparable and
-judging reproducible across the k=3 validators. See
+grades with a self-hosted judge, both served from a local Ollama/vLLM gateway
+rather than a hosted API. This is what makes scores comparable and judging
+reproducible across the k=3 validators. It is also the hardware floor for a
+scoring validator: the locked model is Qwen2.5-72B-Instruct, which needs one
+80 GB GPU (or 2x 48 GB) at the consensus Q4_K_M quantization. See
 [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md) for the full setup
-(gateway install, determinism knobs, and the env wiring).
+(hardware sizing, gateway install, artifact pinning, determinism knobs, and
+the env wiring). Weights-only validators need no GPU at all.
 
 ## Cadence
 

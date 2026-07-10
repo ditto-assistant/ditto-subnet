@@ -34,6 +34,55 @@ you pin does.
 No key in the sandbox: under the lock no OpenRouter key is forwarded into the
 sandbox at all, which closes the key-exfiltration and BYOK-spend concerns.
 
+## Hardware requirements
+
+The locked model is a consensus parameter, so the hardware floor is
+non-negotiable: you cannot substitute a smaller model to fit a smaller GPU.
+Sizing below is for Qwen2.5-72B-Instruct, the v2 locked model, serving both
+the harness and the judge from one gateway.
+
+| Setup | GPUs | Fits |
+|---|---|---|
+| Ollama, Q4_K_M quant (the consensus default) | 1x 80 GB (H100/A100) | comfortable, full GPU offload plus KV cache |
+| Ollama, Q4_K_M quant | 2x 48 GB (L40S / RTX 6000 Ada / A6000) | works, layers split across cards |
+| Ollama, Q4_K_M quant | 3x 24 GB (4090-class) | works but slower; more splits, more PCIe traffic |
+| vLLM, GPTQ/AWQ 4-bit | 1x 80 GB or 2x 48 GB | works with `--enforce-eager` |
+| vLLM, bf16 | 2x 80 GB minimum (`--tensor-parallel-size 2`) | full-precision option |
+
+Rules of thumb behind the table: the Q4_K_M GGUF artifact is about 47 GB of
+weights, bf16 is about 145 GB, and you need headroom on top for the KV cache
+(a few GB at the 8k-16k context this workload uses) and CUDA overhead. Do not
+plan on partial CPU offload: it works, but 72B token rates drop to single
+digits and a full scoring run stops finishing inside the ticket deadline.
+
+Host besides the GPUs: 64 GB+ system RAM, 100 GB+ free disk for model
+artifacts, and the same host (or same LAN) as the eval sandbox so gateway
+latency stays negligible. Throughput-wise a full profile run is on the order
+of 10^5 to 10^6 tokens through the gateway (harness turns plus the judged
+slice), which at 72B speeds means a few hours of GPU time per submission.
+Cases run sequentially, so single-request latency, not batch throughput, is
+what matters; this is why one pinned host at low concurrency is both the
+cheapest and the most reproducible option.
+
+## Pin the exact artifact (quantization is part of the consensus)
+
+Two validators serving "the same model" at different quantizations produce
+different logits and will disagree at argmax ties, which is exactly the k=3
+noise this setup exists to remove. The consensus artifact is therefore not
+just the model id but the exact weights file:
+
+- The fleet default is the Ollama Q4_K_M artifact, pulled with the explicit
+  tag `qwen2.5:72b-instruct-q4_K_M` (the short `qwen2.5:72b-instruct` tag
+  resolves to it today, but explicit is what pins it). After pulling, record
+  the digest (`ollama show`) and compare it with the other validators; digests
+  must match.
+- On vLLM, pin the Hugging Face revision (commit hash) in the serve command
+  and agree on one quantization across the fleet. A bf16 vLLM validator will
+  not reproduce an Ollama Q4_K_M validator even with every other knob pinned.
+- Treat a quantization change like a model change: it follows the same
+  coordinated bump as `HARNESS_MODEL` (and a bench-version re-score when it
+  affects scores).
+
 ## Topology
 
 ```
@@ -62,8 +111,11 @@ which suits the judge.
 curl -fsSL https://ollama.com/install.sh | sh
 ollama serve            # or run as a systemd service
 
-# pull the locked models (harness + judge; can be the same model)
-ollama pull qwen2.5:72b-instruct
+# pull the locked model (one artifact serves both harness and judge).
+# Use the explicit quantization tag so the artifact is pinned, not whatever
+# the short tag currently resolves to:
+ollama pull qwen2.5:72b-instruct-q4_K_M
+ollama show qwen2.5:72b-instruct-q4_K_M    # record the digest; must match the fleet
 ```
 
 Determinism knobs to pin, in the modelfile or per-request `options`:
@@ -100,10 +152,15 @@ Set on the dittobench-api scorer service (see dittobench-api `docs/model-lock.md
 
 ```
 DITTOBENCH_MODEL_LOCK=1
-HARNESS_MODEL=qwen/qwen2.5-72b-instruct        # the locked id (bump for v3)
+HARNESS_MODEL=qwen2.5:72b-instruct-q4_K_M      # must name what the gateway serves (bump for v3)
 HARNESS_PROVIDER=ollama                          # provider string the crate uses for a local gateway
 HARNESS_GATEWAY_URL=http://host.docker.internal:11434
 ```
+
+`HARNESS_MODEL`, like `SCORER_MODEL`, must name the model as the gateway knows
+it: the Ollama tag for an Ollama gateway, the served model name for vLLM. The
+canonical id `qwen/qwen2.5-72b-instruct` names the same locked model in docs
+and score reports.
 
 Also drop `openrouter.ai` from `EGRESS_PROXY_ALLOW` so the gateway is the only
 reachable LLM (the harness fails closed if it tries to route elsewhere). See
@@ -116,7 +173,7 @@ Also on the dittobench-api scorer service (see dittobench-api
 
 ```
 LLM_BASE_URL=http://localhost:11434/v1/chat/completions   # adjust host per topology above
-SCORER_MODEL=qwen2.5:72b-instruct                          # must name what the gateway serves
+SCORER_MODEL=qwen2.5:72b-instruct-q4_K_M                   # must name what the gateway serves
 OPENROUTER_API_KEY=local                                    # any non-empty token; local gateways ignore it
 ```
 
@@ -124,13 +181,33 @@ The judge sends the same OpenAI Chat Completions shape to any base URL, so Ollam
 and vLLM both work without a code change. `temperature 0 + top_p 1 + seed` are sent
 automatically.
 
+Notes on the judge defaults:
+
+- `SCORER_MODEL` defaults to the locked harness model, so with the lock on the
+  whole scoring stack is one frozen open-weight model. You still set it
+  explicitly here because the gateway's model name (the Ollama tag above)
+  differs from the canonical id (`qwen/qwen2.5-72b-instruct`).
+- With `LLM_BASE_URL` set, judge calls automatically add
+  `response_format: {"type":"json_object"}`, constraining the verdict to a JSON
+  object. Ollama and vLLM's OpenAI-compatible endpoints both support this. If
+  your gateway rejects the field, set `LLM_RESPONSE_FORMAT=off`.
+- `SCORER_MODEL_B` (optional) turns on the audit slice: about 1 in 5 judged
+  cases is also graded by the second model, disagreements are counted, and the
+  run logs `judge audit slice: X/Y disagreement(s)`. The counts also ride the
+  score report as `details.judge_audited` / `details.judge_disagreed`.
+
 ## Verifying reproducibility
 
 Grade the same fixed submission twice and diff the per-case scores. They should be
 identical. If they are not, the serving stack is not honoring the seed or the
-batching is not pinned, so recheck the Option A and B knobs above. The
-`SCORER_MODEL_B` audit-slice hook can log verdict agreement across runs for a
-continuous check.
+batching is not pinned, so recheck the Option A and B knobs above.
+
+For a continuous check, set `SCORER_MODEL_B`: every run then reports its
+audit-slice disagreement count in the logs and in the score report
+(`details.judge_audited` / `details.judge_disagreed`). On a correctly pinned
+self-hosted stack the disagreement rate reflects genuine rubric ambiguity, not
+serving noise, and should sit near zero; a persistently high rate on one
+validator relative to the fleet means that host's gateway is not pinned.
 
 ## References (dittobench-api, private)
 
