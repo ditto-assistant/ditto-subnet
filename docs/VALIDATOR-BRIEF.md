@@ -186,14 +186,14 @@ Each item names the repo and the concrete change so anyone can pick it up.
    full profile. Grading contributes zero variance now, so the number is pure
    dataset + harness-execution spread. Also refreshes the 13.6 s/case latency
    figure for 32B.
-3. Platform (ditto-platform repo): finish the `/validator/queue` to
-   `/validator/job` ticket migration (contract in this repo's
-   `ditto/api_models/validator.py`); add `composite_stderr` per ledger entry
-   on `GET /api/v1/scoring/scores` (this repo's SE dethroning band and CRN
-   re-score code are already wired and inert until it appears); publish each
-   run's transcript + dataset artifact to a public GCS bucket (dittobench-api
-   writes artifacts wherever `DITTOBENCH_ARTIFACT_DIR` points; the bucket is
-   the drop-in replacement).
+3. Platform: DONE pending review (ditto-platform#39). `/validator/queue`
+   retired (the worker was already on `/validator/job` tickets);
+   `composite_stderr` already flowed per ledger entry; finalize now mirrors
+   each run record (dataset pin, three signed scores with per-case details,
+   median) to `scored/{agent_id}.json` in a public bucket when
+   `STORAGE_PUBLIC_BUCKET` is set. Remaining infra: create the bucket with a
+   public-read policy and set the env. Full RunResponse transcripts are a
+   dittobench-api wire follow-up.
 4. Median-of-3 proof: stand up two more validators (any mix of relay-backed
    hosts, both duties on), let the platform lease all three
    tickets per agent, and confirm identical composites in the ledger. Any
