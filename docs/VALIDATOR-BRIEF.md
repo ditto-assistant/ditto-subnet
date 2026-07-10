@@ -5,17 +5,26 @@
 1. Scoring is deterministic. No LLM judge, no validator-side API key. A score
    is a pure function of (seed, transcript); anyone can re-grade a published
    transcript offline with the public `dittobench-datagen` module (v0.4.0).
-2. The fleet standard for the locked model is **Chutes FP8**:
+2. All benchmark data is open. The generator, the grader, and every case
+   template live in `github.com/ditto-assistant/dittobench-datagen` (MIT). A
+   dataset, including its answer keys, is byte-reproducible from
+   (seed, bench_version): `generate -seed N -run-size full -sha` reproduces
+   any scored run's exact bytes and `dataset_sha256`. There is no hidden test
+   set; the only secrecy is timing, because the seed derives from an on-chain
+   block hash fixed after the miner commits. The score ledger is public and
+   self-verifying, and per-run transcripts land in a public bucket with gate 3
+   below, completing the anyone-can-re-grade loop.
+3. The fleet standard for the locked model is **Chutes FP8**:
    `Qwen/Qwen3-32B-TEE`, served in attested Intel TDX with per-token model
    verification, reached through the local `model-relay`. A scoring validator
    needs zero GPUs; at Chutes' Qwen3-32B pricing ($0.104/M input, $0.416/M
    output) a full run's 10^5-10^6 tokens costs under $0.50. Local Ollama/vLLM
    remains a supported fallback but does not bit-match FP8, so it must not mix
    with relay-backed validators in the same k=3 set.
-3. Weights-only validators need no GPU, no key, no benchmark data. Env:
+4. Weights-only validators need no GPU, no key, no benchmark data. Env:
    [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md). KOTH knobs are consensus
    parameters (margin 0.05, champion share 0.9, tail 4); run defaults.
-4. bench_version stays 2 until after launch. Dataset hashes moved with datagen
+5. bench_version stays 2 until after launch. Dataset hashes moved with datagen
    v0.4.0 on 2026-07-10; older cached hashes are stale.
 
 ## Pipeline
