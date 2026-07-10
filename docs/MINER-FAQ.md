@@ -38,7 +38,7 @@ Two properties follow from "best artifact":
 | Platform API | `ditto-platform` | Intake, on-chain payment verification, object storage, the screener/validator queues, the public signed score ledger, the anti-copy gate, leaderboard/dashboard |
 | Screener worker | `ditto-subnet` | Cheap automated gate: does your tarball `docker build` and serve `/health`? Promotes `uploaded → evaluating` |
 | Validator worker | `ditto-subnet` | Pulls the queue, scores via DittoBench, signs and submits scores, computes the weight vector, sets weights on chain |
-| DittoBench | `dittobench-api` (Go) | The scoring engine: sandboxed `docker build`, seeded tool + memory cases, LLM judge → `ScoreReport` |
+| DittoBench | `dittobench-api` (Go) | The scoring engine: sandboxed `docker build`, seeded tool + memory cases, deterministic judge-free grading → `ScoreReport` |
 | Reference harness | `ditto-harness` (Rust) | The library your crate builds against (pinned build dep) |
 | Bittensor chain | — | Weights → Yuma consensus → emissions to the winner |
 
@@ -216,23 +216,27 @@ Each validator sweep (hourly by default), the validator:
 2. Fetches a short-lived presigned tarball URL and **cross-checks the sha256**
    (queue vs. artifact vs. what the scorer fetches) — a mismatch refuses to
    score.
-3. Submits to the hosted **DittoBench** API with the tarball URL, the
-   validator's own OpenRouter key, and `run_size=full`, then polls until done
+3. Submits to its co-located **DittoBench** engine with the tarball URL and
+   `run_size=full` (no key: scoring is judge-free), then polls until done
    (timeout 40 min).
 4. DittoBench does the real work: sandboxed `docker build` of your crate,
    **seeded** synthetic data generation, tool-use cases + memory cases run
-   against your harness, an LLM judge for quality — producing a `ScoreReport`.
+   against your harness under the locked model, deterministic grading —
+   producing a `ScoreReport`.
 5. The validator **signs** the score and posts it to the platform ledger.
 
 ### The score
 
 ```
-composite = 0.6 * tool_mean + 0.4 * memory_mean        # both in [0, 1]
+composite = 0.5 * tool_mean + 0.5 * memory_mean        # both in [0, 1]
 ```
 
-- **Tool case:** `score = 0.5 * tool_score + 0.5 * quality` (tool_score =
-  did you call the expected tools; quality = LLM-judge rating).
-- **Memory case:** binary — `1.0` if the memory verdict is correct, else `0.0`.
+- **Tool case:** deterministic trajectory + argument accuracy (0.4 name-F1 +
+  0.4 arg-F1 + 0.2 order/extra-call discipline), scored on the trajectory the
+  validator observed execute.
+- **Memory case:** deterministic per-`answer_kind` grading (value, number,
+  list, ordered list, duration, reversal, decline) with distractor and
+  forbidden-value zeroing. No LLM judge anywhere.
 - The report also carries `median_ms` (latency), `n` (cases), and the
   **`seed`** used for data generation.
 
@@ -241,8 +245,8 @@ so any score is reproducible and challengeable — you don't have to trust the
 scorer's word, you can re-run the exact benchmark. Seeded generation also
 means you can't overfit to a fixed public test set.
 
-**Cost caps:** the LLM judge runs under a per-call `max_tokens` and a per-run
-token budget. **A harness that loops or spews unbounded LLM calls fails its
+**Cost caps:** your harness's own LLM calls run under per-case and per-run
+budgets. **A harness that loops or spews unbounded LLM calls fails its
 run** rather than burning the validator's budget — keep your harness's token
 use disciplined.
 
@@ -264,7 +268,7 @@ The deterministic weight fold, exactly as implemented:
    eligible agent). Drop non-positive composites.
 2. Walk entries in **first-seen order** (upload time, then agent_id). A
    challenger dethrones the current champion **only if**
-   `challenger_composite > champion_composite × 1.01` (a **1% relative
+   `challenger_composite > champion_composite × 1.05` (a **5% relative
    margin**, `VALIDATOR_KOTH_MARGIN`).
 3. **Ties and sub-margin improvements keep the incumbent.** First to submit
    wins — an exact copy at best *ties* the champion and therefore never earns
@@ -277,7 +281,7 @@ The deterministic weight fold, exactly as implemented:
 
 Practical consequences for miners:
 
-- **A 0.9% improvement earns nothing; a 1.1% improvement earns everything.**
+- **A 4% improvement earns nothing; a 6% improvement earns everything.**
   Ship real improvements, not epsilon tweaks.
 - **Being early matters.** `first_seen` (your upload timestamp, immutable) is
   the tie-break. If two miners land equivalent scores, the earlier upload
@@ -287,7 +291,7 @@ Practical consequences for miners:
   keeps its emission until actually dethroned.
 - **The tail keeps you in the game** — top-5-ish miners all earn something,
   but 90% concentration means #1 is the only position worth optimizing for.
-- These parameters (1%, 90/10, tail 4) are validated against real score
+- These parameters (5%, 90/10, tail 4) are validated against real score
   distributions before launch and may be tuned — the *shape* (KOTH + ATH +
   first-seen) is locked.
 
@@ -313,7 +317,7 @@ folding weights from the ledger.)*
 Copying is treated as the existential risk, and there are three stacked
 defenses:
 
-1. **The mechanism itself** (§7): a verbatim copy ties, never beats the 1%
+1. **The mechanism itself** (§7): a verbatim copy ties, never beats the 5%
    margin, and loses the first-seen tie-break — it earns nothing even if
    undetected.
 2. **Exact + heuristic checks at upload:** cross-miner exact sha256 match and
@@ -343,7 +347,7 @@ What this means for honest miners:
 - Thresholds are currently conservative, so false holds are possible; a hold
   is reviewed by a human, and legitimate independent work gets cleared.
 - Deep semantic rewrites are acknowledged as out of scope for the fingerprint
-  — but they still have to *beat the champion by >1%* to earn anything.
+  — but they still have to *beat the champion by >5%* to earn anything.
 
 ---
 
@@ -409,16 +413,20 @@ screener's exact gate yourself: `docker build` with your tarball as context,
 run the image, curl `/health`. If those pass, screening will pass.
 
 **Q: Do I need my own OpenRouter/LLM key?**
-No — the **validator** brings its own key (BYOK) for the LLM-judge portion.
-Your harness just needs to work within the run's token budget.
+Not for scoring: grading is deterministic (no judge) and on-chain runs score
+your harness against the locked open-weight model served by the validator's
+gateway, so no key exists anywhere in a scored run. You only need a key (or
+local Ollama) for your own local practice.
 
-**Q: What model/judge is used and can I see per-case results?**
-Per-case details (`case_id`, category, tool/quality/correct, latency, notes)
-exist on the `ScoreReport`, but only aggregates are published. The rubric that
-matters: **0.6 × tool + 0.4 × memory**.
+**Q: What model is used and can I see per-case results?**
+Every harness runs against the locked open-weight model (Qwen3-32B,
+`Qwen/Qwen3-32B-TEE` on the fleet-standard Chutes gateway). Per-case details
+(`case_id`, category, scores, latency, notes) exist on the `ScoreReport`, but
+only aggregates are published. The rubric that matters:
+**0.5 × tool + 0.5 × memory**.
 
 **Q: Someone copied my harness — what protects me?**
-Your **first-seen timestamp** (immutable upload time), the 1% dethrone margin
+Your **first-seen timestamp** (immutable upload time), the 5% dethrone margin
 (a copy only ties you), and the two-channel fingerprint that catches
 renamed/reformatted/padded copies and holds them for human review. §7–8.
 
