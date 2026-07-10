@@ -50,30 +50,35 @@ class DittobenchClient:
         tarball_url: str,
         tarball_sha256: str | None = None,
         seed: int | None = None,
+        dataset_sha256: str | None = None,
+        run_size: str | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
-        Submits at ``run_size`` (default ``full``) with the BYOK OpenRouter key,
-        then polls until the run finishes. Raises :class:`DittobenchError` on a
-        failed run or when the overall timeout elapses.
+        Submits with the BYOK OpenRouter key, then polls until the run finishes.
+        Raises :class:`DittobenchError` on a failed run or the overall timeout.
 
         ``tarball_sha256`` (the digest the platform registered at upload) is
         forwarded so the scorer re-verifies the fetched bytes against it and
-        pins the Docker build tag to the content hash — closing the gap where a
-        swapped blob or a URL-basename tag collision could be scored.
+        pins the Docker build tag to the content hash.
 
-        ``seed`` pins the dataset seed (v3 #1, Common Random Numbers): pass the
-        SAME seed when re-scoring the champion + challengers so they face the
-        identical fresh dataset and their composites become directly comparable
-        (``BENCHMARK-V3-IDEAS.md`` §2.1). ``None`` lets dittobench-api draw its own
-        fresh per-run seed (the default, anti-overfit path). Requires an
-        api that honors the field; older ones ignore it and draw fresh.
+        ``seed`` pins the dataset seed. ``dataset_sha256`` selects the CANONICAL
+        validator path: when set, this posts to dittobench-api **/v1/score** with
+        the platform-pinned ``seed`` + ``dataset_sha256`` (+ ``run_size``), so the
+        engine regenerates that exact dataset and FAILS the run on a hash mismatch
+        (tamper-evidence — every k=3 validator provably scored the platform's
+        dataset). Without ``dataset_sha256`` it uses /v1/submit (practice /
+        version-bump re-score, fresh-or-CRN seed).
         """
         if self._config.dittobench_mock:
             self.last_details = {}
             return self._mock_report()
         run_id = await self._submit(
-            tarball_url=tarball_url, tarball_sha256=tarball_sha256, seed=seed
+            tarball_url=tarball_url,
+            tarball_sha256=tarball_sha256,
+            seed=seed,
+            dataset_sha256=dataset_sha256,
+            run_size=run_size,
         )
         return await self._poll(run_id)
 
@@ -100,17 +105,26 @@ class DittobenchClient:
         tarball_url: str,
         tarball_sha256: str | None = None,
         seed: int | None = None,
+        dataset_sha256: str | None = None,
+        run_size: str | None = None,
     ) -> str:
         body: dict[str, object] = {
             "tarball_url": tarball_url,
-            "run_size": self._config.run_size,
+            "run_size": run_size or self._config.run_size,
             "openrouter_key": self._config.openrouter_key,
         }
         if tarball_sha256:
             body["tarball_sha256"] = tarball_sha256
         if seed is not None:
             body["seed"] = seed
-        url = f"{self._config.dittobench_api_url}/v1/submit"
+        # Canonical validator path: pin the dataset so the engine fails on a
+        # regenerated-hash mismatch. Otherwise the practice/re-score path.
+        if dataset_sha256:
+            body["dataset_sha256"] = dataset_sha256
+            endpoint = "/v1/score"
+        else:
+            endpoint = "/v1/submit"
+        url = f"{self._config.dittobench_api_url}{endpoint}"
         try:
             resp = await self._client.post(url, json=body)
         except httpx.HTTPError as e:

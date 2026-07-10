@@ -12,12 +12,11 @@ import pytest
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.validator import (
     ArtifactResponse,
+    JobResponse,
     LedgerEntry,
     LedgerResponse,
     ScoreReport,
     SubmitScoreResponse,
-    ValidatorQueueItem,
-    ValidatorQueueResponse,
 )
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
@@ -115,14 +114,21 @@ class TestComputeWeights:
         assert len(w) == 3
 
 
-def _queue_item(miner_hotkey: str, name: str) -> ValidatorQueueItem:
-    return ValidatorQueueItem(
+def _job(
+    miner_hotkey: str,
+    *,
+    sha256: str = "ab" * 32,
+    dataset_sha256: str | None = "cd" * 32,
+    deadline: datetime | None = None,
+) -> JobResponse:
+    return JobResponse(
         agent_id=uuid4(),
         miner_hotkey=miner_hotkey,
-        name=name,
-        sha256="ab" * 32,
-        status=AgentStatus.EVALUATING,
-        created_at=datetime.now(UTC),
+        sha256=sha256,
+        deadline=deadline or datetime.now(UTC) + timedelta(hours=1),
+        seed=12345,
+        dataset_sha256=dataset_sha256,
+        run_size="full",
     )
 
 
@@ -154,16 +160,20 @@ def _config() -> MagicMock:
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
+    cfg.queue_limit = 16
+    # Combined role (the historical single-process default): a scorer clears
+    # enable_weights, an independent validator clears enable_scoring.
+    cfg.enable_scoring = True
+    cfg.enable_weights = True
     return cfg
 
 
 def _platform_with_ledger(
-    *, items: list[ValidatorQueueItem], ledger: list[LedgerEntry]
+    *, jobs: list[JobResponse], ledger: list[LedgerEntry]
 ) -> MagicMock:
     platform = MagicMock()
-    platform.get_queue = AsyncMock(
-        return_value=ValidatorQueueResponse(items=items, count=len(items))
-    )
+    # Ticket poll: hand out one ticket per job, then 204 (None) to end the sweep.
+    platform.request_job = AsyncMock(side_effect=[*jobs, None])
     platform.get_ledger = AsyncMock(
         return_value=LedgerResponse(entries=ledger, count=len(ledger))
     )
@@ -185,10 +195,10 @@ def _platform_with_ledger(
 
 class TestRunOnce:
     async def test_scores_queue_and_sets_weights_from_ledger(self) -> None:
-        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        job = _job("5MinerA" + "x" * 41)
         # The weight vector comes from the LEDGER, not the swept composites.
         ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
-        platform = _platform_with_ledger(items=[item], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[job], ledger=ledger)
 
         dittobench = MagicMock()
         dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
@@ -213,9 +223,9 @@ class TestRunOnce:
     async def test_forwards_tarball_sha_to_scorer(self) -> None:
         # The registered digest must be forwarded so dittobench re-verifies the
         # fetched bytes and pins the build tag to the content hash.
-        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        job = _job("5MinerA" + "x" * 41)
         platform = _platform_with_ledger(
-            items=[item], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
+            jobs=[job], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
         )
         dittobench = MagicMock()
         dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
@@ -235,16 +245,21 @@ class TestRunOnce:
         kwargs = dittobench.score_tarball.await_args.kwargs
         assert kwargs["tarball_sha256"] == "ab" * 32
         assert kwargs["tarball_url"].startswith("https://")
+        # The ticket pins the dataset: seed + dataset_sha256 + run_size are
+        # forwarded so the scorer takes the tamper-evident /v1/score path.
+        assert kwargs["seed"] == 12345
+        assert kwargs["dataset_sha256"] == "cd" * 32
+        assert kwargs["run_size"] == "full"
 
     async def test_sha_mismatch_skips_agent(self) -> None:
         # If the queue item and artifact disagree on the digest, the agent is
         # skipped (never scored), but the sweep continues and weights still come
         # from the durable ledger.
-        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        job = _job("5MinerA" + "x" * 41)
         platform = _platform_with_ledger(
-            items=[item], ledger=[_entry("5Champ" + "x" * 42, 0.85)]
+            jobs=[job], ledger=[_entry("5Champ" + "x" * 42, 0.85)]
         )
-        # Artifact reports a DIFFERENT sha than the queue item's "ab" * 32.
+        # Artifact reports a DIFFERENT sha than the ticket's "ab" * 32.
         platform.get_artifact = AsyncMock(
             return_value=ArtifactResponse(
                 agent_id=uuid4(),
@@ -271,11 +286,40 @@ class TestRunOnce:
         platform.submit_score.assert_not_awaited()
         chain.put_weights.assert_awaited_once_with({"5Champ" + "x" * 42: 0.9})
 
+    async def test_lapsed_ticket_is_skipped_unscored(self) -> None:
+        # A ticket already past its deadline is counted as pulled but never
+        # scored — the platform re-opens it, so spending a full run would only
+        # produce a score the platform would reject as late.
+        job = _job(
+            "5MinerA" + "x" * 41,
+            deadline=datetime.now(UTC) - timedelta(seconds=1),
+        )
+        platform = _platform_with_ledger(
+            jobs=[job], ledger=[_entry("5Champ" + "x" * 42, 0.85)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock(put_weights=AsyncMock())
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        n = await worker.run_once()
+
+        assert n == 1  # counted against the sweep cap...
+        platform.get_artifact.assert_not_awaited()  # ...but not even fetched
+        dittobench.score_tarball.assert_not_awaited()
+        platform.submit_score.assert_not_awaited()
+
     async def test_empty_queue_still_sets_weights_from_ledger(self) -> None:
         # The regression that broke incentives: an empty queue must NOT skip
         # weight-setting, or the reigning champion is zeroed.
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         chain = MagicMock()
         chain.put_weights = AsyncMock()
 
@@ -291,7 +335,7 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
 
     async def test_empty_ledger_skips_weights(self) -> None:
-        platform = _platform_with_ledger(items=[], ledger=[])
+        platform = _platform_with_ledger(jobs=[], ledger=[])
         chain = MagicMock()
         chain.put_weights = AsyncMock()
 
@@ -305,11 +349,38 @@ class TestRunOnce:
         assert await worker.run_once() == 0
         chain.put_weights.assert_not_awaited()
 
+    async def test_stale_ledger_is_still_folded_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A platform-served last-known-good (stale) ledger must still set weights —
+        # the pool is durable — but log that the platform is degraded.
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
+        platform.get_ledger = AsyncMock(
+            return_value=LedgerResponse(
+                entries=ledger, count=len(ledger), stale=True, age_seconds=120
+            )
+        )
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        with caplog.at_level("WARNING"):
+            await worker.run_once()
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
+        assert any("STALE" in r.message for r in caplog.records)
+
     async def test_no_permit_skips_weight_submission(self) -> None:
         # A validator hotkey without a permit must not burn an epoch submitting
         # weights the chain will reject; skip loudly instead.
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         chain = MagicMock()
         chain.put_weights = AsyncMock()
         chain.has_validator_permit = AsyncMock(return_value=False)
@@ -327,7 +398,7 @@ class TestRunOnce:
 
     async def test_permit_present_sets_weights(self) -> None:
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         chain = MagicMock()
         chain.put_weights = AsyncMock()
         chain.has_validator_permit = AsyncMock(return_value=True)
@@ -346,7 +417,7 @@ class TestRunOnce:
         # A flaky metagraph read must not wedge weight-setting; proceed and let
         # the chain enforce.
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         chain = MagicMock()
         chain.put_weights = AsyncMock()
         chain.has_validator_permit = AsyncMock(side_effect=ChainError("pylon down"))
@@ -365,7 +436,7 @@ class TestRunOnce:
         # With VALIDATOR_MIN_STAKE_TAO set, a demonstrably short stake must not
         # burn an epoch on a guaranteed chain rejection.
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         cfg = _config()
         cfg.min_stake_tao = 1000.0
         chain = MagicMock()
@@ -386,7 +457,7 @@ class TestRunOnce:
 
     async def test_stake_above_minimum_sets_weights(self) -> None:
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         cfg = _config()
         cfg.min_stake_tao = 1000.0
         chain = MagicMock()
@@ -407,7 +478,7 @@ class TestRunOnce:
     async def test_stake_check_error_fails_open(self) -> None:
         # Same fail-open posture as the permit check: a flaky read proceeds.
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         cfg = _config()
         cfg.min_stake_tao = 1000.0
         chain = MagicMock()
@@ -429,7 +500,7 @@ class TestRunOnce:
         # min_stake_tao=0 (the default; localnet has staking disabled) must not
         # even touch the stake read.
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         chain = MagicMock()
         chain.put_weights = AsyncMock()
         chain.has_validator_permit = AsyncMock(return_value=True)
@@ -447,11 +518,11 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once()
 
     async def test_set_weights_false_scores_without_touching_weights(self) -> None:
-        # The scoring-only sweep (between weight-set epochs) drains the queue but
-        # does not read the ledger or submit weights.
-        item = _queue_item("5MinerA" + "x" * 41, "alpha")
+        # The scoring-only sweep (between weight-set epochs) drains the queue and
+        # re-scores stale champions (a ledger read) but never submits weights.
+        job = _job("5MinerA" + "x" * 41)
         ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
-        platform = _platform_with_ledger(items=[item], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[job], ledger=ledger)
         dittobench = MagicMock()
         dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
         chain = MagicMock()
@@ -469,16 +540,16 @@ class TestRunOnce:
         n = await worker.run_once(set_weights=False)
         assert n == 1
         assert platform.submit_score.await_count == 1
-        platform.get_ledger.assert_not_awaited()
+        platform.get_ledger.assert_awaited()  # read for the stale-champion re-score
         chain.put_weights.assert_not_awaited()
 
     async def test_one_agent_failure_does_not_block_weights(self) -> None:
         from ditto.validator.errors import DittobenchError
 
-        bad = _queue_item("5MinerB" + "x" * 41, "bad")
-        good = _queue_item("5MinerG" + "x" * 41, "good")
+        bad = _job("5MinerB" + "x" * 41)
+        good = _job("5MinerG" + "x" * 41)
         ledger = [_entry("5MinerG" + "x" * 41, 0.7)]
-        platform = _platform_with_ledger(items=[bad, good], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[bad, good], ledger=ledger)
 
         async def _score(**_: object) -> ScoreReport:
             if _score.calls == 0:  # type: ignore[attr-defined]
@@ -510,7 +581,7 @@ class TestRunOnce:
     async def test_ledger_fetch_failure_leaves_weights_untouched(self) -> None:
         from ditto.validator.errors import PlatformError
 
-        platform = _platform_with_ledger(items=[], ledger=[])
+        platform = _platform_with_ledger(jobs=[], ledger=[])
         platform.get_ledger = AsyncMock(side_effect=PlatformError("ledger 503"))
         chain = MagicMock()
         chain.put_weights = AsyncMock()
@@ -530,7 +601,7 @@ class TestRunOnce:
     ) -> None:
         monkeypatch.setattr(worker_mod, "_WEIGHT_SET_RETRY_SECONDS", 0.0)
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         chain = MagicMock()
         chain.put_weights = AsyncMock(side_effect=[ChainError("timeout"), None])
 
@@ -550,7 +621,7 @@ class TestRunOnce:
     ) -> None:
         monkeypatch.setattr(worker_mod, "_WEIGHT_SET_RETRY_SECONDS", 0.0)
         ledger = [_entry("5Champion" + "x" * 39, 0.85)]
-        platform = _platform_with_ledger(items=[], ledger=ledger)
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
         chain = MagicMock()
         chain.put_weights = AsyncMock(side_effect=ChainError("down"))
 
@@ -564,6 +635,66 @@ class TestRunOnce:
         # Must not raise — the durable ledger means next epoch retries.
         await worker.run_once()
         assert chain.put_weights.await_count == worker_mod._WEIGHT_SET_ATTEMPTS
+
+
+class TestRoleSplit:
+    """The scoring / weight halves gate on enable_scoring / enable_weights, so one
+    process can be the central scorer, another an independent weights-only
+    validator, or (default) both."""
+
+    async def test_scoring_only_scores_but_never_sets_weights(self) -> None:
+        # Central scorer: drains the queue and submits signed scores, but with
+        # enable_weights cleared it never reads-and-folds for weights or touches
+        # the chain.
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(
+            jobs=[job], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock(put_weights=AsyncMock())
+        keypair = MagicMock(sign=MagicMock(return_value=b"\x01" * 64))
+        cfg = _config()
+        cfg.enable_weights = False
+
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=keypair,
+        )
+        n = await worker.run_once()
+        assert n == 1
+        assert platform.submit_score.await_count == 1  # scored + persisted
+        chain.put_weights.assert_not_awaited()  # never touches the chain
+
+    async def test_weights_only_sets_weights_without_scoring(self) -> None:
+        # Independent validator: with enable_scoring cleared it never pulls the
+        # queue or scores, only reads the canonical ledger and sets weights.
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(
+            jobs=[job], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock(put_weights=AsyncMock())
+        cfg = _config()
+        cfg.enable_scoring = False
+
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        n = await worker.run_once()
+        assert n == 0  # no queue pulled
+        platform.request_job.assert_not_awaited()  # never polls for a ticket
+        platform.submit_score.assert_not_awaited()
+        dittobench.score_tarball.assert_not_awaited()  # never scores
+        chain.put_weights.assert_awaited_once_with({"5MinerA" + "x" * 41: 0.9})
 
 
 class TestRetryBackoff:

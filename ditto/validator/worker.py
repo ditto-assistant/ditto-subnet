@@ -19,6 +19,7 @@ import inspect
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from ditto.chain import ChainError
@@ -46,9 +47,9 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from ditto.api_models.validator import (
+        JobResponse,
         LedgerResponse,
         ScoreReport,
-        ValidatorQueueItem,
     )
     from ditto.chain import ChainClient
     from ditto.validator.config import ValidatorConfig
@@ -140,35 +141,66 @@ class ValidatorWorker:
     async def run_once(self, *, set_weights: bool = True) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
 
-        Scoring persists each agent's composite to the platform. When
-        ``set_weights`` is True the sweep also recomputes weights from the
-        durable ledger and submits them (see :meth:`_update_weights`), so an
-        empty queue no longer means "set no weights" — the reigning champion
-        keeps its emission. ``run_forever`` scores every sweep but only sets
-        weights when the epoch (weight-set) interval is due, so scoring latency
-        isn't tied to the much longer weight cadence.
+        Which halves run is gated by this instance's role (``enable_scoring`` /
+        ``enable_weights``):
+
+        * Scoring (``enable_scoring``): pull the ``evaluating`` queue, score each
+          agent through dittobench-api, persist the signed composite, and
+          re-score stale champions. The central scorer runs only this.
+        * Weights (``enable_weights`` and ``set_weights``): recompute weights from
+          the durable ledger and submit them (see :meth:`_update_weights`), so an
+          empty queue no longer means "set no weights" — the reigning champion
+          keeps its emission. An independent (weights-only) validator runs only
+          this, reading the ledger the central scorer maintains.
+
+        ``run_forever`` scores every sweep but only sets weights when the epoch
+        interval is due, so scoring latency isn't tied to the longer weight
+        cadence.
         """
         started = time.monotonic()
-        queue = await self._platform.get_queue()
         scored: list[ScoredAgentStat] = []
         failed = 0
-        for item in queue.items:
-            try:
-                report = await self._score_agent(item)
-                details = getattr(self._dittobench, "last_details", None)
-                if not isinstance(details, dict):
-                    details = {}
-                scored.append(scored_agent_stat(item.miner_hotkey, report, details))
-            except (DittobenchError, PlatformError) as e:
-                logger.warning("scoring agent %s failed: %s", item.agent_id, e)
-                failed += 1
-                continue
+        queue_depth = 0
+        if self._config.enable_scoring:
+            # k=3 pull: request tickets until the platform says 204 (no work for
+            # us) or this sweep's cap is hit. Each ticket pins the dataset all
+            # three validators score, so scores stay comparable for the median.
+            while queue_depth < self._config.queue_limit:
+                job = await self._platform.request_job()
+                if job is None:
+                    break  # 204: no ticket available
+                queue_depth += 1
+                if job.deadline <= datetime.now(UTC):
+                    # Already lapsed (the platform will re-open it); don't waste a
+                    # full run on a score that would be invalidated as late.
+                    logger.warning(
+                        "ticket for agent %s already past deadline %s; skipping",
+                        job.agent_id,
+                        job.deadline.isoformat(),
+                    )
+                    continue
+                try:
+                    report = await self._score_job(job)
+                    details = getattr(self._dittobench, "last_details", None)
+                    if not isinstance(details, dict):
+                        details = {}
+                    scored.append(scored_agent_stat(job.miner_hotkey, report, details))
+                except (DittobenchError, PlatformError) as e:
+                    logger.warning("scoring agent %s failed: %s", job.agent_id, e)
+                    failed += 1
+                    continue
+            # Re-scoring stale champions is a scoring responsibility, done here
+            # (not in the weight fold) so the split topology keeps re-scoring:
+            # the weight-only validators just read the ledger the scorer refreshes.
+            await self._rescore_stale_champions()
 
-        outcome = await self._update_weights() if set_weights else _WeightOutcome()
+        outcome = _WeightOutcome()
+        if set_weights and self._config.enable_weights:
+            outcome = await self._update_weights()
         self._telemetry.record_sweep(
             SweepStats(
                 sweep_duration_s=time.monotonic() - started,
-                queue_depth=len(queue.items),
+                queue_depth=queue_depth,
                 failed_count=failed,
                 scored=scored,
                 leaderboard=outcome.leaderboard,
@@ -176,7 +208,7 @@ class ValidatorWorker:
                 weights_submitted=outcome.submitted,
             )
         )
-        return len(queue.items)
+        return queue_depth
 
     async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.
@@ -193,13 +225,20 @@ class ValidatorWorker:
             logger.warning("ledger fetch failed; weights unchanged this epoch: %s", e)
             return _WeightOutcome()
 
-        # §9 version-bump re-score: if the ledger surfaces bench_version and its
-        # champion/tail were scored under an older version than this validator's
-        # scorer now produces, re-evaluate them so the fold compares like with
-        # like. Inert until the platform surfaces per-entry versions (compute the
-        # fold ignores stale versions regardless — see compute_weights).
-        ledger = await self._rescore_stale_champion_and_tail(ledger)
+        # The platform serves a last-known-good ledger (flagged stale) when its own
+        # DB read fails; folding it is safe (the pool is durable + slow-moving) but
+        # worth a loud line so an operator sees the platform is degraded.
+        if getattr(ledger, "stale", False):
+            logger.warning(
+                "scoring ledger is STALE (platform served a %ss-old snapshot); "
+                "folding it but the platform DB read is failing",
+                getattr(ledger, "age_seconds", "?"),
+            )
 
+        # Re-scoring stale champions (§9 version-bump) is the scorer's job now,
+        # run in the scoring sweep (see _rescore_stale_champions); the fold reads
+        # whatever the scorer has already persisted. compute_weights ignores
+        # stale versions defensively regardless.
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
         weights = compute_weights(
             ledger.entries,
@@ -221,6 +260,23 @@ class ValidatorWorker:
         return _WeightOutcome(
             leaderboard=leaderboard, weights=weights, submitted=submitted
         )
+
+    async def _rescore_stale_champions(self) -> None:
+        """Read the ledger and re-score any champion/tail agents scored under an
+        older bench_version than this scorer now produces (BENCHMARK-V2 §9).
+
+        Run in the scoring sweep so the durable ledger the weight fold reads is
+        already refreshed, which keeps re-scoring working once scoring and
+        weight-setting live in separate processes. Inert until the platform
+        surfaces per-entry versions; one agent failing to re-score is logged and
+        skipped. A ledger-read failure is swallowed — the next sweep retries.
+        """
+        try:
+            ledger = await self._platform.get_ledger()
+        except PlatformError as e:
+            logger.warning("ledger fetch for re-score failed; skipping: %s", e)
+            return
+        await self._rescore_stale_champion_and_tail(ledger)
 
     async def _rescore_stale_champion_and_tail(
         self, ledger: LedgerResponse
@@ -469,9 +525,15 @@ class ValidatorWorker:
                 await asyncio.sleep(delay)
         return False
 
-    async def _score_agent(self, item: ValidatorQueueItem) -> ScoreReport:
+    async def _score_job(self, job: JobResponse) -> ScoreReport:
+        """Score one issued ticket against its platform-pinned dataset."""
         return await self._evaluate_and_submit(
-            item.agent_id, item.sha256, item.miner_hotkey
+            job.agent_id,
+            job.sha256,
+            job.miner_hotkey,
+            seed=job.seed,
+            dataset_sha256=job.dataset_sha256,
+            run_size=job.run_size,
         )
 
     async def _evaluate_and_submit(
@@ -481,14 +543,17 @@ class ValidatorWorker:
         miner_hotkey: str,
         *,
         seed: int | None = None,
+        dataset_sha256: str | None = None,
+        run_size: str | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. Shared by the
-        queue sweep (:meth:`_score_agent`) and the §9 version-bump re-score.
+        ticket sweep (:meth:`_score_job`) and the §9 version-bump re-score.
 
-        ``seed`` pins the dataset seed (v3 #1 CRN): the re-score sweep passes one
-        common seed for the whole champion+tail set so their composites are
-        directly comparable. The queue sweep leaves it ``None`` (fresh per-run
-        seed, anti-overfit)."""
+        ``seed`` pins the dataset seed. ``dataset_sha256`` (from the ticket)
+        selects the canonical /v1/score path, where the engine regenerates that
+        exact dataset and fails on a hash mismatch (tamper-evidence). The re-score
+        sweep passes a common ``seed`` (CRN) but no ``dataset_sha256`` (its
+        comparison is across a fresh common dataset, not a platform-pinned one)."""
         artifact = await self._platform.get_artifact(agent_id)
         # The caller and the artifact response both carry the registered digest; a
         # mismatch means the platform is inconsistent about which blob this agent
@@ -504,6 +569,8 @@ class ValidatorWorker:
             tarball_url=artifact.download_url,
             tarball_sha256=artifact.sha256,
             seed=seed,
+            dataset_sha256=dataset_sha256,
+            run_size=run_size,
         )
         signature = sign_score(
             self._keypair,

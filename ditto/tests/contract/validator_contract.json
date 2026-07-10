@@ -272,6 +272,11 @@
       }
     },
     "properties": {
+      "age_seconds": {
+        "default": 0,
+        "minimum": 0,
+        "type": "integer"
+      },
       "count": {
         "minimum": 0,
         "type": "integer"
@@ -281,6 +286,22 @@
           "$ref": "#/$defs/LedgerEntry"
         },
         "type": "array"
+      },
+      "generated_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "stale": {
+        "default": false,
+        "type": "boolean"
       }
     },
     "required": [

@@ -66,7 +66,32 @@ async def _amain() -> int:
             platform = PlatformClient(config, http)
             dittobench = DittobenchClient(config, http)
 
-            if config.use_sdk_weights:
+            roles = "+".join(
+                name
+                for name, on in (
+                    ("scoring", config.enable_scoring),
+                    ("weights", config.enable_weights),
+                )
+                if on
+            )
+            logger.info("validator roles: %s", roles)
+
+            if not config.enable_weights:
+                # Scoring-only (the central scorer): no weight sink and no chain
+                # client. Scores the queue and re-scores stale champions; it never
+                # touches the chain.
+                logger.info("weight mode: none (scoring-only instance)")
+                worker = ValidatorWorker(
+                    config=config,
+                    platform=platform,
+                    dittobench=dittobench,
+                    chain=None,
+                    keypair=keypair,
+                    telemetry=telemetry,
+                )
+                _apply_ditto_logging()  # re-assert: bittensor has initialised
+                await worker.run_forever(stop)
+            elif config.use_sdk_weights:
                 # Localnet fallback: weights go through the bittensor SDK, signed
                 # by the local hotkey. No Pylon chain client / write identity.
                 from ditto.validator.sdk_weights import SdkWeightSetter
