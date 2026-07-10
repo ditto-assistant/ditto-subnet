@@ -65,10 +65,15 @@ Scoring role, every sweep (default `VALIDATOR_SWEEP_SECONDS=120`):
    platform leases at most 3 tickets per agent, to distinct validators.
 2. `GET /api/v1/validator/agent/{id}/artifact` → presigned tarball URL +
    sha256. Verify the hash before building.
-3. `POST localhost:8080/v1/score` on the co-located dittobench-api with
+3. `POST localhost:8080/v1/score` on the validator's own co-located
+   dittobench-api instance with
    `{tarball_url, tarball_sha256, seed, dataset_sha256, run_size}` → `202` +
    run id; poll `GET /v1/runs/{id}` to `done`/`failed`. The engine regenerates
    the dataset from `seed` and fails the run on a `dataset_sha256` mismatch.
+   This is deliberately NOT the hosted practice endpoint: that deployment has
+   no Docker daemon (it cannot build miner tarballs), and k=3 only means
+   anything if three validators execute independently rather than calling one
+   central service. Note the access implication below.
 4. Sign sr25519 over `{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}`
    (`!r` = Python shortest-round-trip float repr) and
    `POST /api/v1/validator/agent/{id}/score`.
@@ -103,6 +108,16 @@ re-leased.
 Chain-side: a registered hotkey with a validator permit and the stake finney
 requires for one; the same hotkey signs scores (and screener verdicts, which
 is safe: verdict and weight signatures have disjoint formats).
+
+Access model for the scoring role: the co-located engine builds from the
+`dittobench-api` repo, which is currently private (the infra role clones it
+with a read token). So today the scoring role is operator-run or by-invite;
+independent validators run weights-only and verify the ledger, which needs no
+private access. Since scoring went judge-free, everything answer-key-shaped
+lives in the public dittobench-datagen module, so the private repo holds
+operational glue rather than secrets. Opening it (or shipping a signed binary
+or image) is what would let independents run scoring permissionlessly; it is
+listed as an open decision below.
 
 Ledger: `GET /api/v1/scoring/scores`, self-verifying per the signature above.
 
@@ -186,6 +201,15 @@ Not gating, open for pickup:
 - Doc drift: MINER-FAQ still cites the 1% margin and judge-based grading;
   code is authoritative (margin 0.05, judge-free).
 - 17 open dependabot findings in this repo (3 high).
+
+Open decision (Nick): whether to open-source `dittobench-api` or publish a
+signed binary/image so independents can run the scoring role without repo
+access. Judge-free scoring moved every secret-shaped component (generator,
+answer keys, grader) into the public dittobench-datagen module; what remains
+private is the sandbox/egress orchestration and deploy glue. Until decided,
+scoring stays operator-run and the decided model (central scoring, open
+weight-setting, dittobench-api docs/scoring-decentralization-brief.md) is the
+operative description.
 
 ## Watch items
 
