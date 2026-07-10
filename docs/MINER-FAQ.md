@@ -212,7 +212,7 @@ tail, "serve check failed", …) are logged server-side.
 
 Each validator sweep (hourly by default), the validator:
 
-1. Pulls the `evaluating` queue (`GET /validator/queue`, oldest first).
+1. Leases a scoring ticket (`POST /validator/job`: seed, dataset_sha256, run_size, deadline; at most 3 validators per agent).
 2. Fetches a short-lived presigned tarball URL and **cross-checks the sha256**
    (queue vs. artifact vs. what the scorer fetches) — a mismatch refuses to
    score.
@@ -462,7 +462,7 @@ alpha accruing).
   full-size (`run_size=full`) proof is in flight.
 - **Single validator** (the subnet owner's UID). k=3 median-of-3
   multi-validator scoring is the next architectural step; the current
-  `/validator/queue` / `/agent/{id}/artifact` / `/agent/{id}/score` endpoints
+  `/validator/job` / `/agent/{id}/artifact` / `/agent/{id}/score` endpoints
   are Phase-1 names that will migrate to lease-based `request-evaluation` /
   `submit-score`.
 - **Sandbox egress allowlist not yet in place** (cost caps are); deferred tar
