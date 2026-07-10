@@ -73,7 +73,7 @@ VALIDATOR_ENABLE_SCORING=true
 VALIDATOR_ENABLE_WEIGHTS=false
 VALIDATOR_PLATFORM_API_URL=...
 VALIDATOR_DITTOBENCH_API_URL=...             # the private scoring service
-VALIDATOR_OPENROUTER_KEY=...                 # forwarded to the run_size pipeline
+VALIDATOR_OPENROUTER_KEY=...                 # legacy only: needed just when the model lock is off
 VALIDATOR_RUN_SIZE=full
 VALIDATOR_HOTKEY=<scorer SS58 hotkey>        # signs each score
 VALIDATOR_MNEMONIC=...                        # or a wallet
@@ -84,15 +84,14 @@ No Pylon identity is required (it sets no weights).
 
 ### Hosting the model gateway
 
-Under v2 the scorer runs the harness against one locked open-weight model and
-grades with a self-hosted judge, both served from a local Ollama/vLLM gateway
-rather than a hosted API. This is what makes scores comparable and judging
-reproducible across the k=3 validators. It is also the hardware floor for a
-scoring validator: the locked model is Qwen2.5-72B-Instruct, which needs one
-80 GB GPU (or 2x 48 GB) at the consensus Q4_K_M quantization. See
-[VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md) for the full setup
-(hardware sizing, gateway install, artifact pinning, determinism knobs, and
-the env wiring). Weights-only validators need no GPU at all.
+Under v2 the scorer runs the harness against one locked open-weight model
+served from a gateway; scoring itself is judge-free and deterministic, so no
+judge model and no LLM key are needed. The locked model is Qwen3-32B: one
+24 GB GPU self-hosted (Ollama/vLLM), or zero GPUs via the model-relay backed by
+Chutes' TEE-served catalog. See
+[VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md) for hardware sizing,
+gateway options, artifact pinning, and the env wiring. Weights-only validators
+need no GPU at all.
 
 ## Cadence
 
