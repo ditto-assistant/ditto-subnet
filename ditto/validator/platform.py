@@ -21,7 +21,6 @@ from ditto.api_models.validator import (
     ScoreReport,
     SubmitScoreRequest,
     SubmitScoreResponse,
-    ValidatorQueueResponse,
 )
 from ditto.validator.errors import PlatformError
 
@@ -43,20 +42,6 @@ class PlatformClient:
         self._client = client
         self._base = config.platform_api_url.rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
-
-    async def get_queue(self) -> ValidatorQueueResponse:
-        """Pull agents awaiting evaluation."""
-        url = f"{self._base}{_PREFIX}/queue"
-        params = {"limit": self._config.queue_limit}
-        try:
-            resp = await self._client.get(url, params=params, headers=self._headers)
-        except httpx.HTTPError as e:
-            raise PlatformError(f"queue fetch failed: {e}") from e
-        if resp.status_code != 200:
-            raise PlatformError(
-                f"queue rejected ({resp.status_code}): {resp.text[:200]}"
-            )
-        return ValidatorQueueResponse.model_validate(resp.json())
 
     async def request_job(self) -> JobResponse | None:
         """Request a scoring ticket (the k=3 pull). ``None`` on 204 (no work).

@@ -34,62 +34,6 @@ from ditto.api_models.upload import (
 )
 
 
-class ValidatorQueueItem(BaseModel):
-    """One agent awaiting evaluation, returned by ``GET /validator/queue``.
-
-    Carries exactly what the daemon needs to fetch + identify the
-    submission; the tarball itself comes from the ``/artifact`` endpoint.
-    """
-
-    agent_id: Annotated[UUID, Field(description="Server-generated agent identifier.")]
-    miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
-    name: Annotated[str, Field(description="Miner-chosen agent name.")]
-    sha256: Annotated[
-        str, Field(description="SHA-256 of the uploaded tarball, lowercase hex.")
-    ]
-    status: Annotated[
-        AgentStatus, Field(description="Lifecycle state at queue read time.")
-    ]
-    created_at: Annotated[
-        datetime, Field(description="When the upload row was inserted (UTC).")
-    ]
-
-
-class ValidatorQueueResponse(BaseModel):
-    """Returned by ``GET /validator/queue``.
-
-    ``items`` is ordered oldest-first so a daemon draining the queue
-    processes submissions roughly in arrival order. ``count`` echoes
-    ``len(items)`` for convenience.
-    """
-
-    items: Annotated[
-        list[ValidatorQueueItem],
-        Field(description="Agents awaiting evaluation, oldest first."),
-    ]
-    count: Annotated[int, Field(ge=0, description="Number of items returned.")]
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "items": [
-                    {
-                        "agent_id": "550e8400-e29b-41d4-a716-446655440000",
-                        "miner_hotkey": (
-                            "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
-                        ),
-                        "name": "alpha-agent",
-                        "sha256": "deadbeef" * 8,
-                        "status": "screening_passed",
-                        "created_at": "2026-06-08T12:00:00Z",
-                    }
-                ],
-                "count": 1,
-            }
-        }
-    )
-
-
 class JobResponse(BaseModel):
     """Returned by ``POST /validator/job`` when a ticket is issued.
 
