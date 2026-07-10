@@ -1,9 +1,5 @@
 # SN118 validator brief (2026-07-10)
 
-For the lead independent validator, to relay to other validators. Engineering
-critical path: [ROAD-TO-PRODUCTION.md](ROAD-TO-PRODUCTION.md). Doc index at the
-end.
-
 ## Facts to relay
 
 1. Scoring is deterministic. No LLM judge, no validator-side API key. A score
@@ -105,15 +101,16 @@ Ledger: `GET /api/v1/scoring/scores`, self-verifying per the signature above.
 
 Live now:
 
-- C-ISO egress enforcement: isolated `ditto-sandbox` network
-  (172.31.240.0/24), fail-closed CONNECT proxy, DOCKER-USER firewall.
-  Verified active 2026-07-10.
+- Sandbox egress enforcement: each untrusted miner container runs on the
+  isolated `ditto-sandbox` docker network (172.31.240.0/24) whose only egress
+  is a fail-closed CONNECT proxy, with a DOCKER-USER firewall dropping direct
+  dials. Verified active 2026-07-10.
 - dittobench-api on the judge-free build (converged from main).
 - Validator worker, screener, and Pylon identity sidecar on dev localnet;
   full pipeline runs unattended; champion selected by Yuma consensus.
 
-Staged in infra (`feat/validator-role-split`), flips on at the first converge
-after the Chutes key exists:
+Staged in infra (`feat/validator-role-split` branch), flips on at the first
+converge after our Chutes key exists:
 
 - `dittobench_model_lock: true`: sandbox scores against `Qwen/Qwen3-32B-TEE`
   only, egress allowlist derives to empty (deny-all CONNECT), no key in any
@@ -122,31 +119,64 @@ after the Chutes key exists:
   key from Secret Manager, forwards to `llm.chutes.ai`. Embeddings stay on the
   VM's Ollama at :11434 (`HARNESS_EMBED_URL`).
 
-**TODO (Nick):** create the Chutes API key and store it as the
+**TODO (Nick):** create a Chutes API key and store it as the
 `validator-chutes-key` Secret Manager value in `ditto-app-dev`:
 `printf '%s' 'cpk_...' | gcloud secrets create validator-chutes-key
---data-file=- --project ditto-app-dev`. Then re-converge
-(`ansible/playbooks/gcp-validator.yml`); the lock and relay activate
-themselves.
+--data-file=- --project ditto-app-dev`, then re-converge
+(`ansible-playbook -i ansible/inventory/validator-static.yml
+ansible/playbooks/gcp-validator.yml` in the infra repo); the lock and relay
+activate themselves.
+
+This key blocks only OUR dev validator's lock flip and testing. It is not a
+blocker for independent validators: weights-only validators need no key at
+all, and an independent scoring validator brings their own Chutes key (or
+their own GPU on the fallback path) when they stand up their host.
 
 ## Remaining gates to finney (validator-visible)
 
-1. Chutes key + lock flip on dev (above), then the enforcement smoke test in
-   infra `docs/validator-deploy.md`.
-2. Noise-floor calibration at Qwen3-32B: 30 seeds, one real harness, confirm
-   between-seed composite sigma clears the 0.05 KOTH margin. Grading
-   contributes zero; what remains is dataset + harness-execution variance.
-3. Platform: `/validator/job` ticket migration complete, `composite_stderr`
-   in the ledger (activates the SE dethroning band + CRN re-scores already in
-   this repo), transcripts + artifacts published to the public bucket for
-   third-party re-grading.
-4. Median-of-3 convergence proof with three validators (F-MV).
-5. Finney cutover per the runbook (no testnet), commit-reveal re-enabled,
-   verified Pylon identity-write.
+Each item names the repo and the concrete change so anyone can pick it up.
 
-Not gating: starter kit adopting the `answer`/`abstain` slot and the public
-grader for local eval parity; MINER-FAQ still citing the 1% margin and judged
-grading (code is authoritative); 17 dependabot findings in this repo (3 high).
+1. Lock flip on dev. Blocked on the Chutes key TODO above. Then run the
+   enforcement smoke test from infra `docs/validator-deploy.md` (proxy must
+   deny every CONNECT; `curl localhost:11435/health` on the relay; a scored
+   run against a harness that requests a different model still gets
+   `Qwen/Qwen3-32B-TEE` served).
+2. Noise-floor calibration at Qwen3-32B. Submit the unmodified starter-kit
+   baseline through `POST /v1/score` on the dev VM for 30 distinct seeds at
+   `run_size=full`, then compute the between-seed composite stddev. It must
+   clear the 0.05 relative KOTH margin (`VALIDATOR_KOTH_MARGIN`,
+   `ditto/validator/config.py`); if it does not, widen the margin or grow the
+   full profile. Grading contributes zero variance now, so the number is pure
+   dataset + harness-execution spread. Also refreshes the 13.6 s/case latency
+   figure for 32B.
+3. Platform (ditto-platform repo): finish the `/validator/queue` to
+   `/validator/job` ticket migration (contract in this repo's
+   `ditto/api_models/validator.py`); add `composite_stderr` per ledger entry
+   on `GET /api/v1/scoring/scores` (this repo's SE dethroning band and CRN
+   re-score code are already wired and inert until it appears); publish each
+   run's transcript + dataset artifact to a public GCS bucket (dittobench-api
+   writes artifacts wherever `DITTOBENCH_ARTIFACT_DIR` points; the bucket is
+   the drop-in replacement).
+4. Median-of-3 proof: stand up two more scoring validators (any mix of
+   relay-backed hosts; `VALIDATOR_ENABLE_SCORING=true`,
+   `VALIDATOR_ENABLE_WEIGHTS=false`), let the platform lease all three
+   tickets per agent, and confirm identical composites in the ledger. Any
+   spread beyond gate 2's band means a gateway mismatch.
+5. Finney cutover per infra `docs/cutover-runbook.md` (no testnet):
+   register on netuid 118, re-enable commit-reveal, verify the Pylon
+   identity-write path sets weights on chain.
+
+Not gating, open for pickup:
+
+- Starter kit parity: populate `answer`/`abstain` in `src/baseline.rs`, and
+  replace the local LLM judge (`src/judge.rs`, used by `evaluate`/`practice`
+  in `src/eval.rs`) with the deterministic rules from
+  `dittobench-datagen/grade`, so local scores match on-chain scores exactly.
+  Add the two `RunResponse` fields to the kit's `PROTOCOL.md` and
+  `src/protocol.rs`.
+- Doc drift: MINER-FAQ still cites the 1% margin and judge-based grading;
+  code is authoritative (margin 0.05, judge-free).
+- 17 open dependabot findings in this repo (3 high).
 
 ## Watch items
 
