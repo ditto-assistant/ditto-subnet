@@ -1,197 +1,125 @@
-# SN118 validator brief: current state and next steps (2026-07-10)
+# SN118 validator brief (2026-07-10)
 
-Audience: the lead independent validator, as the briefing to relay to other
-independent validators. It covers what the pipeline is today, what changed this
-week, what each validator role does now and at mainnet, and what is still in
-flight. The engineering-facing critical path lives in
-[ROAD-TO-PRODUCTION.md](ROAD-TO-PRODUCTION.md); this document is the
-validator-facing view and defers to it where they overlap. Doc pointers are at
-the end.
+For the lead independent validator, to relay to other validators. Engineering
+critical path: [ROAD-TO-PRODUCTION.md](ROAD-TO-PRODUCTION.md). Doc index at the
+end.
 
-## TL;DR to relay
+## Facts to relay
 
-1. Scoring is now fully deterministic. There is no LLM judge, no validator-side
-   API key, and no grading noise in the k=3 median. A score is a pure function
-   of (seed, transcript), and anyone can re-grade a published transcript
-   offline from the public generator module.
-2. The hardware floor for scoring validators collapsed. The locked harness
-   model is Qwen3-32B: one 24 GB GPU self-hosted, or zero GPUs via the
-   model-relay backed by Chutes (SN64) TEE inference. Weights-only validators
-   still need no GPU and no key.
-3. The full loop runs unattended end to end on the dev localnet, and the
-   migration target is finney netuid 118 directly (no testnet). The gates are
-   listed below.
-4. bench_version is 2 and does not move until after production launch; all
-   pre-production hardening has shipped under it.
+1. Scoring is deterministic. No LLM judge, no validator-side API key. A score
+   is a pure function of (seed, transcript); anyone can re-grade a published
+   transcript offline with the public `dittobench-datagen` module (v0.4.0).
+2. The fleet standard for the locked model is **Chutes FP8**:
+   `Qwen/Qwen3-32B-TEE`, served in attested Intel TDX with per-token model
+   verification, reached through the local `model-relay`. A scoring validator
+   needs zero GPUs; at Chutes' Qwen3-32B pricing ($0.104/M input, $0.416/M
+   output) a full run's 10^5-10^6 tokens costs under $0.50. Local Ollama/vLLM
+   remains a supported fallback but does not bit-match FP8, so it must not mix
+   with relay-backed validators in the same k=3 set.
+3. Weights-only validators need no GPU, no key, no benchmark data. Env:
+   [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md). KOTH knobs are consensus
+   parameters (margin 0.05, champion share 0.9, tail 4); run defaults.
+4. bench_version stays 2 until after launch. Dataset hashes moved with datagen
+   v0.4.0 on 2026-07-10; older cached hashes are stale.
 
-## The pipeline in one diagram
+## Pipeline
 
 ```
-miner: fork starter-kit -> edit baseline.rs -> local eval -> hosted practice
-   |
-   |  ditto upload (signed tarball + on-chain eval fee)
-   v
-ditto-platform: payment verify -> store -> screener gate (docker build + /health)
-   |  k=3 tickets, each pinning (seed, dataset_sha256, run_size, deadline);
-   |  seed derived from an on-chain block hash fixed AFTER the miner commits
-   v
-3 scoring validators -> dittobench-api POST /v1/score on their own hosts:
-   regenerate dataset from seed (hash must match, else fail loudly)
-   -> docker-build the crate -> /seed -> /run per case (observed execution)
-   -> deterministic grading -> signed ScoreReport
-   v
-platform ledger (median of 3) -> weights-only validators fold KOTH
-   -> put_weights via Pylon -> Bittensor chain
+miner: starter-kit fork -> local eval -> hosted practice (keyless)
+  -> ditto upload (signed tarball + on-chain fee)
+platform: payment verify -> screener (docker build + /health)
+  -> k=3 tickets pinning (seed, dataset_sha256, run_size, deadline);
+     seed from an on-chain block hash fixed after the miner commits
+validator (x3): dittobench-api /v1/score
+  -> regenerate dataset (hash mismatch fails loudly) -> build crate in sandbox
+  -> run cases (observed execution) -> deterministic grade -> signed report
+platform: median of 3 -> ledger -> weights-only validators fold KOTH
+  -> put_weights via Pylon -> chain
 ```
 
-Repos: `dittobench-datagen` (public generator + grader, single source of
-truth), `dittobench-api` (private scoring engine; also the hosted practice
-endpoint), `ditto-platform` (intake, queue, ledger, leaderboard),
-`ditto-subnet` (this repo: miner CLI, validator and screener workers),
-`ditto-harness` + `dittobench-starter-kit` (public miner stack).
+## Scoring, concretely
 
-## What changed this week (all merged and deployed)
+- Tool cases: 0.4 name-F1 + 0.4 arg-F1 + 0.2 order/extra-call discipline, on
+  the validator-observed trajectory. Unobserved observable cases cap at 0.5.
+  Result-usage cases also require the served needle value in the answer.
+- Memory cases: graded per `answer_kind` (value, number, list, ordered_list,
+  duration, reversal, decline) against the response's `answer` slot with
+  `final_text` fallback. Zeroed by: any forbidden value (isolation leak,
+  injection payload, canary bait), any distractor value (wrong same-attribute
+  value, or a pool value on a decline case), or abstaining on an answerable
+  case.
+- Composite: 0.5 tool_mean + 0.5 memory_mean, times the observed
+  tool-efficiency factor (≤1). Latency is measured and advisory.
+- Signature: sr25519 over `hotkey:agent_id:run_id:composite:seed`, verified by
+  the platform at write time. Ledger: `GET /api/v1/scoring/scores`.
 
-Judge-free scoring (dittobench-api 782853c, dittobench-datagen v0.4.0):
+## Infrastructure state (dev VM, ditto-validator-dev)
 
-- Memory cases carry typed grading data (`answer_kind`, `answer_items`,
-  `distractor_answers`) and grade deterministically: value, number, list,
-  ordered list, duration, reversal, and decline checks, with distractor and
-  forbidden-value zeroing. The grader is the public
-  `dittobench-datagen/grade` package.
-- Tool cases score their deterministic trajectory accuracy (0.4 name-F1 +
-  0.4 arg-F1 + 0.2 order and extra-call discipline, observed execution,
-  needle checks). The judged quality half is gone: under the model lock every
-  miner runs the same model, so it measured the model, not the miner.
-- `RunResponse` gained an optional `answer` slot and `abstain` flag
-  (additive; prose containment is the fallback, old harnesses keep scoring).
-- Removed outright: judge prompts, judge models and the audit slice, the
-  judge outage gate, judge prompt-injection as an attack class, and the
-  per-request OpenRouter key. The composite stays
-  0.5 tool + 0.5 memory, times the tool-efficiency factor.
+Live now:
 
-Locked model shrink + Chutes gateway:
+- C-ISO egress enforcement: isolated `ditto-sandbox` network
+  (172.31.240.0/24), fail-closed CONNECT proxy, DOCKER-USER firewall.
+  Verified active 2026-07-10.
+- dittobench-api on the judge-free build (converged from main).
+- Validator worker, screener, and Pylon identity sidecar on dev localnet;
+  full pipeline runs unattended; champion selected by Yuma consensus.
 
-- `HARNESS_MODEL` default is now `qwen/qwen3-32b` (was Qwen2.5-72B).
-  Judge-free scoring removed the last reason for a large model, and a smaller
-  model differentiates retrieval quality at least as well.
-- New `model-relay` binary (dittobench-api `cmd/model-relay`): a GPU-less
-  gateway that forces the model field to the locked id and holds the
-  operator's Chutes key outside the sandbox. Lock semantics identical to a
-  local gateway. Chutes serves `Qwen/Qwen3-32B-TEE` in attested Intel TDX
-  with per-token model verification, at well under $1 per full scoring run.
-- The lock's owned env keys now include the Chutes and OpenAI provider
-  selectors, so a crate cannot route around the locked model through any
-  supported provider.
-- Miner side: the starter kit gained `DITTOBENCH_PROVIDER=chutes`
-  (starter-kit PR #11, rebased and merged).
+Staged in infra (`feat/validator-role-split`), flips on at the first converge
+after the Chutes key exists:
 
-Verification: keyless end-to-end runs (reference harness, small and medium
-profiles, every case category) produced byte-identical per-case scores across
-repeated runs of one seed. All suites green across the three Go/Rust repos.
+- `dittobench_model_lock: true`: sandbox scores against `Qwen/Qwen3-32B-TEE`
+  only, egress allowlist derives to empty (deny-all CONNECT), no key in any
+  run.
+- `ditto-model-relay` unit on :11435: pins the model field, injects the Chutes
+  key from Secret Manager, forwards to `llm.chutes.ai`. Embeddings stay on the
+  VM's Ollama at :11434 (`HARNESS_EMBED_URL`).
 
-## Current state by component
+**TODO (Nick):** create the Chutes API key and store it as the
+`validator-chutes-key` Secret Manager value in `ditto-app-dev`:
+`printf '%s' 'cpk_...' | gcloud secrets create validator-chutes-key
+--data-file=- --project ditto-app-dev`. Then re-converge
+(`ansible/playbooks/gcp-validator.yml`); the lock and relay activate
+themselves.
 
-| Component | State |
-|---|---|
-| dittobench-datagen | Public, MIT, v0.4.0. Non-LLM, byte-reproducible from (seed, bench_version). Known vector pinned in CI. |
-| dittobench-api | Judge-free scorer merged and auto-deployed; hosted practice endpoint live and keyless. Docker build path runs on validator hosts only. |
-| ditto-platform | Intake, payment verify, screener, k=3 ticket leasing, signed score ledger, public leaderboard endpoints. |
-| ditto-subnet worker | Role-split scoring/weights loops, KOTH fold (margin 0.05, champion 0.9, tail 4), Pylon weight sink, commit-reveal aware. |
-| starter kit | v2 parity + Chutes provider. Local eval still uses its own local judge (parity follow-up below). |
-| Chain | Dev localnet runs the full loop unattended; a champion has been selected by real Yuma consensus. Production netuid 118 not yet live. |
+## Remaining gates to finney (validator-visible)
 
-## What validators do now
+1. Chutes key + lock flip on dev (above), then the enforcement smoke test in
+   infra `docs/validator-deploy.md`.
+2. Noise-floor calibration at Qwen3-32B: 30 seeds, one real harness, confirm
+   between-seed composite sigma clears the 0.05 KOTH margin. Grading
+   contributes zero; what remains is dataset + harness-execution variance.
+3. Platform: `/validator/job` ticket migration complete, `composite_stderr`
+   in the ledger (activates the SE dethroning band + CRN re-scores already in
+   this repo), transcripts + artifacts published to the public bucket for
+   third-party re-grading.
+4. Median-of-3 convergence proof with three validators (F-MV).
+5. Finney cutover per the runbook (no testnet), commit-reveal re-enabled,
+   verified Pylon identity-write.
 
-Weights-only (the role most independents run):
-
-- No GPU, no LLM key, no benchmark answers. Read the public ledger, fold
-  weights deterministically, submit via Pylon. Env in
-  [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md).
-- The KOTH knobs are consensus parameters; run defaults unless a change is
-  announced. Deviation gets clipped by Yuma.
-- Verify, don't trust: `GET /api/v1/scoring/scores` is self-verifying
-  (sr25519 over `hotkey:agent_id:run_id:composite:seed`), and any published
-  transcript can now be re-graded offline with dittobench-datagen. GPU-less
-  spot-audits of grading are possible today; re-executing a run to audit the
-  transcript itself needs one 24 GB GPU or a Chutes key.
-
-Scoring validators (k=3 quorum members):
-
-- Pick a gateway backend and standardize with the fleet:
-  A) Ollama `qwen3:32b-q4_K_M` on one 24 GB card, digest-matched fleet-wide.
-  B) vLLM with a pinned HF revision.
-  C) model-relay + Chutes (no GPU).
-  The quantization is part of the consensus: FP8 on Chutes and Q4 locally do
-  not bit-match each other, so the fleet picks ONE option for scored runs.
-  Details in [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md).
-- Do not flip `DITTOBENCH_MODEL_LOCK=1` until the egress firewall and gateway
-  are provisioned together (dittobench-api docs/model-lock.md and
-  docs/sandbox-egress-hardening.md).
-
-## Next steps, in order
-
-Validator-relevant gates to production (the full ordered checklist is
-ROAD-TO-PRODUCTION.md §2; items here are the ones validators see or act on):
-
-1. Fleet decision: one consensus gateway option (A local Q4 vs C Chutes FP8)
-   and, for A/B, matching artifact digests across all scoring validators.
-2. Provision the lock: gateway + egress firewall + `DITTOBENCH_MODEL_LOCK=1`
-   on every scoring host, `openrouter.ai` dropped from the egress allowlist.
-   This removes the last key from the pipeline.
-3. Noise-floor calibration at Qwen3-32B: a 30-seed run with a real harness to
-   reconfirm between-seed composite sigma against the 0.05 KOTH margin.
-   Grading noise is now zero, so whatever remains is dataset plus
-   harness-execution variance.
-4. Platform: finish the queue-to-ticket (`/validator/job`) migration, surface
-   `composite_stderr` in the ledger (activates the SE-aware dethroning band
-   and CRN re-scores already wired in this repo), and publish per-run
-   transcripts and dataset artifacts to the public bucket so third parties
-   can exercise the offline re-grade path.
-5. Median-of-3 proof: three validators converging on the KOTH champion
-   (ROAD-TO-PRODUCTION F-MV), now with grading noise structurally at zero.
-6. Finney migration per the cutover runbook (no testnet), commit-reveal
-   re-enabled on production, verified Pylon identity-write.
-
-Parity and cleanup (not launch-gating):
-
-7. Starter kit: adopt the `answer`/`abstain` slot in baseline.rs and replace
-   the kit's local LLM judge with the public deterministic grader, so local
-   `evaluate`/`practice` matches on-chain grading exactly.
-8. Doc drift sweep: MINER-FAQ still cites the 1% margin and judge-based
-   grading in places; the starter kit's PROTOCOL.md copy needs the
-   answer-slot fields. Code is authoritative until then.
-9. Chutes hardening if option C is chosen: a deploy-our-own-chute guarantee
-   for catalog stability, a scoped key, and periodic attestation checks. The
-   relay makes the backend swappable back to local GPUs with no other change.
-10. Repo hygiene: 17 open dependabot findings in this repo (3 high); recent
-    doc pushes to main used admin bypass of the PR rule and can get
-    retroactive review. Superseded: dittobench-api PR #11 (closed with a
-    landing map) and the 2026-07-02 snapshot in NEXT-STEPS.md where this
-    brief and ROAD-TO-PRODUCTION disagree with it.
+Not gating: starter kit adopting the `answer`/`abstain` slot and the public
+grader for local eval parity; MINER-FAQ still citing the 1% margin and judged
+grading (code is authoritative); 17 dependabot findings in this repo (3 high).
 
 ## Watch items
 
-- Chutes is a third-party dependency inside the scoring loop under option C:
-  catalog churn, serving-stack upgrades, and uptime all matter. TEE
-  attestation makes the serving observable; the relay makes it swappable.
-- Harness-execution variance is now the ONLY cross-validator noise source. If
-  k=3 medians disagree beyond the calibrated band, suspect a gateway config
-  mismatch (quantization, serving stack), not grading.
-- bench_version 2 dataset hashes moved with datagen v0.4.0 (grading fields are
-  part of the artifact). Any cached hashes from before 2026-07-10 are stale.
+- Cross-validator noise is now harness execution only. k=3 disagreement beyond
+  the calibrated band means a gateway mismatch (backend, quantization), not
+  grading.
+- Chutes is a third-party dependency under the FP8 standard: catalog churn,
+  serving upgrades, uptime. TEE attestation makes serving observable; the
+  relay makes the backend swappable to local GPUs with no other change.
 
-## Doc index (what to send someone)
+## Doc index
 
 | Question | Doc |
 |---|---|
-| How do I run a weights-only validator | [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md) |
-| How do I host the locked model, what hardware | [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md) |
-| How is anything scored, exactly | dittobench-api docs/judge-determinism.md + PROTOCOL.md |
-| What is the model lock and how is it enforced | dittobench-api docs/model-lock.md + docs/sandbox-egress-hardening.md |
-| How do I reproduce a dataset or re-grade a run | dittobench-datagen README (public repo) |
-| What do miners build | dittobench-starter-kit README + PROTOCOL.md |
+| Run a weights-only validator | [RUNNING-A-VALIDATOR.md](RUNNING-A-VALIDATOR.md) |
+| Host the locked model / hardware | [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md) |
+| Exact grading rules | dittobench-api docs/judge-determinism.md + PROTOCOL.md |
+| Model lock enforcement | dittobench-api docs/model-lock.md + docs/sandbox-egress-hardening.md |
+| Provisioning runbook | infra docs/validator-deploy.md |
+| Reproduce a dataset / re-grade a run | dittobench-datagen README (public) |
+| What miners build | dittobench-starter-kit README + PROTOCOL.md |
 | Incentives, KOTH, anti-copy | [incentive-mechanism.md](incentive-mechanism.md) + [MINER-FAQ.md](MINER-FAQ.md) |
-| Scoring decentralization decision | dittobench-api docs/scoring-decentralization-brief.md |
 | Engineering critical path | [ROAD-TO-PRODUCTION.md](ROAD-TO-PRODUCTION.md) |
-| Live status endpoints | `GET /api/v1/public/leaderboard`, `/public/health`, `GET /api/v1/scoring/scores` (self-verifying ledger) |
+| Live status | `GET /api/v1/public/leaderboard`, `/public/health`, `GET /api/v1/scoring/scores` |

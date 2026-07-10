@@ -11,9 +11,12 @@ surface. Scoring itself is judge-free and fully deterministic (dittobench-api
 `docs/judge-determinism.md`), so there is no judge model, no validator-side
 LLM key, and grading contributes zero noise to the k=3 median.
 
-The locked model is **Qwen3-32B** (`HARNESS_MODEL=qwen/qwen3-32b`). The harness
-reaches it from inside the eval sandbox through an OpenAI-compatible gateway
-you host. Three backends work; pick one:
+The locked model is **Qwen3-32B**. The harness reaches it from inside the eval
+sandbox through an OpenAI-compatible gateway you host. The fleet standard is
+**Option C (model-relay + Chutes FP8, `Qwen/Qwen3-32B-TEE`)**: zero GPUs, one
+pinned serving stack for every validator by construction, hardware-attested.
+Options A/B are self-hosted fallbacks; they do not bit-match FP8 and must not
+mix with relay-backed validators in the same k=3 set.
 
 ## Hardware requirements
 
@@ -23,9 +26,9 @@ model. Option C needs no GPU at all.
 
 | Option | Backend | GPUs |
 |---|---|---|
-| A | Ollama, Qwen3-32B Q4_K_M (~20 GB weights) | one 24 GB card (3090/4090/L4) |
-| B | vLLM, GPTQ/AWQ 4-bit | one 24 GB card; bf16 needs ~65 GB (1x80 GB or 2x48 GB) |
-| C | `model-relay` fronting Chutes (`Qwen/Qwen3-32B-TEE`) | none |
+| C (fleet standard) | `model-relay` fronting Chutes (`Qwen/Qwen3-32B-TEE`, FP8) | none |
+| A (fallback) | Ollama, Qwen3-32B Q4_K_M (~20 GB weights) | one 24 GB card (3090/4090/L4) |
+| B (fallback) | vLLM, GPTQ/AWQ 4-bit | one 24 GB card; bf16 needs ~65 GB (1x80 GB or 2x48 GB) |
 
 Host besides the GPUs (A/B): 32 GB+ system RAM, 60 GB+ free disk, and the same
 host as the eval sandbox so gateway latency stays negligible. Cases run
@@ -43,8 +46,8 @@ exact weights file, not just the model id:
   quantization fleet-wide.
 - Option C: Chutes serves one pinned artifact (`root: Qwen/Qwen3-32B-FP8`) in
   attested TEEs, so every relay-backed validator gets the same serving stack by
-  construction. Note FP8 on Chutes will not bit-match a local Q4_K_M validator;
-  the fleet standardizes on ONE option for scored runs.
+  construction. This is the fleet standard for scored runs; A/B validators do
+  not bit-match it and run practice or fallback only.
 - Treat a quantization change like a model change: coordinated bump plus a
   bench-version re-score when it affects scores.
 
