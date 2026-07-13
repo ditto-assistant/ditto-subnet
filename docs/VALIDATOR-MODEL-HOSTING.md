@@ -11,18 +11,17 @@ Grading is judge-free and deterministic (dittobench-api
 `docs/judge-determinism.md`), so there is no judge model and no validator-side
 LLM key; grading adds zero noise to the k=3 median.
 
-The locked model is **Qwen3-32B**. The harness reaches it from inside the eval
-sandbox over an OpenAI-compatible gateway you host. The fleet standard is
-**model-relay fronting Chutes** (`Qwen/Qwen3-32B-TEE`, FP8, hardware-attested):
-zero GPUs and one pinned serving stack for every validator by construction.
-Options A/B are self-hosted GPU fallbacks; they do not bit-match FP8, so do not
-mix them with relay-backed validators in the same k=3 set.
+The locked model is **Qwen3-32B**, served through **Chutes** as
+`Qwen/Qwen3-32B-TEE` (FP8, hardware-attested). Every validator uses the same
+Chutes-served artifact, so no GPU is needed and scores bit-match across the fleet
+by construction. You run dittobench-api's `cmd/model-relay` as a thin local
+gateway: the eval sandbox reaches the relay, and the relay forwards to Chutes.
 
 ## Hardware requirements
 
 One host runs everything: the validator worker, its co-located dittobench-api
-scorer (which `docker build`s and runs each miner crate in a sandbox), and the
-gateway. The fleet-standard floor (Option C, no GPU):
+scorer (which `docker build`s and runs each miner crate in a sandbox), the relay,
+and a small local embeddings model. No GPU.
 
 | Resource | Floor |
 |---|---|
@@ -30,75 +29,15 @@ gateway. The fleet-standard floor (Option C, no GPU):
 | RAM | 16 GB |
 | Disk | 80 GB+ free |
 
-Disk is dominated by the Docker build cache and per-submission images, not the
-model. The chat model is served remotely in Chutes' TEE, so no GPU is needed;
-the small embedding model runs locally on CPU.
+Disk is dominated by the Docker build cache and per-submission images. Cases run
+sequentially, so single-request latency matters more than batch throughput.
 
-Self-hosted gateways (Options A/B) add a **24 GB GPU** (3090/4090/L4) on the same
-host for the 4-bit weights (~20 GB). vLLM at bf16 instead needs ~65 GB VRAM
-(1x80 GB or 2x48 GB). The locked model is a consensus parameter, so you cannot
-drop to a smaller model to fit a smaller card.
+## Run the relay (chat)
 
-Cases run sequentially, so single-request latency matters more than batch
-throughput. Keep the gateway on the sandbox host so gateway latency is
-negligible.
-
-## Pin the exact artifact (quantization is part of the consensus)
-
-Two validators serving "the same model" at different quantizations produce
-different logits and disagree at argmax ties, so the consensus artifact is the
-exact weights file, not just the model id:
-
-- Option A (Ollama): pull the explicit quantization tag and record the digest
-  (`ollama show`); digests must match across the fleet.
-- Option B (vLLM): pin the Hugging Face revision (commit hash) and agree on one
-  quantization fleet-wide.
-- Option C (relay): Chutes serves one pinned artifact (`Qwen/Qwen3-32B-FP8`) in
-  attested TEEs, so every relay-backed validator gets the same stack by
-  construction. A/B do not bit-match it and run practice or fallback only.
-
-Treat a quantization change like a model change: a coordinated bump plus a
-bench-version re-score when it moves scores.
-
-## Topology
-
-```
-                          ┌────────────────────────── validator host ──┐
-  eval sandbox (harness) ─┤ host.docker.internal:11434 ──► gateway      │
-                          │   (Ollama / vLLM / model-relay ──► Chutes)  │
-                          └─────────────────────────────────────────────┘
-```
-
-The sandbox reaches the gateway at `host.docker.internal:11434` (a `NO_PROXY`
-bypass allows this; the egress firewall drops everything else).
-
-## Option A: Ollama (simplest self-hosted)
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama serve                       # or a systemd service
-ollama pull qwen3:32b-q4_K_M       # explicit quantization tag
-ollama show qwen3:32b-q4_K_M       # record the digest; must match fleet-wide
-```
-
-Pin `num_gpu`, `num_thread`, and `num_ctx` per host: thread count and the
-GPU-layer split change the reduction order. This only affects the harness's own
-sampling now; grading is deterministic regardless.
-
-## Option B: vLLM (higher throughput)
-
-```bash
-pip install vllm
-vllm serve Qwen/Qwen3-32B --revision <pinned-commit> --port 11434 --enforce-eager
-```
-
-## Option C: model-relay + Chutes (no GPU, fleet standard)
-
-Run dittobench-api's `cmd/model-relay` as the gateway. It terminates the
-sandbox's requests locally, forces the model id to the locked one, injects your
-Chutes key, and forwards to Chutes' TEE catalog. The sandbox never holds the key
-and cannot pick the model, so the lock behaves exactly like a local gateway. The
-relay serves chat; a local Ollama serves embeddings (see the wiring below).
+`cmd/model-relay` terminates the sandbox's requests locally, forces the model id
+to the locked one, injects your Chutes key, and forwards to Chutes' TEE catalog.
+The sandbox never holds the key and cannot pick the model, so the lock behaves
+exactly like a local gateway.
 
 ```bash
 RELAY_API_KEY=cpk-... \
@@ -109,10 +48,41 @@ PORT=11435 \
 
 Chutes serves the model in Intel TDX trust domains with per-token verification
 bound to the exact HF revision, at roughly $0.10/M input and $0.42/M output
-tokens; a full scoring run is 10^5 to 10^6 tokens, well under a dollar.
-Tradeoffs: a third-party dependency in the scoring loop (the relay keeps the
-backend swappable to Option A with no other change) and FP8 serving noise in the
-harness's outputs, absorbed by k=3.
+tokens; a full scoring run is 10^5 to 10^6 tokens, well under a dollar. It serves
+one pinned artifact (`Qwen/Qwen3-32B-FP8`), so quantization is handled for you and
+every validator is byte-identical. The tradeoff is a third-party dependency in the
+scoring loop, whose FP8 serving noise k=3 absorbs.
+
+Keep the Chutes key in a secret manager and inject it as `RELAY_API_KEY`; it is
+never exposed to the sandbox.
+
+## Embeddings
+
+The relay serves chat only. The harness's embeddings run on a small local model
+served by Ollama on CPU, reached at `host.docker.internal:11434` while the chat
+relay sits on `11435`:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama serve                       # or a systemd service
+```
+
+Pull the embeddings model your dittobench-api run config names (see
+`docs/model-lock.md`); it is small and needs no GPU.
+
+## Topology
+
+```
+                          ┌───────────────────────── validator host ──┐
+                          │  :11435  model-relay ──► Chutes TEE (chat)  │
+  eval sandbox (harness) ─┤                                            │
+                          │  :11434  Ollama (embeddings, CPU)           │
+                          └─────────────────────────────────────────────┘
+```
+
+The sandbox reaches both endpoints at `host.docker.internal` through a `NO_PROXY`
+bypass; the egress firewall drops everything else, and only the relay process may
+reach Chutes upstream.
 
 ## Wiring the validator
 
@@ -120,26 +90,16 @@ Set on the dittobench-api scorer service (see dittobench-api `docs/model-lock.md
 
 ```
 DITTOBENCH_MODEL_LOCK=1
-
-# A/B (local gateway):
-HARNESS_MODEL=qwen3:32b-q4_K_M                 # the id as the gateway knows it
-HARNESS_PROVIDER=ollama
-HARNESS_GATEWAY_URL=http://host.docker.internal:11434
-
-# C (relay + Chutes): chat to the relay (11435), embeddings on local Ollama (11434)
-# HARNESS_MODEL=Qwen/Qwen3-32B-TEE
-# HARNESS_PROVIDER=chutes
-# HARNESS_GATEWAY_URL=http://host.docker.internal:11435
-# HARNESS_EMBED_URL=http://host.docker.internal:11434
+HARNESS_MODEL=Qwen/Qwen3-32B-TEE
+HARNESS_PROVIDER=chutes
+HARNESS_GATEWAY_URL=http://host.docker.internal:11435    # chat: the relay
+HARNESS_EMBED_URL=http://host.docker.internal:11434      # embeddings: local Ollama
 ```
 
-`HARNESS_MODEL` must name the model as the gateway knows it; the canonical id
-`qwen/qwen3-32b` names the same locked model in docs and score reports.
-
-Drop `openrouter.ai` from `EGRESS_PROXY_ALLOW` so the gateway is the only
-reachable LLM (the harness fails closed otherwise). See the Sandbox egress
-section in dittobench-api `docs/model-lock.md`. On Option C only the relay may
-reach Chutes; the sandbox still reaches only the relay.
+Also drop `openrouter.ai` from `EGRESS_PROXY_ALLOW` so the relay is the only path
+to an LLM (the harness fails closed otherwise). See the Sandbox egress section in
+dittobench-api `docs/model-lock.md`. The canonical id `qwen/qwen3-32b` names the
+same locked model in docs and score reports.
 
 ## Verifying reproducibility
 
@@ -147,6 +107,14 @@ Grading is deterministic, so this is a one-command check: score the same fixed
 transcript twice (or on two validators) and diff the per-case scores; they must
 be byte-identical. Residual cross-validator composite spread comes only from the
 harness's own execution against the gateway, which k=3 absorbs.
+
+## Self-hosting the model (non-standard)
+
+Serving the locked model on your own GPU instead of Chutes is supported by the
+engine but is not the fleet standard: a self-hosted gateway does not bit-match
+Chutes' FP8, so it cannot share a k=3 set with relay-backed validators, and you
+take on pinning the exact quantization fleet-wide. Treat it as local practice
+only. See dittobench-api `docs/model-lock.md`.
 
 ## References (dittobench-api)
 

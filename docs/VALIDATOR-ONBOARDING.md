@@ -61,7 +61,7 @@ What it does not do:
 | A hotkey registered on SN118 with a `validator_permit` | The chain accepts weights only from permitted validators (stake above the permit threshold). |
 | The hotkey's signing source (wallet files or mnemonic) | Signs score reports and, on the SDK path, the `set_weights` extrinsic. The coldkey is never needed on the box. |
 | A co-located dittobench-api instance on a Docker-capable host | Builds and scores each submission. See the [dittobench-api](https://github.com/ditto-assistant/dittobench-api) repo. |
-| A model gateway serving the locked Qwen3-32B | The harness is scored against one locked model. Host it with a Chutes relay key (no GPU) or a local GPU; see [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md). |
+| A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay, no GPU. See [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md). |
 | Outbound reach to the platform API and a chain endpoint (Pylon or a subtensor node) | All communication is outbound; the worker listens on nothing. |
 
 Keep the mnemonic or wallet key and any gateway key (the Chutes relay key) in a
