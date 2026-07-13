@@ -117,10 +117,10 @@ point the worker at it with:
 
 | Env | Meaning |
 | --- | --- |
-| `PYLON_URL` | Base URL of your Pylon service (e.g. `http://localhost:8000`). |
-| `PYLON_IDENTITY_NAME` | The Pylon identity holding this validator's hotkey. |
+| `PYLON_URL` | Base URL of your Pylon service (Compose defaults to `http://pylon:8000`). |
+| `PYLON_IDENTITY_NAME` | The Pylon identity holding this validator's hotkey (Compose defaults to `ditto`). |
 | `PYLON_IDENTITY_TOKEN` | The Pylon token, authorizing `put_weights`. |
-| `PYLON_OPEN_ACCESS_TOKEN` | Same token; lets the worker self-check its permit. |
+| `PYLON_OPEN_ACCESS_TOKEN` | Optional separate read token. Compose defaults it to `PYLON_IDENTITY_TOKEN`. |
 
 ## 4. Model gateway
 
@@ -171,9 +171,10 @@ dittobench-api backed by an isolated rootless Docker daemon for sandbox builds,
 and the ditto-subnet validator worker. A small internal proxy preserves sandbox
 access to the model relay and embedder running on the physical host. Compose
 reads the single `.env` created in section 3 and passes each service only the
-values it needs. The Pylon settings name the wallet and one random token that guards
-both open-access reads and the identity write. Reuse the same string for both;
-only split them if you hand the read token to a separate read-only consumer.
+values it needs. Compose derives Pylon's network, netuid, wallet, and hotkey from
+the validator settings and configures the identity as `ditto`. One random token
+guards both open-access reads and the identity write by default; only set
+`PYLON_OPEN_ACCESS_TOKEN` if you hand a separate token to a read-only consumer.
 
 Generate the token with OpenSSL:
 
@@ -185,16 +186,8 @@ Store it in a secret manager; do not commit it. If you do split read from write,
 run the command twice and use a different output for each token.
 
 ```sh
-PYLON_BITTENSOR_NETWORK=finney
-PYLON_OPEN_ACCESS_TOKEN=<random-token>
-
-PYLON_IDENTITIES=["ditto"]
-PYLON_ID_DITTO_WALLET_NAME=<coldkey-name>
-PYLON_ID_DITTO_HOTKEY_NAME=<hotkey-name>
-PYLON_ID_DITTO_NETUID=118
-PYLON_ID_DITTO_TOKEN=<random-token>
-
-PYLON_DATABASE_PATH=/data/pylon.db   # persist in-flight submissions
+PYLON_IDENTITY_TOKEN=<random-token>
+# PYLON_OPEN_ACCESS_TOKEN=<separate-read-token>  # optional
 ```
 
 Bring up the stack from the repository root. Pylon and dittobench-api stay on
@@ -204,14 +197,12 @@ the private Compose network; the validator worker listens on no port.
 docker compose up -d
 ```
 
-Then point the worker at it (section 3 / your validator `.env`), reusing the
-identity name and the same token:
+Outside the root Compose stack, point the worker at Pylon explicitly:
 
 ```sh
 PYLON_URL=http://localhost:8000
 PYLON_IDENTITY_NAME=ditto
-PYLON_IDENTITY_TOKEN=<the same PYLON_ID_DITTO_TOKEN>
-PYLON_OPEN_ACCESS_TOKEN=<the same token>   # lets the worker self-check its permit
+PYLON_IDENTITY_TOKEN=<the token configured in Pylon>
 ```
 
 The identity hotkey must be the validator hotkey registered on SN118 with a
