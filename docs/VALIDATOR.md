@@ -158,7 +158,8 @@ docker compose ps
 
 The platform leases at most three live scoring tickets per submission. Three
 independent validators publish signed scores, and the platform finalizes the
-median. An expired ticket reopens automatically.
+median. Each ticket pins the dataset seed, dataset hash, and `full` run size, so
+validators evaluate the same workload. An expired ticket reopens automatically.
 
 Each validator reads the same public median-aggregated ledger and applies the
 deterministic king-of-the-hill fold in `ditto/validator/weights.py`. A challenger
@@ -178,17 +179,15 @@ The production defaults are already in `.env.example`. Common overrides are:
 
 | Env | Default | Meaning |
 | --- | --- | --- |
-| `VALIDATOR_RUN_SIZE` | `full` | Benchmark size; smaller values are for local plumbing only. |
 | `VALIDATOR_SWEEP_SECONDS` | `120` | Work-poll cadence. |
-| `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` | `2400` | Hard cap for one scoring run. |
-| `VALIDATOR_DITTOBENCH_MOCK` | `false` | Return a canned score; never enable on a real network. |
 | `VALIDATOR_LOG_LEVEL` | `INFO` | Worker log level. |
 | `WANDB_MODE` | `disabled` | Set to `online` with project/entity values for aggregate telemetry. |
 
-The one-hour production weight cadence, locked model, provider, thinking mode,
-SN118 mechanism values, and Pylon identity name are not operator choices. The
-worker also honors a longer on-chain rate limit if required. See `.env.example`
-for the complete environment reference.
+The full benchmark size, 2400-second scoring timeout, disabled mock mode,
+one-hour weight cadence, locked model, provider, thinking mode, SN118 mechanism
+values, and Pylon identity name are not operator choices. The worker also honors
+a longer on-chain rate limit if required. See `.env.example` for the complete
+environment reference.
 
 ## Development
 
