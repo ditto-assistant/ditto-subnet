@@ -27,8 +27,8 @@ services:
       - ~/.bittensor/wallets/:/root/.bittensor/wallets:ro
       - pylon-data:/data
 
-  # The scorer receives an isolated rootless Docker daemon. Compromise of the
-  # scorer or a miner sandbox cannot control the validator host daemon.
+  # The scorer receives an isolated nested Docker daemon. The validator host's
+  # Docker socket is never mounted, so the scorer cannot control the host daemon.
   sandbox-docker:
     build:
       context: .
@@ -38,9 +38,7 @@ services:
       DOCKER_HOST: tcp://127.0.0.1:2375
       DOCKER_TLS_CERTDIR: ""
     volumes:
-      - sandbox-docker-data:/home/rootless/.local/share/docker
-    extra_hosts:
-      - host.docker.internal:host-gateway
+      - sandbox-docker-rootful-data:/var/lib/docker
     healthcheck:
       test: ["CMD", "docker", "info"]
       interval: 5s
@@ -48,12 +46,11 @@ services:
       retries: 24
 
   # The embedding model the harness scores memory recall against. Runs on the
-  # host network so the sandbox-docker socat forwarder can reach it at
-  # host.docker.internal:11434. The model is pulled once into the volume.
+  # private Compose network. The sandbox-docker forwarder makes it available to
+  # inner sandboxes at host.docker.internal:11434.
   ollama:
     image: docker.io/ollama/ollama:0.6.8
     restart: unless-stopped
-    network_mode: host
     volumes:
       - ollama-data:/root/.ollama
     entrypoint:
@@ -71,14 +68,14 @@ services:
       retries: 30
 
   # The model-pinning gateway: fronts Chutes, forces the frozen Qwen3-32B model
-  # and thinking mode, and keeps the Chutes key out of the sandbox. On the host
-  # network so the socat forwarder reaches it at host.docker.internal:11435.
+  # and thinking mode, and keeps the Chutes key out of the sandbox. It stays on
+  # the private Compose network; the forwarder exposes it only to inner sandboxes
+  # at host.docker.internal:11435.
   model-relay:
     build:
       context: https://github.com/ditto-assistant/dittobench-api.git#4ee268309247ca4b497c4418df6640ed30b52cf0
       target: relay
     restart: unless-stopped
-    network_mode: host
     environment:
       RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY in .env}
       PORT: "11435"
@@ -106,7 +103,7 @@ services:
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
       # The model id, provider, and thinking mode are frozen in dittobench-api's
-      # code, not env. Only the gateway URLs (the host-side relay and Ollama,
+      # code, not env. Only the gateway URLs (the relay and Ollama sidecars,
       # reached via the sandbox-docker socat forwarder) are configurable.
       HARNESS_GATEWAY_URL: ${HARNESS_GATEWAY_URL:-http://host.docker.internal:11435}
       HARNESS_EMBED_URL: ${HARNESS_EMBED_URL:-http://host.docker.internal:11434}
@@ -175,5 +172,5 @@ services:
 
 volumes:
   pylon-data:
-  sandbox-docker-data:
+  sandbox-docker-rootful-data:
   ollama-data:

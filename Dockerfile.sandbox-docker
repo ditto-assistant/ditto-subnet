@@ -1,8 +1,6 @@
-FROM docker.io/library/docker:29-dind-rootless@sha256:371962f4344295a1eb185f1c9e62064bf4503a7beb8c6e73be3405500041784b
+FROM docker.io/library/docker:29-dind@sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515
 
-USER root
-RUN apk add --no-cache socat su-exec
+RUN apk add --no-cache socat
 COPY scripts/sandbox-docker-entrypoint.sh /usr/local/bin/sandbox-docker-entrypoint
-USER root
 
 ENTRYPOINT ["sandbox-docker-entrypoint"]

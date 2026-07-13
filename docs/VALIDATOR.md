@@ -76,7 +76,7 @@ What it does not do:
 | --- | --- |
 | Linux host: 4 vCPU, 16 GB RAM, 80 GB+ free disk | Runs the worker plus the co-located dittobench-api scorer; Docker sandbox builds dominate disk use. |
 | x86-64 CPU | The upstream Pylon image is currently published for `linux/amd64`. |
-| Docker Engine + Docker Compose v2 | The whole stack runs as Compose services (`docker compose up -d`): Pylon, the model gateway, the co-located [dittobench-api](https://github.com/ditto-assistant/dittobench-api) scorer with its rootless Docker sandbox, and the worker. |
+| Docker Engine + Docker Compose v2 | The whole stack runs as Compose services (`docker compose up -d`): Pylon, the model gateway, the co-located [dittobench-api](https://github.com/ditto-assistant/dittobench-api) scorer with its isolated Docker sandbox, and the worker. |
 | Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | `uv sync` installs the pinned environment (for the worker and CLI outside Compose). |
 | A hotkey registered on SN118 with a `validator_permit` | The chain accepts weights only from permitted validators (stake above the permit threshold). |
 | A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay; no GPU is needed. |
@@ -140,9 +140,9 @@ by the root `docker-compose.yml` (section 6):
   scoring.
 
 The miner sandbox reaches both at `host.docker.internal` (the `sandbox-docker`
-forwarder bridges the ports); it never gets a provider key or direct
-LLM-provider access. The only model setting you provide is the Chutes key the
-relay uses:
+forwarder bridges the private Compose network); it never gets a provider key or
+direct LLM-provider access. The only model setting you provide is the Chutes key
+the relay uses:
 
 ```sh
 RELAY_API_KEY=cpk-...   # in .env, used only by the relay
@@ -166,9 +166,9 @@ Pylon ships as a Docker image (`backenddevelopersltd/bittensor-pylon`). It reads
 worker authenticates to that identity to write weights.
 
 The root `docker-compose.yml` starts the complete validator stack: Pylon,
-dittobench-api backed by an isolated rootless Docker daemon for sandbox builds,
+dittobench-api backed by an isolated nested Docker daemon for sandbox builds,
 and the ditto-subnet validator worker. A small internal proxy preserves sandbox
-access to the model relay and embedder running on the physical host. Compose
+access to the model relay and embedder on the private Compose network. Compose
 reads the single `.env` created in section 3 and passes each service only the
 values it needs. Compose derives Pylon's network, netuid, wallet, hotkey, and
 identity (`ditto`) from the validator settings, so the one thing you set for
