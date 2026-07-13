@@ -93,8 +93,8 @@ or malformed.
 | `VALIDATOR_DITTOBENCH_API_URL` | Your co-located dittobench-api base URL. |
 
 The locked model is served from a gateway configured on the dittobench-api
-service, not the worker (see VALIDATOR-MODEL-HOSTING.md). `VALIDATOR_OPENROUTER_KEY`
-is legacy and needed only when the model lock is off.
+service, not the worker (see VALIDATOR-MODEL-HOSTING.md). The validator worker
+does not receive or forward model-provider credentials.
 
 ### Chain / weight path (pick one)
 

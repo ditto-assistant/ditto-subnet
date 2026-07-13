@@ -1,7 +1,7 @@
 """Async client for the hosted dittobench-api scoring engine.
 
 Drives the run_size pipeline over HTTP: ``POST /v1/submit`` with the platform's
-presigned ``tarball_url`` (mode B) + the BYOK OpenRouter key, then polls
+presigned ``tarball_url`` (mode B), then polls
 ``GET /v1/runs/{id}`` until the job is ``done`` and parses the ``ScoreReport``.
 
 The returned report is the platform :class:`ScoreReport` shape (the dittobench
@@ -55,7 +55,7 @@ class DittobenchClient:
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
-        Submits with the BYOK OpenRouter key, then polls until the run finishes.
+        Submits the scoring inputs, then polls until the run finishes.
         Raises :class:`DittobenchError` on a failed run or the overall timeout.
 
         ``tarball_sha256`` (the digest the platform registered at upload) is
@@ -111,7 +111,6 @@ class DittobenchClient:
         body: dict[str, object] = {
             "tarball_url": tarball_url,
             "run_size": run_size or self._config.run_size,
-            "openrouter_key": self._config.openrouter_key,
         }
         if tarball_sha256:
             body["tarball_sha256"] = tarball_sha256

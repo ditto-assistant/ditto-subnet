@@ -30,9 +30,6 @@ class ValidatorConfig:
     dittobench_api_url: str
     """Base URL of the hosted dittobench-api (Cloud Run)."""
 
-    openrouter_key: str
-    """BYOK OpenRouter key forwarded to dittobench-api's run_size pipeline."""
-
     run_size: str
     """dittobench run size: ``small`` | ``medium`` | ``full``."""
 
@@ -51,7 +48,7 @@ class ValidatorConfig:
     independent validators and the platform finalizes on the median. Splitting
     the roles (a scoring-only or weights-only instance) is an optional deployment
     knob, not a central scorer; a weights-only instance needs no dittobench-api
-    URL / OpenRouter key."""
+    URL."""
 
     enable_weights: bool
     """Run the weight path: fold the durable (median-aggregated) ledger and set
@@ -244,8 +241,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             f"VALIDATOR_RUN_SIZE must be small|medium|full, got {run_size!r}"
         )
 
-    # Mock mode bypasses dittobench-api, so its URL + OpenRouter key are
-    # optional (local end-to-end plumbing without a scoring engine).
+    # Mock mode bypasses dittobench-api, so its URL is optional (local
+    # end-to-end plumbing without a scoring engine).
     _truthy = {"1", "true", "yes"}
     dittobench_mock = os.environ.get("VALIDATOR_DITTOBENCH_MOCK", "").lower() in _truthy
     use_sdk_weights = os.environ.get("VALIDATOR_USE_SDK_WEIGHTS", "").lower() in _truthy
@@ -268,13 +265,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             "must be true"
         )
 
-    # dittobench-api + OpenRouter are only needed by the scoring half (and not in
-    # mock mode). A weights-only validator consumes the ledger and needs neither.
+    # dittobench-api is only needed by the scoring half (and not in mock mode).
+    # A weights-only validator consumes the ledger and does not need it.
     dittobench_api_url = os.environ.get("VALIDATOR_DITTOBENCH_API_URL", "")
-    openrouter_key = os.environ.get("VALIDATOR_OPENROUTER_KEY", "")
     if enable_scoring and not dittobench_mock:
         _require("VALIDATOR_DITTOBENCH_API_URL", dittobench_api_url)
-        _require("VALIDATOR_OPENROUTER_KEY", openrouter_key)
 
     # Pylon identity is only needed by the weight half's Pylon ``put_weights``
     # path; the SDK weight fallback signs with the local hotkey, and a
@@ -344,7 +339,6 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_PLATFORM_API_URL", "http://localhost:8000"),
         ),
         dittobench_api_url=dittobench_api_url,
-        openrouter_key=openrouter_key,
         run_size=run_size,
         dittobench_mock=dittobench_mock,
         enable_scoring=enable_scoring,
