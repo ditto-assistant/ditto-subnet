@@ -74,10 +74,13 @@ The validator hotkey (an SS58 address) is public.
 git clone https://github.com/ditto-assistant/ditto-subnet
 cd ditto-subnet
 uv sync
+cp .env.example .env
 ```
 
-Configuration is env-driven (`ditto/validator/config.py`); the worker fails fast
-at boot on anything missing or malformed.
+Edit `.env` with the settings for your validator, then load it through your
+shell or process supervisor. Configuration is env-driven
+(`ditto/validator/config.py`); the worker fails fast at boot on anything missing
+or malformed.
 
 ### Required
 
@@ -118,7 +121,7 @@ is legacy and needed only when the model lock is off.
 ## 4. Run it
 
 ```sh
-VALIDATOR_PLATFORM_API_URL=https://<platform-host> \
+VALIDATOR_PLATFORM_API_URL=https://platform-api.heyditto.ai/ \
 NETUID=118 \
 VALIDATOR_HOTKEY=<ss58> \
 VALIDATOR_WALLET_NAME=<coldkey-name> VALIDATOR_WALLET_HOTKEY=<hotkey-name> \
