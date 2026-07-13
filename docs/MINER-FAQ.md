@@ -4,9 +4,9 @@ Everything a miner needs to know about how SN118 works end to end: what you
 submit, how it flows through the pipeline, how it's scored, how emissions are
 decided, and what will get you flagged or banned.
 
-> Where things run today: the full pipeline runs on the dev localnet
-> (netuid 3) with a single team validator. Where a detail is dev-only or
-> changes on mainnet (finney, SN118), it's called out.
+> This guide describes SN118 in production: independent validators score
+> submissions and set weights, coordinated by the platform. Where a detail
+> differs on the dev localnet (netuid 3), it's called out.
 
 ---
 
@@ -174,8 +174,7 @@ uploaded → screening → screening_passed → evaluating → scored → live
 | `ath_pending_review` | A cross-miner near-duplicate hold: a human reviews before you can take the crown (§8). Never auto-banned. |
 | `banned` | Hotkey-level ban; upload rejected with code `1103` pre-payment. |
 
-The screener runs on the dev validator host; `uploaded → evaluating`
-promotion is automatic.
+The `uploaded → evaluating` promotion is automatic once the screener passes.
 
 ---
 
@@ -189,8 +188,8 @@ check:
    against what you uploaded.
 2. Checks `Dockerfile` at tarball root.
 3. `docker build` with the tarball piped in as the build context (BuildKit;
-   a `gh_token` build secret is provided so your crate can pull the private
-   `ditto-harness` dep).
+   a `gh_token` build secret is available if your crate pulls a private build
+   dependency).
 4. Runs the image (`--memory 2g --pids-limit 512`, port published on
    localhost) and polls `GET /health` every second until 2xx.
 5. Posts a signed verdict (`{screener_hotkey}:{agent_id}:{passed}`,
@@ -229,7 +228,8 @@ Each validator sweep (hourly by default), the validator:
 ### The score
 
 ```
-composite = 0.5 * tool_mean + 0.5 * memory_mean        # both in [0, 1]
+composite = (0.5 * tool_mean + 0.5 * memory_mean) * efficiency * consistency
+#           both means in [0, 1]; a canary miss disqualifies the run (score 0)
 ```
 
 - Tool case: deterministic trajectory + argument accuracy (0.4 name-F1 +
@@ -238,6 +238,10 @@ composite = 0.5 * tool_mean + 0.5 * memory_mean        # both in [0, 1]
 - Memory case: deterministic per-`answer_kind` grading (value, number,
   list, ordered list, duration, reversal, decline) with distractor and
   forbidden-value zeroing. No LLM judge anywhere.
+- Integrity gates: `efficiency` (penalizes burning far more tool calls than a
+  case needs) and `consistency` (metamorphic: equivalent phrasings must agree)
+  are bounded multipliers on the composite, and a canary miss (taking a planted
+  bait value) disqualifies the whole run.
 - The report also carries `median_ms` (latency), `n` (cases), and the
   `seed` used for data generation.
 
@@ -304,10 +308,10 @@ the signatures and the function, not any single operator or the (closed)
 platform API. The platform never computes champions or weights; that logic
 lives only validator-side, by design.
 
-Today a single team validator runs on the dev chain; scoring decentralizes
-as independent validators join. The scoring design uses k=3: each submission
-is independently scored by 3 validators and finalized as the median of 3,
-with validators folding weights from the ledger.
+Scoring uses k=3: each submission is independently scored by up to three
+validators and finalized on the median, and every validator folds weights from
+the public ledger. No single operator, and not the platform, decides your score
+or your weight.
 
 ---
 
@@ -321,7 +325,7 @@ defenses:
    undetected.
 2. Exact + heuristic checks at upload: cross-miner exact sha256 match and
    size/score heuristics.
-3. Two-channel content fingerprinting (live since 2026-07-05): both channels
+3. Two-channel content fingerprinting: both channels
    build MinHash sketches (a hashing method that estimates set overlap)
    compared by Jaccard similarity (intersection over union) and containment.
    - Lexical channel (platform, at upload): per-file line shingles with
@@ -422,8 +426,9 @@ local Ollama) for your own local practice.
 Every harness runs against the locked open-weight model (Qwen3-32B,
 `Qwen/Qwen3-32B-TEE` on the fleet-standard Chutes gateway). Per-case details
 (`case_id`, category, scores, latency, notes) exist on the `ScoreReport`, but
-only aggregates are published. The rubric that matters:
-0.5 × tool + 0.5 × memory.
+only aggregates are published. The rubric: a 0.5/0.5 tool-and-memory mean,
+scaled by the efficiency and consistency gates, with a canary miss
+disqualifying the run.
 
 **Q: Someone copied my harness: what protects me?**
 Your first-seen timestamp (immutable upload time), the 5% dethrone margin
@@ -440,39 +445,26 @@ review). Banned hotkeys are rejected at `/upload/check` (code `1103`) before
 any payment.
 
 **Q: Is commit-reveal on?**
-Off on the dev chain (weights apply directly). Commit-reveal changes nothing
-for miners except weight visibility timing.
+On finney it is enabled (the dev localnet runs with it off). Either way it
+changes nothing for miners except weight-visibility timing.
 
 **Q: Where do emissions actually come from?**
 Standard Bittensor: validators set weights → Yuma consensus → the subnet's
 per-block emission is split per the consensus weights, accruing as
-alpha (the subnet's emission token) to your hotkey. This is proven live on
-the dev chain (champion incentive = 1.0, alpha accruing).
+alpha (the subnet's emission token) to your hotkey.
 
 ---
 
-## 11. Current status & known caveats (2026-07-07)
+## 11. Known caveats
 
-- Live today (dev localnet, netuid 3): the full pipeline runs unattended,
-  non-mock, end to end: miner upload → screener (auto build-gate) → validator
-  → real DittoBench scoring → signed ledger → KOTH weights → on-chain
-  emissions. A real agent has produced a signed composite (0.522 at
-  `run_size=small`) that drove an accepted on-chain `set_weights`.
-- k=3 multi-validator scoring is implemented: the platform issues leased
-  `/validator/job` tickets to up to three distinct validators per submission,
-  each posts one signed score, and the platform finalizes on the median. Today
-  only the subnet owner's validator runs, so agents receive one score; scoring
-  decentralizes as independent validators join. The `/validator/job`,
-  `/agent/{id}/artifact`, and `/agent/{id}/score` endpoints are the shipped
-  names.
-- The sandbox enforces cost caps but has no egress allowlist today. The
-  deferred tar checks (manifest, dependency allowlist, schema diff) do not
-  gate today.
-- Fingerprint thresholds are conservative, so false holds are possible; holds
-  are human-reviewed.
-- Networks: everything runs against the dev chain today
-  (`--network local --chain-endpoint ws://…`); non-local networks use your
-  network's platform API URL.
+- The deferred tar checks (manifest, dependency allowlist, schema diff) are
+  stubs today: they print `DEFERRED` in `ditto verify` and do not gate. Don't
+  rely on their absence.
+- Fingerprint thresholds are conservative, so false holds are possible; every
+  hold is human-reviewed before any action.
+- The packaged `ditto` CLI and some deeper submission-time checks are landing
+  around launch; the platform's OpenAPI schema is the source of truth for the
+  exact fields at any moment.
 
 ### Sources (this repo unless noted)
 

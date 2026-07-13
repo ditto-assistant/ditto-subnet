@@ -132,7 +132,7 @@ class ValidatorConfig:
     koth_margin: float
     """Relative margin a challenger must beat the incumbent by to dethrone it.
 
-    ``0.01`` = 1%: a challenger becomes champion only if its composite exceeds the
+    ``0.05`` = 5%: a challenger becomes champion only if its composite exceeds the
     incumbent's by more than this. Ties + sub-margin gains keep the incumbent
     (first-seen wins), which is what makes a copy unprofitable."""
 

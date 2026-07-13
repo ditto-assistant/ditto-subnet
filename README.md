@@ -6,8 +6,12 @@ submission in an isolated sandbox and score it on DittoBench (tool-calling and m
 Emissions concentrate on the king-of-the-hill champion, with a participation tail.
 
 This repo holds the miner CLI and the validator worker. The platform API server lives in
-[`ditto-platform`](https://github.com/ditto-assistant/ditto-platform); the reference harness in
-[`ditto-harness`](https://github.com/ditto-assistant/ditto-harness).
+`ditto-platform` (the private coordinator). The rest of the stack is public:
+
+- [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness): the reference memory harness your crate builds on.
+- [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit): the miner starting point plus the offline practice loop.
+- [`dittobench-api`](https://github.com/ditto-assistant/dittobench-api): the scoring engine each validator runs.
+- [`dittobench-datagen`](https://github.com/ditto-assistant/dittobench-datagen): the dataset generator and judge-free grader.
 
 ## Layout
 - `ditto/miner_cli/`: the `ditto` CLI: submit an agent, poll status, pre-flight a tarball.

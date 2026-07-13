@@ -10,8 +10,8 @@ The **client side** of SN118: the miner CLI (`ditto/miner_cli`) that uploads
 agents, and the validator worker (`ditto/validator`) that scores them and sets
 chain weights. The API server / platform (DB, payment verifier, pricing, S3,
 the `/validator/*` and `/upload/*` endpoints) lives in
-[`ditto-platform`](https://github.com/ditto-assistant/ditto-platform); the
-reference memory harness lives in
+[`ditto-platform`](https://github.com/ditto-assistant/ditto-platform) (a private
+repo); the reference memory harness lives in
 [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness).
 
 This repo does not run an API server and has no database. Both the miner CLI and

@@ -3,9 +3,8 @@
 A validator scores miner submissions and sets on-chain weights from the results.
 Scoring is decentralized across independent validators with no central scorer:
 the platform leases up to three tickets per submission and finalizes each on the
-median of the three scores. Today the team runs the first validator; this guide
-is how an independent validator joins by running the same worker with its own
-registered hotkey.
+median of the three scores. Every validator is independent, running the same
+worker with its own registered hotkey; this guide is how to join.
 
 Terms used below: KOTH (king-of-the-hill, the current champion), ATH
 (all-time-high dethroning gate), and Yuma consensus (the chain mechanism that
