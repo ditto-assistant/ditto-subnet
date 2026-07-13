@@ -45,6 +45,44 @@ DEFAULT_BENCH_VERSION = 1
 MIN_ELIGIBLE_CASES = 100
 
 
+def apply_miner_emission_cap(
+    weights: dict[str, float], *, miner_share: float, burn_hotkey: str
+) -> dict[str, float]:
+    """Reserve ``1 - miner_share`` for Subtensor's subnet-owner burn path.
+
+    Pylon normalizes every submitted vector, so merely scaling miner weights to
+    sum to ``miner_share`` would still pay miners 100%. The final vector must
+    include the subnet owner's registered hotkey: Subtensor withholds and burns
+    miner incentive routed to an owner-associated hotkey. The eligible miner
+    vector is normalized before receiving its fixed share so a lone champion
+    receives exactly ``miner_share`` rather than its raw KOTH share.
+
+    With no positive eligible miner weights, route the whole vector to burn.
+    The burn hotkey is excluded from the miner pool defensively.
+    """
+    if not 0.0 <= miner_share <= 1.0:
+        raise ValueError(f"miner_share must be in [0, 1], got {miner_share}")
+    if not burn_hotkey:
+        raise ValueError("burn_hotkey must be non-empty")
+
+    miners = {
+        hotkey: weight
+        for hotkey, weight in weights.items()
+        if hotkey != burn_hotkey and weight > 0.0
+    }
+    total = sum(miners.values())
+    if total <= 0.0:
+        return {burn_hotkey: 1.0}
+
+    capped = {
+        hotkey: (weight / total) * miner_share for hotkey, weight in miners.items()
+    }
+    burn_share = 1.0 - miner_share
+    if burn_share > 0.0:
+        capped[burn_hotkey] = burn_share
+    return capped
+
+
 def _entry_version(entry: LedgerEntry) -> int:
     """The entry's bench_version, or DEFAULT_BENCH_VERSION when the platform
     ledger does not carry one. Read via getattr so the wire model can stay

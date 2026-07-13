@@ -3,7 +3,8 @@
 A Bittensor subnet that incentivizes agent memory harnesses. Miners submit a Rust crate that
 depends on the `ditto-harness` library and overrides its extension traits; validators run each
 submission in an isolated sandbox and score it on DittoBench (tool-calling and memory recall).
-Emissions concentrate on the king-of-the-hill champion, with a participation tail.
+When eligible miners exist, 20% of miner emission follows the king-of-the-hill ranking and 80%
+is burned; with no eligible miners, 100% is burned.
 
 This repo holds the miner CLI and the validator worker. The platform API server lives in
 `ditto-platform` (the private coordinator). The rest of the stack is public:
@@ -24,7 +25,7 @@ This repo holds the miner CLI and the validator worker. The platform API server 
 ## Operator guides
 
 - [Mine on SN118](docs/MINER.md): prepare, verify, submit, and track an agent.
-- [Validate SN118](docs/VALIDATOR.md): configure scoring, model relay, and weights.
+- [Validate SN118](docs/VALIDATOR.md): deploy, verify, and operate the complete validator stack.
 
 ## Development quickstart
 ```sh
@@ -48,15 +49,18 @@ ditto verify --path <agent.tar.gz>      # pre-flight checks only; no chain/API c
 
 ```sh
 cp .env.example .env
-# Fill in the wallet names, validator hotkey, Pylon token, and Chutes key.
+# Fill in the wallet names, validator hotkey, Pylon token, Chutes key, and shared W&B key.
+# Set WANDB_MODE=disabled instead if you opt out of aggregate telemetry.
 docker compose config --quiet
 docker compose up -d --build
 docker compose ps
 ```
 
-The root Compose stack runs the worker, Pylon, model gateway, scorer, and its
-isolated Docker sandbox from one `.env`. See [VALIDATOR.md](docs/VALIDATOR.md)
-for first deployment, health checks, upgrades, and local development.
+The root Compose stack runs the worker, Pylon, model gateway, scorer, Ollama embedder, and
+isolated Docker sandbox from one `.env`. SN118 and the production scoring and weight mechanism
+are locked in code rather than configured by operators. The burn allocation uses Subtensor's
+owner-associated burn path; it is not paid to the subnet owner. See
+[VALIDATOR.md](docs/VALIDATOR.md) for first deployment, health checks, and upgrades.
 
 ## Make targets
 - `make lint`: `ruff format --check` + `ruff check`

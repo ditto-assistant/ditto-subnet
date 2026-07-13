@@ -21,10 +21,11 @@ from ditto.api_models.validator import (
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
 from ditto.validator.onchain_seed import derive_seed
-from ditto.validator.weights import compute_weights
+from ditto.validator.weights import apply_miner_emission_cap, compute_weights
 from ditto.validator.worker import ValidatorWorker
 
 _VALIDATOR_HOTKEY = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
+_BURN_HOTKEY = "5Burn" + "x" * 43
 _T0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
 
 
@@ -115,6 +116,38 @@ class TestComputeWeights:
         assert len(w) == 3
 
 
+class TestMinerEmissionCap:
+    def test_empty_ledger_burns_everything(self) -> None:
+        assert apply_miner_emission_cap(
+            {}, miner_share=0.2, burn_hotkey=_BURN_HOTKEY
+        ) == {_BURN_HOTKEY: 1.0}
+
+    def test_single_miner_gets_exactly_twenty_percent(self) -> None:
+        assert apply_miner_emission_cap(
+            {"miner": 0.9}, miner_share=0.2, burn_hotkey=_BURN_HOTKEY
+        ) == {"miner": pytest.approx(0.2), _BURN_HOTKEY: pytest.approx(0.8)}
+
+    def test_normalizes_koth_vector_inside_miner_share(self) -> None:
+        capped = apply_miner_emission_cap(
+            {"champ": 0.9, "tail": 0.1},
+            miner_share=0.2,
+            burn_hotkey=_BURN_HOTKEY,
+        )
+        assert capped == {
+            "champ": pytest.approx(0.18),
+            "tail": pytest.approx(0.02),
+            _BURN_HOTKEY: pytest.approx(0.8),
+        }
+        assert sum(capped.values()) == pytest.approx(1.0)
+
+    def test_burn_hotkey_cannot_enter_miner_pool(self) -> None:
+        assert apply_miner_emission_cap(
+            {_BURN_HOTKEY: 0.9, "miner": 0.1},
+            miner_share=0.2,
+            burn_hotkey=_BURN_HOTKEY,
+        ) == {"miner": pytest.approx(0.2), _BURN_HOTKEY: pytest.approx(0.8)}
+
+
 def _job(
     miner_hotkey: str,
     *,
@@ -157,6 +190,8 @@ def _config() -> MagicMock:
     cfg.koth_tail_size = 4
     cfg.koth_champion_share = 0.9
     cfg.koth_dethrone_z = 1.64
+    cfg.miner_emission_share = 0.2
+    cfg.burn_hotkey = _BURN_HOTKEY
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
@@ -214,7 +249,9 @@ class TestRunOnce:
         n = await worker.run_once()
         assert n == 1
         assert platform.submit_score.await_count == 1
-        chain.put_weights.assert_awaited_once_with({"5MinerA" + "x" * 41: 0.9})
+        chain.put_weights.assert_awaited_once_with(
+            {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
+        )
 
     async def test_forwards_tarball_sha_to_scorer(self) -> None:
         # The registered digest must be forwarded so dittobench re-verifies the
@@ -280,7 +317,9 @@ class TestRunOnce:
         assert n == 1  # the item was pulled...
         dittobench.score_tarball.assert_not_awaited()  # ...but never scored
         platform.submit_score.assert_not_awaited()
-        chain.put_weights.assert_awaited_once_with({"5Champ" + "x" * 42: 0.9})
+        chain.put_weights.assert_awaited_once_with(
+            {"5Champ" + "x" * 42: 0.2, _BURN_HOTKEY: 0.8}
+        )
 
     async def test_ground_seed_ticket_is_refused(self) -> None:
         # P2: a ticket whose seed does not re-derive from its pinned on-chain
@@ -316,7 +355,9 @@ class TestRunOnce:
         platform.get_artifact.assert_not_awaited()  # ...but refused unscored
         dittobench.score_tarball.assert_not_awaited()
         platform.submit_score.assert_not_awaited()
-        chain.put_weights.assert_awaited_once_with({"5Champ" + "x" * 42: 0.9})
+        chain.put_weights.assert_awaited_once_with(
+            {"5Champ" + "x" * 42: 0.2, _BURN_HOTKEY: 0.8}
+        )
 
     async def test_derived_seed_ticket_is_scored(self) -> None:
         # The companion arm: a ticket whose seed DOES re-derive proceeds.
@@ -396,9 +437,11 @@ class TestRunOnce:
         )
 
         assert await worker.run_once() == 0
-        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
+        chain.put_weights.assert_awaited_once_with(
+            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
+        )
 
-    async def test_empty_ledger_skips_weights(self) -> None:
+    async def test_empty_ledger_burns_all_miner_emission(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
         chain = MagicMock()
         chain.put_weights = AsyncMock()
@@ -411,7 +454,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
         assert await worker.run_once() == 0
-        chain.put_weights.assert_not_awaited()
+        chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
 
     async def test_stale_ledger_is_still_folded_with_warning(
         self, caplog: pytest.LogCaptureFixture
@@ -437,7 +480,9 @@ class TestRunOnce:
         )
         with caplog.at_level("WARNING"):
             await worker.run_once()
-        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
+        chain.put_weights.assert_awaited_once_with(
+            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
+        )
         assert any("STALE" in r.message for r in caplog.records)
 
     async def test_no_permit_skips_weight_submission(self) -> None:
@@ -475,7 +520,9 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
         assert await worker.run_once() == 0
-        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
+        chain.put_weights.assert_awaited_once_with(
+            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
+        )
 
     async def test_permit_check_error_fails_open(self) -> None:
         # A flaky metagraph read must not wedge weight-setting; proceed and let
@@ -537,7 +584,9 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
         assert await worker.run_once() == 0
-        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 0.9})
+        chain.put_weights.assert_awaited_once_with(
+            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
+        )
 
     async def test_stake_check_error_fails_open(self) -> None:
         # Same fail-open posture as the permit check: a flaky read proceeds.
@@ -639,8 +688,10 @@ class TestRunOnce:
 
         n = await worker.run_once()
         assert n == 2
-        # The good miner is the lone eligible entry => champion share (0.9).
-        chain.put_weights.assert_awaited_once_with({"5MinerG" + "x" * 41: 0.9})
+        # The lone eligible miner receives the released 20%; 80% stays burned.
+        chain.put_weights.assert_awaited_once_with(
+            {"5MinerG" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
+        )
 
     async def test_ledger_fetch_failure_leaves_weights_untouched(self) -> None:
         from ditto.validator.errors import PlatformError

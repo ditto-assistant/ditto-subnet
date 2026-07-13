@@ -41,6 +41,7 @@ from ditto.validator.telemetry import (
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
     agents_needing_rescore,
+    apply_miner_emission_cap,
     compute_weights,
 )
 
@@ -236,16 +237,22 @@ class ValidatorWorker:
         # whatever the scorer has already persisted. compute_weights ignores
         # stale versions defensively regardless.
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
-        weights = compute_weights(
+        miner_weights = compute_weights(
             ledger.entries,
             margin=self._config.koth_margin,
             tail_size=self._config.koth_tail_size,
             champion_share=self._config.koth_champion_share,
             dethrone_z=self._config.koth_dethrone_z,
         )
-        if not weights:
-            logger.info("ledger has no positive scores; skipping put_weights")
-            return _WeightOutcome(leaderboard=leaderboard)
+        weights = apply_miner_emission_cap(
+            miner_weights,
+            miner_share=self._config.miner_emission_share,
+            burn_hotkey=self._config.burn_hotkey,
+        )
+        if not miner_weights:
+            logger.info(
+                "ledger has no positive scores; routing 100% of miner emission to burn"
+            )
         if not await self._validator_permitted() or not await self._stake_sufficient():
             # No permit / demonstrably short stake → the chain would reject the
             # submission anyway; skip it (loudly) rather than burn an epoch on a
