@@ -52,7 +52,7 @@ Everything else parallelizes.
 ### Anti-gaming / abuse
 - **C-REPLAY** (covered by tickets; nonce-cache deferred): replay is already prevented by the one-ticket-one-score lifecycle (`submit_score` requires an open ticket, consumed atomically with the score under a row lock, 30-min TTL), so a captured submission 409s. A signed nonce+expiry cache would only add defense-in-depth and requires a coordinated change to the signing message across repos (the engine's `generated_at` is a fixed constant, not a live timestamp), so it is low-value pre-launch. Revisit only if the ticket gate is ever relaxed.
 - **C-TUNE** (PARTIAL): tune the plagiarism thresholds against a real corpus and build a reviewer workflow (today `ath_pending_review` is drained by hand).
-- **C-RATE / X-HARDEN** (TODO): before public exposure, unset `DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR`, front the platform with a TLS + rate-limiting reverse proxy, add per-request nonce/timestamp signatures on validator read-GETs, and add global/per-hotkey rate limits.
+- **C-RATE / X-HARDEN** (PARTIAL): the dev permit-bypass flag is now refused on finney in code (still keep it unset in prod). Remaining is deploy-layer: front the platform with a TLS + rate-limiting reverse proxy and global/per-hotkey rate limits. Per-request nonce/timestamp signatures on the validator read-GETs stay deferred (those endpoints are already permit-gated and the ledger is public), revisit if artifact/dataset reads need requester-proof auth.
 
 ### Infra / ops
 - **X-INFRA-PROD** (TODO, largest gap): no prod environment. dev and "prod" share the GCP project + tfstate; validator/embedder gated off; everything targets dev netuid 3; the DB password lands in tfstate; a single non-HA Postgres holds both DBs; the validator reuses the platform SA. Needs a genuine prod-isolation build, not a flag flip.
@@ -65,7 +65,7 @@ Everything else parallelizes.
 
 ### Screener / miner CLI
 - **S-GATE** (TODO): deeper screener gate (`/seed` + `/run` smoke, failure-reason persist, stale-claim reset, a distinct screener permit).
-- **S-RETRY** (TODO): bounded re-score on transient failure (terminal `evaluation_failed` after N attempts) so a broken agent does not re-burn tokens every epoch.
+- **S-RETRY** (TODO, needs a migration): a broken agent that fails to score keeps getting re-ticketed and re-scored every epoch, re-burning tokens. Design: add a terminal `evaluation_failed` status + an `eval_attempts` column on the agent (Alembic migration); a validator failure-report endpoint (POST `/validator/agent/{id}/evaluation_failed`, signed) increments the counter and, past N, transitions the agent terminal so `issue_ticket` stops selecting it; exclude the terminal status from the ledger/leaderboard. Deferred off the launch path (schema change; a cost optimization, not launch-blocking), sequence deliberately.
 - **M-CLI** (PARTIAL): deferred upload validations (tar manifest, import allowlist, schema diff) pending the frozen harness interface.
 
 ### Docs
@@ -100,10 +100,18 @@ no benefit. Nothing to hide: no answer key is hardcoded (regenerated per seed vi
 public datagen) and no keys are in source (env-only), and it is already framed as
 the keyless public practice validator.
 
-Pre-open checklist: fresh-history secrets scan (grep clean today); confirm
-`cmd/model-relay` embeds no gateway secret (env-only on inspection); add an MIT
-LICENSE (matching the sibling public repos); add a README pointer to C-OPEN +
-`VALIDATOR-ONBOARDING.md`; re-pin the public `dittobench-datagen` version.
+Pre-open checklist status:
+- Secrets scan: DONE. Tracked files and full git history are clean of key
+  patterns (sk-or / cpk_ / private keys / AWS).
+- `cmd/model-relay` embeds no gateway secret: CONFIRMED. Key + model come from
+  `RELAY_API_KEY` / `RELAY_MODEL` env, nothing hardcoded.
+- `dittobench-datagen` pin: CURRENT (v0.7.0, the latest public tag). No re-pin
+  needed.
+- LICENSE + README pointer: PREPARED (held commit on dittobench-api, not pushed):
+  the proprietary LICENSE is replaced with MIT and the README points at the
+  independent-validator role + `VALIDATOR-ONBOARDING.md`. The only remaining steps
+  are the owner actions: flip repo visibility to public and push. Gated on decision
+  #1 below (open at launch vs fast-follow).
 
 ---
 
