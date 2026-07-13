@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from ditto.chain import ChainError
-from ditto.validator.crn import crn_seed
+from ditto.validator.crn import confirmation_seeds
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
@@ -45,6 +45,7 @@ from ditto.validator.weights import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from uuid import UUID
 
     from ditto.api_models.validator import (
@@ -304,33 +305,37 @@ class ValidatorWorker:
         )
         if not stale:
             return ledger
-        # v3 #1 (CRN): score the whole stale champion+tail set on ONE deterministic
-        # common seed so their refreshed composites face the identical dataset and
-        # become directly comparable. The seed is a pure hash of the compared
-        # agent ids + version, so every validator derives the same one (consensus-
-        # safe) — see ditto/validator/crn.py.
-        sweep_seed = crn_seed(
-            (str(e.agent_id) for e in stale), version=self._current_bench_version
+        # v3 #1 (CRN) + P4: score the whole stale champion+tail set on K
+        # deterministic COMMON seeds so their refreshed composites face identical
+        # datasets and become directly comparable. Each seed is a pure hash of the
+        # compared agent ids + version (+ replicate index), so every validator
+        # derives the same set (consensus-safe) — see ditto/validator/crn.py. With
+        # K >= 2 each agent is submitted once as the median over its seeds, so a
+        # dethrone must replicate across seeds, not ride one lucky draw.
+        sweep_seeds = confirmation_seeds(
+            (str(e.agent_id) for e in stale),
+            version=self._current_bench_version,
+            count=self._config.koth_confirmation_seeds,
         )
         logger.info(
             "bench_version %d re-score sweep: %d stale champion/tail agent(s) "
-            "(CRN seed=%d)",
+            "(CRN seeds=%s)",
             self._current_bench_version,
             len(stale),
-            sweep_seed,
+            sweep_seeds,
         )
         rescored = 0
         for e in stale:
-            try:
-                await self._evaluate_and_submit(
-                    e.agent_id, e.sha256, e.miner_hotkey, seed=sweep_seed
-                )
+            submitted = await self._confirm_and_submit(
+                e.agent_id, e.sha256, e.miner_hotkey, seeds=sweep_seeds
+            )
+            if submitted is not None:
                 rescored += 1
-            except (PlatformError, DittobenchError) as exc:
+            else:
                 logger.warning(
-                    "re-score of stale agent %s failed; leaving its ledger score: %s",
+                    "re-score of stale agent %s produced no score; "
+                    "leaving its ledger score",
                     e.agent_id,
-                    exc,
                 )
         if rescored == 0:
             return ledger
@@ -554,18 +559,17 @@ class ValidatorWorker:
             run_size=job.run_size,
         )
 
-    async def _evaluate_and_submit(
+    async def _evaluate(
         self,
         agent_id: UUID,
         expected_sha256: str,
-        miner_hotkey: str,
         *,
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
     ) -> ScoreReport:
-        """Fetch an agent's artifact, score it, sign, and submit. Shared by the
-        ticket sweep (:meth:`_score_job`) and the §9 version-bump re-score.
+        """Fetch an agent's artifact and score it (no sign, no submit). Returns
+        the raw :class:`ScoreReport`.
 
         ``seed`` pins the dataset seed. ``dataset_sha256`` (from the ticket)
         selects the canonical /v1/score path, where the engine regenerates that
@@ -590,15 +594,6 @@ class ValidatorWorker:
             dataset_sha256=dataset_sha256,
             run_size=run_size,
         )
-        signature = sign_score(
-            self._keypair,
-            validator_hotkey=self._config.validator_hotkey,
-            agent_id=agent_id,
-            run_id=report.run_id,
-            composite=report.composite,
-            seed=report.seed,
-        )
-        await self._platform.submit_score(agent_id, signature=signature, report=report)
         details = getattr(self._dittobench, "last_details", None)
         bench_version = (
             details.get("bench_version") if isinstance(details, dict) else None
@@ -610,14 +605,99 @@ class ValidatorWorker:
             and bench_version > self._current_bench_version
         ):
             self._current_bench_version = bench_version
+        return report
+
+    async def _submit_report(
+        self, agent_id: UUID, miner_hotkey: str, report: ScoreReport
+    ) -> ScoreReport:
+        """Sign and submit an already-scored :class:`ScoreReport`. The signature
+        binds ``(validator_hotkey, agent_id, run_id, composite, seed)`` of this
+        exact run; any advisory ``confirmation_composites`` it carries rides
+        unsigned (like ``composite_stderr``)."""
+        signature = sign_score(
+            self._keypair,
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=agent_id,
+            run_id=report.run_id,
+            composite=report.composite,
+            seed=report.seed,
+        )
+        await self._platform.submit_score(agent_id, signature=signature, report=report)
         logger.info(
-            "scored agent %s (miner=%s composite=%.3f bench_version=%s)",
+            "scored agent %s (miner=%s composite=%.3f seed=%d)",
             agent_id,
             miner_hotkey,
             report.composite,
-            bench_version,
+            report.seed,
         )
         return report
+
+    async def _evaluate_and_submit(
+        self,
+        agent_id: UUID,
+        expected_sha256: str,
+        miner_hotkey: str,
+        *,
+        seed: int | None = None,
+        dataset_sha256: str | None = None,
+        run_size: str | None = None,
+    ) -> ScoreReport:
+        """Fetch an agent's artifact, score it, sign, and submit. The single-seed
+        path used by the ticket sweep (:meth:`_score_job`)."""
+        report = await self._evaluate(
+            agent_id,
+            expected_sha256,
+            seed=seed,
+            dataset_sha256=dataset_sha256,
+            run_size=run_size,
+        )
+        return await self._submit_report(agent_id, miner_hotkey, report)
+
+    async def _confirm_and_submit(
+        self,
+        agent_id: UUID,
+        expected_sha256: str,
+        miner_hotkey: str,
+        *,
+        seeds: Sequence[int],
+    ) -> ScoreReport | None:
+        """P4 re-score of one stale agent over ``seeds`` (K common CRN seeds).
+
+        Evaluates the agent on each seed, then submits a SINGLE signed score: the
+        median-composite run (a real run, so its signed composite/seed/run_id are
+        genuine), enriched with ``confirmation_composites`` = the sorted per-seed
+        composites. The KOTH fold then dethrones on the median over seeds
+        (:func:`ditto.validator.weights._effective_composite`), so a crown flip
+        must replicate across seeds and not ride one lucky common-seed draw, with
+        no per-seed rows on the platform. Seeds that fail to score are skipped;
+        with one survivor this degrades to the plain single-seed submission and
+        with none returns ``None`` (the caller keeps the stale ledger score)."""
+        reports: list[ScoreReport] = []
+        for s in seeds:
+            try:
+                reports.append(await self._evaluate(agent_id, expected_sha256, seed=s))
+            except (PlatformError, DittobenchError) as exc:
+                logger.warning(
+                    "re-score of stale agent %s (seed %d) failed; skipping seed: %s",
+                    agent_id,
+                    s,
+                    exc,
+                )
+        if not reports:
+            return None
+        # Representative = the middle run by composite (a real run, so the signed
+        # composite/seed/run_id stay genuine); ties broken by seed for
+        # determinism. With K odd this is the median run; the full per-seed list
+        # rides in confirmation_composites so the fold takes the true median.
+        ordered = sorted(reports, key=lambda r: (r.composite, r.seed))
+        representative = ordered[len(ordered) // 2]
+        if len(reports) >= 2:
+            representative = representative.model_copy(
+                update={
+                    "confirmation_composites": sorted(r.composite for r in reports)
+                }
+            )
+        return await self._submit_report(agent_id, miner_hotkey, representative)
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         """Score every ``sweep_seconds``; set weights every effective epoch.

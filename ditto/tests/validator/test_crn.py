@@ -15,7 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
-from ditto.validator.crn import crn_seed
+from ditto.validator.crn import confirmation_seeds, crn_seed
 from ditto.validator.worker import ValidatorWorker
 
 _INT63_MAX = (1 << 63) - 1
@@ -59,6 +59,34 @@ class TestCrnSeed:
         assert crn_seed(["a"], version=3) == crn_seed(["a"], version=int(3.0))
 
 
+class TestConfirmationSeeds:
+    def test_count_gives_distinct_deterministic_seeds(self) -> None:
+        seeds = confirmation_seeds(["a", "b"], version=3, count=3)
+        assert len(seeds) == 3
+        assert len(set(seeds)) == 3  # the replicate index rotates each seed
+        # Deterministic: every validator derives the identical set.
+        assert seeds == confirmation_seeds(["b", "a"], version=3, count=3)
+
+    def test_first_seed_is_the_classic_single_crn_seed(self) -> None:
+        # k=0 must be byte-identical to the pre-P4 single-seed derivation so pins
+        # and mixed K=1/K>1 fleets stay consistent.
+        seeds = confirmation_seeds(["a", "b"], version=3, count=3)
+        assert seeds[0] == crn_seed(["a", "b"], version=3)
+
+    def test_count_one_or_less_degrades_to_one_classic_seed(self) -> None:
+        assert confirmation_seeds(["a"], version=3, count=1) == [
+            crn_seed(["a"], version=3)
+        ]
+        assert confirmation_seeds(["a"], version=3, count=0) == [
+            crn_seed(["a"], version=3)
+        ]
+
+    def test_seeds_are_json_clean_int63(self) -> None:
+        for s in confirmation_seeds(["a", "b", "c"], version=9, count=4):
+            assert isinstance(s, int)
+            assert 0 <= s <= _INT63_MAX
+
+
 def _cfg() -> Any:
     cfg = MagicMock()
     cfg.validator_hotkey = "5" + "V" * 47
@@ -67,6 +95,7 @@ def _cfg() -> Any:
     cfg.koth_tail_size = 4
     cfg.koth_champion_share = 0.9
     cfg.koth_dethrone_z = 1.64
+    cfg.koth_confirmation_seeds = 3
     return cfg
 
 
@@ -94,10 +123,12 @@ def _entry(aid: UUID, composite: float, *, version: int, minutes: int) -> Any:
 
 
 class TestRescoreSweepUsesCommonSeed:
-    async def test_all_stale_agents_get_one_common_crn_seed(self) -> None:
+    async def test_all_stale_agents_get_the_same_common_confirmation_seeds(
+        self,
+    ) -> None:
         w = _worker()
         w._current_bench_version = 3
-        w._evaluate_and_submit = AsyncMock(return_value=None)
+        w._confirm_and_submit = AsyncMock(return_value=SimpleNamespace())
         champ, r1 = uuid4(), uuid4()
         stale_ledger = SimpleNamespace(
             entries=[
@@ -113,9 +144,16 @@ class TestRescoreSweepUsesCommonSeed:
 
         await w._rescore_stale_champion_and_tail(stale_ledger)
 
-        # Every stale agent scored on the SAME seed...
-        seeds = {c.kwargs["seed"] for c in w._evaluate_and_submit.await_args_list}
-        assert len(seeds) == 1
-        # ...and that seed is exactly the deterministic CRN seed for the set.
-        expected = crn_seed([str(champ), str(r1)], version=3)
-        assert seeds == {expected}
+        # Every stale agent is confirmed over the SAME set of common seeds...
+        seed_sets = [
+            tuple(c.kwargs["seeds"])
+            for c in w._confirm_and_submit.await_args_list
+        ]
+        assert len(seed_sets) == 2  # champion + one tail agent
+        assert seed_sets[0] == seed_sets[1]
+        # ...which are exactly the deterministic K confirmation seeds for the set
+        # (K=3 by config), with k=0 equal to the classic single CRN seed.
+        expected = confirmation_seeds([str(champ), str(r1)], version=3, count=3)
+        assert seed_sets[0] == tuple(expected)
+        assert len(set(expected)) == 3
+        assert expected[0] == crn_seed([str(champ), str(r1)], version=3)

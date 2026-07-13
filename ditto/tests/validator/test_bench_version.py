@@ -150,6 +150,7 @@ def _worker() -> Any:
     cfg.koth_tail_size = 4
     cfg.koth_champion_share = 0.9
     cfg.koth_dethrone_z = 1.64
+    cfg.koth_confirmation_seeds = 3
     return ValidatorWorker(
         config=cfg,
         platform=MagicMock(),
@@ -163,19 +164,19 @@ class TestWorkerRescoreSweep:
     async def test_inert_when_ledger_has_no_versions(self) -> None:
         w = _worker()
         w._current_bench_version = 3
-        w._evaluate_and_submit = AsyncMock()
+        w._confirm_and_submit = AsyncMock()
         ledger = SimpleNamespace(entries=[_e("a", 0.9), _e("b", 0.8)])
         w._platform.get_ledger = AsyncMock()
         out = await w._rescore_stale_champion_and_tail(ledger)
         # No version info ⇒ no re-score, no re-fetch, same ledger back.
-        w._evaluate_and_submit.assert_not_called()
+        w._confirm_and_submit.assert_not_called()
         w._platform.get_ledger.assert_not_called()
         assert out is ledger
 
     async def test_rescore_then_refetch(self) -> None:
         w = _worker()
         w._current_bench_version = 3
-        w._evaluate_and_submit = AsyncMock(return_value=None)
+        w._confirm_and_submit = AsyncMock(return_value=SimpleNamespace())
         stale_ledger = SimpleNamespace(
             entries=[
                 _e("champ", 0.90, version=2, minutes=0),
@@ -186,17 +187,17 @@ class TestWorkerRescoreSweep:
         w._platform.get_ledger = AsyncMock(return_value=refreshed)
 
         out = await w._rescore_stale_champion_and_tail(stale_ledger)
-        # Both stale (champion + tail) re-evaluated, then the ledger re-fetched.
-        assert w._evaluate_and_submit.await_count == 2
+        # Both stale (champion + tail) re-confirmed, then the ledger re-fetched.
+        assert w._confirm_and_submit.await_count == 2
         w._platform.get_ledger.assert_awaited_once()
         assert out is refreshed
 
     async def test_current_version_ledger_not_rescored(self) -> None:
         w = _worker()
         w._current_bench_version = 3
-        w._evaluate_and_submit = AsyncMock()
+        w._confirm_and_submit = AsyncMock()
         ledger = SimpleNamespace(entries=[_e("champ", 0.9, version=3)])
         w._platform.get_ledger = AsyncMock()
         out = await w._rescore_stale_champion_and_tail(ledger)
-        w._evaluate_and_submit.assert_not_called()
+        w._confirm_and_submit.assert_not_called()
         assert out is ledger

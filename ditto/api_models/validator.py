@@ -197,9 +197,9 @@ class ScoreReport(BaseModel):
 
     Mirrors the Go validator's ``ScoreReport`` so the scoring engine's
     output round-trips through ``POST /validator/agent/{id}/score``
-    unchanged. ``composite = 0.6*tool_mean + 0.4*memory_mean`` when both
-    kinds are present (the platform does not recompute it; it records
-    what the daemon reports).
+    unchanged. ``composite = 0.5*tool_mean + 0.5*memory_mean`` (before the
+    gate factors) when both kinds are present; the platform does not
+    recompute it, it records what the daemon reports.
     """
 
     run_id: Annotated[str, Field(description="Scoring-engine run identifier.")]
@@ -223,6 +223,37 @@ class ScoreReport(BaseModel):
     ]
     median_ms: Annotated[int, Field(ge=0, description="Median per-case latency (ms).")]
     n: Annotated[int, Field(ge=0, description="Number of cases scored.")]
+    composite_stderr: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            description=(
+                "Optional standard error of the composite for this run. Surfaced "
+                "on the scoring ledger so the validator's KOTH fold can gate a "
+                "challenger on measurement uncertainty (the indifference band) "
+                "instead of a flat margin. Additive-optional; not covered by the "
+                "signature and never affects the score. Declared here so the "
+                "engine's reported value survives parsing and reaches the "
+                "platform (pydantic drops undeclared keys)."
+            ),
+        ),
+    ] = None
+    confirmation_composites: Annotated[
+        list[float] | None,
+        Field(
+            default=None,
+            description=(
+                "Per-seed composites for a version-bump re-score (prod hardening "
+                "P4). When the validator re-scores a stale champion/tail agent on "
+                "K common CRN seeds it submits ONE score (this report, for the "
+                "median-composite run) and lists all K per-seed composites here so "
+                "the KOTH fold can gate a dethrone on the MEDIAN over seeds. "
+                "Advisory: not covered by the signature and never affects the "
+                "score. Null for a normal single-seed run."
+            ),
+        ),
+    ] = None
     generated_at: Annotated[
         datetime, Field(description="When the report was produced (UTC).")
     ]
@@ -359,6 +390,35 @@ class LedgerEntry(BaseModel):
             description="Validator's hex sr25519 signature, if stored.",
         ),
     ]
+    composite_stderr: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            description=(
+                "Standard error of the composite for the winning run, if the "
+                "platform surfaced one. Feeds the KOTH fold's measurement-"
+                "uncertainty indifference band (weights.py ``_beats``). "
+                "Additive-optional: absent means the fold uses the flat relative "
+                "margin. Declared here so the wire value survives parsing "
+                "(pydantic drops undeclared keys)."
+            ),
+        ),
+    ] = None
+    confirmation_composites: Annotated[
+        list[float] | None,
+        Field(
+            default=None,
+            description=(
+                "Per-seed composites for this agent from a version-bump re-score "
+                "over K common CRN seeds (prod hardening P4), when the platform "
+                "surfaces them. With two or more values the KOTH dethrone "
+                "comparison uses their MEDIAN instead of the single-run composite, "
+                "so a crown flip must replicate across seeds. Additive-optional: "
+                "absent means the fold uses the raw composite."
+            ),
+        ),
+    ] = None
     status: Annotated[
         AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
     ]

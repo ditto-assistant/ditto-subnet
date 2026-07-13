@@ -40,7 +40,7 @@ Everything else parallelizes.
 - **W-PYLON** (PARTIAL): the prod weight path is 100% Pylon and validated on localnet; real commit-reveal, chain version_key, and u16 normalization are guarded first-runs at cutover.
 - **E1** (PARTIAL): the Pylon write token is self-serve (`openssl rand`), proven on dev; redo the flip in finney host_vars against real stake.
 - **E2 / E3 / E4** (TODO): finney permit + owner-UID stake; chain params + commit-reveal on; guarded cutover runbook.
-- **B-KOTH** (TODO, data in): measured noise (within-run `composite_stderr` ~0.041, seed-difficulty sd ~0.049, k=3 median sd ~0.031) dwarfs the 1% flat margin (~0.005 at composite 0.49). The v3 z-band (`_beats`) covers within-run noise only if the platform surfaces `composite_stderr` (verify, else it silently falls back to the flat margin). The seed-difficulty confound needs **P4 (multi-seed champion confirmation over K=3 common CRN seeds)**, spec'd and implemented on the parked `nick/p4-multi-seed-confirmation` branches, sequenced for the week after launch. Until then, at minimum surface `composite_stderr` and set `dethrone_z`. Tune via `VALIDATOR_KOTH_*`.
+- **B-KOTH** (CODE-DONE, prove on localnet): the noise-robust dethrone is landed end to end (z-band + P4 median-over-seeds). Remaining is verification: a localnet `bench_version` bump to trigger the champion/tail re-score sweep and confirm the K-seed confirmation path folds as expected. Tune via `VALIDATOR_KOTH_*`.
 
 ### Decentralization / trust
 - **C-OPEN** (TODO): open the dittobench-api scoring engine so any validator runs its own and the composite is third-party-verifiable. The prerequisite for trustless independent validators. Scope below.
@@ -136,6 +136,7 @@ Verified on the dev localnet or merged, no longer tracked above:
 - **Benchmark content (bench_version 2)**: judge-free deterministic scoring, hardened (bounded canary + multi-family metamorphic, 0.5/0.5 composite), datagen public and pinned v0.7.0, reference baseline published (composite 0.492 ± 0.013 SE at `full`). Pre-prod hardening P1/P2/P3/P5/P6 landed (P4 parked, see B-KOTH).
 - **C-ISO**: sandbox egress allowlist + isolation, applied and verified on dev.
 - **F-MV**: k=3 leased tickets + median-at-quorum + deterministic median-ledger fold, code-done and tested (`ditto-platform TestMultiValidatorConsensus`); deploy pending.
+- **B-KOTH noise-robust dethrone**: code-done across all three repos. z-band uses the engine's gated `composite_stderr` (dittobench-api scales the SE by the gate factors), surfaced by the platform ledger and folded by the validator (`dethrone_z=1.64`). P4 multi-seed lands without a platform schema change: the validator re-scores each stale champion/tail agent over K common CRN seeds (`VALIDATOR_KOTH_CONFIRMATION_SEEDS=3`) and submits one median-run score carrying `confirmation_composites`, which the ledger surfaces and the fold dethrones on the median over seeds. Only the localnet version-bump proof remains (see B-KOTH above).
 - **W-VK / W-PERMIT / W-CADENCE / W-CR / V-ROBUST**: weight-path conformance code-done (first proven at the finney cutover, no testnet).
 - **W-PYLON / E1**: Pylon identity write validated through the deployed dev sidecar.
 - **X-LEDGER-N**: ledger surfaces `n`, so a small run can no longer be champion.

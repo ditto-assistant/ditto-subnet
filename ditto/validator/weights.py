@@ -148,6 +148,46 @@ def compute_weights(
     return weights
 
 
+def _entry_confirmations(entry: LedgerEntry) -> list[float] | None:
+    """The entry's per-seed confirmation composites, or None when the ledger
+    does not carry them (prod hardening P4). Read via getattr so the wire model
+    can stay untouched — until the platform surfaces ``confirmation_composites``
+    this is inert and the fold uses the raw composite, byte-identical to today.
+    Requires at least two finite values in [0, 1]; anything else is treated as
+    absent (a consensus-safe guard: one validator must never fold a different
+    effective composite than another off a malformed list)."""
+    v = getattr(entry, "confirmation_composites", None)
+    if not isinstance(v, (list, tuple)) or len(v) < 2:
+        return None
+    out: list[float] = []
+    for x in v:
+        if (
+            not isinstance(x, (int, float))
+            or not math.isfinite(x)
+            or not 0.0 <= x <= 1.0
+        ):
+            return None
+        out.append(float(x))
+    return out
+
+
+def _effective_composite(entry: LedgerEntry) -> float:
+    """The composite the dethrone comparison uses: the MEDIAN of the entry's
+    per-seed confirmation composites when the ledger surfaces them, else the raw
+    single-run composite. Multi-seed medians make a crown flip require a lead
+    that survives seed-to-seed variance, not one lucky draw (P4). Pure and
+    deterministic: an explicit sorted-middle median, no library rounding, so
+    every validator computes identical bytes."""
+    vals = _entry_confirmations(entry)
+    if vals is None:
+        return entry.composite
+    s = sorted(vals)
+    mid = len(s) // 2
+    if len(s) % 2 == 1:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2.0
+
+
 def _entry_stderr(entry: LedgerEntry) -> float | None:
     """The entry's composite standard error, or None when the platform ledger
     does not carry one. Read via getattr so the wire model can stay untouched
@@ -174,8 +214,17 @@ def _beats(
     applies only when BOTH entries carry a ``composite_stderr`` and
     ``dethrone_z > 0``. With no stderr (or z=0) the band is exactly the flat
     relative margin, so ``challenger.composite > champion.composite*(1+margin)`` —
-    identical to the pre-v3 rule. Pure and deterministic (consensus-safe)."""
-    band = champion.composite * margin
+    identical to the pre-v3 rule. Pure and deterministic (consensus-safe).
+
+    Both sides use :func:`_effective_composite` (P4): when the ledger surfaces
+    per-seed confirmation composites the MEDIAN over the common CRN seeds is
+    compared, so a dethrone requires a lead that replicates across seeds. With no
+    confirmations the raw composites compare, byte-identical to the pre-P4 rule.
+    The flat-margin band keys off the champion's effective composite for the same
+    reason."""
+    chall = _effective_composite(challenger)
+    champ = _effective_composite(champion)
+    band = champ * margin
     if dethrone_z > 0.0:
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)
@@ -183,7 +232,7 @@ def _beats(
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
-    return challenger.composite - champion.composite > band
+    return chall - champ > band
 
 
 def _champion(

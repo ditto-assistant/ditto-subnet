@@ -154,6 +154,16 @@ class ValidatorConfig:
     band is the flat relative margin, byte-identical to today. ``1.64`` ≈ one-sided
     95%; ``0`` disables the statistical half."""
 
+    koth_confirmation_seeds: int
+    """How many common CRN seeds the version-bump re-score sweep runs each stale
+    champion/tail agent on (prod hardening P4, ``docs/BENCHMARK-V3-IDEAS.md``
+    §2.1). With ``K >= 2`` the validator submits the median composite over the K
+    common seeds and attaches the per-seed list (``confirmation_composites``), so
+    the dethrone comparison clears the MEDIAN over seeds and a crown flip must
+    replicate across seeds instead of riding one lucky draw. A **consensus knob**
+    like ``koth_margin`` (every validator must run the same K to derive the same
+    seed set). ``1`` reproduces the single-seed pre-P4 sweep, byte-identical."""
+
     min_stake_tao: float
     """Minimum stake (TAO) this validator expects on its own hotkey before it
     submits weights. ``0`` disables the check (the localnet has staking
@@ -293,6 +303,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     koth_tail_size = _parse_int("VALIDATOR_KOTH_TAIL_SIZE", "4")
     koth_champion_share = _parse_float("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")
     koth_dethrone_z = _parse_float("VALIDATOR_KOTH_DETHRONE_Z", "1.64")
+    koth_confirmation_seeds = _parse_int("VALIDATOR_KOTH_CONFIRMATION_SEEDS", "3")
     # ``math.isfinite`` rejects NaN/Inf, which slip past a bare ``<= 0`` (e.g.
     # ``nan <= 0`` is False) and would silently disable the ATH gate — a
     # consensus-divergence footgun since the fold multiplies by ``1 + margin``.
@@ -315,6 +326,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         raise ValidatorConfigError(
             "VALIDATOR_KOTH_DETHRONE_Z must be a finite number >= 0, "
             f"got {koth_dethrone_z}"
+        )
+    if koth_confirmation_seeds < 1:
+        raise ValidatorConfigError(
+            "VALIDATOR_KOTH_CONFIRMATION_SEEDS must be >= 1, "
+            f"got {koth_confirmation_seeds}"
         )
     min_stake_tao = _parse_float("VALIDATOR_MIN_STAKE_TAO", "0")
     if not math.isfinite(min_stake_tao) or min_stake_tao < 0:
@@ -354,6 +370,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_tail_size=koth_tail_size,
         koth_champion_share=koth_champion_share,
         koth_dethrone_z=koth_dethrone_z,
+        koth_confirmation_seeds=koth_confirmation_seeds,
         min_stake_tao=min_stake_tao,
         sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),

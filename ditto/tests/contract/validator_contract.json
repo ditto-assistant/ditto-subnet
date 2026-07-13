@@ -115,6 +115,32 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "composite_stderr": {
+        "anyOf": [
+          {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_composites": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "first_seen": {
         "format": "date-time",
         "type": "string"
@@ -205,6 +231,32 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "type": "number"
+          },
+          "composite_stderr": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_composites": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "first_seen": {
             "format": "date-time",
@@ -411,6 +463,32 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "composite_stderr": {
+        "anyOf": [
+          {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_composites": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "details": {
         "anyOf": [
           {
@@ -583,6 +661,32 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "type": "number"
+          },
+          "composite_stderr": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_composites": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "details": {
             "anyOf": [

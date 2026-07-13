@@ -832,3 +832,115 @@ class TestChainCadenceFloor:
         chain = MagicMock()
         chain.get_weights_rate_limit = AsyncMock(return_value=object())
         assert await self._worker(chain)._chain_min_epoch_seconds() == 0.0
+
+
+class TestConfirmAndSubmit:
+    """P4: the re-score confirmation over K common seeds submits exactly ONE
+    signed score (the median-composite run) carrying every per-seed composite."""
+
+    def _seeded_report(self, seed: int, composite: float) -> ScoreReport:
+        r = _report(f"run-{seed}", composite)
+        return r.model_copy(update={"seed": seed})
+
+    async def _worker(self, dittobench: MagicMock, platform: MagicMock) -> Any:
+        keypair = MagicMock()
+        keypair.sign = MagicMock(return_value=b"\x01" * 64)
+        return ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=keypair,
+        )
+
+    async def test_submits_one_median_run_with_all_confirmations(self) -> None:
+        agent_id = uuid4()
+        composites = {10: 0.90, 20: 0.70, 30: 0.80}  # median = 0.80 (seed 30)
+
+        async def _score(**kw: Any) -> ScoreReport:
+            return self._seeded_report(kw["seed"], composites[kw["seed"]])
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=_score)
+        dittobench.last_details = {"bench_version": 3}
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+            )
+        )
+        w = await self._worker(dittobench, platform)
+
+        out = await w._confirm_and_submit(
+            agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
+        )
+
+        # One evaluation per seed, but exactly one submitted score.
+        assert dittobench.score_tarball.await_count == 3
+        assert platform.submit_score.await_count == 1
+        report = platform.submit_score.await_args.kwargs["report"]
+        # The representative is a real run (the median composite/seed), and it
+        # carries the sorted per-seed composites for the fold's median.
+        assert report.composite == 0.80
+        assert report.seed == 30
+        assert report.confirmation_composites == [0.70, 0.80, 0.90]
+        assert out is report
+
+    async def test_single_surviving_seed_has_no_confirmations(self) -> None:
+        # If all but one seed fail, this degrades to a plain single-seed submit
+        # (no confirmation_composites, so the fold uses the raw composite).
+        agent_id = uuid4()
+
+        async def _score(**kw: Any) -> ScoreReport:
+            if kw["seed"] == 20:
+                return self._seeded_report(20, 0.75)
+            raise worker_mod.DittobenchError("boom")
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=_score)
+        dittobench.last_details = None
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+            )
+        )
+        w = await self._worker(dittobench, platform)
+
+        report = await w._confirm_and_submit(
+            agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
+        )
+        assert platform.submit_score.await_count == 1
+        assert report is not None
+        assert report.composite == 0.75
+        assert report.confirmation_composites is None
+
+    async def test_all_seeds_fail_returns_none_and_submits_nothing(self) -> None:
+        agent_id = uuid4()
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=worker_mod.DittobenchError("boom")
+        )
+        dittobench.last_details = None
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+            )
+        )
+        w = await self._worker(dittobench, platform)
+
+        out = await w._confirm_and_submit(
+            agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
+        )
+        assert out is None
+        platform.submit_score.assert_not_awaited()
