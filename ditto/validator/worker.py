@@ -693,9 +693,7 @@ class ValidatorWorker:
         representative = ordered[len(ordered) // 2]
         if len(reports) >= 2:
             representative = representative.model_copy(
-                update={
-                    "confirmation_composites": sorted(r.composite for r in reports)
-                }
+                update={"confirmation_composites": sorted(r.composite for r in reports)}
             )
         return await self._submit_report(agent_id, miner_hotkey, representative)
 

@@ -146,8 +146,7 @@ class TestRescoreSweepUsesCommonSeed:
 
         # Every stale agent is confirmed over the SAME set of common seeds...
         seed_sets = [
-            tuple(c.kwargs["seeds"])
-            for c in w._confirm_and_submit.await_args_list
+            tuple(c.kwargs["seeds"]) for c in w._confirm_and_submit.await_args_list
         ]
         assert len(seed_sets) == 2  # champion + one tail agent
         assert seed_sets[0] == seed_sets[1]

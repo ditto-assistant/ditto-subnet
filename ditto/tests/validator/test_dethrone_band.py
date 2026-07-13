@@ -80,7 +80,10 @@ class TestEntryConfirmations:
         assert _entry_confirmations(_e("a", 0.5, confirmations=[])) is None
 
     def test_valid_list(self) -> None:
-        assert _entry_confirmations(_e("a", 0.5, confirmations=[0.4, 0.6])) == [0.4, 0.6]
+        assert _entry_confirmations(_e("a", 0.5, confirmations=[0.4, 0.6])) == [
+            0.4,
+            0.6,
+        ]
 
     def test_out_of_range_or_non_finite_treated_as_absent(self) -> None:
         # A malformed list must degrade to the raw composite, never poison the
