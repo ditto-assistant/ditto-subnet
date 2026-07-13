@@ -183,12 +183,6 @@ may configure logging and aggregate telemetry:
 | `VALIDATOR_LOG_LEVEL` | `INFO` | Worker log level. |
 | `WANDB_MODE` | `disabled` | Set to `online` with project/entity values for aggregate telemetry. |
 
-The queue cap, polling and HTTP timeouts, model routes, sandbox hardening,
-120-second sweep, full benchmark size, 2400-second scoring timeout, disabled
-mock mode, one-hour weight cadence, locked model behavior, SN118 mechanism
-values, and Pylon route and identity are not operator choices. The worker also
-honors a longer on-chain rate limit if required.
-
 ## Development
 
 For local code work outside Compose:
