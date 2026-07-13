@@ -174,6 +174,15 @@ cp pylon.env.example pylon.env      # then fill it in (never commit it)
 `pylon.env` names the wallet and the two tokens (a read token for open-access
 endpoints, a write token for the identity):
 
+Generate each token with OpenSSL:
+
+```sh
+openssl rand -base64 32
+```
+
+Run the command twice and use a different output for each token. Store both
+tokens in a secret manager; do not commit them.
+
 ```sh
 PYLON_BITTENSOR_NETWORK=finney
 PYLON_OPEN_ACCESS_TOKEN=<random-read-token>
