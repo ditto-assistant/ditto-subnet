@@ -10,6 +10,14 @@ Terms used below: KOTH (king-of-the-hill, the current champion), ATH
 (all-time-high dethroning gate), and Yuma consensus (the chain mechanism that
 combines validators' weight vectors and clips outliers).
 
+## Contents
+
+| Understand | Set up | Operate and reference |
+| --- | --- | --- |
+| [What validators do](#1-what-a-validator-does-and-doesnt) | [Requirements](#2-requirements) | [Install and configure](#3-install-and-configure) |
+| [Model gateway](#4-model-gateway) | [Run](#5-run-it) | [Verify](#6-verify-its-working) |
+| [Three-validator localnet](#7-localnet-three-validators-prove-k3-consensus) | [Mechanism](#8-mechanism-reference) | [Environment reference](#9-environment-reference) |
+
 ## 1. What a validator does (and doesn't)
 
 The validator is one stateless Python process (`python -m ditto.validator`) that
@@ -92,7 +100,7 @@ or malformed.
 | `VALIDATOR_DITTOBENCH_API_URL` | Your co-located dittobench-api base URL. |
 
 The locked model is served from a gateway configured on the dittobench-api
-service, not the worker. See [Model gateway](#model-gateway). The validator
+service, not the worker. See [Model gateway](#4-model-gateway). The validator
 worker does not receive or forward model-provider credentials.
 
 ### Chain / weight path (pick one)
@@ -101,21 +109,6 @@ worker does not receive or forward model-provider credentials.
 | --- | --- |
 | `PYLON_URL` + `PYLON_IDENTITY_NAME` + `PYLON_IDENTITY_TOKEN` | Production path: weights via Pylon identity `put_weights` (Pylon handles normalization, u16, UID resolution, commit-reveal, version_key). |
 | `VALIDATOR_USE_SDK_WEIGHTS=1` + `SUBTENSOR_NETWORK` | Fallback and localnet path: weights via `bittensor.Subtensor.set_weights`, hotkey-signed. `SUBTENSOR_NETWORK` takes `finney`, `test`, `local`, or a raw `ws://` endpoint. |
-
-### Common knobs (defaults in parentheses)
-
-| Env | Meaning |
-| --- | --- |
-| `VALIDATOR_RUN_SIZE` (`full`) | dittobench run size. `full` is the production config; `small`/`medium` are for plumbing tests. |
-| `VALIDATOR_SWEEP_SECONDS` (120) | Scoring-sweep cadence. |
-| `VALIDATOR_EPOCH_SECONDS` (3600) | Weight-set cadence. The worker also honors the chain's `weights_rate_limit`, stretching to whichever is longer. |
-| `VALIDATOR_KOTH_MARGIN` (0.05) / `VALIDATOR_KOTH_TAIL_SIZE` (4) / `VALIDATOR_KOTH_CHAMPION_SHARE` (0.9) / `VALIDATOR_KOTH_DETHRONE_Z` (1.64) | Consensus-critical mechanism knobs. Every validator on a network must run identical values or Yuma clips you. Do not tune unilaterally. |
-| `VALIDATOR_WEIGHT_VERSION_KEY` (package version) | Mechanism version stamped on SDK-path `set_weights`; must agree network-wide. |
-| `VALIDATOR_REQUIRE_COMMIT_REVEAL` (off) | Cutover guard. When set, the worker logs an error each weight-set if the chain reports commit-reveal off (weights would be front-runnable); it still submits. Set on finney; leave off on the localnet. |
-| `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` (2400) | Hard cap per agent run (full builds are slow). |
-| `VALIDATOR_DITTOBENCH_MOCK` (off) | Canned scores, no dittobench key needed; local plumbing only, never on a real network. |
-| `VALIDATOR_LOG_LEVEL` (`INFO`) | Worker log level. |
-| `WANDB_MODE` (`disabled`) | Set `online` (plus `WANDB_PROJECT`/`WANDB_ENTITY`) to publish the aggregate-only telemetry. |
 
 ## 4. Model gateway
 
@@ -223,6 +216,24 @@ timestamps and duplicate detection prevent copied artifacts from displacing the
 incumbent. Keep every `VALIDATOR_KOTH_*` setting identical network-wide so Yuma
 consensus converges. The implementation in `ditto/validator/weights.py` is the
 source of truth.
+
+## 9. Environment reference
+
+These common knobs retain the defaults documented by the validator worker.
+Consensus-critical values must remain identical across the network.
+
+| Env | Meaning |
+| --- | --- |
+| `VALIDATOR_RUN_SIZE` (`full`) | dittobench run size. `full` is the production config; `small`/`medium` are for plumbing tests. |
+| `VALIDATOR_SWEEP_SECONDS` (120) | Scoring-sweep cadence. |
+| `VALIDATOR_EPOCH_SECONDS` (3600) | Weight-set cadence. The worker also honors the chain's `weights_rate_limit`, stretching to whichever is longer. |
+| `VALIDATOR_KOTH_MARGIN` (0.05) / `VALIDATOR_KOTH_TAIL_SIZE` (4) / `VALIDATOR_KOTH_CHAMPION_SHARE` (0.9) / `VALIDATOR_KOTH_DETHRONE_Z` (1.64) | Consensus-critical mechanism knobs. Every validator on a network must run identical values or Yuma clips you. Do not tune unilaterally. |
+| `VALIDATOR_WEIGHT_VERSION_KEY` (package version) | Mechanism version stamped on SDK-path `set_weights`; must agree network-wide. |
+| `VALIDATOR_REQUIRE_COMMIT_REVEAL` (off) | Cutover guard. When set, the worker logs an error each weight-set if the chain reports commit-reveal off (weights would be front-runnable); it still submits. Set on finney; leave off on the localnet. |
+| `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` (2400) | Hard cap per agent run (full builds are slow). |
+| `VALIDATOR_DITTOBENCH_MOCK` (off) | Canned scores, no dittobench key needed; local plumbing only, never on a real network. |
+| `VALIDATOR_LOG_LEVEL` (`INFO`) | Worker log level. |
+| `WANDB_MODE` (`disabled`) | Set `online` (plus `WANDB_PROJECT`/`WANDB_ENTITY`) to publish the aggregate-only telemetry. |
 
 ## Code references
 
