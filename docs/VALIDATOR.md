@@ -165,11 +165,11 @@ Pylon ships as a Docker image (`backenddevelopersltd/bittensor-pylon`). It reads
 **identity**, a named wallet-plus-subnet pair with its own secret token; the
 worker authenticates to that identity to write weights.
 
-A ready-to-edit compose file and env template live in `scripts/pylon/`:
+A ready-to-edit compose file lives in `scripts/pylon/`. Use the repository's
+single environment template:
 
 ```sh
-cd scripts/pylon
-cp pylon.env.example pylon.env      # then fill it in (never commit it)
+cp .env.example scripts/pylon/pylon.env  # then fill it in (never commit it)
 ```
 
 `pylon.env` names the wallet and one random token that guards both open-access
@@ -201,7 +201,7 @@ PYLON_DATABASE_PATH=/data/pylon.db   # persist in-flight submissions
 Bring it up (serves on `:8000`, wallet mounted read-only):
 
 ```sh
-docker compose up -d
+docker compose -f scripts/pylon/docker-compose.yaml up -d
 ```
 
 Then point the worker at it (section 3 / your validator `.env`), reusing the
