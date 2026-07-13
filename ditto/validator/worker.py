@@ -143,19 +143,13 @@ class ValidatorWorker:
     async def run_once(self, *, set_weights: bool = True) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
 
-        Which halves run is gated by this instance's role (``enable_scoring`` /
-        ``enable_weights``):
+        Every validator pulls the ``evaluating`` queue, scores each agent,
+        persists the signed composite, and re-scores stale champions. It also
+        recomputes weights from the durable ledger and submits them when
+        ``set_weights`` is true. An empty queue does not mean "set no weights" —
+        the reigning champion keeps its emission.
 
-        * Scoring (``enable_scoring``): pull the ``evaluating`` queue, score each
-          agent through dittobench-api, persist the signed composite, and
-          re-score stale champions. The central scorer runs only this.
-        * Weights (``enable_weights`` and ``set_weights``): recompute weights from
-          the durable ledger and submit them (see :meth:`_update_weights`), so an
-          empty queue no longer means "set no weights" — the reigning champion
-          keeps its emission. An independent (weights-only) validator runs only
-          this, reading the ledger the central scorer maintains.
-
-        ``run_forever`` scores every sweep but only sets weights when the epoch
+        ``run_forever`` scores on every sweep but only sets weights when the epoch
         interval is due, so scoring latency isn't tied to the longer weight
         cadence.
         """
@@ -163,41 +157,37 @@ class ValidatorWorker:
         scored: list[ScoredAgentStat] = []
         failed = 0
         queue_depth = 0
-        if self._config.enable_scoring:
-            # k=3 pull: request tickets until the platform says 204 (no work for
-            # us) or this sweep's cap is hit. Each ticket pins the dataset all
-            # three validators score, so scores stay comparable for the median.
-            while queue_depth < self._config.queue_limit:
-                job = await self._platform.request_job()
-                if job is None:
-                    break  # 204: no ticket available
-                queue_depth += 1
-                if job.deadline <= datetime.now(UTC):
-                    # Already lapsed (the platform will re-open it); don't waste a
-                    # full run on a score that would be invalidated as late.
-                    logger.warning(
-                        "ticket for agent %s already past deadline %s; skipping",
-                        job.agent_id,
-                        job.deadline.isoformat(),
-                    )
-                    continue
-                try:
-                    report = await self._score_job(job)
-                    details = getattr(self._dittobench, "last_details", None)
-                    if not isinstance(details, dict):
-                        details = {}
-                    scored.append(scored_agent_stat(job.miner_hotkey, report, details))
-                except (DittobenchError, PlatformError) as e:
-                    logger.warning("scoring agent %s failed: %s", job.agent_id, e)
-                    failed += 1
-                    continue
-            # Re-scoring stale champions is a scoring responsibility, done here
-            # (not in the weight fold) so the split topology keeps re-scoring:
-            # the weight-only validators just read the ledger the scorer refreshes.
-            await self._rescore_stale_champions()
+        # k=3 pull: request tickets until the platform says 204 (no work for us)
+        # or this sweep's cap is hit. Each ticket pins the dataset all three
+        # validators score, so scores stay comparable for the median.
+        while queue_depth < self._config.queue_limit:
+            job = await self._platform.request_job()
+            if job is None:
+                break  # 204: no ticket available
+            queue_depth += 1
+            if job.deadline <= datetime.now(UTC):
+                # Already lapsed (the platform will re-open it); don't waste a
+                # full run on a score that would be invalidated as late.
+                logger.warning(
+                    "ticket for agent %s already past deadline %s; skipping",
+                    job.agent_id,
+                    job.deadline.isoformat(),
+                )
+                continue
+            try:
+                report = await self._score_job(job)
+                details = getattr(self._dittobench, "last_details", None)
+                if not isinstance(details, dict):
+                    details = {}
+                scored.append(scored_agent_stat(job.miner_hotkey, report, details))
+            except (DittobenchError, PlatformError) as e:
+                logger.warning("scoring agent %s failed: %s", job.agent_id, e)
+                failed += 1
+                continue
+        await self._rescore_stale_champions()
 
         outcome = _WeightOutcome()
-        if set_weights and self._config.enable_weights:
+        if set_weights:
             outcome = await self._update_weights()
         self._telemetry.record_sweep(
             SweepStats(
