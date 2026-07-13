@@ -1,12 +1,11 @@
 # Pylon weight-setting service for one SN118 validator. See docs/VALIDATOR.md,
-# "Set up Pylon". From the repository root, copy .env.example to
-# scripts/pylon/pylon.env, fill it in (never commit it), then:
-#   docker compose -f scripts/pylon/docker-compose.yaml up -d
+# "Set up Pylon". Configure the root .env, then run:
+#   docker compose up -d pylon
 services:
   pylon:
     image: docker.io/backenddevelopersltd/bittensor-pylon:latest # pin to a released tag in production
     restart: unless-stopped
-    env_file: ./pylon.env
+    env_file: ./.env
     ports:
       - "8000:8000"
     volumes:
