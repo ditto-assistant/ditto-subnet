@@ -18,68 +18,38 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
     monkeypatch.setenv("PYLON_IDENTITY_NAME", "ditto")
     monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "tok")
-    for k in (
-        "VALIDATOR_KOTH_MARGIN",
-        "VALIDATOR_KOTH_TAIL_SIZE",
-        "VALIDATOR_KOTH_CHAMPION_SHARE",
-    ):
-        monkeypatch.delenv(k, raising=False)
 
 
 class TestKothConfig:
-    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_frozen_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
         cfg = parse_validator_config_from_env()
-        # v2 / bench_version 2 retune: 5% margin ≥ 3σ/composite at the σ ≤ 0.01
-        # target (was 1%; see config.py B8 note).
+        # Consensus-critical mechanism values are frozen in code (the KOTH_*
+        # constants), not env, so every validator folds identically.
         assert cfg.koth_margin == 0.05
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
-        # Weight-set cadence is decoupled from the (faster) scoring sweep.
+        assert cfg.koth_dethrone_z == 1.64
+        # Cadence knobs stay env-driven, with these defaults.
         assert cfg.sweep_seconds == 120
         assert cfg.epoch_seconds == 3600
 
-    @pytest.mark.parametrize("val", ["nan", "inf", "-inf", "0", "-0.5"])
-    def test_bad_margin_rejected(
-        self, monkeypatch: pytest.MonkeyPatch, val: str
-    ) -> None:
-        # NaN/Inf are the ones that slip past a bare ``<= 0`` and would silently
-        # disable the ATH gate → validator diverges from consensus.
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_KOTH_MARGIN", val)
-        with pytest.raises(ValidatorConfigError):
-            parse_validator_config_from_env()
-
-    def test_non_numeric_margin_is_typed_error(
+    def test_env_cannot_override_frozen_knobs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_KOTH_MARGIN", "abc")
-        with pytest.raises(ValidatorConfigError):
-            parse_validator_config_from_env()
-
-    @pytest.mark.parametrize("val", ["nan", "inf", "1.5", "0", "-0.1"])
-    def test_bad_champion_share_rejected(
-        self, monkeypatch: pytest.MonkeyPatch, val: str
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_KOTH_CHAMPION_SHARE", val)
-        with pytest.raises(ValidatorConfigError):
-            parse_validator_config_from_env()
-
-    def test_negative_tail_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_KOTH_TAIL_SIZE", "-1")
-        with pytest.raises(ValidatorConfigError):
-            parse_validator_config_from_env()
-
-    def test_non_numeric_tail_is_typed_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_KOTH_TAIL_SIZE", "4.5")
-        with pytest.raises(ValidatorConfigError):
-            parse_validator_config_from_env()
+        for var in (
+            "VALIDATOR_KOTH_MARGIN",
+            "VALIDATOR_KOTH_TAIL_SIZE",
+            "VALIDATOR_KOTH_CHAMPION_SHARE",
+            "VALIDATOR_KOTH_DETHRONE_Z",
+        ):
+            monkeypatch.setenv(var, "999")
+        cfg = parse_validator_config_from_env()
+        assert cfg.koth_margin == 0.05
+        assert cfg.koth_tail_size == 4
+        assert cfg.koth_champion_share == 0.9
+        assert cfg.koth_dethrone_z == 1.64
 
 
 class TestMinStakeConfig:

@@ -15,6 +15,23 @@ from dataclasses import dataclass
 
 from ditto.validator.errors import ValidatorConfigError
 
+# --- Frozen consensus constants (KOTH + ATH gate) ---
+# NOT env-tunable: every validator must fold the public ledger with byte-identical
+# mechanism values or Yuma consensus clips the deviator, so these are pinned in
+# code. Changing one is a coordinated network upgrade (roll every validator
+# together), never a per-operator setting.
+#
+# Margin: the dethrone margin must exceed the between-seed composite noise so a
+# verbatim copy cannot win a lucky seed. v2 targets between-seed σ ≤ 0.01 and sets
+# the margin to ≥ 3σ/composite (at composite ~0.6, 3·0.01/0.6 = 5%). The offline
+# calibrator (dittobench-api cmd/benchcal) reports a hermetic σ ≈ 0.017 as a
+# weak-harness upper bound; the champion-region σ must reconfirm ≤ 0.01 on the
+# hosted multi-seed run before mainnet.
+KOTH_MARGIN = 0.05  # relative dethrone margin (5%)
+KOTH_TAIL_SIZE = 4  # runners-up after the champion that split the tail
+KOTH_CHAMPION_SHARE = 0.9  # champion weight share (90% champion / 10% tail)
+KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
+
 
 @dataclass(frozen=True)
 class ValidatorConfig:
@@ -103,7 +120,9 @@ class ValidatorConfig:
     be front-runnable) but still submits — refusing would zero the chain, a worse
     failure. Set it on finney so a mis-set hyperparameter is loud."""
 
-    # --- Incentive mechanism (KOTH + ATH gate) ---
+    # --- Incentive mechanism (KOTH + ATH gate). margin / tail_size /
+    # champion_share / dethrone_z are set from the frozen KOTH_* module constants
+    # above, not from env. ---
     koth_margin: float
     """Relative margin a challenger must beat the incumbent by to dethrone it.
 
@@ -257,48 +276,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         _require("PYLON_IDENTITY_NAME", pylon_identity_name)
         _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
 
-    # KOTH+ATH mechanism knobs. Every validator must agree on these or Yuma
-    # consensus clips the deviator, so they are env-tunable but default to the
-    # team-locked values (90/10 split).
-    #
-    # Margin retune for DittoBench v2 / bench_version 2:
-    # the dethrone margin must exceed the between-seed composite noise so a
-    # verbatim copy cannot win a lucky seed. v1's 1% margin assumed a small σ it
-    # never had. v2 targets between-seed σ ≤ 0.01 composite and sets
-    # the margin to ≥ 3σ/composite: at composite ~0.6, 3·0.01/0.6 = 5%. The
-    # offline calibrator (dittobench-api cmd/benchcal) reports a hermetic
-    # composite σ ≈ 0.017 as a weak-harness upper bound; the champion-region σ
-    # from the hosted 30-seed frozen-starter-kit run MUST reconfirm ≤ 0.01 before
-    # mainnet — if it is higher, raise this margin (and adopt median-of-3
-    # sub-seeds) and re-match the platform score_tol.
-    koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.05")
-    koth_tail_size = _parse_int("VALIDATOR_KOTH_TAIL_SIZE", "4")
-    koth_champion_share = _parse_float("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")
-    koth_dethrone_z = _parse_float("VALIDATOR_KOTH_DETHRONE_Z", "1.64")
+    # margin / tail_size / champion_share / dethrone_z are frozen (the KOTH_*
+    # module constants), not env. Confirmation-seed count stays operator-set but
+    # must match network-wide, so validate it.
     koth_confirmation_seeds = _parse_int("VALIDATOR_KOTH_CONFIRMATION_SEEDS", "3")
-    # ``math.isfinite`` rejects NaN/Inf, which slip past a bare ``<= 0`` (e.g.
-    # ``nan <= 0`` is False) and would silently disable the ATH gate — a
-    # consensus-divergence footgun since the fold multiplies by ``1 + margin``.
-    if not math.isfinite(koth_margin) or koth_margin <= 0:
-        raise ValidatorConfigError(
-            f"VALIDATOR_KOTH_MARGIN must be a finite number > 0, got {koth_margin}"
-        )
-    if koth_tail_size < 0:
-        raise ValidatorConfigError(
-            f"VALIDATOR_KOTH_TAIL_SIZE must be >= 0, got {koth_tail_size}"
-        )
-    if not (math.isfinite(koth_champion_share) and 0 < koth_champion_share <= 1):
-        raise ValidatorConfigError(
-            "VALIDATOR_KOTH_CHAMPION_SHARE must be a finite number in (0, 1], "
-            f"got {koth_champion_share}"
-        )
-    # z >= 0; 0 disables the statistical band (pure relative margin). NaN/Inf
-    # would poison the deterministic fold, so reject them (consensus footgun).
-    if not math.isfinite(koth_dethrone_z) or koth_dethrone_z < 0:
-        raise ValidatorConfigError(
-            "VALIDATOR_KOTH_DETHRONE_Z must be a finite number >= 0, "
-            f"got {koth_dethrone_z}"
-        )
     if koth_confirmation_seeds < 1:
         raise ValidatorConfigError(
             "VALIDATOR_KOTH_CONFIRMATION_SEEDS must be >= 1, "
@@ -333,10 +314,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         require_commit_reveal=require_commit_reveal,
-        koth_margin=koth_margin,
-        koth_tail_size=koth_tail_size,
-        koth_champion_share=koth_champion_share,
-        koth_dethrone_z=koth_dethrone_z,
+        koth_margin=KOTH_MARGIN,
+        koth_tail_size=KOTH_TAIL_SIZE,
+        koth_champion_share=KOTH_CHAMPION_SHARE,
+        koth_dethrone_z=KOTH_DETHRONE_Z,
         koth_confirmation_seeds=koth_confirmation_seeds,
         min_stake_tao=min_stake_tao,
         sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),

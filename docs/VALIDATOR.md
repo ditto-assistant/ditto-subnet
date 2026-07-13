@@ -263,21 +263,23 @@ A challenger dethrones the champion only after clearing the greater of the 5%
 relative margin and the configured statistical error band. The champion receives
 90% of weight; the next four distinct miners split the remaining 10%. First-seen
 timestamps and duplicate detection prevent copied artifacts from displacing the
-incumbent. Keep every `VALIDATOR_KOTH_*` setting identical network-wide so Yuma
-consensus converges. The implementation in `ditto/validator/weights.py` is the
-source of truth.
+incumbent. The margin, tail size, champion share, and dethrone-z are frozen in
+code (`ditto/validator/config.py`), not env-tunable, so every validator folds
+identically. The implementation in `ditto/validator/weights.py` is the source of
+truth.
 
 ## 9. Environment reference
 
-These common knobs retain the defaults documented by the validator worker.
-Consensus-critical values must remain identical across the network.
+These common knobs keep the defaults documented by the validator worker. The
+consensus-critical KOTH margin, tail size, champion share, and dethrone-z are
+frozen in code (not listed here); `VALIDATOR_KOTH_CONFIRMATION_SEEDS` (3) is the
+one mechanism value still env-set and must match network-wide.
 
 | Env | Meaning |
 | --- | --- |
 | `VALIDATOR_RUN_SIZE` (`full`) | dittobench run size. `full` is the production config; `small`/`medium` are for plumbing tests. |
 | `VALIDATOR_SWEEP_SECONDS` (120) | Scoring-sweep cadence. |
 | `VALIDATOR_EPOCH_SECONDS` (3600) | Weight-set cadence. The worker also honors the chain's `weights_rate_limit`, stretching to whichever is longer. |
-| `VALIDATOR_KOTH_MARGIN` (0.05) / `VALIDATOR_KOTH_TAIL_SIZE` (4) / `VALIDATOR_KOTH_CHAMPION_SHARE` (0.9) / `VALIDATOR_KOTH_DETHRONE_Z` (1.64) | Consensus-critical mechanism knobs. Every validator on a network must run identical values or Yuma clips you. Do not tune unilaterally. |
 | `VALIDATOR_REQUIRE_COMMIT_REVEAL` (off) | Cutover guard. When set, the worker logs an error each weight-set if the chain reports commit-reveal off (weights would be front-runnable); it still submits. Set on finney. |
 | `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` (2400) | Hard cap per agent run (full builds are slow). |
 | `VALIDATOR_DITTOBENCH_MOCK` (off) | Canned scores, no dittobench key needed; local plumbing only, never on a real network. |
