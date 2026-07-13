@@ -69,7 +69,7 @@ What it does not do:
 | A hotkey registered on SN118 with a `validator_permit` | The chain accepts weights only from permitted validators (stake above the permit threshold). |
 | A co-located dittobench-api instance on a Docker-capable host | Builds and scores each submission. See the [dittobench-api](https://github.com/ditto-assistant/dittobench-api) repo. |
 | A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay; no GPU is needed. |
-| Outbound reach to the platform API and a chain endpoint (Pylon or a subtensor node) | All communication is outbound; the worker listens on nothing. |
+| Outbound reach to the platform API and Pylon | Pylon is the validator weight-setting service; the worker listens on nothing. |
 
 Keep the mnemonic or wallet key and any gateway key (the Chutes relay key) in a
 secret manager and inject them as env; they must never be logged or committed.
@@ -103,12 +103,15 @@ The locked model is served from a gateway configured on the dittobench-api
 service, not the worker. See [Model gateway](#4-model-gateway). The validator
 worker does not need an LLM key.
 
-### Chain / weight path (pick one)
+### Pylon weight setting
 
 | Env | Meaning |
 | --- | --- |
-| `PYLON_URL` + `PYLON_IDENTITY_NAME` + `PYLON_IDENTITY_TOKEN` | Production path: weights via Pylon identity `put_weights` (Pylon handles normalization, u16, UID resolution, commit-reveal, version_key). |
-| `VALIDATOR_USE_SDK_WEIGHTS=1` + `SUBTENSOR_NETWORK` | Fallback and localnet path: weights via `bittensor.Subtensor.set_weights`, hotkey-signed. `SUBTENSOR_NETWORK` takes `finney`, `test`, `local`, or a raw `ws://` endpoint. |
+| `PYLON_URL` + `PYLON_IDENTITY_NAME` + `PYLON_IDENTITY_TOKEN` | Required validator path: weights via Pylon identity `put_weights`. Pylon improves weight submission by handling normalization, u16 conversion, UID resolution, commit-reveal, and `version_key`. |
+
+Validators use Pylon; direct SDK weight submission is not an operator choice.
+`VALIDATOR_USE_SDK_WEIGHTS=1` exists only for the development localnet, where
+Pylon identity writes are not available.
 
 ## 4. Model gateway
 
@@ -156,9 +159,10 @@ Run it under a supervisor (systemd, pm2) with restart-on-exit; the process drain
 cleanly on SIGTERM/SIGINT. Run exactly one instance per hotkey; two instances
 double-submit weights.
 
-A healthy boot logs the weight mode (`Pylon identity` or `bittensor SDK`), then
-per sweep: queue depth, per-agent `scored agent … composite=…` lines, and
-`submitted weights for N miner(s)` when the epoch is due.
+A healthy validator boot logs `Pylon identity`, then per sweep: queue depth,
+per-agent `scored agent … composite=…` lines, and `submitted weights for N
+miner(s)` when the epoch is due. Development-localnet workers instead log the
+SDK fallback.
 
 Boot-time self-checks:
 
@@ -191,7 +195,7 @@ hotkeys:
 2. Copy `scripts/validator.env.example` to `val1.env`, `val2.env`, `val3.env`. In
    each: point `VALIDATOR_PLATFORM_API_URL` and `VALIDATOR_DITTOBENCH_API_URL` at
    the dev services, set that worker's `VALIDATOR_HOTKEY` and signing source,
-   `NETUID=3`, and the localnet weight path (`VALIDATOR_USE_SDK_WEIGHTS=1`,
+   `NETUID=3`, and the development-only localnet fallback (`VALIDATOR_USE_SDK_WEIGHTS=1`,
    `SUBTENSOR_NETWORK=<ws://localnet>`). Keep the KOTH knobs identical in all
    three.
 3. Start each in its own process: `./scripts/run-validator.sh val1.env` (then
@@ -228,7 +232,7 @@ Consensus-critical values must remain identical across the network.
 | `VALIDATOR_SWEEP_SECONDS` (120) | Scoring-sweep cadence. |
 | `VALIDATOR_EPOCH_SECONDS` (3600) | Weight-set cadence. The worker also honors the chain's `weights_rate_limit`, stretching to whichever is longer. |
 | `VALIDATOR_KOTH_MARGIN` (0.05) / `VALIDATOR_KOTH_TAIL_SIZE` (4) / `VALIDATOR_KOTH_CHAMPION_SHARE` (0.9) / `VALIDATOR_KOTH_DETHRONE_Z` (1.64) | Consensus-critical mechanism knobs. Every validator on a network must run identical values or Yuma clips you. Do not tune unilaterally. |
-| `VALIDATOR_WEIGHT_VERSION_KEY` (package version) | Mechanism version stamped on SDK-path `set_weights`; must agree network-wide. |
+| `VALIDATOR_WEIGHT_VERSION_KEY` (package version) | Development-localnet mechanism version stamped on SDK-path `set_weights`; must agree across localnet workers. Production validators use Pylon. |
 | `VALIDATOR_REQUIRE_COMMIT_REVEAL` (off) | Cutover guard. When set, the worker logs an error each weight-set if the chain reports commit-reveal off (weights would be front-runnable); it still submits. Set on finney; leave off on the localnet. |
 | `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` (2400) | Hard cap per agent run (full builds are slow). |
 | `VALIDATOR_DITTOBENCH_MOCK` (off) | Canned scores, no dittobench key needed; local plumbing only, never on a real network. |
