@@ -5,6 +5,17 @@ isolated local sandbox, publishes signed results, and sets weights on Finney.
 The supported production deployment is the root Docker Compose stack: one
 `.env`, one `docker compose up -d`, and no separate process supervisor.
 
+## Contents
+
+- [What runs](#what-runs)
+- [Requirements](#requirements)
+- [First deployment](#first-deployment)
+- [Verify health](#verify-health)
+- [Upgrade and operate](#upgrade-and-operate)
+- [How scoring and weights work](#how-scoring-and-weights-work)
+- [Optional settings](#optional-settings)
+- [Development](#development)
+
 ## What runs
 
 Compose starts six services:
