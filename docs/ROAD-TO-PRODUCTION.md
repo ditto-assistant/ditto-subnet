@@ -59,7 +59,7 @@ Everything else parallelizes.
 - **O-DB** (TODO): backups/PITR, pooling, retention, a read replica for the public ledger.
 - **O-HA** (TODO): API redundancy, DR, cost ceilings + alerts.
 - **O-OBS** (PARTIAL): add validator + platform metrics and real alerting (W&B + dashboard already live).
-- **O-UPD** (PARTIAL): an autoupdater; fix the TF apply that wants to destroy validator resources without `-var=enable_validator=true`.
+- **O-UPD** (PARTIAL, operational): an autoupdater; and set `enable_validator = true` in the env's `terraform.tfvars` (`infra/terraform/envs/gcp-platform`, var defaults to false) so an apply never plans to destroy the validator VM + its secrets without the `-var` flag. The tfvars fix is an operator action against live infra, not a speculative code edit.
 - **O-SEC** (PARTIAL): document and exercise a secrets-rotation runbook.
 - **Q-CI / Q-CHAOS** (TODO): a localnet E2E suite in CI; load + chaos testing.
 
