@@ -103,8 +103,6 @@ services:
         condition: service_healthy
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
-      # Model routes and sandbox enforcement are part of the production scoring
-      # boundary, not operator settings.
       HARNESS_GATEWAY_URL: http://host.docker.internal:11435
       HARNESS_EMBED_URL: http://host.docker.internal:11434
       DITTOBENCH_SANDBOX_HARDEN: "1"
@@ -137,12 +135,8 @@ services:
       PYLON_URL: http://pylon:8000
       PYLON_IDENTITY_NAME: ditto
       PYLON_TOKEN: ${PYLON_TOKEN}
-      # Production scoring controls are protocol policy, not operator knobs.
-      # Tickets also pin run_size, but keep the client fallback fixed to full.
       VALIDATOR_RUN_SIZE: "full"
       VALIDATOR_SWEEP_SECONDS: "120"
-      # Production validators publish on one common cadence. The worker also
-      # honors a longer on-chain weights_rate_limit if the subnet requires it.
       VALIDATOR_EPOCH_SECONDS: "3600"
       VALIDATOR_QUEUE_LIMIT: "50"
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
