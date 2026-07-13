@@ -66,9 +66,6 @@ class ValidatorConfig:
     wallet_hotkey: str | None
     """bittensor wallet hotkey name (paired with ``wallet_name``)."""
 
-    validator_mnemonic: str | None
-    """Alternative signing source: a hotkey mnemonic (secret). Prefer a wallet."""
-
     netuid: int
     """Subnet netuid (118 for Ditto)."""
 
@@ -78,14 +75,10 @@ class ValidatorConfig:
     pylon_identity_name: str
     """Pylon identity name (write access; required for ``put_weights``)."""
 
-    pylon_identity_token: str
-    """Pylon identity token paired with ``pylon_identity_name``."""
-
-    pylon_open_access_token: str | None
-    """Pylon open-access (read) token. Optional, but without it the worker's
-    validator-permit self-check (a Pylon open-access ``get_recent_neurons`` read)
-    cannot run in identity mode and fails open. Set ``PYLON_OPEN_ACCESS_TOKEN`` so
-    the self-check works in production, where identity is the weight path."""
+    pylon_token: str | None
+    """The Pylon token (``PYLON_TOKEN``). One token guards both the open-access
+    reads and the identity write, so the worker uses it for both the
+    validator-permit self-check and ``put_weights``."""
 
     subtensor_network: str
     """Subtensor network identifier for the substrate event reads Pylon does not
@@ -166,10 +159,8 @@ class ValidatorConfig:
     """Per-request timeout for platform + dittobench HTTP calls."""
 
     def signing_source_present(self) -> bool:
-        """Whether a usable signing key source is configured."""
-        return bool(self.validator_mnemonic) or bool(
-            self.wallet_name and self.wallet_hotkey
-        )
+        """Whether a usable signing key source is configured (wallet files)."""
+        return bool(self.wallet_name and self.wallet_hotkey)
 
 
 def _require(name: str, value: str) -> str:
@@ -204,17 +195,20 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     # end-to-end plumbing without a scoring engine).
     _truthy = {"1", "true", "yes"}
     dittobench_mock = os.environ.get("VALIDATOR_DITTOBENCH_MOCK", "").lower() in _truthy
-    # Every validator scores and submits weights. dittobench-api is optional
-    # only in local mock mode.
+
+    # Every validator both scores and sets weights (the one-validator-type model),
+    # so all of it is required: dittobench-api for scoring (unless mock) and the
+    # Pylon identity + token for put_weights.
     dittobench_api_url = os.environ.get("VALIDATOR_DITTOBENCH_API_URL", "")
     if not dittobench_mock:
         _require("VALIDATOR_DITTOBENCH_API_URL", dittobench_api_url)
 
-    # Every validator submits weights through Pylon identity mode.
+    # One Pylon token guards both the open-access reads and the identity write, so
+    # the worker uses it for the permit self-check and for put_weights.
     pylon_identity_name = os.environ.get("PYLON_IDENTITY_NAME", "")
-    pylon_identity_token = os.environ.get("PYLON_IDENTITY_TOKEN", "")
+    pylon_token = os.environ.get("PYLON_TOKEN", "")
     _require("PYLON_IDENTITY_NAME", pylon_identity_name)
-    _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
+    _require("PYLON_TOKEN", pylon_token)
 
     # All KOTH + ATH mechanism values are frozen (the KOTH_* module constants),
     # not env, so every validator folds identically.
@@ -237,12 +231,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         ),
         wallet_name=os.environ.get("VALIDATOR_WALLET_NAME") or None,
         wallet_hotkey=os.environ.get("VALIDATOR_WALLET_HOTKEY") or None,
-        validator_mnemonic=os.environ.get("VALIDATOR_MNEMONIC") or None,
         netuid=int(os.environ.get("NETUID", "118")),
         pylon_url=os.environ.get("PYLON_URL", "http://localhost:8001"),
         pylon_identity_name=pylon_identity_name,
-        pylon_identity_token=pylon_identity_token,
-        pylon_open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
+        pylon_token=pylon_token or None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         koth_margin=KOTH_MARGIN,
         koth_tail_size=KOTH_TAIL_SIZE,
@@ -265,7 +257,6 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     )
     if not config.signing_source_present():
         raise ValidatorConfigError(
-            "no signing key: set VALIDATOR_MNEMONIC or "
-            "VALIDATOR_WALLET_NAME + VALIDATOR_WALLET_HOTKEY"
+            "no signing key: set VALIDATOR_WALLET_NAME + VALIDATOR_WALLET_HOTKEY"
         )
     return config

@@ -122,20 +122,23 @@ def parse_chain_config_from_env() -> ChainConfig:
     Defaults match the local docker-compose stack: Pylon on
     ``http://localhost:8001`` (post the API-server port shift), subnet
     netuid 118, finney mainnet for the substrate-interface event reader.
-    Empty token strings are normalised to ``None`` so a partially-filled
-    ``.env`` does not mask required-auth detection.
+    One token (``PYLON_TOKEN``) guards both the open-access reads and the identity
+    write, so it feeds ``open_access_token`` and, when an identity name is set,
+    ``identity_token``. Empty strings normalise to ``None``.
 
     Raises:
-        ValueError: When neither ``PYLON_OPEN_ACCESS_TOKEN`` nor a paired
-            (``PYLON_IDENTITY_NAME``, ``PYLON_IDENTITY_TOKEN``) is set.
+        ValueError: When ``PYLON_TOKEN`` is unset (no auth mode).
             Surfaces from :meth:`ChainConfig.__post_init__`.
     """
+    token = os.environ.get("PYLON_TOKEN") or None
+    identity_name = os.environ.get("PYLON_IDENTITY_NAME") or None
     return ChainConfig(
         pylon_url=os.environ.get("PYLON_URL", "http://localhost:8001"),
         netuid=int(os.environ.get("NETUID", "118")),
-        open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
-        identity_name=os.environ.get("PYLON_IDENTITY_NAME") or None,
-        identity_token=os.environ.get("PYLON_IDENTITY_TOKEN") or None,
+        open_access_token=token,
+        identity_name=identity_name,
+        # Same token; only in identity mode (a bare read client sets no identity).
+        identity_token=token if identity_name else None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
         archive_blocks_cutoff=int(os.environ.get("ARCHIVE_BLOCKS_CUTOFF", "300")),
     )

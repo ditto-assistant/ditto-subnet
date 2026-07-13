@@ -48,13 +48,15 @@ class TestCommitRevealMode:
         )
         assert not _errors(caplog)
 
-    async def test_error_when_off_and_required(self, caplog) -> None:
+    async def test_off_is_info_not_error(self, caplog) -> None:
+        # Commit-reveal is not required: OFF is the expected default, reported at
+        # info, never an error.
         chain = MagicMock()
         chain.get_commit_reveal_enabled = AsyncMock(return_value=False)
         with caplog.at_level(logging.INFO, logger=_LOGGER):
             await _worker(chain=chain)._log_commit_reveal_mode()
-        errs = _errors(caplog)
-        assert errs and "front-runnable" in errs[0].getMessage()
+        assert not _errors(caplog)
+        assert any("OFF" in r.getMessage() for r in caplog.records)
 
     async def test_undeterminable_none_is_fail_open(self, caplog) -> None:
         chain = MagicMock()
