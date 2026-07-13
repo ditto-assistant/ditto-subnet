@@ -88,7 +88,7 @@ from the `ditto-platform` repo, not here.
 - **`VALIDATOR_DITTOBENCH_MOCK=1`** returns a canned `ScoreReport` and skips the
   real dittobench-api call; use it for local plumbing. When it is off,
   `VALIDATOR_DITTOBENCH_API_URL` is required at boot (fail-fast);
-  `VALIDATOR_OPENROUTER_KEY` is needed only when the model lock is off.
+  model-provider credentials belong to the model relay, not the validator worker.
 - The worker uses the platform's lease-based **k=3** scoring contract:
   `request_job` leases a `/validator/job` ticket, `/agent/{id}/artifact` fetches
   the submission, `submit_score` posts one signed score to the public ledger

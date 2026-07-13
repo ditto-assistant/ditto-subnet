@@ -8,7 +8,7 @@
 # The worker is stateless: run it under a supervisor (systemd/pm2) with
 # restart-on-exit. Run exactly ONE instance per hotkey (two double-submit
 # weights); independent validators each use a DISTINCT registered hotkey.
-# Keep secrets (mnemonic/wallet, OpenRouter key, Pylon token) out of git.
+# Keep secrets (mnemonic/wallet, Pylon token) out of git.
 set -euo pipefail
 
 ENV_FILE="${1:-validator.env}"

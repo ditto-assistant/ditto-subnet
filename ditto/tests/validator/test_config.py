@@ -125,7 +125,7 @@ class TestRoleConfig:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # An independent (weights-only) validator: scoring off, so no
-        # dittobench-api URL / OpenRouter key is required even outside mock mode.
+        # dittobench-api URL is required outside mock mode either.
         monkeypatch.setenv("VALIDATOR_HOTKEY", _HOTKEY)
         monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
         monkeypatch.setenv("VALIDATOR_USE_SDK_WEIGHTS", "true")
@@ -133,7 +133,6 @@ class TestRoleConfig:
         for k in (
             "VALIDATOR_DITTOBENCH_MOCK",
             "VALIDATOR_DITTOBENCH_API_URL",
-            "VALIDATOR_OPENROUTER_KEY",
         ):
             monkeypatch.delenv(k, raising=False)
         cfg = parse_validator_config_from_env()
