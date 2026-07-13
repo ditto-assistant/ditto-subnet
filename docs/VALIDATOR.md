@@ -13,7 +13,7 @@ The supported production deployment is the root Docker Compose stack: one
 - [Verify health](#verify-health)
 - [Upgrade and operate](#upgrade-and-operate)
 - [How scoring and weights work](#how-scoring-and-weights-work)
-- [Optional settings](#optional-settings)
+- [Optional observability](#optional-observability)
 - [Development](#development)
 
 ## What runs
@@ -158,7 +158,8 @@ docker compose ps
 
 The platform leases at most three live scoring tickets per submission. Three
 independent validators publish signed scores, and the platform finalizes the
-median. An expired ticket reopens automatically.
+median. Each ticket pins the dataset seed, dataset hash, and `full` run size, so
+validators evaluate the same workload. An expired ticket reopens automatically.
 
 Each validator reads the same public median-aggregated ledger and applies the
 deterministic king-of-the-hill fold in `ditto/validator/weights.py`. A challenger
@@ -172,23 +173,15 @@ resolution, normalization, commit-reveal handling, retries, and the final
 `put_weights` extrinsic. One `PYLON_TOKEN` protects both the worker's permit
 check and identity writes.
 
-## Optional settings
+## Optional observability
 
-The production defaults are already in `.env.example`. Common overrides are:
+Production behavior and internal service routes are fixed by Compose. Operators
+may configure logging and aggregate telemetry:
 
 | Env | Default | Meaning |
 | --- | --- | --- |
-| `VALIDATOR_RUN_SIZE` | `full` | Benchmark size; smaller values are for local plumbing only. |
-| `VALIDATOR_SWEEP_SECONDS` | `120` | Work-poll cadence. |
-| `VALIDATOR_EPOCH_SECONDS` | `3600` | Weight cadence, also bounded by the chain rate limit. |
-| `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` | `2400` | Hard cap for one scoring run. |
-| `VALIDATOR_DITTOBENCH_MOCK` | `false` | Return a canned score; never enable on a real network. |
 | `VALIDATOR_LOG_LEVEL` | `INFO` | Worker log level. |
 | `WANDB_MODE` | `disabled` | Set to `online` with project/entity values for aggregate telemetry. |
-
-The locked model, provider, thinking mode, SN118 mechanism values, and Pylon
-identity name are not operator choices. See `.env.example` for the complete
-environment reference.
 
 ## Development
 
