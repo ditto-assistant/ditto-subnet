@@ -6,16 +6,16 @@ services:
     platform: linux/amd64
     restart: unless-stopped
     environment:
-      # Pylon reuses the validator settings for its network, wallet, hotkey, and
-      # netuid, so they are set once. One PYLON_TOKEN guards both the open-access
-      # reads and the identity write.
+      # This repository is SN118; netuid is not an operator setting. Pylon
+      # reuses the validator settings for its network, wallet, and hotkey. One
+      # PYLON_TOKEN guards both the open-access reads and the identity write.
       PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
       PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_NETWORK:-finney}
       PYLON_OPEN_ACCESS_TOKEN: ${PYLON_TOKEN}
       PYLON_IDENTITIES: '["ditto"]'
       PYLON_ID_DITTO_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
       PYLON_ID_DITTO_HOTKEY_NAME: ${VALIDATOR_WALLET_HOTKEY}
-      PYLON_ID_DITTO_NETUID: ${NETUID}
+      PYLON_ID_DITTO_NETUID: "118"
       PYLON_ID_DITTO_TOKEN: ${PYLON_TOKEN}
       PYLON_DATABASE_PATH: /data/pylon.db
       PYLON_METRICS_TOKEN: ${PYLON_METRICS_TOKEN:-}
@@ -128,7 +128,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      NETUID: ${NETUID}
+      NETUID: "118"
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
       VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
       VALIDATOR_DITTOBENCH_API_URL: ${VALIDATOR_DITTOBENCH_API_URL}

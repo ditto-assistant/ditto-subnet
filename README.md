@@ -44,14 +44,19 @@ ditto verify --path <agent.tar.gz>      # pre-flight checks only; no chain/API c
 `--chain-endpoint` overrides only the chain target (e.g. a hosted local subtensor) while keeping the
 `--network` API URL. See [MINER.md](docs/MINER.md) for the full workflow.
 
-## Validator worker summary
+## Validator quickstart
+
 ```sh
-python -m ditto.validator
+cp .env.example .env
+# Fill in the wallet names, validator hotkey, Pylon token, and Chutes key.
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
 ```
-Env-driven (`VALIDATOR_*` / `PYLON_*` / `NETUID` / `SUBTENSOR_NETWORK`): polls the platform's
-`/validator/*` API, scores each agent via dittobench-api (set `VALIDATOR_DITTOBENCH_MOCK=1` to return
-a canned score for local testing), and sets weights via Pylon. See
-[VALIDATOR.md](docs/VALIDATOR.md) for setup and operations.
+
+The root Compose stack runs the worker, Pylon, model gateway, scorer, and its
+isolated Docker sandbox from one `.env`. See [VALIDATOR.md](docs/VALIDATOR.md)
+for first deployment, health checks, upgrades, and local development.
 
 ## Make targets
 - `make lint`: `ruff format --check` + `ruff check`

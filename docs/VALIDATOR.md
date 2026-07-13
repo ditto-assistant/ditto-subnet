@@ -1,270 +1,207 @@
-# Validator guide (SN118)
+# Validator operations (SN118)
 
-A validator scores miner submissions and sets on-chain weights from the results.
-Scoring is decentralized across independent validators with no central scorer:
-the platform leases up to three tickets per submission and finalizes each on the
-median of the three scores. Every validator is independent, running the same
-worker with its own registered hotkey; this guide is how to join.
-
-Terms used below: KOTH (king-of-the-hill, the current champion), ATH
-(all-time-high dethroning gate), and Yuma consensus (the chain mechanism that
-combines validators' weight vectors and clips outliers).
+A validator leases miner submissions from the platform, scores them in an
+isolated local sandbox, publishes signed results, and sets weights on Finney.
+The supported production deployment is the root Docker Compose stack: one
+`.env`, one `docker compose up -d`, and no separate process supervisor.
 
 ## Contents
 
-- [What a validator does (and doesn't)](#1-what-a-validator-does-and-doesnt)
-- [Requirements](#2-requirements)
-- [Install and configure](#3-install-and-configure)
-- [Model gateway](#4-model-gateway)
-- [Set up Pylon](#5-set-up-pylon)
-- [Run it](#6-run-it)
-- [Verify it's working](#7-verify-its-working)
-- [Mechanism reference](#8-mechanism-reference)
-- [Environment reference](#9-environment-reference)
-- [Code references](#code-references)
+- [What runs](#what-runs)
+- [Requirements](#requirements)
+- [First deployment](#first-deployment)
+- [Verify health](#verify-health)
+- [Upgrade and operate](#upgrade-and-operate)
+- [How scoring and weights work](#how-scoring-and-weights-work)
+- [Optional settings](#optional-settings)
+- [Development](#development)
 
-## 1. What a validator does (and doesn't)
+## What runs
 
-The validator is one stateless Python process (`python -m ditto.validator`) that
-loops:
+Compose starts six services:
 
-1. Sweep (every `VALIDATOR_SWEEP_SECONDS`, default 120s): pull agents in
-   `evaluating` from the platform's `/validator/*` HTTP API.
-2. Score each through its co-located dittobench-api instance (by presigned
-   tarball URL), sign the composite with the hotkey (sr25519), and POST it to the
-   platform's public score ledger.
-3. Set weights (every `VALIDATOR_EPOCH_SECONDS`, default 3600s): re-read the
-   durable ledger, fold it into the deterministic KOTH+ATH weight vector, and
-   submit on chain.
-
-What it does not do:
-
-- No database, no local state. The queue and the score ledger live behind the
-  platform API; a validator can be killed and restarted at any time and loses
-  nothing.
-- No judge model, no validator LLM key. Scoring is judge-free and deterministic;
-  the only model in a run is the locked harness model, served from a gateway you
-  host (section 4).
-- No server-side champion selection. The weight fold
-  (`ditto/validator/weights.py`) is a pure function of the public ledger, so
-  every honest validator computes the identical vector and Yuma consensus clips
-  deviators.
-- No screening. The pre-benchmark build + health gate (`ditto/screener/`) is a
-  platform-operated role the platform runs on its own dedicated host, not part
-  of the validator stack. You may run a screener locally to add capacity or
-  pre-check submissions (`python -m ditto.screener`, needs Docker and a permitted
-  hotkey), but it is optional and independent of scoring.
-
-### The k=3 model
-
-- The platform issues a leased ticket to a validator that asks for work
-  (`POST /api/v1/validator/job`), capped at three live tickets per submission
-  (`SCORING_QUORUM=3`). Once a submission's three slots are filled, most polls
-  return no job; a ticket not scored before its deadline expires and the slot
-  re-opens.
-- Each validator scores independently and posts one signed score. At three
-  scores the platform finalizes on the median, so no single validator decides a
-  score and an outlier cannot move the result.
-- Every validator then folds the same public median-aggregated ledger with the
-  identical KOTH+ATH function and sets its own weights; Yuma consensus combines
-  them. Bringing up more independent validators, each a distinct registered
-  hotkey, is how scoring decentralizes.
-
-## 2. Requirements
-
-| What | Why |
+| Service | Purpose |
 | --- | --- |
-| Linux host: 4 vCPU, 16 GB RAM, 80 GB+ free disk | Runs the worker plus the co-located dittobench-api scorer; Docker sandbox builds dominate disk use. |
-| x86-64 CPU | The upstream Pylon image is currently published for `linux/amd64`. |
-| Docker Engine + Docker Compose v2 | The whole stack runs as Compose services (`docker compose up -d`): Pylon, the model gateway, the co-located [dittobench-api](https://github.com/ditto-assistant/dittobench-api) scorer with its isolated Docker sandbox, and the worker. |
-| Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | `uv sync` installs the pinned environment (for the worker and CLI outside Compose). |
-| A hotkey registered on SN118 with a `validator_permit` | The chain accepts weights only from permitted validators (stake above the permit threshold). |
-| A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay; no GPU is needed. |
-| Outbound reach to the platform API and Pylon | Pylon is the validator weight-setting service; the worker listens on nothing. |
+| `ditto-subnet` | Polls for work, signs scores, and computes weights. |
+| `dittobench-api` | Scores submissions. |
+| `sandbox-docker` | Provides an isolated nested Docker daemon for submission builds. |
+| `model-relay` | Sends locked-model requests to Chutes without exposing the API key to sandboxes. |
+| `ollama` | Serves `embeddinggemma` for memory scoring. |
+| `pylon` | Uses the validator wallet to submit weights on chain. |
 
-Keep the wallet key and any gateway key (the Chutes relay key) in a
-secret manager and inject them as env; they must never be logged or committed.
-The validator hotkey (an SS58 address) is public.
+The validator is stateless. The queue and score ledger live on the platform,
+while Pylon persists any in-flight weight submission in its named volume. A
+restart does not lose scored work.
 
-## 3. Install and configure
+Screening is not part of this stack. The platform runs the pre-benchmark build
+and health gate on a dedicated host before a submission reaches validators.
+
+## Requirements
+
+- Linux x86-64 host with at least 4 vCPU, 16 GB RAM, and 80 GB free disk.
+- Docker Engine with Docker Compose v2. Docker must start at boot.
+- A local Bittensor wallet whose hotkey is registered on Finney SN118 and has a
+  validator permit.
+- A Chutes API key for the locked `Qwen/Qwen3-32B-TEE` model.
+- Outbound access to Finney, Chutes, and `https://platform-api.heyditto.ai`.
+
+Python and `uv` are needed only for development or running components outside
+Compose; they are not required for the production path below.
+
+## First deployment
+
+Clone the repository and create the one environment file Compose reads:
 
 ```sh
 git clone https://github.com/ditto-assistant/ditto-subnet
 cd ditto-subnet
-uv sync
 cp .env.example .env
-```
-
-Edit `.env` with the settings for your validator, then load it through your
-shell or process supervisor. Configuration is env-driven
-(`ditto/validator/config.py`); the worker fails fast at boot on anything missing
-or malformed.
-
-### Required
-
-| Env | Meaning |
-| --- | --- |
-| `VALIDATOR_PLATFORM_API_URL` | Platform API base URL. |
-| `VALIDATOR_HOTKEY` | Your validator hotkey (SS58); must match the loaded keypair. |
-| `VALIDATOR_WALLET_NAME` + `VALIDATOR_WALLET_HOTKEY` | Signing source: the bittensor wallet files mounted on the host. |
-| `NETUID` | Subnet netuid (118 on finney). |
-| `VALIDATOR_DITTOBENCH_API_URL` | Your co-located dittobench-api base URL. |
-
-The locked model is served by the gateway services alongside the scorer, not by
-the worker. See [Model gateway](#4-model-gateway). The validator worker does not
-receive or forward model-provider credentials.
-
-### Weight path (Pylon)
-
-Weights are set through Pylon, a small service that owns the validator hotkey and
-submits `put_weights` on chain. [Set up Pylon](#5-set-up-pylon) covers running it;
-point the worker at it with:
-
-| Env | Meaning |
-| --- | --- |
-| `PYLON_URL` | Base URL of your Pylon service (Compose defaults to `http://pylon:8000`). |
-| `PYLON_IDENTITY_NAME` | The Pylon identity holding this validator's hotkey (Compose defaults to `ditto`). |
-| `PYLON_TOKEN` | The Pylon token: authorizes `put_weights` and the worker's permit self-check. |
-
-## 4. Model gateway
-
-Every run is scored against one locked model, Qwen3-32B, served through Chutes;
-no GPU is needed. The locked model id, provider, and thinking mode are
-frozen in dittobench-api's code, so there is nothing about the model to
-configure. The stack runs two model services next to the scorer, both brought up
-by the root `docker-compose.yml` (section 6):
-
-- **model-relay** (`:11435`): fronts Chutes, forcing the frozen model and
-  keeping your Chutes key out of the miner sandbox.
-- **Ollama** (`:11434`): serves the `embeddinggemma` embedding model for memory
-  scoring.
-
-The miner sandbox reaches both at `host.docker.internal` (the `sandbox-docker`
-forwarder bridges the private Compose network); it never gets a provider key or
-direct LLM-provider access. The only model setting you provide is the Chutes key
-the relay uses:
-
-```sh
-RELAY_API_KEY=cpk-...   # in .env, used only by the relay
-```
-
-Keep `RELAY_API_KEY` in a secret manager; it never enters the scorer or the
-sandbox.
-
-## 5. Set up Pylon
-
-Pylon is a small HTTP service that owns the validator hotkey and submits weights
-on chain. The worker never signs a weight extrinsic itself; it hands its computed
-weight vector to Pylon, and Pylon does the normalization, u16 conversion, UID
-resolution, commit-reveal, and `version_key`, retrying until the extrinsic lands.
-It persists in-flight submissions to a local database and resumes them across
-restarts. Run one Pylon next to each worker.
-
-Pylon ships as a Docker image (`backenddevelopersltd/bittensor-pylon`). It reads
-`PYLON_`-prefixed env and mounts the validator wallet. You configure one
-**identity**, a named wallet-plus-subnet pair with its own secret token; the
-worker authenticates to that identity to write weights.
-
-The root `docker-compose.yml` starts the complete validator stack: Pylon,
-dittobench-api backed by an isolated nested Docker daemon for sandbox builds,
-and the ditto-subnet validator worker. A small internal proxy preserves sandbox
-access to the model relay and embedder on the private Compose network. Compose
-reads the single `.env` created in section 3 and passes each service only the
-values it needs. Compose derives Pylon's network, netuid, wallet, hotkey, and
-identity (`ditto`) from the validator settings, so the one thing you set for
-Pylon is `PYLON_TOKEN`, which guards both the open-access reads and the identity
-write. Generate it with OpenSSL and keep it in a secret manager:
-
-```sh
 openssl rand -base64 32
 ```
 
-The one Pylon setting in `.env` is the token:
+Put the generated random value in `PYLON_TOKEN`, then fill these placeholders in
+`.env`:
 
-```sh
-PYLON_TOKEN=<random-token>           # the one token, generated above
-```
-
-Bring up the stack from the repository root (section 6). The identity hotkey must
-be the validator hotkey registered on SN118 with a `validator_permit`; Pylon
-returns `403` on `put_weights` without the permit and stake. Pylon serves its
-OpenAPI at `http://localhost:8000/schema/swagger` once running. Full service
-reference: <https://github.com/bittensor-church/bittensor-pylon> (`docs/SERVICE.md`).
-
-## 6. Run it
-
-With `.env` filled in (sections 3-5), bring up the whole stack from the
-repository root:
-
-```sh
-docker compose up -d
-```
-
-That starts Pylon, the model gateway (relay + Ollama), the dittobench-api scorer,
-and the validator worker together. `docker compose logs -f ditto-subnet` follows
-the worker. Run exactly one stack per hotkey; two workers double-submit weights.
-
-To run the worker outside Docker instead (pointing at your own Pylon and
-dittobench-api), load `.env` and start it directly under a supervisor (systemd,
-pm2) with restart-on-exit; it drains cleanly on SIGTERM/SIGINT:
-
-```sh
-uv run python -m ditto.validator
-```
-
-A healthy boot logs the weight mode (`Pylon identity`), then per sweep: queue
-depth, per-agent `scored agent … composite=…` lines, and
-`submitted weights for N miner(s)` when the epoch is due.
-
-Boot-time self-checks:
-
-- Missing or invalid env gives an immediate typed `ValidatorConfigError` (it
-  never boots half-configured).
-- No `validator_permit` on your hotkey: the worker scores normally but skips
-  weight submission each epoch with a loud log line (the chain is the enforcer,
-  the log line is the alarm).
-
-## 7. Verify it's working
-
-- Logs: `sweep complete: N agent(s) (weights set)` and no recurring
-  `put_weights failed` lines.
-- The public ledger: your signed scores appear under your `validator_hotkey` at
-  `GET /api/v1/scoring/scores`.
-- On chain: your hotkey's last-update block advances each epoch (`btcli` or
-  metagraph inspection), and weights match the ledger fold.
-- W&B dashboard (if enabled): sweep stats, leaderboard, and the weight vector per
-  epoch.
-
-## 8. Mechanism reference
-
-Weights use a deterministic king-of-the-hill fold over the public score ledger.
-A challenger dethrones the champion only after clearing the greater of the 5%
-relative margin and the configured statistical error band. The champion receives
-90% of weight; the next four distinct miners split the remaining 10%. First-seen
-timestamps and duplicate detection prevent copied artifacts from displacing the
-incumbent. The margin, tail size, champion share, and dethrone-z are frozen in
-code (`ditto/validator/config.py`), not env-tunable, so every validator folds
-identically. The implementation in `ditto/validator/weights.py` is the source of
-truth.
-
-## 9. Environment reference
-
-These common knobs keep the defaults documented by the validator worker. The
-consensus-critical KOTH values (margin, tail size, champion share, dethrone-z,
-and confirmation seeds) are frozen in code (`ditto/validator/config.py`), not
-env-tunable, so they are not listed here.
-
-| Env | Meaning |
+| Env | Value |
 | --- | --- |
-| `VALIDATOR_RUN_SIZE` (`full`) | dittobench run size. `full` is the production config; `small`/`medium` are for plumbing tests. |
-| `VALIDATOR_SWEEP_SECONDS` (120) | Scoring-sweep cadence. |
-| `VALIDATOR_EPOCH_SECONDS` (3600) | Weight-set cadence. The worker also honors the chain's `weights_rate_limit`, stretching to whichever is longer. |
-| `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` (2400) | Hard cap per agent run (full builds are slow). |
-| `VALIDATOR_DITTOBENCH_MOCK` (off) | Canned scores, no dittobench key needed; local plumbing only, never on a real network. |
-| `VALIDATOR_LOG_LEVEL` (`INFO`) | Worker log level. |
-| `WANDB_MODE` (`disabled`) | Set `online` (plus `WANDB_PROJECT`/`WANDB_ENTITY`) to publish the aggregate-only telemetry. |
+| `VALIDATOR_HOTKEY` | Public SS58 address of the permitted validator hotkey. |
+| `VALIDATOR_WALLET_NAME` | Coldkey directory name under `~/.bittensor/wallets`. |
+| `VALIDATOR_WALLET_HOTKEY` | Hotkey file name inside that wallet. |
+| `PYLON_TOKEN` | Random token generated above. |
+| `RELAY_API_KEY` | Chutes API key used only by `model-relay`. |
 
-## Code references
+The example already selects the production platform and Finney; Compose
+hardcodes SN118 for both the worker and Pylon. For a local chain, explicitly
+replace `VALIDATOR_PLATFORM_API_URL` and `SUBTENSOR_NETWORK`; do not reuse the
+production `.env`.
 
-`ditto/validator/{__main__,config,worker,weights,signing,telemetry}.py` ·
-`ditto/chain/client.py`
+The wallet stays on the host and is mounted read-only. The loaded wallet hotkey
+must exactly match `VALIDATOR_HOTKEY`. Never put a mnemonic in `.env`, and never
+commit `.env`.
+
+Validate the configuration and start the complete stack from the repository
+root:
+
+```sh
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+```
+
+Compose services use `restart: unless-stopped`, so Docker brings the validator
+back after a host reboot. Do not also run it under PM2 or systemd, and do not run
+two stacks with the same hotkey.
+
+## Verify health
+
+All six services should be `Up`; `ollama`, `sandbox-docker`, and
+`dittobench-api` should also report `healthy`:
+
+```sh
+docker compose ps
+docker compose logs --since 10m ditto-subnet
+curl -fsS https://platform-api.heyditto.ai/health
+```
+
+A healthy idle validator logs:
+
+```text
+sweep complete: 0 agent(s)
+```
+
+Zero agents is normal when no submission is queued. During mining, successful
+runs add `scored agent ... composite=...` lines. When an epoch is due, the
+worker logs either a submitted weight count or that the ledger has no positive
+scores.
+
+Production acceptance is:
+
+- the platform health response reports `db: ok` and `chain: ok`;
+- sweeps complete without recurring platform, scorer, or Pylon errors;
+- the configured hotkey is registered on SN118 and has a validator permit;
+- the hotkey's on-chain last-update block advances after weights are submitted.
+
+## Upgrade and operate
+
+Pull and reconcile in place; taking the stack down first creates unnecessary
+downtime and is not required:
+
+```sh
+git pull --ff-only
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+```
+
+Useful commands:
+
+```sh
+docker compose logs -f ditto-subnet
+docker compose logs --since 10m sandbox-docker
+docker compose logs --since 10m dittobench-api
+docker compose logs --since 10m pylon
+docker compose restart ditto-subnet
+```
+
+If `sandbox-docker` exits, check its logs first. It must run privileged so its
+nested daemon can build untrusted submissions, but the scorer never mounts or
+controls the host Docker socket. If the host reboots, verify both Docker and the
+stack rather than adding a second supervisor:
+
+```sh
+systemctl is-enabled docker
+systemctl is-active docker
+docker compose ps
+```
+
+## How scoring and weights work
+
+The platform leases at most three live scoring tickets per submission. Three
+independent validators publish signed scores, and the platform finalizes the
+median. An expired ticket reopens automatically.
+
+Each validator reads the same public median-aggregated ledger and applies the
+deterministic king-of-the-hill fold in `ditto/validator/weights.py`. A challenger
+must clear both the relative margin and statistical error band. The champion
+gets 90% of weight and the next four distinct miners split 10%; Yuma consensus
+combines validators' on-chain vectors. These consensus values are frozen in
+code, not configurable through env.
+
+The worker sends its vector to its co-located Pylon identity. Pylon performs UID
+resolution, normalization, commit-reveal handling, retries, and the final
+`put_weights` extrinsic. One `PYLON_TOKEN` protects both the worker's permit
+check and identity writes.
+
+## Optional settings
+
+The production defaults are already in `.env.example`. Common overrides are:
+
+| Env | Default | Meaning |
+| --- | --- | --- |
+| `VALIDATOR_RUN_SIZE` | `full` | Benchmark size; smaller values are for local plumbing only. |
+| `VALIDATOR_SWEEP_SECONDS` | `120` | Work-poll cadence. |
+| `VALIDATOR_EPOCH_SECONDS` | `3600` | Weight cadence, also bounded by the chain rate limit. |
+| `VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS` | `2400` | Hard cap for one scoring run. |
+| `VALIDATOR_DITTOBENCH_MOCK` | `false` | Return a canned score; never enable on a real network. |
+| `VALIDATOR_LOG_LEVEL` | `INFO` | Worker log level. |
+| `WANDB_MODE` | `disabled` | Set to `online` with project/entity values for aggregate telemetry. |
+
+The locked model, provider, thinking mode, SN118 mechanism values, and Pylon
+identity name are not operator choices. See `.env.example` for the complete
+environment reference.
+
+## Development
+
+For local code work outside Compose:
+
+```sh
+uv sync
+make lint typecheck test
+```
+
+The worker entry point is `uv run python -m ditto.validator`. Point it at local
+platform, scorer, and Pylon services, and set `VALIDATOR_DITTOBENCH_MOCK=true`
+only when testing plumbing without a real benchmark.
+
+Code references: `ditto/validator/{__main__,config,worker,weights,signing}.py`,
+`ditto/chain/client.py`, and the root `docker-compose.yml`.
