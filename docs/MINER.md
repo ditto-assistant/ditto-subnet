@@ -88,8 +88,9 @@ artifact digest.
 uv run ditto --network finney status <agent-id>
 ```
 
-The normal pipeline is upload, automated screening, validator evaluation, and
-ledger finalization. Screening includes an isolated build and health check. Up
+The normal pipeline is upload, automated screening (run by the platform on a
+dedicated host, not by validators), validator evaluation, and ledger
+finalization. Screening includes an isolated build and health check. Up
 to three independent validators score a submission; the platform finalizes the
 median. Failed leases expire and can be retried, so one validator does not own
 the result.
