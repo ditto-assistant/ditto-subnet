@@ -1,8 +1,10 @@
-"""On-chain weight submission via the bittensor SDK (localnet fallback).
+"""On-chain weight submission via the bittensor SDK (deprecated fallback).
 
-Pylon's identity ``put_weights`` requires a registered write identity that is
-not stood up on the dev localnet. When ``VALIDATOR_USE_SDK_WEIGHTS`` is set the
-worker submits weights directly through the bittensor SDK
+Pylon is the supported weight path (see VALIDATOR.md); its identity
+``put_weights`` requires a registered write identity. This escape hatch exists
+only for bring-up on a chain where Pylon is not yet stood up. When
+``VALIDATOR_USE_SDK_WEIGHTS`` is set the worker submits weights directly through
+the bittensor SDK
 (``Subtensor.set_weights``) instead. :class:`SdkWeightSetter` duck-types
 :meth:`ditto.chain.ChainClient.put_weights` (``async def put_weights(weights)``)
 so :class:`~ditto.validator.worker.ValidatorWorker` is agnostic to the sink.

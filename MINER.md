@@ -99,8 +99,9 @@ Grading is deterministic and uses no judge model:
 - Tool cases score tool selection, arguments, order, and unnecessary calls.
 - Memory cases use answer-type-specific rules with distractor and forbidden-value
   checks.
-- Efficiency and consistency multiply the aggregate score; a canary miss can
-  disqualify the run.
+- Efficiency, consistency, and canary integrity are bounded multipliers on the
+  aggregate (a canary leak multiplies by 0.5, an honest miss by 0.85); none
+  zeroes the run.
 - Reports include the dataset seed so a run can be reproduced and challenged.
 
 Per-case and per-run budgets stop looping agents from consuming unbounded model

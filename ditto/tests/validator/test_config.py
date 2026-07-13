@@ -142,8 +142,8 @@ class TestRoleConfig:
     def test_scoring_only_needs_no_pylon_identity(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The central scorer: weights off, so no Pylon identity is required even
-        # without the SDK-weights escape hatch.
+        # A scoring-only instance: weights off, so no Pylon identity is required
+        # even without the SDK-weights escape hatch.
         monkeypatch.setenv("VALIDATOR_HOTKEY", _HOTKEY)
         monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
         monkeypatch.setenv("VALIDATOR_DITTOBENCH_MOCK", "true")

@@ -123,7 +123,7 @@ class ValidatorWorker:
         self._chain = chain
         self._keypair = keypair
         # The weight sink: the Pylon-backed ChainClient by default, or an
-        # injected setter (e.g. the bittensor-SDK fallback on the localnet).
+        # injected setter (e.g. the deprecated bittensor-SDK fallback).
         # Both expose ``async def put_weights(dict[str, float])``.
         self._weight_setter: Any = weight_setter if weight_setter is not None else chain
         # Public telemetry sink. A disabled instance is a cheap no-op, so the

@@ -36,8 +36,8 @@ class ValidatorConfig:
     dittobench_mock: bool
     """When True, bypass dittobench-api and return a canned ScoreReport.
 
-    For local end-to-end plumbing tests where no dittobench-api / OpenRouter
-    key is available. Enabled via ``VALIDATOR_DITTOBENCH_MOCK``."""
+    For local end-to-end plumbing tests where no dittobench-api is available.
+    Enabled via ``VALIDATOR_DITTOBENCH_MOCK``."""
 
     # --- Roles (which halves of the loop this instance runs) ---
     enable_scoring: bool
@@ -98,9 +98,10 @@ class ValidatorConfig:
     use_sdk_weights: bool
     """When True, submit weights via the bittensor SDK instead of Pylon identity.
 
-    Localnet fallback (``VALIDATOR_USE_SDK_WEIGHTS``): Pylon identity-write isn't
-    stood up on the dev chain, so the worker calls ``Subtensor.set_weights``
-    directly. Pylon identity creds are not required in this mode."""
+    Deprecated: Pylon is the supported weight path (see VALIDATOR.md). This
+    ``VALIDATOR_USE_SDK_WEIGHTS`` escape hatch calls ``Subtensor.set_weights``
+    directly and is retained only for bring-up on a chain where Pylon is not yet
+    stood up; off by default. Pylon identity creds are not required in this mode."""
 
     require_commit_reveal: bool
     """Cutover guard: expect commit-reveal to be ON for this network.
@@ -111,8 +112,7 @@ class ValidatorConfig:
     separate reveal call. This flag is observability-only: when set and the chain
     reports commit-reveal OFF, the worker logs an error each epoch (weights would
     be front-runnable) but still submits — refusing would zero the chain, a worse
-    failure. Leave off on the localnet (commit-reveal is disabled there); set it
-    on finney so a mis-set hyperparameter is loud."""
+    failure. Set it on finney so a mis-set hyperparameter is loud."""
 
     weight_version_key: int
     """Mechanism version stamped on ``set_weights`` (the SDK path).
@@ -122,8 +122,8 @@ class ValidatorConfig:
     hasn't upgraded doesn't get averaged against a new mechanism. Defaults to
     ``ditto.__spec_version__`` so it advances with the package version. Every
     validator on a network must agree, like the KOTH knobs. (The Pylon path
-    derives its own ``version_key`` from subnet hyperparams, so this applies to
-    the SDK/localnet path.)"""
+    derives its own ``version_key`` from subnet hyperparams, so this applies only
+    to the SDK path.)"""
 
     # --- Incentive mechanism (KOTH + ATH gate) ---
     koth_margin: float
@@ -163,8 +163,8 @@ class ValidatorConfig:
 
     min_stake_tao: float
     """Minimum stake (TAO) this validator expects on its own hotkey before it
-    submits weights. ``0`` disables the check (the localnet has staking
-    disabled). A companion to the ``validator_permit`` self-check: on a real
+    submits weights. ``0`` disables the check. A companion to the
+    ``validator_permit`` self-check: on a real
     network a permit implies stake, but the stake read gives an early, explicit
     log line when the hotkey has demonstrably fallen below the threshold."""
 

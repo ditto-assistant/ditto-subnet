@@ -92,8 +92,8 @@ async def _amain() -> int:
                 _apply_ditto_logging()  # re-assert: bittensor has initialised
                 await worker.run_forever(stop)
             elif config.use_sdk_weights:
-                # Localnet fallback: weights go through the bittensor SDK, signed
-                # by the local hotkey. No Pylon chain client / write identity.
+                # Deprecated SDK fallback: weights go through the bittensor SDK,
+                # signed by the local hotkey. No Pylon chain client / write identity.
                 from ditto.validator.sdk_weights import SdkWeightSetter
 
                 logger.info("weight mode: bittensor SDK (set_weights)")
