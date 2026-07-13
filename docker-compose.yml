@@ -161,6 +161,7 @@ services:
       WANDB_PROJECT: ${WANDB_PROJECT:-ditto-sn118}
       WANDB_ENTITY: ${WANDB_ENTITY:-}
       WANDB_RUN_NAME: ${WANDB_RUN_NAME:-}
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
       UV_CACHE_DIR: /tmp/uv-cache
     depends_on:
       pylon:
