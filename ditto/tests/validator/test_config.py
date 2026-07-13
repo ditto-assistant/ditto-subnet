@@ -8,16 +8,16 @@ from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.errors import ValidatorConfigError
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-_MNEMONIC = "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
 
 
 def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Minimal env under which parse succeeds (mock scoring + Pylon identity)."""
+    """Minimal env under which parse succeeds (mock scoring + wallet + Pylon)."""
     monkeypatch.setenv("VALIDATOR_DITTOBENCH_MOCK", "true")
     monkeypatch.setenv("VALIDATOR_HOTKEY", _HOTKEY)
-    monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
+    monkeypatch.setenv("VALIDATOR_WALLET_NAME", "coldkey")
+    monkeypatch.setenv("VALIDATOR_WALLET_HOTKEY", "hotkey")
     monkeypatch.setenv("PYLON_IDENTITY_NAME", "ditto")
-    monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "tok")
+    monkeypatch.setenv("PYLON_TOKEN", "tok")
 
 
 class TestKothConfig:
@@ -76,23 +76,37 @@ class TestMinStakeConfig:
             parse_validator_config_from_env()
 
 
-class TestUnifiedValidatorConfig:
-    """Every validator requires both the scoring and weight dependencies."""
+class TestRequiredConfig:
+    """Every validator both scores and sets weights, so all of it is required."""
 
-    def test_requires_dittobench_outside_mock_mode(
+    def test_one_pylon_token_used_for_both(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        # The single PYLON_TOKEN drives the identity write too.
+        assert cfg.pylon_token == "tok"
+        assert not hasattr(cfg, "pylon_identity_token")
+
+    def test_pylon_token_required(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("PYLON_TOKEN", raising=False)
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
+
+    def test_pylon_identity_name_required(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("PYLON_IDENTITY_NAME", raising=False)
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
+
+    def test_dittobench_url_required_without_mock(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _base_env(monkeypatch)
         monkeypatch.delenv("VALIDATOR_DITTOBENCH_MOCK", raising=False)
         monkeypatch.delenv("VALIDATOR_DITTOBENCH_API_URL", raising=False)
-        with pytest.raises(ValidatorConfigError, match="VALIDATOR_DITTOBENCH_API_URL"):
-            parse_validator_config_from_env()
-
-    @pytest.mark.parametrize("missing", ["PYLON_IDENTITY_NAME", "PYLON_IDENTITY_TOKEN"])
-    def test_requires_pylon_identity(
-        self, monkeypatch: pytest.MonkeyPatch, missing: str
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.delenv(missing, raising=False)
-        with pytest.raises(ValidatorConfigError, match=missing):
+        with pytest.raises(ValidatorConfigError):
             parse_validator_config_from_env()

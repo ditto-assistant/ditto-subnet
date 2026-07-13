@@ -66,19 +66,18 @@ async def _amain() -> int:
             platform = PlatformClient(config, http)
             dittobench = DittobenchClient(config, http)
 
-            # Every validator scores submissions and submits its own weights.
+            # Every validator both scores and sets weights, so it always runs a
+            # Pylon identity client. One token authorizes both the put_weights
+            # write and the open-access permit self-check.
             chain_config = ChainConfig(
                 pylon_url=config.pylon_url,
                 netuid=config.netuid,
                 identity_name=config.pylon_identity_name,
-                identity_token=config.pylon_identity_token,
-                # Carry the open-access read token so the worker's
-                # validator-permit self-check (an open-access neurons read)
-                # runs in identity mode instead of failing open.
-                open_access_token=config.pylon_open_access_token,
+                identity_token=config.pylon_token,
+                open_access_token=config.pylon_token,
                 subtensor_network=config.subtensor_network,
             )
-            logger.info("validator mode: scoring + Pylon identity put_weights")
+            logger.info("weight mode: Pylon identity (put_weights)")
             async with create_chain_client(chain_config) as chain:
                 worker = ValidatorWorker(
                     config=config,

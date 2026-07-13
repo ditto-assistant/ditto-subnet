@@ -582,7 +582,7 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once()
 
     async def test_set_weights_false_scores_without_touching_weights(self) -> None:
-        # A sweep between weight-set epochs drains the queue and
+        # The scoring-only sweep (between weight-set epochs) drains the queue and
         # re-scores stale champions (a ledger read) but never submits weights.
         job = _job("5MinerA" + "x" * 41)
         ledger = [_entry("5MinerA" + "x" * 41, 0.9)]

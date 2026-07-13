@@ -77,7 +77,7 @@ What it does not do:
 | A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay; no GPU is needed. |
 | Outbound reach to the platform API and Pylon | Pylon is the validator weight-setting service; the worker listens on nothing. |
 
-Keep the mnemonic or wallet key and any gateway key (the Chutes relay key) in a
+Keep the wallet key and any gateway key (the Chutes relay key) in a
 secret manager and inject them as env; they must never be logged or committed.
 The validator hotkey (an SS58 address) is public.
 
@@ -101,15 +101,13 @@ or malformed.
 | --- | --- |
 | `VALIDATOR_PLATFORM_API_URL` | Platform API base URL. |
 | `VALIDATOR_HOTKEY` | Your validator hotkey (SS58); must match the loaded keypair. |
-| `VALIDATOR_WALLET_NAME` + `VALIDATOR_WALLET_HOTKEY` or `VALIDATOR_MNEMONIC` | Signing source. Prefer wallet files; the mnemonic env is the container-friendly alternative. |
+| `VALIDATOR_WALLET_NAME` + `VALIDATOR_WALLET_HOTKEY` | Signing source: the bittensor wallet files mounted on the host. |
 | `NETUID` | Subnet netuid (118 on finney). |
 | `VALIDATOR_DITTOBENCH_API_URL` | Your co-located dittobench-api base URL. |
 
-The locked model is served from a gateway configured on the dittobench-api
-service, not the worker. See [Model gateway](#4-model-gateway). The validator
-worker does not receive or forward model-provider credentials. Every validator
-runs this scoring path and submits its own weights; these responsibilities
-cannot be split across separate worker roles.
+The locked model is served by the gateway services alongside the scorer, not by
+the worker. See [Model gateway](#4-model-gateway). The validator worker does not
+receive or forward model-provider credentials.
 
 ### Weight path (Pylon)
 
@@ -121,38 +119,32 @@ point the worker at it with:
 | --- | --- |
 | `PYLON_URL` | Base URL of your Pylon service (Compose defaults to `http://pylon:8000`). |
 | `PYLON_IDENTITY_NAME` | The Pylon identity holding this validator's hotkey (Compose defaults to `ditto`). |
-| `PYLON_IDENTITY_TOKEN` | The Pylon token, authorizing `put_weights`. |
-| `PYLON_OPEN_ACCESS_TOKEN` | Optional separate read token. Compose defaults it to `PYLON_IDENTITY_TOKEN`. |
+| `PYLON_TOKEN` | The Pylon token: authorizes `put_weights` and the worker's permit self-check. |
 
 ## 4. Model gateway
 
-A validator runs dittobench-api, its `cmd/model-relay`, and a small local
-embedding model. The relay keeps the Chutes key out of miner sandboxes and forces
-every run onto the same model.
+Every run is scored against one locked model, Qwen3-32B, served through Chutes;
+no GPU is needed. The locked model id, provider, and thinking mode are
+frozen in dittobench-api's code, so there is nothing about the model to
+configure. The stack runs two model services next to the scorer, both brought up
+by the root `docker-compose.yml` (section 6):
+
+- **model-relay** (`:11435`): fronts Chutes, forcing the frozen model and
+  keeping your Chutes key out of the miner sandbox.
+- **Ollama** (`:11434`): serves the `embeddinggemma` embedding model for memory
+  scoring.
+
+The miner sandbox reaches both at `host.docker.internal` (the `sandbox-docker`
+forwarder bridges the ports); it never gets a provider key or direct
+LLM-provider access. The only model setting you provide is the Chutes key the
+relay uses:
 
 ```sh
-RELAY_API_KEY=cpk-... \
-RELAY_MODEL=Qwen/Qwen3-32B-TEE \
-PORT=11435 \
-./model-relay
+RELAY_API_KEY=cpk-...   # in .env, used only by the relay
 ```
 
-Configure dittobench-api (not this validator worker) with:
-
-```sh
-DITTOBENCH_MODEL_LOCK=1
-HARNESS_MODEL=Qwen/Qwen3-32B-TEE
-HARNESS_PROVIDER=chutes
-HARNESS_GATEWAY_URL=http://host.docker.internal:11435
-HARNESS_EMBED_URL=http://host.docker.internal:11434
-```
-
-Run Ollama on port 11434 with the embedding model named by dittobench-api's
-model-lock configuration. The sandbox reaches both services through
-`host.docker.internal`; its egress policy should allow the local relay and
-embedding service, not direct LLM-provider access. Keep `RELAY_API_KEY` in a
-secret manager. Self-hosting the chat model is useful for local practice but is
-not fleet-standard because serving differences make scores less comparable.
+Keep `RELAY_API_KEY` in a secret manager; it never enters the scorer or the
+sandbox.
 
 ## 5. Set up Pylon
 
@@ -173,61 +165,47 @@ dittobench-api backed by an isolated rootless Docker daemon for sandbox builds,
 and the ditto-subnet validator worker. A small internal proxy preserves sandbox
 access to the model relay and embedder running on the physical host. Compose
 reads the single `.env` created in section 3 and passes each service only the
-values it needs. Compose derives Pylon's network, netuid, wallet, and hotkey from
-the validator settings and configures the identity as `ditto`. One random token
-guards both open-access reads and the identity write by default; only set
-`PYLON_OPEN_ACCESS_TOKEN` if you hand a separate token to a read-only consumer.
-
-Generate the token with OpenSSL:
+values it needs. Compose derives Pylon's network, netuid, wallet, hotkey, and
+identity (`ditto`) from the validator settings, so the one thing you set for
+Pylon is `PYLON_TOKEN`, which guards both the open-access reads and the identity
+write. Generate it with OpenSSL and keep it in a secret manager:
 
 ```sh
 openssl rand -base64 32
 ```
 
-Store it in a secret manager; do not commit it. If you do split read from write,
-run the command twice and use a different output for each token.
+The one Pylon setting in `.env` is the token:
 
 ```sh
-PYLON_IDENTITY_TOKEN=<random-token>
-# PYLON_OPEN_ACCESS_TOKEN=<separate-read-token>  # optional
+PYLON_TOKEN=<random-token>           # the one token, generated above
 ```
 
-Bring up the stack from the repository root. Pylon and dittobench-api stay on
-the private Compose network; the validator worker listens on no port.
-
-```sh
-docker compose up -d
-```
-
-Outside the root Compose stack, point the worker at Pylon explicitly:
-
-```sh
-PYLON_URL=http://localhost:8000
-PYLON_IDENTITY_NAME=ditto
-PYLON_IDENTITY_TOKEN=<the token configured in Pylon>
-```
-
-The identity hotkey must be the validator hotkey registered on SN118 with a
-`validator_permit`; Pylon returns `403` on `put_weights` without the permit and
-stake. Keep the token and the wallet in a secret manager. Pylon serves its
+Bring up the stack from the repository root (section 6). The identity hotkey must
+be the validator hotkey registered on SN118 with a `validator_permit`; Pylon
+returns `403` on `put_weights` without the permit and stake. Pylon serves its
 OpenAPI at `http://localhost:8000/schema/swagger` once running. Full service
 reference: <https://github.com/bittensor-church/bittensor-pylon> (`docs/SERVICE.md`).
 
 ## 6. Run it
 
+With `.env` filled in (sections 3-5), bring up the whole stack from the
+repository root:
+
 ```sh
-VALIDATOR_PLATFORM_API_URL=https://platform-api.heyditto.ai/ \
-NETUID=118 \
-VALIDATOR_HOTKEY=<ss58> \
-VALIDATOR_WALLET_NAME=<coldkey-name> VALIDATOR_WALLET_HOTKEY=<hotkey-name> \
-VALIDATOR_DITTOBENCH_API_URL=http://localhost:8080 \
-PYLON_URL=http://<pylon-host> PYLON_IDENTITY_NAME=<name> PYLON_IDENTITY_TOKEN=<secret> \
-uv run python -m ditto.validator
+docker compose up -d
 ```
 
-Run it under a supervisor (systemd, pm2) with restart-on-exit; the process drains
-cleanly on SIGTERM/SIGINT. Run exactly one instance per hotkey; two instances
-double-submit weights.
+That starts Pylon, the model gateway (relay + Ollama), the dittobench-api scorer,
+and the validator worker together. `docker compose logs -f ditto-subnet` follows
+the worker. Run exactly one stack per hotkey; two workers double-submit weights.
+
+To run the worker outside Docker instead (pointing at your own Pylon and
+dittobench-api), load `.env` and start it directly under a supervisor (systemd,
+pm2) with restart-on-exit; it drains cleanly on SIGTERM/SIGINT:
+
+```sh
+uv run python -m ditto.validator
+```
 
 A healthy boot logs the weight mode (`Pylon identity`), then per sweep: queue
 depth, per-agent `scored agent … composite=…` lines, and
@@ -266,7 +244,10 @@ truth.
 
 ## 9. Environment reference
 
-These common knobs keep the defaults documented by the validator worker.
+These common knobs keep the defaults documented by the validator worker. The
+consensus-critical KOTH values (margin, tail size, champion share, dethrone-z,
+and confirmation seeds) are frozen in code (`ditto/validator/config.py`), not
+env-tunable, so they are not listed here.
 
 | Env | Meaning |
 | --- | --- |

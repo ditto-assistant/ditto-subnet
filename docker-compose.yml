@@ -6,13 +6,16 @@ services:
     platform: linux/amd64
     restart: unless-stopped
     environment:
+      # Pylon reuses the validator settings for its network, wallet, hotkey, and
+      # netuid, so they are set once. One PYLON_TOKEN guards both the open-access
+      # reads and the identity write.
       PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
-      PYLON_OPEN_ACCESS_TOKEN: ${PYLON_OPEN_ACCESS_TOKEN:-${PYLON_IDENTITY_TOKEN}}
+      PYLON_OPEN_ACCESS_TOKEN: ${PYLON_TOKEN}
       PYLON_IDENTITIES: '["ditto"]'
       PYLON_ID_DITTO_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
       PYLON_ID_DITTO_HOTKEY_NAME: ${VALIDATOR_WALLET_HOTKEY}
       PYLON_ID_DITTO_NETUID: ${NETUID}
-      PYLON_ID_DITTO_TOKEN: ${PYLON_IDENTITY_TOKEN}
+      PYLON_ID_DITTO_TOKEN: ${PYLON_TOKEN}
       PYLON_DATABASE_PATH: /data/pylon.db
       PYLON_METRICS_TOKEN: ${PYLON_METRICS_TOKEN:-}
     security_opt:
@@ -43,24 +46,69 @@ services:
       timeout: 5s
       retries: 24
 
+  # The embedding model the harness scores memory recall against. Runs on the
+  # host network so the sandbox-docker socat forwarder can reach it at
+  # host.docker.internal:11434. The model is pulled once into the volume.
+  ollama:
+    image: docker.io/ollama/ollama:0.6.8
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ollama-data:/root/.ollama
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        /bin/ollama serve &
+        until /bin/ollama list >/dev/null 2>&1; do sleep 1; done
+        /bin/ollama pull embeddinggemma
+        wait
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q embeddinggemma"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # The model-pinning gateway: fronts Chutes, forces the frozen Qwen3-32B model
+  # and thinking mode, and keeps the Chutes key out of the sandbox. On the host
+  # network so the socat forwarder reaches it at host.docker.internal:11435.
+  model-relay:
+    build:
+      context: https://github.com/ditto-assistant/dittobench-api.git#4ee2683
+      target: relay
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY in .env}
+      PORT: "11435"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
   dittobench-api:
     build:
-      # Pinned to the merged upstream sandbox-image commit from
-      # https://github.com/ditto-assistant/dittobench-api/pull/23.
-      context: https://github.com/ditto-assistant/dittobench-api.git#a1cd41737af929a73d75b7872a514ba53e0d0ea4
+      # Pinned to the dittobench-api commit that freezes the model/provider/
+      # thinking mode and adds the relay target (PR #24, squashed to main).
+      context: https://github.com/ditto-assistant/dittobench-api.git#4ee2683
       target: sandbox
     restart: unless-stopped
     network_mode: service:sandbox-docker
     depends_on:
       sandbox-docker:
         condition: service_healthy
+      model-relay:
+        condition: service_started
+      ollama:
+        condition: service_healthy
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
-      DITTOBENCH_MODEL_LOCK: ${DITTOBENCH_MODEL_LOCK:-1}
-      HARNESS_MODEL: ${HARNESS_MODEL}
-      HARNESS_PROVIDER: ${HARNESS_PROVIDER}
-      HARNESS_GATEWAY_URL: ${HARNESS_GATEWAY_URL}
-      HARNESS_EMBED_URL: ${HARNESS_EMBED_URL}
+      # The model id, provider, and thinking mode are frozen in dittobench-api's
+      # code, not env. Only the gateway URLs (the host-side relay and Ollama,
+      # reached via the sandbox-docker socat forwarder) are configurable.
+      HARNESS_GATEWAY_URL: ${HARNESS_GATEWAY_URL:-http://host.docker.internal:11435}
+      HARNESS_EMBED_URL: ${HARNESS_EMBED_URL:-http://host.docker.internal:11434}
       DITTOBENCH_SANDBOX_HARDEN: ${DITTOBENCH_SANDBOX_HARDEN:-1}
     read_only: true
     tmpfs:
@@ -90,8 +138,7 @@ services:
       VALIDATOR_WALLET_HOTKEY: ${VALIDATOR_WALLET_HOTKEY}
       PYLON_URL: ${PYLON_URL:-http://pylon:8000}
       PYLON_IDENTITY_NAME: ${PYLON_IDENTITY_NAME:-ditto}
-      PYLON_IDENTITY_TOKEN: ${PYLON_IDENTITY_TOKEN}
-      PYLON_OPEN_ACCESS_TOKEN: ${PYLON_OPEN_ACCESS_TOKEN:-${PYLON_IDENTITY_TOKEN}}
+      PYLON_TOKEN: ${PYLON_TOKEN}
       VALIDATOR_RUN_SIZE: ${VALIDATOR_RUN_SIZE:-full}
       VALIDATOR_SWEEP_SECONDS: ${VALIDATOR_SWEEP_SECONDS:-120}
       VALIDATOR_EPOCH_SECONDS: ${VALIDATOR_EPOCH_SECONDS:-3600}
@@ -124,3 +171,4 @@ services:
 volumes:
   pylon-data:
   sandbox-docker-data:
+  ollama-data:

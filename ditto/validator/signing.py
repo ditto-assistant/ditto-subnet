@@ -8,10 +8,10 @@ signature cannot be replayed against a different agent, and the composite the
 platform records cannot be altered without invalidating the signature. (The
 platform's ``/validator/.../score`` rebuilds the same string and verifies it.)
 
-WIP / ops decision: the signing private key comes from a bittensor wallet on the
-host or a mnemonic secret. We only hold the public hotkey
-(``5CZq6Mdanx...``) in config; the secret half must be provisioned on the VM
-(Secret Manager -> wallet file, or VALIDATOR_MNEMONIC). Never log the key.
+The signing private key comes from a bittensor wallet on the host. We only hold
+the public hotkey (``5CZq6Mdanx...``) in config; the secret half must be
+provisioned on the VM as a wallet file (Secret Manager -> wallet file). Never log
+the key.
 """
 
 from __future__ import annotations
@@ -29,17 +29,14 @@ if TYPE_CHECKING:
 def load_validator_keypair(config: ValidatorConfig) -> Any:
     """Load the signing keypair and assert it matches ``config.validator_hotkey``.
 
-    Prefers an explicit mnemonic (``VALIDATOR_MNEMONIC``); otherwise loads the
-    named bittensor wallet hotkey. Raises if neither is usable or the loaded
-    ss58 does not match the configured hotkey (guards against signing weights
-    with the wrong key).
+    Loads the named bittensor wallet hotkey. Raises if it is not usable or the
+    loaded ss58 does not match the configured hotkey (guards against signing
+    weights with the wrong key).
     """
     import bittensor
 
     keypair: Any
-    if config.validator_mnemonic:
-        keypair = bittensor.Keypair.create_from_mnemonic(config.validator_mnemonic)
-    elif config.wallet_name and config.wallet_hotkey:
+    if config.wallet_name and config.wallet_hotkey:
         wallet = bittensor.Wallet(name=config.wallet_name, hotkey=config.wallet_hotkey)
         keypair = wallet.hotkey
     else:  # pragma: no cover - guarded earlier by config parsing

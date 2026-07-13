@@ -335,10 +335,9 @@ class TestBlockInfoFromPylon:
 class TestParseChainConfigFromEnv:
     def test_open_access_only_is_parsed(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("PYLON_URL", "http://pylon:9999")
-        monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "open-tok")
+        monkeypatch.setenv("PYLON_TOKEN", "open-tok")
         monkeypatch.setenv("NETUID", "118")
         monkeypatch.delenv("PYLON_IDENTITY_NAME", raising=False)
-        monkeypatch.delenv("PYLON_IDENTITY_TOKEN", raising=False)
 
         config = parse_chain_config_from_env()
 
@@ -348,22 +347,23 @@ class TestParseChainConfigFromEnv:
         assert config.identity_name is None
         assert config.identity_token is None
 
-    def test_identity_pair_is_parsed(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("PYLON_OPEN_ACCESS_TOKEN", raising=False)
+    def test_identity_uses_the_single_token(self, monkeypatch: pytest.MonkeyPatch):
+        # One PYLON_TOKEN feeds both open-access reads and, when an
+        # identity name is set, the identity write.
+        monkeypatch.setenv("PYLON_TOKEN", "tok")
         monkeypatch.setenv("PYLON_IDENTITY_NAME", "validator")
-        monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "id-tok")
 
         config = parse_chain_config_from_env()
 
         assert config.identity_name == "validator"
-        assert config.identity_token == "id-tok"
+        assert config.identity_token == "tok"
+        assert config.open_access_token == "tok"
 
     def test_empty_string_tokens_become_none(self, monkeypatch: pytest.MonkeyPatch):
         # Empty .env values would otherwise pass the auth-mode truthiness
         # check and look like configured tokens.
-        monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "real-tok")
+        monkeypatch.setenv("PYLON_TOKEN", "real-tok")
         monkeypatch.setenv("PYLON_IDENTITY_NAME", "")
-        monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "")
 
         config = parse_chain_config_from_env()
 
@@ -373,7 +373,7 @@ class TestParseChainConfigFromEnv:
     def test_defaults_apply_when_optional_env_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok")
+        monkeypatch.setenv("PYLON_TOKEN", "tok")
         monkeypatch.delenv("PYLON_URL", raising=False)
         monkeypatch.delenv("NETUID", raising=False)
         monkeypatch.delenv("SUBTENSOR_NETWORK", raising=False)
@@ -386,9 +386,8 @@ class TestParseChainConfigFromEnv:
         assert config.subtensor_network == "finney"
 
     def test_no_auth_configured_raises(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("PYLON_OPEN_ACCESS_TOKEN", raising=False)
+        monkeypatch.delenv("PYLON_TOKEN", raising=False)
         monkeypatch.delenv("PYLON_IDENTITY_NAME", raising=False)
-        monkeypatch.delenv("PYLON_IDENTITY_TOKEN", raising=False)
 
         with pytest.raises(ValueError, match="open_access_token or"):
             parse_chain_config_from_env()

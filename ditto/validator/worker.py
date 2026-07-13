@@ -143,13 +143,17 @@ class ValidatorWorker:
     async def run_once(self, *, set_weights: bool = True) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
 
-        Every validator pulls the ``evaluating`` queue, scores each agent,
-        persists the signed composite, and re-scores stale champions. It also
-        recomputes weights from the durable ledger and submits them when
-        ``set_weights`` is true. An empty queue does not mean "set no weights" —
-        the reigning champion keeps its emission.
+        Every validator does both halves:
 
-        ``run_forever`` scores on every sweep but only sets weights when the epoch
+        * Scoring: pull the ``evaluating`` queue, score each agent through
+          dittobench-api, persist the signed composite, and re-score stale
+          champions.
+        * Weights (when ``set_weights``): recompute weights from the durable
+          ledger and submit them (see :meth:`_update_weights`), so an empty queue
+          no longer means "set no weights": the reigning champion keeps its
+          emission.
+
+        ``run_forever`` scores every sweep but only sets weights when the epoch
         interval is due, so scoring latency isn't tied to the longer weight
         cadence.
         """
@@ -428,12 +432,10 @@ class ValidatorWorker:
         Under commit-reveal v3 the active weight sink (``set_weights`` or Pylon)
         does the timelock commit itself and the chain auto-reveals after
         ``RevealPeriodEpochs`` — there is **no** separate reveal call for the
-        worker to make. This method only *reports* the mode so a cutover can
-        confirm commit-reveal is actually on; without it weights are copy-able
-        (front-runnable). SN118 requires commit-reveal, so an OFF state always
-        logs an error but still submits — refusing would zero the chain, a worse
-        failure. **Fail-open:** any read error or a sink without the reader is a
-        silent no-op.
+        worker to make. Commit-reveal is not required: it is off by default, and
+        this method only *reports* the mode (both states are logged at info) so a
+        cutover can confirm what the network is running. **Fail-open:** any read
+        error or a sink without the reader is a silent no-op.
         """
         read_enabled = getattr(self._weight_setter, "get_commit_reveal_enabled", None)
         if read_enabled is None:
@@ -463,11 +465,9 @@ class ValidatorWorker:
                 period if period is not None else "?",
             )
         else:
-            logger.error(
-                "commit-reveal is OFF on netuid %s — SN118 weights are "
-                "front-runnable; enable the "
-                "CommitRevealWeightsEnabled hyperparameter. Submitting anyway "
-                "(refusing would zero the chain)",
+            logger.info(
+                "commit-reveal is OFF on netuid %s (not required); submitting "
+                "weights directly",
                 netuid,
             )
 
