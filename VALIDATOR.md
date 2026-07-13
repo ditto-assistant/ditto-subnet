@@ -1,4 +1,4 @@
-# Running a Ditto (SN118) validator
+# Validator guide (SN118)
 
 A validator scores miner submissions and sets on-chain weights from the results.
 Scoring is decentralized across independent validators with no central scorer:
@@ -29,9 +29,9 @@ What it does not do:
 - No database, no local state. The queue and the score ledger live behind the
   platform API; a validator can be killed and restarted at any time and loses
   nothing.
-- No judge model, no validator LLM key. Scoring is judge-free and deterministic
-  (dittobench-api `docs/judge-determinism.md`); the only model in a run is the
-  locked harness model, served from a gateway you host (section 2).
+- No judge model, no validator LLM key. Scoring is judge-free and deterministic;
+  the only model in a run is the locked harness model, served from a gateway you
+  host (section 4).
 - No server-side champion selection. The weight fold
   (`ditto/validator/weights.py`) is a pure function of the public ledger, so
   every honest validator computes the identical vector and Yuma consensus clips
@@ -56,11 +56,11 @@ What it does not do:
 
 | What | Why |
 | --- | --- |
-| Linux host: 4 vCPU, 16 GB RAM, 80 GB+ free disk | Runs the worker plus the co-located dittobench-api scorer; the Docker sandbox builds dominate the disk. See [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md). |
+| Linux host: 4 vCPU, 16 GB RAM, 80 GB+ free disk | Runs the worker plus the co-located dittobench-api scorer; Docker sandbox builds dominate disk use. |
 | Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | `uv sync` installs the pinned environment. |
 | A hotkey registered on SN118 with a `validator_permit` | The chain accepts weights only from permitted validators (stake above the permit threshold). |
 | A co-located dittobench-api instance on a Docker-capable host | Builds and scores each submission. See the [dittobench-api](https://github.com/ditto-assistant/dittobench-api) repo. |
-| A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay, no GPU. See [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md). |
+| A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay; no GPU is needed. |
 | Outbound reach to the platform API and a chain endpoint (Pylon or a subtensor node) | All communication is outbound; the worker listens on nothing. |
 
 Keep the mnemonic or wallet key and any gateway key (the Chutes relay key) in a
@@ -92,8 +92,8 @@ or malformed.
 | `VALIDATOR_DITTOBENCH_API_URL` | Your co-located dittobench-api base URL. |
 
 The locked model is served from a gateway configured on the dittobench-api
-service, not the worker (see VALIDATOR-MODEL-HOSTING.md). The validator worker
-does not receive or forward model-provider credentials.
+service, not the worker. See [Model gateway](#model-gateway). The validator
+worker does not receive or forward model-provider credentials.
 
 ### Chain / weight path (pick one)
 
@@ -117,7 +117,37 @@ does not receive or forward model-provider credentials.
 | `VALIDATOR_LOG_LEVEL` (`INFO`) | Worker log level. |
 | `WANDB_MODE` (`disabled`) | Set `online` (plus `WANDB_PROJECT`/`WANDB_ENTITY`) to publish the aggregate-only telemetry. |
 
-## 4. Run it
+## 4. Model gateway
+
+Scoring validators run dittobench-api, its `cmd/model-relay`, and a small local
+embedding model. Weights-only validators can skip this section. The relay keeps
+the Chutes key out of miner sandboxes and forces every run onto the same model.
+
+```sh
+RELAY_API_KEY=cpk-... \
+RELAY_MODEL=Qwen/Qwen3-32B-TEE \
+PORT=11435 \
+./model-relay
+```
+
+Configure dittobench-api (not this validator worker) with:
+
+```sh
+DITTOBENCH_MODEL_LOCK=1
+HARNESS_MODEL=Qwen/Qwen3-32B-TEE
+HARNESS_PROVIDER=chutes
+HARNESS_GATEWAY_URL=http://host.docker.internal:11435
+HARNESS_EMBED_URL=http://host.docker.internal:11434
+```
+
+Run Ollama on port 11434 with the embedding model named by dittobench-api's
+model-lock configuration. The sandbox reaches both services through
+`host.docker.internal`; its egress policy should allow the local relay and
+embedding service, not direct LLM-provider access. Keep `RELAY_API_KEY` in a
+secret manager. Self-hosting the chat model is useful for local practice but is
+not fleet-standard because serving differences make scores less comparable.
+
+## 5. Run it
 
 ```sh
 VALIDATOR_PLATFORM_API_URL=https://platform-api.heyditto.ai/ \
@@ -145,7 +175,7 @@ Boot-time self-checks:
   weight submission each epoch with a loud log line (the chain is the enforcer,
   the log line is the alarm).
 
-## 5. Verify it's working
+## 6. Verify it's working
 
 - Logs: `sweep complete: N agent(s) (weights set)` and no recurring
   `put_weights failed` lines.
@@ -156,7 +186,7 @@ Boot-time self-checks:
 - W&B dashboard (if enabled): sweep stats, leaderboard, and the weight vector per
   epoch.
 
-## 6. Localnet: three validators (prove k=3 consensus)
+## 7. Localnet: three validators (prove k=3 consensus)
 
 To exercise the full three-scores to median to finalize to weights path on the
 dev localnet (netuid 3), run three workers with three distinct registered
@@ -183,8 +213,18 @@ hotkeys:
 A hotkey without a `validator_permit` still scores but skips weight submission
 (loud log), so give each localnet hotkey enough stake.
 
-### Sources (this repo)
+## 8. Mechanism reference
 
-`CLAUDE.md` · `docs/incentive-mechanism.md` ·
+Weights use a deterministic king-of-the-hill fold over the public score ledger.
+A challenger dethrones the champion only after clearing the greater of the 5%
+relative margin and the configured statistical error band. The champion receives
+90% of weight; the next four distinct miners split the remaining 10%. First-seen
+timestamps and duplicate detection prevent copied artifacts from displacing the
+incumbent. Keep every `VALIDATOR_KOTH_*` setting identical network-wide so Yuma
+consensus converges. The implementation in `ditto/validator/weights.py` is the
+source of truth.
+
+## Code references
+
 `ditto/validator/{__main__,config,worker,weights,signing,telemetry}.py` ·
 `ditto/chain/client.py`
