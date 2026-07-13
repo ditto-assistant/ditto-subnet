@@ -50,7 +50,10 @@ services:
   # private Compose network. The sandbox-docker forwarder makes it available to
   # inner sandboxes at host.docker.internal:11434.
   ollama:
-    image: docker.io/ollama/ollama:0.6.8
+    # 0.11.10 is the first Ollama release with EmbeddingGemma support. Keep the
+    # multi-arch index pinned so amd64 validators and arm64 development hosts
+    # resolve reproducibly.
+    image: docker.io/ollama/ollama:0.11.10@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
     restart: unless-stopped
     volumes:
       - ollama-data:/root/.ollama
@@ -63,9 +66,18 @@ services:
         /bin/ollama pull embeddinggemma
         wait
     healthcheck:
-      test: ["CMD-SHELL", "ollama list | grep -q embeddinggemma"]
+      # A listed model can still be unusable (Ollama 0.6.8 pulled
+      # EmbeddingGemma but returned 500 for /api/embed). Probe the capability
+      # the scoring harness actually needs.
+      test:
+        - CMD-SHELL
+        - >-
+          bash -ec 'body="{\"model\":\"embeddinggemma\",\"input\":\"health\"}";
+          exec 3<>/dev/tcp/127.0.0.1/11434;
+          printf "POST /api/embed HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "$${#body}" "$$body" >&3;
+          head -n 1 <&3 | grep -q " 200 "'
       interval: 10s
-      timeout: 5s
+      timeout: 15s
       retries: 30
 
   # The model-pinning gateway: fronts Chutes, forces the frozen Qwen3-32B model
