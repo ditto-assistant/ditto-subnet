@@ -1,211 +1,113 @@
+%% SN118 (DittoBench) system architecture. Everything shown is shipped.
+%% Colour = trust boundary: public repo, private coordinator, external service.
 
 flowchart TB
 
-  %% ---------------- MINER HOST ----------------
-  subgraph MINER["MINER HOST &nbsp;·&nbsp; ditto.miner_cli &nbsp;(building blocks built, CLI entrypoint NOT wired yet)"]
+  %% ===================== MINER (offchain) =====================
+  subgraph MINER["Miner (offchain)"]
     direction TB
-    mc_models["models.py<br/>NetworkConfig · WalletHandle<br/>PreflightCheckResult · PreflightResult<br/>PaymentReceipt · UploadResult · MinerCliConfig"]
-    mc_errors["errors.py<br/>MinerCliError tree<br/>(Tar/Manifest/Import/Schema, Wallet*,<br/>Payment*, ApiResponse*, PaymentCancelled)"]
-    mc_network["network.py<br/>NETWORKS{} · resolve_network()"]
-    mc_factory["factory.py<br/>create_miner_cli_config()"]
-    mc_wallet["wallet.py<br/>load_wallet() -> (WalletHandle, bittensor.Wallet)"]
-    mc_signing["signing.py<br/>build_upload_payload()<br/>sign_upload_payload()"]
-    mc_payment["payment.py<br/>submit_eval_payment() -> PaymentReceipt"]
-    mc_tar["tar_validator.py<br/>run_preflight() -> PreflightResult<br/>(_check_file_size/gzip/tar, _deferred_checks)"]
-    mc_api["api_client.py<br/>ApiClient: get_eval_pricing · post_upload_check<br/>post_upload_agent · get_agent_status · get_agent_by_hotkey"]
-    mc_cli["cli.py / __main__.py<br/>ditto upload | status | verify | logs<br/>(orchestrator — NOT BUILT)"]
+    m_harness["ditto-harness / dittobench-starter-kit<br/>writes a memory harness<br/>(MCP tools + agent loop)"]
+    m_cli["ditto-subnet · miner_cli<br/>ditto upload | status | verify<br/>tar + sign + submit"]
   end
 
-  %% ---------------- PLATFORM HOST ----------------
-  subgraph PLATFORM["PLATFORM HOST &nbsp;·&nbsp; ditto.api_server &nbsp;(FastAPI)"]
+  %% ===================== PLATFORM (private coordinator) =====================
+  subgraph PLATFORM["ditto-platform · coordinator (private)"]
     direction TB
-    as_main["__main__.py<br/>main() · argparse + env"]
-    as_factory["factory.py<br/>create_api_server() + _lifespan()"]
-    as_config["config.py<br/>ApiServerConfig · parse_*_from_env()"]
-    as_deps["dependencies.py<br/>get_session · get_chain_client<br/>get_price_oracle · get_payment_verifier · get_storage_client"]
-
-    subgraph AS_MW["middleware/"]
-      mw_reqid["request_id.py<br/>RequestIDMiddleware · RequestIdFilter"]
-      mw_auth["auth_pass_through.py<br/>AuthPassThroughMiddleware"]
-      mw_err["error_envelope.py<br/>register_exception_handlers()<br/>(maps domain errors -> error codes)"]
-    end
-
-    subgraph AS_EP["endpoints/"]
-      ep_health["health.py<br/>GET /health"]
-      ep_metrics["metrics.py<br/>GET /metrics"]
-      ep_upload["upload.py<br/>GET /upload/eval-pricing<br/>POST /upload/check<br/>POST /upload/agent"]
-      ep_retr["retrieval.py<br/>GET /retrieval/agent-by-hotkey<br/>GET /retrieval/agent/{id}/status<br/>AgentNotFoundError · HotkeyAgentNotFoundError"]
-    end
-
-    subgraph AS_PV["payment_verifier/"]
-      pv_verifier["verifier.py<br/>PaymentVerifier.verify_payment()"]
-      pv_models["models.py<br/>PaymentProof · VerifiedPayment"]
-      pv_errors["errors.py<br/>PaymentNotFoundOnChain · ExtrinsicFailed<br/>Amount/Destination/Signer/CallType Mismatch · Replayed"]
-    end
-
-    subgraph AS_PR["pricing/"]
-      pr_oracle["oracle.py<br/>PriceOracle(Protocol) · CoinGeckoOracle.get_tao_usd()"]
-      pr_config["config.py<br/>PricingConfig"]
-    end
-
-    subgraph AS_ST["storage/"]
-      st_client["client.py<br/>S3StorageClient.put_object / object_exists"]
-      st_models["models.py<br/>StorageConfig · StoredObject"]
-    end
+    p_intake["Miner intake<br/>/upload/check · /upload/agent<br/>payment verify · object store"]
+    p_screen["Screener build-gate<br/>docker build + serve /health smoke"]
+    p_tickets["Ticket lease<br/>issue_ticket · SCORING_QUORUM=3<br/>30-min TTL · one (agent,validator) row"]
+    p_final["Finalize at quorum<br/>median of 3 signed scores<br/>ATH + duplicate check · audit log"]
+    p_public["Public API<br/>/leaderboard · /agent/{id}/scores (k=3 + median)<br/>/agent/{id}/dataset · /audit"]
+    p_ledger[("Ledger DB<br/>agents · scores · banned_hotkeys")]
   end
 
-  %% ---------------- SHARED ----------------
-  subgraph SHARED["SHARED LIBS"]
+  %% ===================== VALIDATOR HOST (k=3 independent) =====================
+  subgraph VALHOST["Validator host · one per hotkey, k=3 independent"]
     direction TB
-    subgraph CHAIN["ditto.chain"]
-      ch_client["client.py — ChainClient<br/>get_recent_neurons · is_registered · get_latest_block<br/>get_extrinsic · put_weights · check_extrinsic_success<br/>get_coldkey_for_hotkey · get_block_timestamp"]
-      ch_models["models.py<br/>ChainConfig · NeuronInfo · ExtrinsicInfo · BlockInfo"]
-      ch_factory["factory.py · create_chain_client()"]
+    v_worker["ditto-subnet · validator worker<br/>work_loop (sweep) · weight_loop"]
+    v_fold["Weight fold · weights.py<br/>KOTH champion 0.9 · dethrone margin 0.05<br/>+ z-band (dethrone_z 1.64) · tail 4"]
+
+    subgraph DBAPI["dittobench-api · scoring engine (co-located, :8080)"]
+      direction TB
+      d_sandbox["sandbox / runner<br/>docker build + run the miner harness"]
+      d_scorer["scorer<br/>composite = 0.5·tool + 0.5·memory<br/>× tool-eff / canary / metamorphic gates<br/>+ composite_stderr"]
+      d_grade["deterministic grader<br/>judge-free, per answer_kind"]
+      d_astfp["astfp<br/>lexical + AST anti-copy fingerprint"]
+      d_egress["egress-proxy<br/>fail-closed hostname allowlist"]
     end
-    subgraph DB["ditto.db"]
-      db_models["models.py<br/>Agent · EvaluationPayment · AgentStatus(enum)<br/>tables: agents, evaluation_payments"]
-      db_qa["queries/agents.py<br/>insert_agent · get_agent_by_id<br/>get_latest_agent_by_hotkey"]
-      db_qp["queries/payments.py<br/>insert_evaluation_payment()"]
-      db_factory["factory.py · create_db_engine · create_session_maker"]
+
+    subgraph GW["Locked model gateway (Qwen3-32B)"]
+      direction TB
+      g_relay["model-relay<br/>Qwen/Qwen3-32B-TEE (Chutes)"]
+      g_local["or local Ollama / vLLM<br/>qwen3:32b"]
     end
-    subgraph AM["ditto.api_models (Pydantic wire shapes)"]
-      am_health["health.py · HealthResponse"]
-      am_upload["upload.py<br/>EvalPricingResponse · UploadCheckRequest/Response<br/>UploadAgentResponse"]
-      am_retr["retrieval.py · AgentResponse · AgentStatusResponse"]
-    end
+
+    v_pylon["Pylon sidecar (:8001)<br/>signs set_weights<br/>u16 · version_key · commit-reveal"]
   end
 
-  %% ---------------- EXTERNAL ----------------
-  subgraph EXT["EXTERNAL"]
+  %% ===================== PUBLIC BUILD DEPS =====================
+  subgraph PUB["Public build dependencies"]
     direction TB
-    x_subtensor(("Subtensor chain<br/>Balances.transfer_keep_alive"))
-    x_bittensor(("bittensor SDK"))
-    x_pylon(("Pylon<br/>AsyncPylonClient"))
-    x_substrate(("async-substrate-interface<br/>(event/storage reads)"))
-    x_pg(("Postgres"))
-    x_s3(("S3 / minio"))
-    x_cg(("CoinGecko"))
+    r_datagen["dittobench-datagen<br/>dataset generator + judge-free grader<br/>(regenerated from the seed)"]
+    r_harness["ditto-harness<br/>reference memory library"]
   end
 
-  %% ---- miner_cli internal wiring (planned orchestrator dashed) ----
-  mc_cli -.-> mc_factory
-  mc_cli -.-> mc_wallet
-  mc_cli -.-> mc_tar
-  mc_cli -.-> mc_signing
-  mc_cli -.-> mc_payment
-  mc_cli -.-> mc_api
-  mc_factory --> mc_network
-  mc_factory --> mc_models
-  mc_wallet --> mc_models
-  mc_signing --> mc_models
-  mc_payment --> mc_models
-  mc_tar --> mc_models
-  mc_network --> mc_models
-
-  %% ---- miner_cli external + cross-pkg ----
-  mc_wallet --> x_bittensor
-  mc_signing --> x_bittensor
-  mc_payment --> x_bittensor
-  x_bittensor --> x_subtensor
-  mc_api --> AM
-  mc_api -.HTTP.-> ep_upload
-  mc_api -.HTTP.-> ep_retr
-
-  %% ---- api_server wiring ----
-  as_main --> as_factory
-  as_main --> as_config
-  as_factory --> as_config
-  as_factory --> ch_factory
-  as_factory --> db_factory
-  as_factory --> AS_MW
-  as_factory --> AS_EP
-  as_config --> ch_models
-  as_config --> as_deps
-  as_deps --> ch_client
-
-  ep_health --> am_health
-  ep_health --> ch_client
-  ep_upload --> am_upload
-  ep_upload --> db_qa
-  ep_upload --> db_qp
-  ep_upload --> pv_verifier
-  ep_upload --> st_client
-  ep_upload --> pr_oracle
-  ep_upload --> ch_client
-  ep_retr --> am_retr
-  ep_retr --> db_qa
-  mw_err --> ep_retr
-  mw_err --> pv_errors
-
-  pv_verifier --> pv_models
-  pv_verifier --> ch_client
-  pv_verifier --> pr_oracle
-  pv_verifier --> pr_config
-  pr_oracle --> pr_config
-  pr_oracle --> x_cg
-  st_client --> st_models
-  st_client --> x_s3
-
-  %% ---- shared internal + external ----
-  ch_client --> ch_models
-  ch_client --> x_pylon
-  ch_client --> x_substrate
-  ch_factory --> ch_client
-  db_qa --> db_models
-  db_qp --> db_models
-  db_qp -.VerifiedPayment / Replayed.-> pv_models
-  db_factory --> x_pg
-  am_upload --> db_models
-  am_retr --> db_models
-
-  %% ======================================================================
-  %% DIAGRAM 2 — INJECTION POINTS / ACTOR FLOWS
-  %% (most of this is PLANNED — no code yet, lives in context-docs)
-  %% ======================================================================
-
-  subgraph INJECT["INJECTION POINTS &nbsp;·&nbsp; mostly PLANNED (context-docs, no code yet)"]
+  %% ===================== OBSERVABILITY =====================
+  subgraph OBS["Observability"]
     direction TB
-
-    inj_miner>"MINER injection<br/>writes Go harness implementing<br/>ditto-harness/interface (MCP + agent loop),<br/>tars it, ditto upload"]
-    inj_val>"VALIDATOR injection<br/>MODE=validator, hotkey identity<br/>runs full evals, relays weights via Pylon"]
-    inj_scr>"SCREENER injection<br/>MODE=screener, no hotkey<br/>team-run, screening evals only"]
-
-    p_harness["ditto-harness/ (Go module) — NOT BUILT<br/>interface/ (required exports) · reference/ (forkable)"]
-    p_validator["ditto.validator — NOT BUILT<br/>work_loop · heartbeat_loop · weight_loop"]
-    p_evaluator["ditto.evaluator — NOT BUILT<br/>sandbox/ · go_build · postgres_runtime<br/>benchmark/ · data_source/ · eval_runner/ · failure_classifier"]
-    p_proxy["ditto.proxy — NOT BUILT<br/>egress sidecar, OpenRouter allowlist, cost cap"]
-    p_scoring["ditto.scoring — NOT BUILT<br/>Pareto-GM · ATH gate (1%) · weight_builder (PureWTA)"]
-    p_val_ep["api_server validator/scoring/admin endpoints — NOT BUILT<br/>register · request-evaluation · download<br/>submit-score · heartbeat · /scoring/weights · /admin/*"]
-    p_aux["api_server auth/ loops/ admin/ plagiarism/ observability/ — NOT BUILT"]
-    x_openrouter(("OpenRouter<br/>LLM + embeddings"))
+    o_wandb["W&B run logging"]
+    o_dash["Public dashboard<br/>current champion + stats"]
   end
 
-  %% miner injection: harness -> CLI -> API (built path) -> S3/DB
-  inj_miner --> p_harness
-  p_harness -.tar.-> mc_cli
-  mc_api ==>|"POST /upload/agent (BUILT)"| ep_upload
-  ep_upload ==> st_client
-  ep_upload ==> db_qa
+  %% ===================== EXTERNAL =====================
+  x_store[("Object store<br/>presigned tarballs")]
+  x_llm(("Chutes TEE<br/>(or local GPU)"))
+  x_chain(("Subtensor · finney<br/>netuid 118"))
 
-  %% validator/screener injection: poll planned endpoints -> evaluator -> scoring
-  inj_val --> p_validator
-  inj_scr --> p_validator
-  p_validator -.poll.-> p_val_ep
-  p_validator --> p_evaluator
-  p_evaluator --> p_proxy
-  p_proxy --> x_openrouter
-  p_evaluator -.runs miner harness.-> p_harness
-  p_val_ep -.scores.-> p_scoring
-  p_scoring -.weights.-> p_validator
-  p_validator -.put_weights.-> x_pylon
-  p_val_ep -.belongs to.-> PLATFORM
-  p_aux -.belongs to.-> PLATFORM
+  %% ---- miner flow ----
+  m_harness --> m_cli
+  m_cli ==>|"1 upload (signed)"| p_intake
+  p_intake --> x_store
+  p_intake --> p_ledger
+  p_intake -.->|"2 queued"| p_screen
+  p_screen -->|"3 build+serve pass"| p_ledger
 
-  %% ---------------- styles ----------------
-  classDef planned stroke-dasharray:6 4,stroke:#c0392b,color:#c0392b,fill:#fff;
-  classDef external fill:#eef,stroke:#557,color:#225;
-  classDef injection fill:#fffbe6,stroke:#b8860b,color:#7a5c00;
+  %% ---- validator scoring flow ----
+  v_worker ==>|"4 request job"| p_tickets
+  p_tickets -->|"ticket + seed"| v_worker
+  v_worker -->|"5 download"| x_store
+  v_worker -->|"6 score"| d_sandbox
+  d_sandbox --> d_scorer
+  d_scorer --> d_grade
+  d_scorer --> d_astfp
+  d_sandbox -->|"runs harness"| d_egress
+  d_egress --> g_relay
+  d_egress --> g_local
+  g_relay --> x_llm
+  d_grade -->|"seed to dataset"| r_datagen
+  d_sandbox -.->|"build pulls"| r_harness
+  d_scorer ==>|"7 signed ScoreReport"| v_worker
+  v_worker ==>|"8 submit signed score"| p_final
+  p_final --> p_ledger
+  p_final --> p_public
 
-  class mc_cli,p_harness,p_validator,p_evaluator,p_proxy,p_scoring,p_val_ep,p_aux planned;
-  class x_subtensor,x_bittensor,x_pylon,x_substrate,x_pg,x_s3,x_cg,x_openrouter external;
-  class inj_miner,inj_val,inj_scr injection;
+  %% ---- weights flow ----
+  p_public -->|"9 median ledger"| v_fold
+  v_worker --> v_fold
+  v_fold ==>|"10 set_weights"| v_pylon
+  v_pylon ==> x_chain
+
+  %% ---- observability ----
+  p_public --> o_dash
+  v_worker -.-> o_wandb
+
+  %% ---- styles ----
+  classDef pub fill:#e6ffed,stroke:#2da44e,color:#0a3d1f;
+  classDef priv fill:#fff4e6,stroke:#d98324,color:#7a4a00;
+  classDef ext fill:#eef,stroke:#557,color:#225;
+  classDef host fill:#f5f0ff,stroke:#7a5cc0,color:#3a2a6a;
+
+  class m_harness,m_cli,v_worker,v_fold,d_sandbox,d_scorer,d_grade,d_astfp,d_egress,g_relay,r_datagen,r_harness pub;
+  class p_intake,p_screen,p_tickets,p_final,p_public,p_ledger priv;
+  class g_local,v_pylon,o_wandb,o_dash host;
+  class x_store,x_llm,x_chain ext;
