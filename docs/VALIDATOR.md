@@ -165,10 +165,12 @@ Pylon ships as a Docker image (`backenddevelopersltd/bittensor-pylon`). It reads
 **identity**, a named wallet-plus-subnet pair with its own secret token; the
 worker authenticates to that identity to write weights.
 
-The root `docker-compose.yml` reads the same `.env` you created in section 3.
-Those Pylon settings name the wallet and one random token that guards both
-open-access reads and the identity write. Reuse the same string for both; only
-split them if you hand the read token to a separate read-only consumer.
+The root `docker-compose.yml` starts the complete validator stack: Pylon,
+dittobench-api with access to the host Docker daemon for sandbox builds, and the
+ditto-subnet validator worker. All three read the same `.env` you created in
+section 3. The Pylon settings name the wallet and one random token that guards
+both open-access reads and the identity write. Reuse the same string for both;
+only split them if you hand the read token to a separate read-only consumer.
 
 Generate the token with OpenSSL:
 
@@ -192,10 +194,11 @@ PYLON_ID_DITTO_TOKEN=<random-token>
 PYLON_DATABASE_PATH=/data/pylon.db   # persist in-flight submissions
 ```
 
-Bring it up (serves on `:8000`, wallet mounted read-only):
+Bring up the stack from the repository root. Pylon serves on `:8000` and
+dittobench-api on `:8080`; the validator worker listens on no port.
 
 ```sh
-docker compose up -d pylon
+docker compose up -d
 ```
 
 Then point the worker at it (section 3 / your validator `.env`), reusing the

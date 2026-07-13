@@ -1,6 +1,5 @@
-# Pylon weight-setting service for one SN118 validator. See docs/VALIDATOR.md,
-# "Set up Pylon". Configure the root .env, then run:
-#   docker compose up -d pylon
+# Complete SN118 validator stack. Configure the root .env, then run:
+#   docker compose up -d
 services:
   pylon:
     image: docker.io/backenddevelopersltd/bittensor-pylon:latest # pin to a released tag in production
@@ -13,6 +12,40 @@ services:
       - ~/.bittensor/wallets/:/root/.bittensor/wallets:ro
       # Persist in-flight weight submissions so a restart resumes them.
       - pylon-data:/data
+
+  dittobench-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dittobench-api
+      args:
+        DITTOBENCH_API_REF: ${DITTOBENCH_API_REF:-main}
+    restart: unless-stopped
+    env_file: ./.env
+    network_mode: host
+    volumes:
+      # The scorer builds and runs untrusted miner submissions as sandbox
+      # containers on the host daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ditto-subnet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: ./.env
+    network_mode: host
+    depends_on:
+      pylon:
+        condition: service_started
+      dittobench-api:
+        condition: service_healthy
+    volumes:
+      - ~/.bittensor/wallets/:/root/.bittensor/wallets:ro
 
 volumes:
   pylon-data:

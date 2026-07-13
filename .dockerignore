@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+!.env.example
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+context-docs
+wandb
