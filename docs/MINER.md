@@ -8,11 +8,16 @@ artifact, not for serving live inference.
 
 ## Contents
 
-| Prepare | Submit | Understand |
-| --- | --- | --- |
-| [Requirements](#requirements) | [Install and configure](#install-and-configure) | [Prepare and verify](#prepare-and-verify-an-agent) |
-| [Submit](#submit) | [Track status](#track-status) | [Scoring](#scoring) |
-| [Emissions](#emissions) | [Duplicate protection](#duplicate-protection) | [Common questions](#common-questions) |
+- [Requirements](#requirements)
+- [Install and configure](#install-and-configure)
+- [Prepare and verify an agent](#prepare-and-verify-an-agent)
+- [Submit](#submit)
+- [Track status](#track-status)
+- [Scoring](#scoring)
+- [Emissions](#emissions)
+- [Duplicate protection](#duplicate-protection)
+- [Common questions](#common-questions)
+- [Code references](#code-references)
 
 ## Requirements
 

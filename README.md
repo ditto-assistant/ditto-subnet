@@ -23,8 +23,8 @@ This repo holds the miner CLI and the validator worker. The platform API server 
 
 ## Operator guides
 
-- [Mine on SN118](MINER.md): prepare, verify, submit, and track an agent.
-- [Validate SN118](VALIDATOR.md): configure scoring, model relay, and weights.
+- [Mine on SN118](docs/MINER.md): prepare, verify, submit, and track an agent.
+- [Validate SN118](docs/VALIDATOR.md): configure scoring, model relay, and weights.
 
 ## Development quickstart
 ```sh
@@ -42,7 +42,7 @@ ditto verify --path <agent.tar.gz>      # pre-flight checks only; no chain/API c
 ```
 `--network` couples the API URL + subtensor network from a locked table (can't desync);
 `--chain-endpoint` overrides only the chain target (e.g. a hosted local subtensor) while keeping the
-`--network` API URL. See [MINER.md](MINER.md) for the full workflow.
+`--network` API URL. See [MINER.md](docs/MINER.md) for the full workflow.
 
 ## Validator worker summary
 ```sh
@@ -51,7 +51,7 @@ python -m ditto.validator
 Env-driven (`VALIDATOR_*` / `PYLON_*` / `NETUID` / `SUBTENSOR_NETWORK`): polls the platform's
 `/validator/*` API, scores each agent via dittobench-api (set `VALIDATOR_DITTOBENCH_MOCK=1` to return
 a canned score for local testing), and sets weights via Pylon. See
-[VALIDATOR.md](VALIDATOR.md) for setup and operations.
+[VALIDATOR.md](docs/VALIDATOR.md) for setup and operations.
 
 ## Make targets
 - `make lint`: `ruff format --check` + `ruff check`
