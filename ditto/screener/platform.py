@@ -1,9 +1,9 @@
 """Async client for the platform's ``/screener/*`` HTTP API.
 
 The worker is HTTP-decoupled from the platform: it pulls work and posts verdicts
-over the public ``/screener/*`` contract, authenticating with the
-``X-Screener-Hotkey`` header and (on the verdict POST) an sr25519 signature. It
-never touches the platform DB.
+over the public ``/screener/*`` contract, authenticating every request with a
+bearer token and the ``X-Screener-Hotkey`` header. Verdict POSTs additionally
+carry an sr25519 signature. It never touches the platform DB.
 """
 
 from __future__ import annotations
@@ -37,7 +37,10 @@ class PlatformClient:
         self._config = config
         self._client = client
         self._base = config.platform_api_url.rstrip("/")
-        self._headers = {"X-Screener-Hotkey": config.screener_hotkey}
+        self._headers = {
+            "Authorization": f"Bearer {config.api_token}",
+            "X-Screener-Hotkey": config.screener_hotkey,
+        }
 
     async def get_queue(self) -> ScreenerQueueResponse:
         """Pull agents awaiting screening (status ``uploaded``), oldest first."""
