@@ -56,25 +56,6 @@ class ValidatorConfig:
     For local end-to-end plumbing tests where no dittobench-api is available.
     Enabled via ``VALIDATOR_DITTOBENCH_MOCK``."""
 
-    # --- Roles (which halves of the loop this instance runs) ---
-    enable_scoring: bool
-    """Run the scoring sweep: pull the ``evaluating`` queue, score via
-    dittobench-api, submit signed scores, and re-score stale champions. Defaults
-    true (``VALIDATOR_ENABLE_SCORING``). In the one-validator-type model every
-    validator both scores and sets weights, so an agent is scored by up to k=3
-    independent validators and the platform finalizes on the median. Splitting
-    the roles (a scoring-only or weights-only instance) is an optional deployment
-    knob, not a central scorer; a weights-only instance needs no dittobench-api
-    URL."""
-
-    enable_weights: bool
-    """Run the weight path: fold the durable (median-aggregated) ledger and set
-    weights on chain. Defaults true (``VALIDATOR_ENABLE_WEIGHTS``). Every
-    validator folds the same public ledger deterministically and sets its own
-    weights, so chain consensus converges with no central weight authority. A
-    scoring-only instance clears this and needs no Pylon identity. Both true is
-    the default one-validator-type behaviour."""
-
     # --- Identity / chain ---
     validator_hotkey: str
     """This validator's SS58 hotkey (must match the loaded signing keypair)."""
@@ -223,35 +204,17 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     # end-to-end plumbing without a scoring engine).
     _truthy = {"1", "true", "yes"}
     dittobench_mock = os.environ.get("VALIDATOR_DITTOBENCH_MOCK", "").lower() in _truthy
-    # Roles: an instance runs the scoring half, the weight half, or both. Both
-    # (the default) is the one-validator-type model: every validator scores and
-    # sets weights. Splitting the roles is an optional deployment knob.
-    enable_scoring = (
-        os.environ.get("VALIDATOR_ENABLE_SCORING", "true").lower() in _truthy
-    )
-    enable_weights = (
-        os.environ.get("VALIDATOR_ENABLE_WEIGHTS", "true").lower() in _truthy
-    )
-    if not (enable_scoring or enable_weights):
-        raise ValidatorConfigError(
-            "at least one of VALIDATOR_ENABLE_SCORING / VALIDATOR_ENABLE_WEIGHTS "
-            "must be true"
-        )
-
-    # dittobench-api is only needed by the scoring half (and not in mock mode).
-    # A weights-only validator consumes the ledger and does not need it.
+    # Every validator scores and submits weights. dittobench-api is optional
+    # only in local mock mode.
     dittobench_api_url = os.environ.get("VALIDATOR_DITTOBENCH_API_URL", "")
-    if enable_scoring and not dittobench_mock:
+    if not dittobench_mock:
         _require("VALIDATOR_DITTOBENCH_API_URL", dittobench_api_url)
 
-    # Pylon identity is only needed by the weight half's Pylon ``put_weights``
-    # path; a scoring-only instance sets no weights at all, so don't require it
-    # there.
+    # Every validator submits weights through Pylon identity mode.
     pylon_identity_name = os.environ.get("PYLON_IDENTITY_NAME", "")
     pylon_identity_token = os.environ.get("PYLON_IDENTITY_TOKEN", "")
-    if enable_weights:
-        _require("PYLON_IDENTITY_NAME", pylon_identity_name)
-        _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
+    _require("PYLON_IDENTITY_NAME", pylon_identity_name)
+    _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
 
     # All KOTH + ATH mechanism values are frozen (the KOTH_* module constants),
     # not env, so every validator folds identically.
@@ -269,8 +232,6 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         dittobench_api_url=dittobench_api_url,
         run_size=run_size,
         dittobench_mock=dittobench_mock,
-        enable_scoring=enable_scoring,
-        enable_weights=enable_weights,
         validator_hotkey=_require(
             "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
         ),

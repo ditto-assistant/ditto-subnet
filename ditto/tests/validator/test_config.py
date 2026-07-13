@@ -76,56 +76,23 @@ class TestMinStakeConfig:
             parse_validator_config_from_env()
 
 
-class TestRoleConfig:
-    """The scoring / weight role flags gate which env is required."""
+class TestUnifiedValidatorConfig:
+    """Every validator requires both the scoring and weight dependencies."""
 
-    def test_defaults_both_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _base_env(monkeypatch)
-        cfg = parse_validator_config_from_env()
-        assert cfg.enable_scoring is True
-        assert cfg.enable_weights is True
-
-    def test_weights_only_needs_no_dittobench(
+    def test_requires_dittobench_outside_mock_mode(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # An independent (weights-only) validator: scoring off, so no dittobench-api
-        # URL is required even outside mock mode. It still needs Pylon identity to
-        # write weights.
-        monkeypatch.setenv("VALIDATOR_HOTKEY", _HOTKEY)
-        monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
-        monkeypatch.setenv("PYLON_IDENTITY_NAME", "ditto")
-        monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "tok")
-        monkeypatch.setenv("VALIDATOR_ENABLE_SCORING", "false")
-        for k in (
-            "VALIDATOR_DITTOBENCH_MOCK",
-            "VALIDATOR_DITTOBENCH_API_URL",
-        ):
-            monkeypatch.delenv(k, raising=False)
-        cfg = parse_validator_config_from_env()
-        assert cfg.enable_scoring is False
-        assert cfg.enable_weights is True
-
-    def test_scoring_only_needs_no_pylon_identity(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A scoring-only instance: weights off, so no Pylon identity is required
-        # even without the SDK-weights escape hatch.
-        monkeypatch.setenv("VALIDATOR_HOTKEY", _HOTKEY)
-        monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
-        monkeypatch.setenv("VALIDATOR_DITTOBENCH_MOCK", "true")
-        monkeypatch.setenv("VALIDATOR_ENABLE_WEIGHTS", "false")
-        for k in (
-            "PYLON_IDENTITY_NAME",
-            "PYLON_IDENTITY_TOKEN",
-        ):
-            monkeypatch.delenv(k, raising=False)
-        cfg = parse_validator_config_from_env()
-        assert cfg.enable_weights is False
-        assert cfg.enable_scoring is True
-
-    def test_both_disabled_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_ENABLE_SCORING", "false")
-        monkeypatch.setenv("VALIDATOR_ENABLE_WEIGHTS", "false")
-        with pytest.raises(ValidatorConfigError):
+        monkeypatch.delenv("VALIDATOR_DITTOBENCH_MOCK", raising=False)
+        monkeypatch.delenv("VALIDATOR_DITTOBENCH_API_URL", raising=False)
+        with pytest.raises(ValidatorConfigError, match="VALIDATOR_DITTOBENCH_API_URL"):
+            parse_validator_config_from_env()
+
+    @pytest.mark.parametrize("missing", ["PYLON_IDENTITY_NAME", "PYLON_IDENTITY_TOKEN"])
+    def test_requires_pylon_identity(
+        self, monkeypatch: pytest.MonkeyPatch, missing: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv(missing, raising=False)
+        with pytest.raises(ValidatorConfigError, match=missing):
             parse_validator_config_from_env()

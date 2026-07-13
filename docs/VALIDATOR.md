@@ -107,7 +107,9 @@ or malformed.
 
 The locked model is served from a gateway configured on the dittobench-api
 service, not the worker. See [Model gateway](#4-model-gateway). The validator
-worker does not receive or forward model-provider credentials.
+worker does not receive or forward model-provider credentials. Every validator
+runs this scoring path and submits its own weights; these responsibilities
+cannot be split across separate worker roles.
 
 ### Weight path (Pylon)
 
@@ -126,7 +128,7 @@ point the worker at it with:
 
 A validator runs dittobench-api, its `cmd/model-relay`, and a small local
 embedding model. The relay keeps the Chutes key out of miner sandboxes and forces
-every run onto the same model.[^roles]
+every run onto the same model.
 
 ```sh
 RELAY_API_KEY=cpk-... \
@@ -264,10 +266,7 @@ truth.
 
 ## 9. Environment reference
 
-These common knobs keep the defaults documented by the validator worker. The
-consensus-critical KOTH values (margin, tail size, champion share, dethrone-z,
-and confirmation seeds) are frozen in code (`ditto/validator/config.py`), not
-env-tunable, so they are not listed here.
+These common knobs keep the defaults documented by the validator worker.
 
 | Env | Meaning |
 | --- | --- |
@@ -283,8 +282,3 @@ env-tunable, so they are not listed here.
 
 `ditto/validator/{__main__,config,worker,weights,signing,telemetry}.py` ·
 `ditto/chain/client.py`
-
-[^roles]: A validator both scores submissions and sets weights by default. The
-    two halves can be split across instances (`VALIDATOR_ENABLE_SCORING` /
-    `VALIDATOR_ENABLE_WEIGHTS`): a weights-only instance skips the model gateway
-    (section 4), a scoring-only instance skips Pylon (section 5).
