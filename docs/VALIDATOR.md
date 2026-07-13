@@ -183,6 +183,7 @@ may configure logging and aggregate telemetry:
 | `VALIDATOR_LOG_LEVEL` | `INFO` | Worker log level. |
 | `WANDB_MODE` | `online` | `online` publishes aggregate stats to the shared `heyditto/ditto-sn118` project; set `disabled` to opt out. |
 | `WANDB_API_KEY` | none | The shared read+write key the Ditto team provides trusted validators confidentially. Required when `WANDB_MODE=online`; never commit it. |
+| `WANDB_RUN_NAME` | `validator-<hotkey8>` | Auto-derived per hotkey so validators sharing the project never collide. Leave unset unless overriding. |
 
 ## Development
 
