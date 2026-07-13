@@ -165,6 +165,43 @@ artifact that disappears where miners must register to submit.
 
 ---
 
+### 3a. Open-source scope for independent validators (C-OPEN detail)
+
+A trustless independent validator must run the whole evaluation itself, which
+fixes exactly which repos are public and what to open.
+
+| Repo | Role | Status | For independent validators |
+|---|---|---|---|
+| `dittobench-datagen` | dataset generator + judge-free grader | PUBLIC | done; the validator regenerates the dataset from the seed and grades per-case with public code |
+| `ditto-harness` | miner agent/memory library | PUBLIC | done; the miner's Docker build fetches it inside the validator sandbox |
+| `dittobench-starter-kit` | miner harness kit | PUBLIC | done; miner-side reference |
+| `ditto-subnet` | the validator worker (sweep, sign, fold, set weights) | PUBLIC target | OPEN it: a validator runs this process |
+| `dittobench-api` | the scoring engine (build+run miner, model/egress lock, composite + gates) | PRIVATE | OPEN it (C-OPEN); see the decision below |
+| `ditto-platform` | central coordinator (dataset issuance, ticket lease, ledger, median) | PRIVATE | STAYS private: the validator talks to it but does not run it, and verifies everything it returns (seed re-derivation, tarball sha256, signed scores, public audit log) |
+| `ditto-data-pipeline` | upstream corpus extraction (LongMemEval to seed corpus) | PRIVATE | STAYS private: build-time tooling, off the scoring path |
+
+So exactly two repos open beyond what is already public: **`ditto-subnet`** and
+**`dittobench-api`**.
+
+**dittobench-api: open the whole repo in place, do not extract a subset.** The
+scoring path (`cmd/dittobench-api`) already pulls in nearly every internal
+package: `internal/{scorer,sandbox,runner,netguard,astfp,store,llm,ratelimit}`
+plus `cmd/{model-relay,egress-proxy}`. A subset extraction would move ~90% of the
+repo into a new module for no benefit. There is nothing to hide: no answer key is
+hardcoded (regenerated per seed via public datagen) and no keys are in source
+(env-only), and the repo is already framed as the keyless public practice
+validator. Keep the internal tooling (`cmd/benchcal`, `cmd/calibrate`,
+`cmd/refharness`) with it; it is harmless and reproduces the difficulty
+calibration and the reference baseline.
+
+Pre-open checklist for `dittobench-api`: fresh-history secrets scan (grep clean
+today); confirm `cmd/model-relay` embeds no gateway secret (env-only on
+inspection); add a LICENSE (MIT, matching the sibling public repos); add a README
+pointer to C-OPEN + `ditto-subnet/docs/VALIDATOR-ONBOARDING.md`; and re-pin the
+public `dittobench-datagen` version (already the only cross-repo dep).
+
+---
+
 ## 4. Bittensor-ecosystem conformance
 
 The production weight path **delegates all chain conformance to Pylon**
