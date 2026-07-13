@@ -121,7 +121,7 @@ is legacy and needed only when the model lock is off.
 ## 4. Run it
 
 ```sh
-VALIDATOR_PLATFORM_API_URL=https://<platform-host> \
+VALIDATOR_PLATFORM_API_URL=https://platform-api.heyditto.ai/ \
 NETUID=118 \
 VALIDATOR_HOTKEY=<ss58> \
 VALIDATOR_WALLET_NAME=<coldkey-name> VALIDATOR_WALLET_HOTKEY=<hotkey-name> \
