@@ -21,13 +21,18 @@ This repo holds the miner CLI and the validator worker. The platform API server 
 - `ditto/api_models/`: Pydantic wire shapes shared with the platform (the HTTP contract).
 - `ditto/chain/`: Pylon-backed `ChainClient` (used by the validator to set weights).
 
-## Quickstart
+## Operator guides
+
+- [Mine on SN118](MINER.md): prepare, verify, submit, and track an agent.
+- [Validate SN118](VALIDATOR.md): configure scoring, model relay, and weights.
+
+## Development quickstart
 ```sh
 uv sync
 make test          # unit tests
 ```
 
-## Miner CLI
+## Miner CLI summary
 Installed as the `ditto` console script (`pyproject` `[project.scripts]`):
 ```sh
 ditto --network <finney|test|local> [--chain-endpoint ws://…] upload \
@@ -37,16 +42,16 @@ ditto verify --path <agent.tar.gz>      # pre-flight checks only; no chain/API c
 ```
 `--network` couples the API URL + subtensor network from a locked table (can't desync);
 `--chain-endpoint` overrides only the chain target (e.g. a hosted local subtensor) while keeping the
-`--network` API URL.
+`--network` API URL. See [MINER.md](MINER.md) for the full workflow.
 
-## Validator worker
+## Validator worker summary
 ```sh
 python -m ditto.validator
 ```
 Env-driven (`VALIDATOR_*` / `PYLON_*` / `NETUID` / `SUBTENSOR_NETWORK`): polls the platform's
 `/validator/*` API, scores each agent via dittobench-api (set `VALIDATOR_DITTOBENCH_MOCK=1` to return
-a canned score for local testing), and sets weights via Pylon. See `ditto/validator/config.py` for
-all settings.
+a canned score for local testing), and sets weights via Pylon. See
+[VALIDATOR.md](VALIDATOR.md) for setup and operations.
 
 ## Make targets
 - `make lint`: `ruff format --check` + `ruff check`
