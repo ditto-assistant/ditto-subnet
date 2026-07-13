@@ -59,7 +59,6 @@ What it does not do:
 | Linux host: 4 vCPU, 16 GB RAM, 80 GB+ free disk | Runs the worker plus the co-located dittobench-api scorer; the Docker sandbox builds dominate the disk. See [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md). |
 | Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | `uv sync` installs the pinned environment. |
 | A hotkey registered on SN118 with a `validator_permit` | The chain accepts weights only from permitted validators (stake above the permit threshold). |
-| The hotkey's signing source (wallet files or mnemonic) | Signs score reports and, on the SDK path, the `set_weights` extrinsic. The coldkey is never needed on the box. |
 | A co-located dittobench-api instance on a Docker-capable host | Builds and scores each submission. See the [dittobench-api](https://github.com/ditto-assistant/dittobench-api) repo. |
 | A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay, no GPU. See [VALIDATOR-MODEL-HOSTING.md](VALIDATOR-MODEL-HOSTING.md). |
 | Outbound reach to the platform API and a chain endpoint (Pylon or a subtensor node) | All communication is outbound; the worker listens on nothing. |
