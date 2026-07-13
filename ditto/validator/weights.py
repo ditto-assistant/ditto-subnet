@@ -1,6 +1,6 @@
 """KOTH + ATH-gate weight function: map the score ledger to a weight vector.
 
-The incentive mechanism (``VALIDATOR.md``): the reigning
+The incentive mechanism (``docs/VALIDATOR.md``): the reigning
 all-time-high holder is the **champion** and takes ~all emissions; a challenger
 only dethrones it by beating its score by a **relative margin** (default 5%);
 ties and sub-margin gains keep the incumbent, so **first-to-submit wins** and a

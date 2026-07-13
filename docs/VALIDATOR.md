@@ -12,11 +12,16 @@ combines validators' weight vectors and clips outliers).
 
 ## Contents
 
-| Understand | Set up | Operate and reference |
-| --- | --- | --- |
-| [What validators do](#1-what-a-validator-does-and-doesnt) | [Requirements](#2-requirements) | [Install and configure](#3-install-and-configure) |
-| [Model gateway](#4-model-gateway) | [Set up Pylon](#5-set-up-pylon) | [Run](#6-run-it) |
-| [Verify](#7-verify-its-working) | [Mechanism](#8-mechanism-reference) | [Environment reference](#9-environment-reference) |
+- [What a validator does (and doesn't)](#1-what-a-validator-does-and-doesnt)
+- [Requirements](#2-requirements)
+- [Install and configure](#3-install-and-configure)
+- [Model gateway](#4-model-gateway)
+- [Set up Pylon](#5-set-up-pylon)
+- [Run it](#6-run-it)
+- [Verify it's working](#7-verify-its-working)
+- [Mechanism reference](#8-mechanism-reference)
+- [Environment reference](#9-environment-reference)
+- [Code references](#code-references)
 
 ## 1. What a validator does (and doesn't)
 
