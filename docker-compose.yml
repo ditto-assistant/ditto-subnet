@@ -10,6 +10,7 @@ services:
       # netuid, so they are set once. One PYLON_TOKEN guards both the open-access
       # reads and the identity write.
       PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
+      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_NETWORK:-finney}
       PYLON_OPEN_ACCESS_TOKEN: ${PYLON_TOKEN}
       PYLON_IDENTITIES: '["ditto"]'
       PYLON_ID_DITTO_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
@@ -74,7 +75,7 @@ services:
   # network so the socat forwarder reaches it at host.docker.internal:11435.
   model-relay:
     build:
-      context: https://github.com/ditto-assistant/dittobench-api.git#4ee2683
+      context: https://github.com/ditto-assistant/dittobench-api.git#4ee268309247ca4b497c4418df6640ed30b52cf0
       target: relay
     restart: unless-stopped
     network_mode: host
@@ -91,7 +92,7 @@ services:
     build:
       # Pinned to the dittobench-api commit that freezes the model/provider/
       # thinking mode and adds the relay target (PR #24, squashed to main).
-      context: https://github.com/ditto-assistant/dittobench-api.git#4ee2683
+      context: https://github.com/ditto-assistant/dittobench-api.git#4ee268309247ca4b497c4418df6640ed30b52cf0
       target: sandbox
     restart: unless-stopped
     network_mode: service:sandbox-docker
@@ -153,6 +154,7 @@ services:
       WANDB_PROJECT: ${WANDB_PROJECT:-ditto-sn118}
       WANDB_ENTITY: ${WANDB_ENTITY:-}
       WANDB_RUN_NAME: ${WANDB_RUN_NAME:-}
+      UV_CACHE_DIR: /tmp/uv-cache
     depends_on:
       pylon:
         condition: service_started
@@ -161,6 +163,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+      # bittensor creates runtime directories (miners, metagraphs) on import;
+      # keep them ephemeral while the wallet bind mount below stays read-only.
+      - /root/.bittensor
     security_opt:
       - no-new-privileges:true
     cap_drop:
