@@ -66,56 +66,30 @@ async def _amain() -> int:
             platform = PlatformClient(config, http)
             dittobench = DittobenchClient(config, http)
 
-            roles = "+".join(
-                name
-                for name, on in (
-                    ("scoring", config.enable_scoring),
-                    ("weights", config.enable_weights),
-                )
-                if on
+            # Every validator scores submissions and submits its own weights.
+            chain_config = ChainConfig(
+                pylon_url=config.pylon_url,
+                netuid=config.netuid,
+                identity_name=config.pylon_identity_name,
+                identity_token=config.pylon_identity_token,
+                # Carry the open-access read token so the worker's
+                # validator-permit self-check (an open-access neurons read)
+                # runs in identity mode instead of failing open.
+                open_access_token=config.pylon_open_access_token,
+                subtensor_network=config.subtensor_network,
             )
-            logger.info("validator roles: %s", roles)
-
-            if not config.enable_weights:
-                # Scoring-only instance: no weight sink and no chain client. Scores
-                # the queue and re-scores stale champions; it never touches the
-                # chain.
-                logger.info("weight mode: none (scoring-only instance)")
+            logger.info("validator mode: scoring + Pylon identity put_weights")
+            async with create_chain_client(chain_config) as chain:
                 worker = ValidatorWorker(
                     config=config,
                     platform=platform,
                     dittobench=dittobench,
-                    chain=None,
+                    chain=chain,
                     keypair=keypair,
                     telemetry=telemetry,
                 )
                 _apply_ditto_logging()  # re-assert: bittensor has initialised
                 await worker.run_forever(stop)
-            else:
-                # Identity mode (write): required for Pylon put_weights.
-                chain_config = ChainConfig(
-                    pylon_url=config.pylon_url,
-                    netuid=config.netuid,
-                    identity_name=config.pylon_identity_name,
-                    identity_token=config.pylon_identity_token,
-                    # Carry the open-access read token so the worker's
-                    # validator-permit self-check (an open-access neurons read)
-                    # runs in identity mode instead of failing open.
-                    open_access_token=config.pylon_open_access_token,
-                    subtensor_network=config.subtensor_network,
-                )
-                logger.info("weight mode: Pylon identity (put_weights)")
-                async with create_chain_client(chain_config) as chain:
-                    worker = ValidatorWorker(
-                        config=config,
-                        platform=platform,
-                        dittobench=dittobench,
-                        chain=chain,
-                        keypair=keypair,
-                        telemetry=telemetry,
-                    )
-                    _apply_ditto_logging()  # re-assert: bittensor has initialised
-                    await worker.run_forever(stop)
     finally:
         telemetry.close()
     logger.info("validator worker stopped")
