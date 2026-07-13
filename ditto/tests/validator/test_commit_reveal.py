@@ -15,10 +15,9 @@ from unittest.mock import AsyncMock, MagicMock
 from ditto.validator.worker import ValidatorWorker
 
 
-def _worker(*, require: bool, chain: MagicMock) -> ValidatorWorker:
+def _worker(*, chain: MagicMock) -> ValidatorWorker:
     config = MagicMock()
     config.netuid = 3
-    config.require_commit_reveal = require
     return ValidatorWorker(
         config=config,
         platform=MagicMock(),
@@ -41,7 +40,7 @@ class TestCommitRevealMode:
         chain.get_commit_reveal_enabled = AsyncMock(return_value=True)
         chain.get_reveal_period_epochs = AsyncMock(return_value=2)
         with caplog.at_level(logging.INFO, logger=_LOGGER):
-            await _worker(require=True, chain=chain)._log_commit_reveal_mode()
+            await _worker(chain=chain)._log_commit_reveal_mode()
         assert any(
             "commit-reveal ON" in r.getMessage()
             and "reveal period 2 epochs" in r.getMessage()
@@ -53,24 +52,16 @@ class TestCommitRevealMode:
         chain = MagicMock()
         chain.get_commit_reveal_enabled = AsyncMock(return_value=False)
         with caplog.at_level(logging.INFO, logger=_LOGGER):
-            await _worker(require=True, chain=chain)._log_commit_reveal_mode()
+            await _worker(chain=chain)._log_commit_reveal_mode()
         errs = _errors(caplog)
         assert errs and "front-runnable" in errs[0].getMessage()
-
-    async def test_info_when_off_and_not_required(self, caplog) -> None:
-        chain = MagicMock()
-        chain.get_commit_reveal_enabled = AsyncMock(return_value=False)
-        with caplog.at_level(logging.INFO, logger=_LOGGER):
-            await _worker(require=False, chain=chain)._log_commit_reveal_mode()
-        assert not _errors(caplog)
-        assert any("commit-reveal OFF" in r.getMessage() for r in caplog.records)
 
     async def test_undeterminable_none_is_fail_open(self, caplog) -> None:
         chain = MagicMock()
         chain.get_commit_reveal_enabled = AsyncMock(return_value=None)
         with caplog.at_level(logging.INFO, logger=_LOGGER):
             # Fail-open: must not raise.
-            await _worker(require=True, chain=chain)._log_commit_reveal_mode()
+            await _worker(chain=chain)._log_commit_reveal_mode()
         assert any("undeterminable" in r.getMessage() for r in caplog.records)
 
     async def test_read_error_is_fail_open(self) -> None:
@@ -79,9 +70,9 @@ class TestCommitRevealMode:
             side_effect=RuntimeError("pylon down")
         )
         # Must not raise — observability never wedges weight-setting.
-        await _worker(require=True, chain=chain)._log_commit_reveal_mode()
+        await _worker(chain=chain)._log_commit_reveal_mode()
 
     async def test_sink_without_reader_is_noop(self) -> None:
         # A weight sink lacking the reader (e.g. an older sink) is a silent no-op.
         chain = MagicMock(spec=["put_weights"])
-        await _worker(require=True, chain=chain)._log_commit_reveal_mode()
+        await _worker(chain=chain)._log_commit_reveal_mode()

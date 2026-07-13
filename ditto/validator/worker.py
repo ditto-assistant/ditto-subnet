@@ -440,10 +440,10 @@ class ValidatorWorker:
         ``RevealPeriodEpochs`` — there is **no** separate reveal call for the
         worker to make. This method only *reports* the mode so a cutover can
         confirm commit-reveal is actually on; without it weights are copy-able
-        (front-runnable). When ``VALIDATOR_REQUIRE_COMMIT_REVEAL`` is set and the
-        chain reports commit-reveal off, it logs an error but still submits —
-        refusing would zero the chain, a worse failure. **Fail-open:** any read
-        error or a sink without the reader is a silent no-op.
+        (front-runnable). SN118 requires commit-reveal, so an OFF state always
+        logs an error but still submits — refusing would zero the chain, a worse
+        failure. **Fail-open:** any read error or a sink without the reader is a
+        silent no-op.
         """
         read_enabled = getattr(self._weight_setter, "get_commit_reveal_enabled", None)
         if read_enabled is None:
@@ -460,8 +460,9 @@ class ValidatorWorker:
         if enabled is not None and not isinstance(enabled, bool):
             enabled = None
         if enabled is None:
-            log = logger.warning if self._config.require_commit_reveal else logger.info
-            log("commit-reveal state undeterminable on netuid %s; proceeding", netuid)
+            logger.warning(
+                "commit-reveal state undeterminable on netuid %s; proceeding", netuid
+            )
             return
         if enabled:
             period = await self._read_reveal_period(netuid)
@@ -471,17 +472,13 @@ class ValidatorWorker:
                 netuid,
                 period if period is not None else "?",
             )
-        elif self._config.require_commit_reveal:
+        else:
             logger.error(
-                "commit-reveal is OFF on netuid %s but VALIDATOR_REQUIRE_COMMIT_REVEAL "
-                "is set — weights are front-runnable; enable the "
+                "commit-reveal is OFF on netuid %s — SN118 weights are "
+                "front-runnable; enable the "
                 "CommitRevealWeightsEnabled hyperparameter. Submitting anyway "
                 "(refusing would zero the chain)",
                 netuid,
-            )
-        else:
-            logger.info(
-                "commit-reveal OFF on netuid %s: weights applied directly", netuid
             )
 
     async def _read_reveal_period(self, netuid: int) -> int | None:
