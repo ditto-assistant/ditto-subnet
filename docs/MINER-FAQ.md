@@ -1,15 +1,13 @@
 # Ditto Subnet (SN118) — Miner FAQ & Pipeline Guide
 
-**Draft, as of 2026-07-07. Not yet published — internal review copy.**
-
 Everything a miner needs to know about how SN118 works end to end: what you
 submit, how it flows through the pipeline, how it's scored, how emissions are
 decided, and what will get you flagged or banned.
 
 > **Where things run today:** the full pipeline is live on the **dev localnet**
-> (netuid 3) with a single team validator. Testnet and mainnet (finney, SN118)
-> migration are on the roadmap. Where a detail is dev-only or subject to change
-> before launch, it's called out.
+> (netuid 3) with a single team validator; the mainnet (finney, SN118) rollout
+> is the remaining deployment step. Where a detail is dev-only or changes at
+> launch, it's called out.
 
 ---
 
@@ -484,9 +482,6 @@ alpha accruing).
 
 ### Sources (this repo unless noted)
 
-`README.md` · `PROJECT.md` (locked decisions D1–D4) ·
-`docs/incentive-mechanism.md` · `docs/STATE-OF-THE-SUBNET.md` ·
-`docs/PRODUCTION-HANDOFF.md` · `docs/NEXT-STEPS.md` ·
-`docs/dev-e2e-handoff.md` · `ditto/miner_cli/` · `ditto/screener/` ·
-`ditto/validator/{worker,dittobench,signing,weights}.py` ·
+`README.md` · `docs/incentive-mechanism.md` · `ditto/miner_cli/` ·
+`ditto/screener/` · `ditto/validator/{worker,dittobench,signing,weights}.py` ·
 `ditto/api_models/{upload,validator,screener,agent_status}.py`

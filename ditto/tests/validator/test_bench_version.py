@@ -1,8 +1,9 @@
-"""WP B9 — version-bump re-score sweep + version-aware weight fold.
+"""Version-bump re-score sweep + version-aware weight fold.
 
-Benchmark scores are only comparable within one ``bench_version`` (BENCHMARK-V2
-§9). These tests cover the two subnet-side pieces: the fold ignores stale
-versions, and the worker re-evaluates the stale champion + tail before folding.
+Benchmark scores are only comparable within one ``bench_version``: a version
+bump changes what the composite means. These tests cover the two subnet-side
+pieces: the fold ignores stale versions, and the worker re-evaluates the stale
+champion + tail before folding.
 """
 
 from __future__ import annotations

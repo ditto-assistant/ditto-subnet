@@ -5,7 +5,7 @@ leases up to three tickets per submission and finalizes on the median of the
 independent validators' scores (see "The k=3 model" below). Today only the team
 validator runs, so this guide is how any independent validator joins. Run the
 same stateless worker with your own registered hotkey and the platform shards
-work to you. This is the O-VAL guide from `ROAD-TO-PRODUCTION.md`.
+work to you.
 
 ---
 
@@ -158,15 +158,15 @@ Boot-time self-checks worth knowing:
 - **k=3 multi-validator is implemented; deployment is the remaining step.** The
   platform leases up to three tickets per submission, stores one signed score
   per `(agent, validator)`, and finalizes on the median (the `/validator/job` /
-  `/agent/{id}/score` endpoints are the shipped names, no rename planned). Today
+  `/agent/{id}/score` endpoints are the shipped names). Today
   only the subnet owner's validator runs, so agents currently get one score.
   Bringing up >=3 independent validators, each a distinct SN118 hotkey with a
   `validator_permit`, is what decentralizes scoring; there is no extra
   registration flow beyond that permitted hotkey. See section 7 for a localnet
   three-validator run.
-- **Pylon identity-write is not yet provisioned** (E1); the SDK fallback is
-  the proven path on the dev chain.
-- **Commit-reveal is off on dev** and will be enabled for production (W-CR).
+- **Pylon identity-write is not yet provisioned**; the SDK fallback is the
+  proven path on the dev chain.
+- **Commit-reveal is off on dev** and on for production.
   Under commit-reveal **v3** there is no separate reveal call — `set_weights` and
   Pylon do the timelock commit and the chain auto-reveals. The worker reads the
   `CommitRevealWeightsEnabled` hyperparameter and **logs the mode** each
@@ -205,7 +205,6 @@ each localnet hotkey enough stake.
 
 ### Sources (this repo)
 
-`CLAUDE.md` · `PROJECT.md` · `docs/ROAD-TO-PRODUCTION.md` ·
-`docs/dev-e2e-handoff.md` · `docs/incentive-mechanism.md` ·
+`CLAUDE.md` · `docs/ROAD-TO-PRODUCTION.md` · `docs/incentive-mechanism.md` ·
 `ditto/validator/{__main__,config,worker,weights,signing,telemetry}.py` ·
 `ditto/chain/client.py`

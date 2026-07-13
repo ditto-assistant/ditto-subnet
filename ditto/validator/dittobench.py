@@ -41,7 +41,7 @@ class DittobenchClient:
         # Raw, opaque ``details`` blob from the most recent scored run (bench
         # version, paraphrase/injection telemetry, token totals). Not part of the
         # signed/DB ScoreReport contract — captured here only so the validator can
-        # surface it in aggregate W&B telemetry (A10, BENCHMARK-V2 §9).
+        # surface it in aggregate W&B telemetry.
         self.last_details: dict[str, object] = {}
 
     async def score_tarball(

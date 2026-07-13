@@ -117,12 +117,12 @@ class TestAggregateReduction:
         assert not hasattr(stat, "per_case")
 
     def test_scored_agent_stat_carries_details_telemetry(self) -> None:
-        # The scorer's opaque details blob (A10) surfaces as aggregate scalars.
+        # The scorer's opaque details blob surfaces as aggregate scalars.
         details = {
             "bench_version": 2,
             "injection_attempts": 3,
             "paraphrase": {"attempted": 40, "applied": 35, "fallback": 5},
-            # Phase C observed-execution telemetry.
+            # Observed-execution telemetry.
             "observed_tool_cases": 12,
             "capped_tool_cases": 2,
             "isolation_cases": 4,

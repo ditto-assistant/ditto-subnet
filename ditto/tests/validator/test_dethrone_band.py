@@ -1,9 +1,9 @@
-"""v3 #2 — statistically-principled (indifference-band) KOTH dethroning.
+"""Statistically-principled (indifference-band) KOTH dethroning.
 
 A challenger must beat the incumbent by more than the **indifference band** =
 max(flat relative margin, z·√(se_c² + se_champ²)). With no per-entry
 ``composite_stderr`` the band is exactly the flat relative margin, so the fold is
-byte-identical to the pre-v3 rule (BENCHMARK-V3-IDEAS.md §2.2).
+byte-identical to the pre-band rule.
 """
 
 from __future__ import annotations

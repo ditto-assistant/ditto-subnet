@@ -1,6 +1,6 @@
-"""Common Random Numbers (CRN) seed derivation for KOTH re-scoring (v3 #1).
+"""Common Random Numbers (CRN) seed derivation for KOTH re-scoring.
 
-BENCHMARK-V3-IDEAS.md §2.1. To compare the champion against challengers on equal
+To compare the champion against challengers on equal
 footing, they must be scored on the **same** freshly-generated dataset — then the
 variance of their score *difference* (the only quantity KOTH cares about)
 collapses by the covariance term instead of summing.

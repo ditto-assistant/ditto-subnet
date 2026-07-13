@@ -72,10 +72,8 @@ ditto --network local --chain-endpoint <ws://…> \
   upload --path <agent.tar.gz> --name <name> --coldkey <ck> --hotkey <hk> -y
 ```
 
-Bringing up the full `miner → platform API → validator → weights` loop against
-the dev chain is documented in [`docs/dev-e2e-handoff.md`](docs/dev-e2e-handoff.md).
-The platform stack (Postgres/MinIO/Pylon/API) runs from the `ditto-platform`
-repo, not here.
+The platform stack (Postgres/MinIO/Pylon/API) that this worker talks to runs
+from the `ditto-platform` repo, not here.
 
 ## Testing
 
@@ -91,17 +89,15 @@ repo, not here.
   real dittobench-api + OpenRouter key — use it for local plumbing. When it is
   off, `VALIDATOR_DITTOBENCH_API_URL` + `VALIDATOR_OPENROUTER_KEY` are required
   at boot (fail-fast).
-- The worker currently targets the platform's **Phase-1 stub contract**
-  (`GET /validator/queue`, `GET /validator/agent/{id}/artifact`,
-  `POST /validator/agent/{id}/score`). The richer target design in
-  [`PROJECT.md`](PROJECT.md) (lease-based **k=3** `request-evaluation`, a signed
-  public score ledger via `submit-score` + `/scoring/scores`, and **replicated
-  deterministic weights** every validator recomputes) is a later phase — migrate
-  endpoint names + semantics in lockstep with the platform, since there is no
-  shared package.
+- The worker uses the platform's lease-based **k=3** scoring contract:
+  `request_job` leases a `/validator/job` ticket, `/agent/{id}/artifact` fetches
+  the submission, `submit_score` posts one signed score to the public ledger
+  (`/scoring/scores`), and every validator recomputes **replicated deterministic
+  weights** over that ledger. There is no shared wire package, so a request or
+  response shape change must land in both repos (see the copy note below).
 - On the dev localnet, staking is disabled, so the validator gets
-  `vpermit=False` and `set_weights` no-ops — see `dev-e2e-handoff.md` for the
-  Alice/sudo workaround.
+  `vpermit=False` and `set_weights` no-ops; an Alice/sudo stake workaround is
+  needed to exercise the weight path locally.
 - `ditto/api_models/validator.py` is a **copy** of the platform's wire models.
   If you change a validator request/response shape, change it in both repos.
 

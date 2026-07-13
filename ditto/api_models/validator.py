@@ -342,7 +342,7 @@ class SubmitScoreRequest(BaseModel):
 class LedgerEntry(BaseModel):
     """One miner's best eligible score, returned by ``GET /scoring/scores``.
 
-    The public score pool (PROJECT.md D3) the validator folds into KOTH+ATH
+    The public score pool the validator folds into KOTH+ATH
     weights. One entry per active miner = that miner's highest-scoring eligible
     agent (status ``scored``). ``first_seen`` (the agent's upload time) is the
     tie-break that lets the original beat a later copy of the same score;

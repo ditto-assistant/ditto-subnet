@@ -48,7 +48,3 @@ all settings.
 - `make format` — `ruff format` + `ruff check --fix`
 - `make typecheck` — `mypy ditto/`
 - `make test` — the default `pytest` suite
-
-## Dev-chain end-to-end
-See [`docs/dev-e2e-handoff.md`](docs/dev-e2e-handoff.md) for running the full
-miner → API → validator loop against the dev local chain.

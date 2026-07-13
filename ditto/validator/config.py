@@ -144,8 +144,8 @@ class ValidatorConfig:
     tail. ``0.9`` = 90% champion / 10% tail."""
 
     koth_dethrone_z: float
-    """z-multiplier for the **statistical** half of the dethroning band (v3 #2,
-    ``docs/BENCHMARK-V3-IDEAS.md`` §2.2). A challenger must beat the incumbent by
+    """z-multiplier for the **statistical** half of the dethroning band. A
+    challenger must beat the incumbent by
     more than ``max(koth_margin * incumbent, koth_dethrone_z * sqrt(se_c² +
     se_champ²))`` — the larger of the flat relative margin and the combined
     measurement uncertainty, when the ledger surfaces a per-entry
@@ -156,8 +156,8 @@ class ValidatorConfig:
 
     koth_confirmation_seeds: int
     """How many common CRN seeds the version-bump re-score sweep runs each stale
-    champion/tail agent on (prod hardening P4, ``docs/BENCHMARK-V3-IDEAS.md``
-    §2.1). With ``K >= 2`` the validator submits the median composite over the K
+    champion/tail agent on. With ``K >= 2`` the validator submits the median
+    composite over the K
     common seeds and attaches the per-seed list (``confirmation_composites``), so
     the dethrone comparison clears the MEDIAN over seeds and a crown flip must
     replicate across seeds instead of riding one lucky draw. A **consensus knob**
@@ -289,16 +289,16 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     # consensus clips the deviator, so they are env-tunable but default to the
     # team-locked values (90/10 split).
     #
-    # Margin retune for DittoBench v2 / bench_version 2 (BENCHMARK-V2 §6.2, B8):
+    # Margin retune for DittoBench v2 / bench_version 2:
     # the dethrone margin must exceed the between-seed composite noise so a
     # verbatim copy cannot win a lucky seed. v1's 1% margin assumed a small σ it
-    # never had. v2 targets between-seed σ ≤ 0.01 composite (§8 gate 1) and sets
+    # never had. v2 targets between-seed σ ≤ 0.01 composite and sets
     # the margin to ≥ 3σ/composite: at composite ~0.6, 3·0.01/0.6 = 5%. The
     # offline calibrator (dittobench-api cmd/benchcal) reports a hermetic
     # composite σ ≈ 0.017 as a weak-harness upper bound; the champion-region σ
     # from the hosted 30-seed frozen-starter-kit run MUST reconfirm ≤ 0.01 before
     # mainnet — if it is higher, raise this margin (and adopt median-of-3
-    # sub-seeds, §10.2) and re-match the platform score_tol.
+    # sub-seeds) and re-match the platform score_tol.
     koth_margin = _parse_float("VALIDATOR_KOTH_MARGIN", "0.05")
     koth_tail_size = _parse_int("VALIDATOR_KOTH_TAIL_SIZE", "4")
     koth_champion_share = _parse_float("VALIDATOR_KOTH_CHAMPION_SHARE", "0.9")

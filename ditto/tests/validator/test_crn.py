@@ -1,9 +1,9 @@
-"""v3 #1 — Common Random Numbers (CRN) seed derivation + plumbing.
+"""Common Random Numbers (CRN) seed derivation + plumbing.
 
 ``crn_seed`` must be pure and deterministic: every validator scoring the same set
 of agents at the same bench_version derives the identical seed, so the champion
 and its challengers face the same fresh dataset and their composites become
-directly comparable (BENCHMARK-V3-IDEAS.md §2.1). These tests pin the invariants
+directly comparable. These tests pin the invariants
 that keep it consensus-safe — determinism, order-independence, version rotation,
 JSON-clean int63 range — and that the re-score sweep forwards ONE common seed.
 """

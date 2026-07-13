@@ -69,14 +69,14 @@ class ScoredAgentStat:
     median_ms: int
     seed: int
     run_id: str
-    # Aggregate telemetry from the scorer's opaque ``details`` blob (A10). Zero
+    # Aggregate telemetry from the scorer's opaque ``details`` blob. Zero
     # when the scorer predates the field (older bench versions).
     bench_version: int = 0
     injection_attempts: int = 0
     paraphrase_fallbacks: int = 0
-    # Phase C observed execution (bench_version 2): how many tool cases ran under
+    # Observed tool execution (bench_version 2): how many tool cases ran under
     # observed execution vs. were capped (harness didn't use the endpoint), and how
-    # many multi-graph isolation cases ran. Zero on pre-Phase-C scorers.
+    # many multi-graph isolation cases ran. Zero on scorers without observed execution.
     observed_tool_cases: int = 0
     capped_tool_cases: int = 0
     isolation_cases: int = 0

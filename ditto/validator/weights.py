@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 # Benchmark scores are only comparable within one bench_version: a version bump
 # changes what the composite means, so folding a v2 champion against a v3
-# challenger would be nonsense (BENCHMARK-V2.md §9). Entries whose bench_version
+# challenger would be nonsense. Entries whose bench_version
 # the platform does not (yet) surface are treated as this baseline — so on a
 # ledger with no version info the fold is unchanged (all one version).
 DEFAULT_BENCH_VERSION = 1
@@ -48,8 +48,8 @@ MIN_ELIGIBLE_CASES = 100
 def _entry_version(entry: LedgerEntry) -> int:
     """The entry's bench_version, or DEFAULT_BENCH_VERSION when the platform
     ledger does not carry one. Read via getattr so the wire model can stay
-    untouched (the platform surfacing bench_version on the ledger is optional
-    per BENCHMARK-V2 §7 — until then this is a safe no-op)."""
+    untouched; the platform surfacing bench_version on the ledger is optional,
+    and until then this is a safe no-op)."""
     v = getattr(entry, "bench_version", None)
     return v if isinstance(v, int) and v > 0 else DEFAULT_BENCH_VERSION
 
@@ -106,8 +106,8 @@ def compute_weights(
     (:func:`_beats`): the larger of the flat relative ``margin`` and, when the
     ledger surfaces per-entry ``composite_stderr`` and ``dethrone_z > 0``, the
     statistical band ``dethrone_z * sqrt(se_c² + se_champ²)`` — so a challenger
-    inside the measurement noise cannot flip the crown (v3 #2). With no stderr the
-    band is exactly ``margin`` relative, identical to the pre-v3 rule. The
+    inside the measurement noise cannot flip the crown. With no stderr the
+    band is exactly ``margin`` relative, identical to the pre-band rule. The
     champion gets ``champion_share``; the next ``tail_size`` miners by composite
     split ``1 - champion_share`` equally.
 
@@ -191,9 +191,9 @@ def _effective_composite(entry: LedgerEntry) -> float:
 def _entry_stderr(entry: LedgerEntry) -> float | None:
     """The entry's composite standard error, or None when the platform ledger
     does not carry one. Read via getattr so the wire model can stay untouched
-    (the platform surfacing ``composite_stderr`` is optional per
-    BENCHMARK-V3-IDEAS §2.2 — until then the statistical band is inert and the
-    fold uses the flat relative margin, byte-identical to today). Non-finite or
+    (the platform surfacing ``composite_stderr`` is optional; until then the
+    statistical band is inert and the fold uses the flat relative margin,
+    byte-identical to today). Non-finite or
     negative values are treated as absent (a consensus-safe guard)."""
     v = getattr(entry, "composite_stderr", None)
     if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0.0:
@@ -204,7 +204,7 @@ def _entry_stderr(entry: LedgerEntry) -> float | None:
 def _beats(
     challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
 ) -> bool:
-    """Whether ``challenger`` dethrones ``champion`` (v3 #2). The lead must exceed
+    """Whether ``challenger`` dethrones ``champion``. The lead must exceed
     the **indifference band** = max(flat relative margin, statistical band):
 
         band = max( margin * champion.composite,
@@ -269,7 +269,7 @@ def agents_needing_rescore(
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
     bench_version than ``current_version`` — they must be re-evaluated before the
-    fold can compare them at the new version (BENCHMARK-V2 §9 step 2).
+    fold can compare them at the new version.
 
     Selection uses the same champion/tail logic as :func:`compute_weights`, but
     over the FULL positive-composite set (not the version filter) — on a fresh

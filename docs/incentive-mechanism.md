@@ -1,7 +1,6 @@
-# Incentive Mechanism — Options & Trade-offs (SN118)
+# Incentive Mechanism (SN118)
 
-Draft for team discussion, 2026-06-22. Goal: pick how emissions are distributed
-across miners based on benchmark scores.
+How SN118 distributes emissions across miners based on their benchmark scores.
 
 ## What makes this subnet different
 
@@ -136,8 +135,8 @@ too jittery to launch on.
 
 In all cases the mechanism needs, as non-negotiable supports:
 - **First-seen timestamps** + **plagiarism / near-duplicate detection**, and
-- a **deterministic** scoring function (so validators converge on identical
-  weights — see D3 in `PROJECT.md`).
+- a **deterministic** scoring function, so validators converge on identical
+  weights from the same ledger.
 
 Avoid B and E as the primary mechanism: both pay copies and underweight genuine
 improvement.

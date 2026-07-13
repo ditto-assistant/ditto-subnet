@@ -1,9 +1,8 @@
 # Road to Production: SN118
 
 **Snapshot: 2026-07-12.** Only the remaining work and decisions before a mainnet
-(finney) rollout. Completed items are the footnote at the end. Full history and
-rationale: `NEXT-STEPS.md`. Status: TODO, PARTIAL (started), DECISION (needs a
-human call). Code that is merged but unproven on a live chain sits in the
+(finney) rollout. Completed items are the footnote at the end. Status: TODO, PARTIAL (started),
+DECISION (needs a human call). Code that is merged but unproven on a live chain sits in the
 footnote and re-appears here only as the finney first-run that proves it.
 
 > There is no testnet, only the dev localnet and prod (finney). finney is the

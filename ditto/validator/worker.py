@@ -265,7 +265,7 @@ class ValidatorWorker:
 
     async def _rescore_stale_champions(self) -> None:
         """Read the ledger and re-score any champion/tail agents scored under an
-        older bench_version than this scorer now produces (BENCHMARK-V2 §9).
+        older bench_version than this scorer now produces.
 
         Run in the scoring sweep so the durable ledger the weight fold reads is
         already refreshed, which keeps re-scoring working once scoring and
@@ -284,10 +284,10 @@ class ValidatorWorker:
         self, ledger: LedgerResponse
     ) -> LedgerResponse:
         """Re-evaluate the champion + participation-tail agents whose ledger
-        bench_version is older than this validator's current scorer version
-        (BENCHMARK-V2 §9 step 2), then re-fetch the ledger so the fold sees the
+        bench_version is older than this validator's current scorer version,
+        then re-fetch the ledger so the fold sees the
         refreshed scores. A no-op — with no re-fetch — when the ledger carries no
-        per-entry version (the platform surfacing it is optional per §7) or when
+        per-entry version (the platform surfacing it is optional) or when
         nothing is stale. One agent failing to re-score is logged and skipped; it
         must never stall weight-setting.
         """
@@ -305,7 +305,7 @@ class ValidatorWorker:
         )
         if not stale:
             return ledger
-        # v3 #1 (CRN) + P4: score the whole stale champion+tail set on K
+        # CRN + P4: score the whole stale champion+tail set on K
         # deterministic COMMON seeds so their refreshed composites face identical
         # datasets and become directly comparable. Each seed is a pure hash of the
         # compared agent ids + version (+ replicate index), so every validator
