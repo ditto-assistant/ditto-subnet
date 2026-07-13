@@ -175,15 +175,8 @@ check and identity writes.
 
 ## Optional observability
 
-Production behavior and internal service routes are fixed by Compose. Operators
-may configure logging and aggregate telemetry:
-
-| Env | Default | Meaning |
-| --- | --- | --- |
-| `VALIDATOR_LOG_LEVEL` | `INFO` | Worker log level. |
-| `WANDB_MODE` | `online` | `online` publishes aggregate stats to the shared `heyditto/ditto-sn118` project; set `disabled` to opt out. |
-| `WANDB_API_KEY` | none | The shared read+write key the Ditto team provides trusted validators confidentially. Required when `WANDB_MODE=online`; never commit it. |
-| `WANDB_RUN_NAME` | `validator-<hotkey8>` | Auto-derived per hotkey so validators sharing the project never collide. Leave unset unless overriding. |
+Add the shared `WANDB_API_KEY` provided by Ditto to `.env` (never commit it), or
+set `WANDB_MODE=disabled` to opt out of aggregate telemetry.
 
 ## Development
 
