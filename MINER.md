@@ -6,6 +6,14 @@ validators build it in a sandbox, benchmark tool use and memory recall, and set
 weights from the public score ledger. You are rewarded for improving the best
 artifact, not for serving live inference.
 
+## Contents
+
+| Prepare | Submit | Understand |
+| --- | --- | --- |
+| [Requirements](#requirements) | [Install and configure](#install-and-configure) | [Prepare and verify](#prepare-and-verify-an-agent) |
+| [Submit](#submit) | [Track status](#track-status) | [Scoring](#scoring) |
+| [Emissions](#emissions) | [Duplicate protection](#duplicate-protection) | [Common questions](#common-questions) |
+
 ## Requirements
 
 - Python 3.11+ and [`uv`](https://docs.astral.sh/uv/)
