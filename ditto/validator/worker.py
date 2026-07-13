@@ -29,6 +29,7 @@ from ditto.validator.errors import (
     PlatformError,
     WeightSubmissionError,
 )
+from ditto.validator.onchain_seed import seed_matches
 from ditto.validator.signing import sign_score
 from ditto.validator.telemetry import (
     ScoredAgentStat,
@@ -526,7 +527,24 @@ class ValidatorWorker:
         return False
 
     async def _score_job(self, job: JobResponse) -> ScoreReport:
-        """Score one issued ticket against its platform-pinned dataset."""
+        """Score one issued ticket against its platform-pinned dataset.
+
+        When the ticket pins the seed's on-chain block hash, the seed is
+        re-derived locally first (prod hardening P2): a mismatch means the
+        platform issued a seed it could have chosen — refuse to score rather
+        than lend the ticket a signature. Tickets without a block hash
+        (pre-derivation agents) proceed as before.
+        """
+        if (
+            job.seed is not None
+            and job.dataset_seed_block_hash
+            and not seed_matches(job.dataset_seed_block_hash, job.agent_id, job.seed)
+        ):
+            raise PlatformError(
+                f"ticket seed {job.seed} for agent {job.agent_id} does not "
+                f"re-derive from pinned block hash "
+                f"{job.dataset_seed_block_hash!r}; refusing to score"
+            )
         return await self._evaluate_and_submit(
             job.agent_id,
             job.sha256,

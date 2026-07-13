@@ -67,6 +67,22 @@ class JobResponse(BaseModel):
         str | None,
         Field(default=None, description="Generator profile (small|medium|full)."),
     ] = None
+    dataset_seed_block: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Chain block number the dataset seed derives from.",
+        ),
+    ] = None
+    dataset_seed_block_hash: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Hash of ``dataset_seed_block``; lets the validator "
+            "re-derive the seed itself and refuse a ground ticket "
+            "(ditto/validator/onchain_seed.py).",
+        ),
+    ] = None
 
 
 class ArtifactResponse(BaseModel):

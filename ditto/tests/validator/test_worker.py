@@ -20,6 +20,7 @@ from ditto.api_models.validator import (
 )
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
+from ditto.validator.onchain_seed import derive_seed
 from ditto.validator.weights import compute_weights
 from ditto.validator.worker import ValidatorWorker
 
@@ -285,6 +286,74 @@ class TestRunOnce:
         dittobench.score_tarball.assert_not_awaited()  # ...but never scored
         platform.submit_score.assert_not_awaited()
         chain.put_weights.assert_awaited_once_with({"5Champ" + "x" * 42: 0.9})
+
+    async def test_ground_seed_ticket_is_refused(self) -> None:
+        # P2: a ticket whose seed does not re-derive from its pinned on-chain
+        # block hash could have been chosen by the platform (seed grinding).
+        # It is refused before the artifact is even fetched; the sweep
+        # continues and weights still come from the ledger.
+        agent_id = uuid4()
+        block_hash = "0x" + "12" * 32
+        job = _job("5MinerA" + "x" * 41).model_copy(
+            update={
+                "agent_id": agent_id,
+                "dataset_seed_block_hash": block_hash,
+                "seed": derive_seed(block_hash, agent_id) + 1,
+            }
+        )
+        platform = _platform_with_ledger(
+            jobs=[job], ledger=[_entry("5Champ" + "x" * 42, 0.85)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock(put_weights=AsyncMock())
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(),
+        )
+        n = await worker.run_once()
+
+        assert n == 1  # counted against the sweep cap...
+        platform.get_artifact.assert_not_awaited()  # ...but refused unscored
+        dittobench.score_tarball.assert_not_awaited()
+        platform.submit_score.assert_not_awaited()
+        chain.put_weights.assert_awaited_once_with({"5Champ" + "x" * 42: 0.9})
+
+    async def test_derived_seed_ticket_is_scored(self) -> None:
+        # The companion arm: a ticket whose seed DOES re-derive proceeds.
+        agent_id = uuid4()
+        block_hash = "0x" + "34" * 32
+        job = _job("5MinerA" + "x" * 41).model_copy(
+            update={
+                "agent_id": agent_id,
+                "dataset_seed_block_hash": block_hash,
+                "seed": derive_seed(block_hash, agent_id),
+            }
+        )
+        platform = _platform_with_ledger(
+            jobs=[job], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        chain = MagicMock(put_weights=AsyncMock())
+        keypair = MagicMock()
+        keypair.sign = MagicMock(return_value=b"\x01" * 64)
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=keypair,
+        )
+        await worker.run_once()
+
+        dittobench.score_tarball.assert_awaited_once()
+        platform.submit_score.assert_awaited_once()
 
     async def test_lapsed_ticket_is_skipped_unscored(self) -> None:
         # A ticket already past its deadline is counted as pulled but never
