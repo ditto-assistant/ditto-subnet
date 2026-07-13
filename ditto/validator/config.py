@@ -110,17 +110,6 @@ class ValidatorConfig:
     """Subtensor network identifier for the substrate event reads Pylon does not
     surface. A ``ws://`` endpoint targets a specific node."""
 
-    require_commit_reveal: bool
-    """Cutover guard: expect commit-reveal to be ON for this network.
-
-    ``VALIDATOR_REQUIRE_COMMIT_REVEAL``. Under commit-reveal v3 (bittensor >= 9)
-    the weight sink (``set_weights`` / Pylon) does the timelock commit itself and
-    the chain auto-reveals after ``RevealPeriodEpochs`` — the worker makes **no**
-    separate reveal call. This flag is observability-only: when set and the chain
-    reports commit-reveal OFF, the worker logs an error each epoch (weights would
-    be front-runnable) but still submits — refusing would zero the chain, a worse
-    failure. Set it on finney so a mis-set hyperparameter is loud."""
-
     # --- Incentive mechanism (KOTH + ATH gate). margin / tail_size /
     # champion_share / dethrone_z / confirmation_seeds are all set from the frozen
     # KOTH_* module constants above, not from env. ---
@@ -234,10 +223,6 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     # end-to-end plumbing without a scoring engine).
     _truthy = {"1", "true", "yes"}
     dittobench_mock = os.environ.get("VALIDATOR_DITTOBENCH_MOCK", "").lower() in _truthy
-    require_commit_reveal = (
-        os.environ.get("VALIDATOR_REQUIRE_COMMIT_REVEAL", "").lower() in _truthy
-    )
-
     # Roles: an instance runs the scoring half, the weight half, or both. Both
     # (the default) is the one-validator-type model: every validator scores and
     # sets weights. Splitting the roles is an optional deployment knob.
@@ -298,7 +283,6 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_identity_token=pylon_identity_token,
         pylon_open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
-        require_commit_reveal=require_commit_reveal,
         koth_margin=KOTH_MARGIN,
         koth_tail_size=KOTH_TAIL_SIZE,
         koth_champion_share=KOTH_CHAMPION_SHARE,
