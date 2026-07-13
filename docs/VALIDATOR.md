@@ -70,9 +70,10 @@ Put the generated random value in `PYLON_TOKEN`, then fill these placeholders in
 | `PYLON_TOKEN` | Random token generated above. |
 | `RELAY_API_KEY` | Chutes API key used only by `model-relay`. |
 
-The example already selects the production platform, Finney, and SN118. For a
-local chain, explicitly replace `VALIDATOR_PLATFORM_API_URL` and
-`SUBTENSOR_NETWORK`; do not reuse the production `.env`.
+The example already selects the production platform and Finney; Compose
+hardcodes SN118 for both the worker and Pylon. For a local chain, explicitly
+replace `VALIDATOR_PLATFORM_API_URL` and `SUBTENSOR_NETWORK`; do not reuse the
+production `.env`.
 
 The wallet stays on the host and is mounted read-only. The loaded wallet hotkey
 must exactly match `VALIDATOR_HOTKEY`. Never put a mnemonic in `.env`, and never
