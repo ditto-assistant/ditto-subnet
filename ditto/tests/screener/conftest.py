@@ -15,6 +15,7 @@ _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 def _default_config(**overrides: Any) -> ScreenerConfig:
     base: dict[str, Any] = {
         "platform_api_url": "http://platform.test",
+        "api_token": "test-screener-token-at-least-32-characters",
         "screener_hotkey": _HOTKEY,
         "wallet_name": None,
         "wallet_hotkey": None,

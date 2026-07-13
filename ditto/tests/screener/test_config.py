@@ -13,6 +13,9 @@ _MNEMONIC = "bottom drive obey lake curtain smoke basket hold race lonely fit wa
 
 def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SCREENER_HOTKEY", _HOTKEY)
+    monkeypatch.setenv(
+        "SCREENER_API_TOKEN", "test-screener-token-at-least-32-characters"
+    )
     monkeypatch.setenv("SCREENER_MNEMONIC", _MNEMONIC)
     for k in (
         "SCREENER_WALLET_NAME",
@@ -28,6 +31,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     _base_env(monkeypatch)
     cfg = parse_screener_config_from_env()
     assert cfg.screener_hotkey == _HOTKEY
+    assert cfg.api_token == "test-screener-token-at-least-32-characters"
     assert cfg.netuid == 118
     assert cfg.docker_bin == "docker"
     assert cfg.container_port == 8080
@@ -57,7 +61,7 @@ def test_smoke_env_bad_pair_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_missing_signing_key_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SCREENER_HOTKEY", _HOTKEY)
+    _base_env(monkeypatch)
     monkeypatch.delenv("SCREENER_MNEMONIC", raising=False)
     monkeypatch.delenv("SCREENER_WALLET_NAME", raising=False)
     monkeypatch.delenv("SCREENER_WALLET_HOTKEY", raising=False)
@@ -66,9 +70,23 @@ def test_missing_signing_key_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_missing_hotkey_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
     monkeypatch.delenv("SCREENER_HOTKEY", raising=False)
-    monkeypatch.setenv("SCREENER_MNEMONIC", _MNEMONIC)
     with pytest.raises(ScreenerConfigError, match="SCREENER_HOTKEY"):
+        parse_screener_config_from_env()
+
+
+def test_missing_api_token_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.delenv("SCREENER_API_TOKEN")
+    with pytest.raises(ScreenerConfigError, match="SCREENER_API_TOKEN"):
+        parse_screener_config_from_env()
+
+
+def test_short_api_token_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_API_TOKEN", "too-short")
+    with pytest.raises(ScreenerConfigError, match="at least 32 characters"):
         parse_screener_config_from_env()
 
 

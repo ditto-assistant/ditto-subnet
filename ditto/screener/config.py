@@ -10,7 +10,7 @@ the DB.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ditto.screener.errors import ScreenerConfigError
 
@@ -24,11 +24,16 @@ class ScreenerConfig:
     platform_api_url: str
     """Base URL of the platform API, e.g. ``http://localhost:8000``."""
 
+    api_token: str = field(repr=False)
+    """Bearer token shared only with the platform's screener endpoints."""
+
     # --- Identity / chain ---
     screener_hotkey: str
-    """This screener's SS58 hotkey (must match the loaded signing keypair, and
-    must hold a validator_permit on the netuid — screeners reuse the validator
-    permit set until a distinct screener_permit exists)."""
+    """Dedicated screener SS58 hotkey matching the loaded signing keypair.
+
+    The platform explicitly allowlists this public key; it does not need an
+    on-chain validator permit and should not hold funds.
+    """
 
     wallet_name: str | None
     """bittensor wallet name to load the signing hotkey from (if used)."""
@@ -154,6 +159,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_PLATFORM_API_URL",
             os.environ.get("SCREENER_PLATFORM_API_URL", "http://localhost:8000"),
         ),
+        api_token=_require(
+            "SCREENER_API_TOKEN", os.environ.get("SCREENER_API_TOKEN", "")
+        ),
         screener_hotkey=_require(
             "SCREENER_HOTKEY", os.environ.get("SCREENER_HOTKEY", "")
         ),
@@ -191,4 +199,6 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "no signing key: set SCREENER_MNEMONIC or "
             "SCREENER_WALLET_NAME + SCREENER_WALLET_HOTKEY"
         )
+    if len(config.api_token) < 32:
+        raise ScreenerConfigError("SCREENER_API_TOKEN must be at least 32 characters")
     return config

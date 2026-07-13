@@ -15,6 +15,12 @@ from ditto.screener.platform import PlatformClient
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+_TOKEN = "test-screener-token-at-least-32-characters"
+
+
+def _assert_auth(request: httpx.Request) -> None:
+    assert request.headers["Authorization"] == f"Bearer {_TOKEN}"
+    assert request.headers["X-Screener-Hotkey"]
 
 
 def _make_client(
@@ -29,7 +35,7 @@ async def test_get_queue_parses_items(
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/screener/queue"
-        assert request.headers["X-Screener-Hotkey"]
+        _assert_auth(request)
         return httpx.Response(
             200,
             json={
@@ -60,6 +66,7 @@ async def test_get_artifact_parses_url(
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == f"/api/v1/screener/agent/{_AGENT}/artifact"
+        _assert_auth(request)
         return httpx.Response(
             200,
             json={
@@ -84,6 +91,7 @@ async def test_submit_result_posts_signed_verdict(
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == f"/api/v1/screener/agent/{_AGENT}/result"
+        _assert_auth(request)
         import json
 
         captured.update(json.loads(request.content))
