@@ -61,7 +61,7 @@ uv sync                              # install deps
 make lint typecheck test             # ruff + mypy + pytest (run before every PR)
 
 # run the validator worker (local plumbing, mock the bench, no key needed):
-VALIDATOR_PLATFORM_API_URL=http://localhost:8000 NETUID=3 \
+VALIDATOR_PLATFORM_API_URL=http://localhost:8000 NETUID=118 \
   VALIDATOR_DITTOBENCH_MOCK=1 \
   VALIDATOR_WALLET_NAME=<ck> VALIDATOR_WALLET_HOTKEY=<hk> VALIDATOR_HOTKEY=<ss58> \
   PYLON_URL=http://localhost:8001 SUBTENSOR_NETWORK=<ws://…> \
@@ -95,9 +95,6 @@ from the `ditto-platform` repo, not here.
   (`/scoring/scores`), and every validator recomputes **replicated deterministic
   weights** over that ledger. There is no shared wire package, so a request or
   response shape change must land in both repos (see the copy note below).
-- On the dev localnet, staking is disabled, so the validator gets
-  `vpermit=False` and `set_weights` no-ops; an Alice/sudo stake workaround is
-  needed to exercise the weight path locally.
 - `ditto/api_models/validator.py` is a **copy** of the platform's wire models.
   If you change a validator request/response shape, change it in both repos.
 

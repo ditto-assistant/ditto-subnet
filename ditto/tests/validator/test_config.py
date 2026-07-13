@@ -12,11 +12,12 @@ _MNEMONIC = "bottom drive obey lake curtain smoke basket hold race lonely fit wa
 
 
 def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Minimal env under which parse succeeds (mock + SDK skip most requirements)."""
+    """Minimal env under which parse succeeds (mock scoring + Pylon identity)."""
     monkeypatch.setenv("VALIDATOR_DITTOBENCH_MOCK", "true")
-    monkeypatch.setenv("VALIDATOR_USE_SDK_WEIGHTS", "true")
     monkeypatch.setenv("VALIDATOR_HOTKEY", _HOTKEY)
     monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
+    monkeypatch.setenv("PYLON_IDENTITY_NAME", "ditto")
+    monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "tok")
     for k in (
         "VALIDATOR_KOTH_MARGIN",
         "VALIDATOR_KOTH_TAIL_SIZE",
@@ -37,16 +38,6 @@ class TestKothConfig:
         # Weight-set cadence is decoupled from the (faster) scoring sweep.
         assert cfg.sweep_seconds == 120
         assert cfg.epoch_seconds == 3600
-        # version_key defaults to the package spec version so it advances with
-        # releases; every validator on a network must agree on it.
-        from ditto import __spec_version__
-
-        assert cfg.weight_version_key == __spec_version__
-
-    def test_weight_version_key_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_WEIGHT_VERSION_KEY", "7")
-        assert parse_validator_config_from_env().weight_version_key == 7
 
     @pytest.mark.parametrize("val", ["nan", "inf", "-inf", "0", "-0.5"])
     def test_bad_margin_rejected(
@@ -124,11 +115,13 @@ class TestRoleConfig:
     def test_weights_only_needs_no_dittobench(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # An independent (weights-only) validator: scoring off, so no
-        # dittobench-api URL is required outside mock mode either.
+        # An independent (weights-only) validator: scoring off, so no dittobench-api
+        # URL is required even outside mock mode. It still needs Pylon identity to
+        # write weights.
         monkeypatch.setenv("VALIDATOR_HOTKEY", _HOTKEY)
         monkeypatch.setenv("VALIDATOR_MNEMONIC", _MNEMONIC)
-        monkeypatch.setenv("VALIDATOR_USE_SDK_WEIGHTS", "true")
+        monkeypatch.setenv("PYLON_IDENTITY_NAME", "ditto")
+        monkeypatch.setenv("PYLON_IDENTITY_TOKEN", "tok")
         monkeypatch.setenv("VALIDATOR_ENABLE_SCORING", "false")
         for k in (
             "VALIDATOR_DITTOBENCH_MOCK",
@@ -149,7 +142,6 @@ class TestRoleConfig:
         monkeypatch.setenv("VALIDATOR_DITTOBENCH_MOCK", "true")
         monkeypatch.setenv("VALIDATOR_ENABLE_WEIGHTS", "false")
         for k in (
-            "VALIDATOR_USE_SDK_WEIGHTS",
             "PYLON_IDENTITY_NAME",
             "PYLON_IDENTITY_TOKEN",
         ):

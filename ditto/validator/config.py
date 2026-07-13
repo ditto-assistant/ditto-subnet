@@ -13,7 +13,6 @@ import math
 import os
 from dataclasses import dataclass
 
-from ditto import __spec_version__
 from ditto.validator.errors import ValidatorConfigError
 
 
@@ -90,18 +89,8 @@ class ValidatorConfig:
     the self-check works in production, where identity is the weight path."""
 
     subtensor_network: str
-    """Subtensor network identifier for the substrate event reads.
-
-    Also the chain target for the SDK weight fallback; a ``ws://`` endpoint is
-    passed straight to :class:`bittensor.Subtensor`."""
-
-    use_sdk_weights: bool
-    """When True, submit weights via the bittensor SDK instead of Pylon identity.
-
-    Deprecated: Pylon is the supported weight path (see VALIDATOR.md). This
-    ``VALIDATOR_USE_SDK_WEIGHTS`` escape hatch calls ``Subtensor.set_weights``
-    directly and is retained only for bring-up on a chain where Pylon is not yet
-    stood up; off by default. Pylon identity creds are not required in this mode."""
+    """Subtensor network identifier for the substrate event reads Pylon does not
+    surface. A ``ws://`` endpoint targets a specific node."""
 
     require_commit_reveal: bool
     """Cutover guard: expect commit-reveal to be ON for this network.
@@ -113,17 +102,6 @@ class ValidatorConfig:
     reports commit-reveal OFF, the worker logs an error each epoch (weights would
     be front-runnable) but still submits — refusing would zero the chain, a worse
     failure. Set it on finney so a mis-set hyperparameter is loud."""
-
-    weight_version_key: int
-    """Mechanism version stamped on ``set_weights`` (the SDK path).
-
-    Bittensor's ``version_key`` lets validators signal which mechanism version
-    they scored under; the chain groups weights by it so an old validator that
-    hasn't upgraded doesn't get averaged against a new mechanism. Defaults to
-    ``ditto.__spec_version__`` so it advances with the package version. Every
-    validator on a network must agree, like the KOTH knobs. (The Pylon path
-    derives its own ``version_key`` from subnet hyperparams, so this applies only
-    to the SDK path.)"""
 
     # --- Incentive mechanism (KOTH + ATH gate) ---
     koth_margin: float
@@ -245,7 +223,6 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     # end-to-end plumbing without a scoring engine).
     _truthy = {"1", "true", "yes"}
     dittobench_mock = os.environ.get("VALIDATOR_DITTOBENCH_MOCK", "").lower() in _truthy
-    use_sdk_weights = os.environ.get("VALIDATOR_USE_SDK_WEIGHTS", "").lower() in _truthy
     require_commit_reveal = (
         os.environ.get("VALIDATOR_REQUIRE_COMMIT_REVEAL", "").lower() in _truthy
     )
@@ -272,11 +249,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         _require("VALIDATOR_DITTOBENCH_API_URL", dittobench_api_url)
 
     # Pylon identity is only needed by the weight half's Pylon ``put_weights``
-    # path; the SDK weight fallback signs with the local hotkey, and a
-    # scoring-only instance sets no weights at all, so don't require it there.
+    # path; a scoring-only instance sets no weights at all, so don't require it
+    # there.
     pylon_identity_name = os.environ.get("PYLON_IDENTITY_NAME", "")
     pylon_identity_token = os.environ.get("PYLON_IDENTITY_TOKEN", "")
-    if enable_weights and not use_sdk_weights:
+    if enable_weights:
         _require("PYLON_IDENTITY_NAME", pylon_identity_name)
         _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
 
@@ -355,11 +332,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_identity_token=pylon_identity_token,
         pylon_open_access_token=os.environ.get("PYLON_OPEN_ACCESS_TOKEN") or None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
-        use_sdk_weights=use_sdk_weights,
         require_commit_reveal=require_commit_reveal,
-        weight_version_key=_parse_int(
-            "VALIDATOR_WEIGHT_VERSION_KEY", str(__spec_version__)
-        ),
         koth_margin=koth_margin,
         koth_tail_size=koth_tail_size,
         koth_champion_share=koth_champion_share,
