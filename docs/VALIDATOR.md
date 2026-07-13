@@ -273,10 +273,7 @@ truth.
 
 ## 9. Environment reference
 
-These common knobs keep the defaults documented by the validator worker. The
-consensus-critical KOTH values (margin, tail size, champion share, dethrone-z,
-and confirmation seeds) are frozen in code (`ditto/validator/config.py`), not
-env-tunable, so they are not listed here.
+These common knobs keep the defaults documented by the validator worker.
 
 | Env | Meaning |
 | --- | --- |
