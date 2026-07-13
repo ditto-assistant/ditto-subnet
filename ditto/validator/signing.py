@@ -124,3 +124,40 @@ def sign_job_request(
         )
     )
     return signature.hex()
+
+
+def heartbeat_signing_message(
+    *,
+    validator_hotkey: str,
+    software_version: str,
+    protocol_version: int,
+    code_digest: str,
+    timestamp: int,
+) -> bytes:
+    """Build the canonical v1 software-heartbeat payload."""
+    return (
+        "ditto-validator-heartbeat:v1:"
+        f"{validator_hotkey}:{software_version}:{protocol_version}:"
+        f"{code_digest}:{timestamp}"
+    ).encode()
+
+
+def sign_heartbeat(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    software_version: str,
+    protocol_version: int,
+    code_digest: str,
+    timestamp: int,
+) -> str:
+    """Return the hex sr25519 signature over a software heartbeat."""
+    message = heartbeat_signing_message(
+        validator_hotkey=validator_hotkey,
+        software_version=software_version,
+        protocol_version=protocol_version,
+        code_digest=code_digest,
+        timestamp=timestamp,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()

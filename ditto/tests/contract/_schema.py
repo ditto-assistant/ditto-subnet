@@ -30,6 +30,8 @@ SHARED_MODELS = [
     "ScoreReport",
     "SubmitScoreRequest",
     "SubmitScoreResponse",
+    "ValidatorHeartbeatRequest",
+    "ValidatorHeartbeatResponse",
     "LedgerEntry",
     "LedgerResponse",
 ]

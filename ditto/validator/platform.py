@@ -23,6 +23,8 @@ from ditto.api_models.validator import (
     ScoreReport,
     SubmitScoreRequest,
     SubmitScoreResponse,
+    ValidatorHeartbeatRequest,
+    ValidatorHeartbeatResponse,
 )
 from ditto.validator.errors import PlatformError
 from ditto.validator.signing import sign_job_request
@@ -48,6 +50,23 @@ class PlatformClient:
         self._keypair = keypair
         self._base = config.platform_api_url.rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
+
+    async def submit_heartbeat(
+        self, request: ValidatorHeartbeatRequest
+    ) -> ValidatorHeartbeatResponse:
+        """Publish this hotkey's signed software identity."""
+        url = f"{self._base}{_PREFIX}/heartbeat"
+        try:
+            resp = await self._client.post(
+                url, json=request.model_dump(mode="json"), headers=self._headers
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"heartbeat failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"heartbeat rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return ValidatorHeartbeatResponse.model_validate(resp.json())
 
     async def request_job(self) -> JobResponse | None:
         """Request a scoring ticket (the k=3 pull). ``None`` on 204 (no work).

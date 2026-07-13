@@ -22,7 +22,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from ditto.api_models.validator import ValidatorHeartbeatRequest
 from ditto.chain import ChainError
+from ditto.validator.build_info import validator_build_info
 from ditto.validator.crn import confirmation_seeds
 from ditto.validator.errors import (
     DittobenchError,
@@ -30,7 +32,7 @@ from ditto.validator.errors import (
     WeightSubmissionError,
 )
 from ditto.validator.onchain_seed import seed_matches
-from ditto.validator.signing import sign_score
+from ditto.validator.signing import sign_heartbeat, sign_score
 from ditto.validator.telemetry import (
     ScoredAgentStat,
     SweepStats,
@@ -159,6 +161,7 @@ class ValidatorWorker:
         cadence.
         """
         started = time.monotonic()
+        await self._report_heartbeat()
         scored: list[ScoredAgentStat] = []
         failed = 0
         queue_depth = 0
@@ -206,6 +209,31 @@ class ValidatorWorker:
             )
         )
         return queue_depth
+
+    async def _report_heartbeat(self) -> None:
+        """Best-effort signed software report; never gate scoring or weights."""
+        try:
+            build = validator_build_info()
+            timestamp = int(time.time())
+            signature = sign_heartbeat(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                software_version=build.software_version,
+                protocol_version=build.protocol_version,
+                code_digest=build.code_digest,
+                timestamp=timestamp,
+            )
+            request = ValidatorHeartbeatRequest(
+                validator_hotkey=self._config.validator_hotkey,
+                software_version=build.software_version,
+                protocol_version=build.protocol_version,
+                code_digest=build.code_digest,
+                timestamp=timestamp,
+                signature=signature,
+            )
+            await self._platform.submit_heartbeat(request)
+        except Exception as e:  # noqa: BLE001 - observability must never gate work
+            logger.warning("validator heartbeat failed (scoring continues): %s", e)
 
     async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.

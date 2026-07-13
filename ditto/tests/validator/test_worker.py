@@ -17,9 +17,11 @@ from ditto.api_models.validator import (
     LedgerResponse,
     ScoreReport,
     SubmitScoreResponse,
+    ValidatorHeartbeatResponse,
 )
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
+from ditto.validator.errors import PlatformError
 from ditto.validator.onchain_seed import derive_seed
 from ditto.validator.weights import apply_miner_emission_cap, compute_weights
 from ditto.validator.worker import ValidatorWorker
@@ -203,6 +205,11 @@ def _platform_with_ledger(
     *, jobs: list[JobResponse], ledger: list[LedgerEntry]
 ) -> MagicMock:
     platform = MagicMock()
+    platform.submit_heartbeat = AsyncMock(
+        return_value=ValidatorHeartbeatResponse(
+            accepted=True, seen_at=datetime.now(UTC)
+        )
+    )
     # Ticket poll: hand out one ticket per job, then 204 (None) to end the sweep.
     platform.request_job = AsyncMock(side_effect=[*jobs, None])
     platform.get_ledger = AsyncMock(
@@ -248,6 +255,11 @@ class TestRunOnce:
 
         n = await worker.run_once()
         assert n == 1
+        platform.submit_heartbeat.assert_awaited_once()
+        heartbeat = platform.submit_heartbeat.await_args.args[0]
+        assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
+        assert heartbeat.protocol_version == 1
+        assert len(heartbeat.code_digest) == 64
         assert platform.submit_score.await_count == 1
         assert (
             platform.submit_score.await_args.kwargs["ticket_deadline"] == job.deadline
@@ -255,6 +267,20 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once_with(
             {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
         )
+
+    async def test_heartbeat_failure_does_not_block_scoring(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_heartbeat.side_effect = PlatformError("platform old")
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker.run_once(set_weights=False) == 0
+        platform.request_job.assert_awaited_once()
 
     async def test_forwards_tarball_sha_to_scorer(self) -> None:
         # The registered digest must be forwarded so dittobench re-verifies the

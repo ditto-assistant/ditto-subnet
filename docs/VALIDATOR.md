@@ -120,6 +120,8 @@ Production acceptance is:
 - sweeps complete without recurring platform, scorer, or Pylon errors;
 - the configured hotkey is registered on SN118 and has a validator permit;
 - the hotkey's on-chain last-update block advances after weights are submitted.
+- `GET https://platform-api.heyditto.ai/api/v1/public/validators` lists the
+  hotkey as online with its signed software version and source digest.
 
 ## Upgrade and operate
 

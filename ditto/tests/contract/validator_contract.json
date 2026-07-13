@@ -828,5 +828,59 @@
       "accepted"
     ],
     "type": "object"
+  },
+  "ValidatorHeartbeatRequest": {
+    "properties": {
+      "code_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "protocol_version": {
+        "maximum": 2147483647,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "signature": {
+        "pattern": "^[0-9a-fA-F]{128}$",
+        "type": "string"
+      },
+      "software_version": {
+        "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$",
+        "type": "string"
+      },
+      "timestamp": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "software_version",
+      "protocol_version",
+      "code_digest",
+      "timestamp",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "ValidatorHeartbeatResponse": {
+    "properties": {
+      "accepted": {
+        "type": "boolean"
+      },
+      "seen_at": {
+        "format": "date-time",
+        "type": "string"
+      }
+    },
+    "required": [
+      "accepted",
+      "seen_at"
+    ],
+    "type": "object"
   }
 }

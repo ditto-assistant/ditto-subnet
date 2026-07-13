@@ -12,8 +12,10 @@ from uuid import UUID
 import bittensor
 
 from ditto.validator.signing import (
+    heartbeat_signing_message,
     job_signing_message,
     score_signing_message,
+    sign_heartbeat,
     sign_job_request,
     sign_score,
 )
@@ -133,3 +135,36 @@ def test_job_claim_signature_binds_hotkey_nonce_and_timestamp() -> None:
         requested_at=requested_at,
     )
     assert not keypair.verify(replay_as_other_nonce, bytes.fromhex(signature))
+
+
+def test_heartbeat_signature_binds_build_and_timestamp() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_heartbeat(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        software_version="0.1.0",
+        protocol_version=1,
+        code_digest="ab" * 32,
+        timestamp=1_752_443_200,
+    )
+    verifier = bittensor.Keypair(ss58_address=keypair.ss58_address)
+    assert verifier.verify(
+        heartbeat_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            software_version="0.1.0",
+            protocol_version=1,
+            code_digest="ab" * 32,
+            timestamp=1_752_443_200,
+        ),
+        bytes.fromhex(signature),
+    )
+    assert not verifier.verify(
+        heartbeat_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            software_version="0.1.0",
+            protocol_version=1,
+            code_digest="cd" * 32,
+            timestamp=1_752_443_200,
+        ),
+        bytes.fromhex(signature),
+    )
