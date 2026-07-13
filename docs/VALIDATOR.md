@@ -50,10 +50,10 @@ What it does not do:
   every honest validator computes the identical vector and Yuma consensus clips
   deviators.
 - No screening. The pre-benchmark build + health gate (`ditto/screener/`) is a
-  platform-operated role hosted alongside the platform API, not part of the
-  validator stack. You may run a screener locally to add capacity or pre-check
-  submissions (`python -m ditto.screener`, needs Docker and a permitted hotkey),
-  but it is optional and independent of scoring.
+  platform-operated role the platform runs on its own dedicated host, not part
+  of the validator stack. You may run a screener locally to add capacity or
+  pre-check submissions (`python -m ditto.screener`, needs Docker and a permitted
+  hotkey), but it is optional and independent of scoring.
 
 ### The k=3 model
 
