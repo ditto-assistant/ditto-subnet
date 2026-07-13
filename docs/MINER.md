@@ -25,6 +25,9 @@ artifact, not for serving live inference.
 - A funded Bittensor coldkey and a hotkey registered on netuid 118
 - A `.tar.gz` agent crate based on the
   [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit)
+- Docker (recommended, not required for submission): the validator and screener
+  build and run your crate in a Docker sandbox, so building the tarball as a
+  Docker image locally is the closest preflight to how it will be scored
 
 The coldkey pays the dynamic evaluation fee. The hotkey signs the artifact and
 receives incentive. Never put wallet secrets in the submission.

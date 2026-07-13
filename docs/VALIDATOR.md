@@ -71,9 +71,9 @@ What it does not do:
 | --- | --- |
 | Linux host: 4 vCPU, 16 GB RAM, 80 GB+ free disk | Runs the worker plus the co-located dittobench-api scorer; Docker sandbox builds dominate disk use. |
 | x86-64 CPU | The upstream Pylon image is currently published for `linux/amd64`. |
-| Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | `uv sync` installs the pinned environment. |
+| Docker Engine + Docker Compose v2 | The whole stack runs as Compose services (`docker compose up -d`): Pylon, the model gateway, the co-located [dittobench-api](https://github.com/ditto-assistant/dittobench-api) scorer with its rootless Docker sandbox, and the worker. |
+| Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | `uv sync` installs the pinned environment (for the worker and CLI outside Compose). |
 | A hotkey registered on SN118 with a `validator_permit` | The chain accepts weights only from permitted validators (stake above the permit threshold). |
-| A co-located dittobench-api instance on a Docker-capable host | Builds and scores each submission. See the [dittobench-api](https://github.com/ditto-assistant/dittobench-api) repo. |
 | A Chutes key for the locked Qwen3-32B | The harness is scored against one locked model, served through Chutes (`Qwen/Qwen3-32B-TEE`) via the model-relay; no GPU is needed. |
 | Outbound reach to the platform API and Pylon | Pylon is the validator weight-setting service; the worker listens on nothing. |
 
