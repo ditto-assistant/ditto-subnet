@@ -45,18 +45,21 @@ class ValidatorConfig:
     # --- Roles (which halves of the loop this instance runs) ---
     enable_scoring: bool
     """Run the scoring sweep: pull the ``evaluating`` queue, score via
-    dittobench-api, submit signed scores, and re-score stale champions. The
-    central scorer sets this and clears ``enable_weights``
-    (``VALIDATOR_ENABLE_SCORING``, default true). A thin (weights-only) validator
-    clears this and needs no dittobench-api URL / OpenRouter key."""
+    dittobench-api, submit signed scores, and re-score stale champions. Defaults
+    true (``VALIDATOR_ENABLE_SCORING``). In the one-validator-type model every
+    validator both scores and sets weights, so an agent is scored by up to k=3
+    independent validators and the platform finalizes on the median. Splitting
+    the roles (a scoring-only or weights-only instance) is an optional deployment
+    knob, not a central scorer; a weights-only instance needs no dittobench-api
+    URL / OpenRouter key."""
 
     enable_weights: bool
-    """Run the weight path: fold the durable ledger and set weights on chain.
-    Independent validators set this and clear ``enable_scoring``
-    (``VALIDATOR_ENABLE_WEIGHTS``, default true) — they consume the
-    centrally-computed ledger and never see the oracle. A scoring-only instance
-    clears this and needs no Pylon identity. Both true is the historical
-    single-process behaviour."""
+    """Run the weight path: fold the durable (median-aggregated) ledger and set
+    weights on chain. Defaults true (``VALIDATOR_ENABLE_WEIGHTS``). Every
+    validator folds the same public ledger deterministically and sets its own
+    weights, so chain consensus converges with no central weight authority. A
+    scoring-only instance clears this and needs no Pylon identity. Both true is
+    the default one-validator-type behaviour."""
 
     # --- Identity / chain ---
     validator_hotkey: str
@@ -176,7 +179,7 @@ class ValidatorConfig:
     never knowingly fights the chain's rate limiter."""
 
     queue_limit: int
-    """Max agents to pull from ``/validator/queue`` per sweep."""
+    """Max agents to pull from ``/validator/job`` per sweep."""
 
     dittobench_poll_seconds: float
     """Interval between ``/v1/runs/{id}`` polls."""
@@ -240,9 +243,9 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         os.environ.get("VALIDATOR_REQUIRE_COMMIT_REVEAL", "").lower() in _truthy
     )
 
-    # Roles: an instance runs the scoring half, the weight half, or both. The
-    # central scorer is scoring-only; independent validators are weights-only;
-    # both (the default) is the historical single-process behaviour.
+    # Roles: an instance runs the scoring half, the weight half, or both. Both
+    # (the default) is the one-validator-type model: every validator scores and
+    # sets weights. Splitting the roles is an optional deployment knob.
     enable_scoring = (
         os.environ.get("VALIDATOR_ENABLE_SCORING", "true").lower() in _truthy
     )

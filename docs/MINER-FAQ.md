@@ -212,18 +212,24 @@ tail, "serve check failed", …) are logged server-side.
 
 Each validator sweep (hourly by default), the validator:
 
-1. Leases a scoring ticket (`POST /validator/job`: seed, dataset_sha256, run_size, deadline; at most 3 validators per agent).
-2. Fetches a short-lived presigned tarball URL and **cross-checks the sha256**
+1. Leases a scoring ticket (`POST /validator/job`: seed, dataset_sha256, run_size, deadline, plus the seed's on-chain block hash; at most 3 validators per agent).
+2. **Re-derives the seed itself** from the ticket's pinned block hash + agent
+   id (`ditto/validator/onchain_seed.py`, byte-compatible with the platform's
+   derivation) — a ticket whose seed does not re-derive is refused, so a
+   platform-chosen ("ground") seed is caught by every honest validator. The
+   seed is per-agent by construction (the agent id is in the hash), so no two
+   submissions are ever scored on the same dataset instances.
+3. Fetches a short-lived presigned tarball URL and **cross-checks the sha256**
    (queue vs. artifact vs. what the scorer fetches) — a mismatch refuses to
    score.
-3. Submits to its co-located **DittoBench** engine with the tarball URL and
+4. Submits to its co-located **DittoBench** engine with the tarball URL and
    `run_size=full` (no key: scoring is judge-free), then polls until done
    (timeout 40 min).
-4. DittoBench does the real work: sandboxed `docker build` of your crate,
+5. DittoBench does the real work: sandboxed `docker build` of your crate,
    **seeded** synthetic data generation, tool-use cases + memory cases run
    against your harness under the locked model, deterministic grading —
    producing a `ScoreReport`.
-5. The validator **signs** the score and posts it to the platform ledger.
+6. The validator **signs** the score and posts it to the platform ledger.
 
 ### The score
 
@@ -460,11 +466,13 @@ alpha accruing).
   emissions. A real agent has produced a signed composite (0.522 at
   `run_size=small`) that drove an accepted on-chain `set_weights`; the
   full-size (`run_size=full`) proof is in flight.
-- **Single validator** (the subnet owner's UID). k=3 median-of-3
-  multi-validator scoring is the next architectural step; the current
-  `/validator/job` / `/agent/{id}/artifact` / `/agent/{id}/score` endpoints
-  are Phase-1 names that will migrate to lease-based `request-evaluation` /
-  `submit-score`.
+- **k=3 multi-validator scoring is implemented**: the platform issues leased
+  `/validator/job` tickets to up to three distinct validators per submission,
+  each posts one signed score, and the platform finalizes on the median. Today
+  only the subnet owner's validator runs, so agents currently receive one
+  score; the remaining step is deploying >=3 independent validators. The
+  `/validator/job` / `/agent/{id}/artifact` / `/agent/{id}/score` endpoints are
+  the shipped names.
 - **Sandbox egress allowlist not yet in place** (cost caps are); deferred tar
   checks (manifest / dependency allowlist / schema diff) will become real
   gates once the harness interface freezes.

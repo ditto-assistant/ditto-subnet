@@ -78,7 +78,7 @@ The spine from `NEXT-STEPS.md §2`, marked to today:
 | 2 | OpenRouter cost cap + **egress allowlist** | cost cap ✅ · egress allowlist ❌ |
 | 3 | **Screener worker** (automate `uploaded → evaluating`) | ⚠️ worker built + merged (subnet #32) · infra role + deploy pending |
 | 4 | **Emissions** + **testnet migration** | emission ✅ live on localnet · testnet migration ❌ |
-| 5 | **Multi-validator** consensus (k=3 + median) | ❌ (single validator; localnet test keys recipe below) |
+| 5 | **Multi-validator** consensus (k=3 + median) | ✅ code (k=3 leased tickets + median-at-quorum) · ❌ deploy >=3 independent validators (only owner runs; localnet test keys recipe below) |
 | 6 | **Content-level plagiarism** detection | ✅ lexical + structural/AST fingerprint channels · tuning ⏳ |
 | 7 | Observability + autoupdater + HA | ⚠️ transparency ✅ · W&B telemetry ✅ live (dev) · autoupdater/HA ❌ |
 | 8 | **Mainnet (finney) cutover** | ❌ |

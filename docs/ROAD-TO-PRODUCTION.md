@@ -84,8 +84,10 @@ Everything below is what stands between that and a real network.
    goes (identity write, permit/stake self-checks, version_key stamping) so the
    finney-only unknowns (real commit-reveal, u16 at scale, chain `version_key`)
    are the *only* things first seen on finney. *Highest-leverage rehearsal.*
-5. **Multi-validator consensus (k=3 + median-of-3)** (§3, F-MV) — decentralize
-   scoring off the single owner validator.
+5. **Multi-validator consensus (k=3 + median-of-3)** (§3, F-MV): code is done
+   (platform leases k=3 tickets and finalizes on the median; validators fold the
+   median ledger). Remaining is deploying >=3 independent validators to
+   decentralize scoring off the single owner validator, plus a localnet proof.
 6. **Guarded finney cutover under the subnet-owner UID + real E2E on-chain**
    (§5, E4) — **the only real-chain step; there is no testnet before it.** Bring
    it up guarded: small `run_size` / low stake first, verify each hop (Pylon
@@ -157,7 +159,7 @@ artifact that disappears where miners must register to submit.
 | C-TUNE | **Plagiarism threshold tuning + review automation** | **PARTIAL** | Two-channel fingerprint gate merged; lexical (0.75/0.95) + structural (0.85/0.98) tolerances are conservative guesses — tune against a real corpus. `ath_pending_review` drained by hand (`scripts/resolve_review.py`); build a reviewer workflow. |
 | C-RATE | **API abuse controls** | **TODO** | Global + per-hotkey rate limits, request-size limits, auth throttling on public platform endpoints (today: permit-check + signatures only). |
 | C-VERIFY | **Verifiable / replicable scoring** | **DECISION** | Scoring is trusted to the single dittobench operator today. Reproducible seeds are already in the ledger; decide whether/when to build toward replicable scoring (couples to multi-validator). Our call, our timeline. |
-| F-MV | **Multi-validator: k=3 sharded queue + median-of-3** | **TODO** | Lease-based assignment to 3 distinct validators, finalize the median of 3 signed scores, migrate stub→target endpoint names, onboard >1 validator. Decentralizes trust off the single owner validator. |
+| F-MV | **Multi-validator: k=3 sharded queue + median-of-3** | **CODE-DONE, deploy pending** | The mechanism is shipped: the platform leases up to 3 tickets per agent (`validator_tickets`, `SCORING_QUORUM=3`, TTL + reopen), stores one signed score per `(agent, validator)`, and finalizes on the median at quorum; validators fold the median-aggregated ledger deterministically so chain consensus converges. Consensus correctness is under test (`ditto-platform` `TestMultiValidatorConsensus`). Remaining is operational: run >=3 independent validators (only the owner runs today) and prove the 3-scores -> median -> weights path on the localnet (O-VAL). The current `/validator/job` endpoint names are the shipped names; no stub->target rename is required. |
 | V-ROBUST | **Weight-setting robustness (residual)** | **CODE-DONE** | version_key/permit/tempo done. Residuals merged in [#39](https://github.com/ditto-assistant/ditto-subnet/pull/39): on-chain tempo/`weights_rate_limit` read stretches the effective epoch, exponential backoff (block-time base on rate-limit rejection), `VALIDATOR_MIN_STAKE_TAO` self-check arm. Unproven on a live network — first proven at finney cutover (no testnet), with W-PYLON. |
 
 ---
@@ -240,7 +242,9 @@ first-runs on finney. The in-repo SDK/localnet path is a declared fallback.
    scoring (C-VERIFY). Gates how much of F-MV / C-VERIFY to build now.
 2. **Participation-tail economics** (B-TAIL).
 3. **Registration / immunity / emission-split** target values per network.
-4. **Endpoint-name migration timing** (stub → target, tied to F-MV).
+4. **Endpoint-name migration** (stub → target): resolved. The shipped
+   `/validator/job` / `/agent/{id}/score` names are canonical; no rename is
+   planned.
 5. **run_size for production** — `full` is the real config (slow, real LLM spend);
    confirm before mainnet.
 

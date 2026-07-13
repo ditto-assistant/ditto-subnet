@@ -1,9 +1,11 @@
 # Running a Ditto (SN118) Validator
 
-**Draft, as of 2026-07-07. Internal review copy — the subnet currently runs a
-single team validator on the dev localnet; third-party onboarding opens with
-the testnet/mainnet migration.** This is the O-VAL guide from
-`ROAD-TO-PRODUCTION.md`: everything needed to stand up a validator worker.
+**As of 2026-07-12.** The k=3 multi-validator design is implemented: the platform
+leases up to three tickets per submission and finalizes on the median of the
+independent validators' scores (see "The k=3 model" below). Today only the team
+validator runs, so this guide is how any independent validator joins. Run the
+same stateless worker with your own registered hotkey and the platform shards
+work to you. This is the O-VAL guide from `ROAD-TO-PRODUCTION.md`.
 
 ---
 
@@ -27,12 +29,30 @@ What it does **not** do:
   the platform API; a validator can be killed and restarted at any time and
   loses nothing. There is nothing to back up.
 - **No GPU, no model hosting.** The benchmark itself (docker build, seeded
-  cases, LLM judge) runs in the hosted dittobench service; the validator
-  orchestrates over HTTP.
+  cases, deterministic grading) runs in the hosted dittobench service; the
+  validator orchestrates over HTTP.
 - **No champion selection server-side.** The weight fold
   (`ditto/validator/weights.py`) is a pure function of the public ledger —
   every honest validator computes the identical vector, and Yuma consensus
   clips deviators.
+
+### The k=3 model
+
+Scoring is decentralized across independent validators, no central scorer:
+
+- The platform issues a leased ticket to a validator that asks for work
+  (`POST /api/v1/validator/job`), capped at three live tickets per submission
+  (`SCORING_QUORUM=3`). Most polls return "no job" once a submission's three
+  slots are filled; a ticket that is not scored before its deadline expires and
+  the slot re-opens for another validator.
+- Each validator scores independently and posts one signed score. When a
+  submission has three scores the platform finalizes it on the **median**, so no
+  single validator decides a score and an outlier cannot move the result.
+- Every validator then folds the same public median-aggregated ledger with the
+  identical KOTH+ATH function and sets its own weights; chain Yuma consensus
+  combines them. Bringing up more independent validators (each a distinct
+  registered hotkey) is exactly how scoring decentralizes. No coordination is
+  needed beyond the shared platform and the network-wide mechanism knobs.
 
 ## 2. Requirements
 
@@ -135,12 +155,15 @@ Boot-time self-checks worth knowing:
 
 ## 6. Current status & caveats (2026-07-07)
 
-- **Single-validator phase.** Validation currently runs under the subnet
-  owner's UID on the dev localnet; there is no separate third-party validator
-  registration flow yet. The target design (lease-based k=3 assignment,
-  median-of-3 finalization, `request-evaluation`/`submit-score` endpoints) is
-  the F-MV milestone in `ROAD-TO-PRODUCTION.md` — this guide gains an
-  "onboard to the queue" section when that lands.
+- **k=3 multi-validator is implemented; deployment is the remaining step.** The
+  platform leases up to three tickets per submission, stores one signed score
+  per `(agent, validator)`, and finalizes on the median (the `/validator/job` /
+  `/agent/{id}/score` endpoints are the shipped names, no rename planned). Today
+  only the subnet owner's validator runs, so agents currently get one score.
+  Bringing up >=3 independent validators, each a distinct SN118 hotkey with a
+  `validator_permit`, is what decentralizes scoring; there is no extra
+  registration flow beyond that permitted hotkey. See section 7 for a localnet
+  three-validator run.
 - **Pylon identity-write is not yet provisioned** (E1); the SDK fallback is
   the proven path on the dev chain.
 - **Commit-reveal is off on dev** and will be enabled for production (W-CR).
@@ -152,6 +175,33 @@ Boot-time self-checks worth knowing:
   reports it off.
 - Mechanism knobs (margin/tail/share, version_key) are team-locked values;
   changing them unilaterally makes your weights diverge from consensus.
+
+## 7. Localnet: three validators (prove k=3 consensus)
+
+To exercise the full 3-scores to median to finalize to weights path on the dev
+localnet (netuid 3), run three workers with three distinct registered hotkeys:
+
+1. Register three hotkeys on netuid 3, each staked past the `validator_permit`
+   threshold (e.g. three wallet hotkeys, or dev keys like `//val1`, `//val2`,
+   `//val3`).
+2. Copy `scripts/validator.env.example` to `val1.env`, `val2.env`, `val3.env`.
+   In each: point `VALIDATOR_PLATFORM_API_URL` / `VALIDATOR_DITTOBENCH_API_URL`
+   at the dev services, set that worker's `VALIDATOR_HOTKEY` + signing source,
+   `NETUID=3`, and the localnet weight path (`VALIDATOR_USE_SDK_WEIGHTS=1`,
+   `SUBTENSOR_NETWORK=<ws://localnet>`). Keep the KOTH knobs identical in all
+   three.
+3. Start each in its own process:
+   `./scripts/run-validator.sh val1.env` (then `val2.env`, `val3.env`).
+4. Submit one agent through the miner path and watch: each validator's sweep
+   logs a `scored agent ... composite=...` line; the platform issues at most
+   three tickets (a fourth poll gets "no job"); at the third score the platform
+   finalizes on the median (`GET /api/v1/public/agent/{id}/scores` shows all
+   three validators + the median); and each validator's fold resolves the
+   champion to the miner's UID on chain.
+
+This is the O-VAL localnet proof for the F-MV milestone. A hotkey without a
+`validator_permit` still scores but skips weight submission (loud log), so give
+each localnet hotkey enough stake.
 
 ### Sources (this repo)
 
