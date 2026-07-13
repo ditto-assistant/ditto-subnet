@@ -18,6 +18,14 @@ disagree, this file is newer. Status verbs: **DONE** (built + verified) ·
 > **2026-07-08 updates:** C-ISO applied + verified on the dev validator (§3);
 > E1 Pylon write-path is self-serve + infra-prepped (§5); the migration spine is
 > re-framed localnet → finney below.
+>
+> **2026-07-12 updates:** DittoBench scoring hardened and redeployed (bounded
+> canary gate, multi-family metamorphic factor, 0.5/0.5 composite), datagen
+> published and the api pinned to v0.7.0, and the first reference baseline is
+> published (`dittobench-api/docs/BASELINES.md`): the stock harness scores
+> composite **0.492 ± 0.013 SE** at `run_size=full` under Qwen3-32B. Scoring is
+> judge-free (deterministic grader, no LLM judge). The measured noise floor is
+> folded into B-KOTH (§5).
 
 ---
 
@@ -28,8 +36,8 @@ localnet**:
 
 ```
 miner upload → screener (auto build-gate) → validator sweep → dittobench
-  (docker build · seed · run · LLM judge) → signed composite → scores ledger
-  → KOTH+ATH weights → set_weights ACCEPTED on-chain
+  (docker build · seed · run · deterministic grade) → signed composite → scores
+  ledger → KOTH+ATH weights → set_weights ACCEPTED on-chain
 ```
 
 - **A1 first real E2E — PROVEN (2026-07-07)** at `run_size=small`: agent
@@ -45,6 +53,13 @@ miner upload → screener (auto build-gate) → validator sweep → dittobench
 - **Anti-copy** two-channel fingerprint gate (lexical + AST) merged.
 - **Emissions** flow on the localnet; **W&B telemetry + public dashboard** live.
 - **Banned-hotkeys** table + enforcement live.
+- **Benchmark content ready for `bench_version 2`** (2026-07-12): judge-free
+  deterministic scoring, hardened (bounded canary + multi-family metamorphic),
+  datagen public and pinned (v0.7.0), reference baseline published. The stock
+  reference harness scores composite **0.492 ± 0.013 SE** at `run_size=full`, so a
+  valid non-zero full composite for a real harness is demonstrated off-chain; the
+  §2.1 gap is narrowed to registering + sweeping a working miner through the
+  validator (the queued on-chain agent is a broken stub scoring 0.000).
 
 Everything below is what stands between that and a real network.
 
@@ -176,7 +191,7 @@ first-runs on finney. The in-repo SDK/localnet path is a declared fallback.
 | E2 | Finney permit + stake (owner UID) | **TODO** | Validation runs under the **subnet owner's UID** — no separate validator registration/burn. Stake the owner hotkey past the `validator_permit` threshold on finney (no testnet stake step first). |
 | E3 | Chain parameters on finney | **TODO** | See W-PARAMS + enable commit-reveal (W-CR); re-tune the alpha pool / `TaoWeight`. Set directly on finney (owner sudo) — no testnet to trial them on. |
 | E4 | **Guarded finney cutover** | **TODO** | The only real-chain step. Point platform + validator at finney SN118, flip `enable_validator`, run the deploy runbook, and **verify each hop guarded** (small `run_size` / low stake first): Pylon write → normalization/u16 → commit-reveal → weight resolves to the champion UID → then full. No testnet dress rehearsal precedes this. |
-| B-KOTH | Validate KOTH+ATH params vs real scores | **TODO** | Once real composites exist, sanity-check the 1% margin + 90/10 split against the observed score spread + between-seed variance; tune via `VALIDATOR_KOTH_*`. |
+| B-KOTH | Validate KOTH+ATH params vs real scores | **TODO (data in, 2026-07-12)** | Measured over N=24 full runs (`dittobench-api/docs/BASELINES.md`): within-run `composite_stderr` ~0.041, between-seed dataset-difficulty sd ~0.049, k=3 median model-noise sd ~0.031. The flat 1% relative margin (~0.005 at composite 0.49) is roughly 10x below this, so it must not be the only guard. The v3 z-band (`_beats` in `weights.py`) already takes `max(flat margin, composite_stderr-based band)`, which covers within-run noise **only if the platform surfaces `composite_stderr`** (`weights.py:154` flags it optional: verify it does, else the fold silently falls back to the ~0.005 flat margin). Even then, each agent is scored on its own agent-bound seed (P2/N1), so the champion/challenger comparison also carries the ~0.049 seed-difficulty spread that `composite_stderr` does NOT capture: a challenger can take the crown by drawing an easier dataset. The designed fix is **P4 (multi-seed champion confirmation)**: require the challenger to beat the champion on the median over K=3 common CRN seeds before a dethrone, which removes the seed-difficulty confound. P4 is spec'd and implemented on the parked `nick/p4-multi-seed-confirmation` branches (`prod-final-hardening-plan.md`), frozen pre-launch and sequenced for the week after launch. These measured numbers are the quantitative case for it: the ~0.049 seed spread and ~0.041 within-run stderr both dwarf the 0.005 flat margin, so until P4 lands, at minimum surface `composite_stderr` and set `dethrone_z` so the flat margin is never the sole guard. Tune via `VALIDATOR_KOTH_*`. |
 | B-TAIL | Participation-tail economics | **DECISION** | Tail size, min-score floor, or pure winner-take-all at mainnet. |
 
 ---
