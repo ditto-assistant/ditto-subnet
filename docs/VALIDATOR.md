@@ -70,6 +70,7 @@ What it does not do:
 | What | Why |
 | --- | --- |
 | Linux host: 4 vCPU, 16 GB RAM, 80 GB+ free disk | Runs the worker plus the co-located dittobench-api scorer; Docker sandbox builds dominate disk use. |
+| x86-64 CPU | The upstream Pylon image is currently published for `linux/amd64`. |
 | Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | `uv sync` installs the pinned environment. |
 | A hotkey registered on SN118 with a `validator_permit` | The chain accepts weights only from permitted validators (stake above the permit threshold). |
 | A co-located dittobench-api instance on a Docker-capable host | Builds and scores each submission. See the [dittobench-api](https://github.com/ditto-assistant/dittobench-api) repo. |
@@ -166,9 +167,11 @@ Pylon ships as a Docker image (`backenddevelopersltd/bittensor-pylon`). It reads
 worker authenticates to that identity to write weights.
 
 The root `docker-compose.yml` starts the complete validator stack: Pylon,
-dittobench-api with access to the host Docker daemon for sandbox builds, and the
-ditto-subnet validator worker. All three read the same `.env` you created in
-section 3. The Pylon settings name the wallet and one random token that guards
+dittobench-api backed by an isolated rootless Docker daemon for sandbox builds,
+and the ditto-subnet validator worker. A small internal proxy preserves sandbox
+access to the model relay and embedder running on the physical host. Compose
+reads the single `.env` created in section 3 and passes each service only the
+values it needs. The Pylon settings name the wallet and one random token that guards
 both open-access reads and the identity write. Reuse the same string for both;
 only split them if you hand the read token to a separate read-only consumer.
 
@@ -194,8 +197,8 @@ PYLON_ID_DITTO_TOKEN=<random-token>
 PYLON_DATABASE_PATH=/data/pylon.db   # persist in-flight submissions
 ```
 
-Bring up the stack from the repository root. Pylon serves on `:8000` and
-dittobench-api on `:8080`; the validator worker listens on no port.
+Bring up the stack from the repository root. Pylon and dittobench-api stay on
+the private Compose network; the validator worker listens on no port.
 
 ```sh
 docker compose up -d

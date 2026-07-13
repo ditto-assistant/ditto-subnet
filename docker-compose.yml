@@ -2,32 +2,75 @@
 #   docker compose up -d
 services:
   pylon:
-    image: docker.io/backenddevelopersltd/bittensor-pylon:latest # pin to a released tag in production
+    image: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+    platform: linux/amd64
     restart: unless-stopped
-    env_file: ./.env
-    ports:
-      - "8000:8000"
+    environment:
+      PYLON_BITTENSOR_NETWORK: ${PYLON_BITTENSOR_NETWORK}
+      PYLON_OPEN_ACCESS_TOKEN: ${PYLON_OPEN_ACCESS_TOKEN}
+      PYLON_IDENTITIES: ${PYLON_IDENTITIES}
+      PYLON_ID_DITTO_WALLET_NAME: ${PYLON_ID_DITTO_WALLET_NAME}
+      PYLON_ID_DITTO_HOTKEY_NAME: ${PYLON_ID_DITTO_HOTKEY_NAME}
+      PYLON_ID_DITTO_NETUID: ${PYLON_ID_DITTO_NETUID}
+      PYLON_ID_DITTO_TOKEN: ${PYLON_ID_DITTO_TOKEN}
+      PYLON_DATABASE_PATH: ${PYLON_DATABASE_PATH:-/data/pylon.db}
+      PYLON_METRICS_TOKEN: ${PYLON_METRICS_TOKEN:-}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
-      # Pylon reads the validator hotkey to sign put_weights; read-only is enough.
       - ~/.bittensor/wallets/:/root/.bittensor/wallets:ro
-      # Persist in-flight weight submissions so a restart resumes them.
       - pylon-data:/data
+
+  # The scorer receives an isolated rootless Docker daemon. Compromise of the
+  # scorer or a miner sandbox cannot control the validator host daemon.
+  sandbox-docker:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-docker
+    privileged: true
+    environment:
+      DOCKER_HOST: tcp://127.0.0.1:2375
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - sandbox-docker-data:/home/rootless/.local/share/docker
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
 
   dittobench-api:
     build:
-      context: .
-      dockerfile: Dockerfile.dittobench-api
-      args:
-        DITTOBENCH_API_REF: ${DITTOBENCH_API_REF:-main}
+      # Pinned to the merged upstream sandbox-image commit from
+      # https://github.com/ditto-assistant/dittobench-api/pull/23.
+      context: https://github.com/ditto-assistant/dittobench-api.git#a1cd41737af929a73d75b7872a514ba53e0d0ea4
+      target: sandbox
     restart: unless-stopped
-    env_file: ./.env
-    network_mode: host
-    volumes:
-      # The scorer builds and runs untrusted miner submissions as sandbox
-      # containers on the host daemon.
-      - /var/run/docker.sock:/var/run/docker.sock
+    network_mode: service:sandbox-docker
+    depends_on:
+      sandbox-docker:
+        condition: service_healthy
+    environment:
+      DOCKER_HOST: tcp://127.0.0.1:2375
+      DITTOBENCH_MODEL_LOCK: ${DITTOBENCH_MODEL_LOCK:-1}
+      HARNESS_MODEL: ${HARNESS_MODEL}
+      HARNESS_PROVIDER: ${HARNESS_PROVIDER}
+      HARNESS_GATEWAY_URL: ${HARNESS_GATEWAY_URL}
+      HARNESS_EMBED_URL: ${HARNESS_EMBED_URL}
+      DITTOBENCH_SANDBOX_HARDEN: ${DITTOBENCH_SANDBOX_HARDEN:-1}
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -37,15 +80,50 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: ./.env
-    network_mode: host
+    environment:
+      NETUID: ${NETUID}
+      SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
+      VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
+      VALIDATOR_DITTOBENCH_API_URL: ${VALIDATOR_DITTOBENCH_API_URL}
+      VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
+      VALIDATOR_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
+      VALIDATOR_WALLET_HOTKEY: ${VALIDATOR_WALLET_HOTKEY}
+      VALIDATOR_ENABLE_SCORING: ${VALIDATOR_ENABLE_SCORING:-true}
+      VALIDATOR_ENABLE_WEIGHTS: ${VALIDATOR_ENABLE_WEIGHTS:-true}
+      PYLON_URL: ${PYLON_URL}
+      PYLON_IDENTITY_NAME: ${PYLON_IDENTITY_NAME}
+      PYLON_IDENTITY_TOKEN: ${PYLON_IDENTITY_TOKEN}
+      PYLON_OPEN_ACCESS_TOKEN: ${PYLON_OPEN_ACCESS_TOKEN}
+      VALIDATOR_RUN_SIZE: ${VALIDATOR_RUN_SIZE:-full}
+      VALIDATOR_SWEEP_SECONDS: ${VALIDATOR_SWEEP_SECONDS:-120}
+      VALIDATOR_EPOCH_SECONDS: ${VALIDATOR_EPOCH_SECONDS:-3600}
+      VALIDATOR_QUEUE_LIMIT: ${VALIDATOR_QUEUE_LIMIT:-50}
+      VALIDATOR_DITTOBENCH_POLL_SECONDS: ${VALIDATOR_DITTOBENCH_POLL_SECONDS:-10}
+      VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: ${VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS:-2400}
+      VALIDATOR_HTTP_TIMEOUT_SECONDS: ${VALIDATOR_HTTP_TIMEOUT_SECONDS:-30}
+      VALIDATOR_MIN_STAKE_TAO: ${VALIDATOR_MIN_STAKE_TAO:-0}
+      VALIDATOR_REQUIRE_COMMIT_REVEAL: ${VALIDATOR_REQUIRE_COMMIT_REVEAL:-false}
+      VALIDATOR_DITTOBENCH_MOCK: ${VALIDATOR_DITTOBENCH_MOCK:-false}
+      VALIDATOR_LOG_LEVEL: ${VALIDATOR_LOG_LEVEL:-INFO}
+      WANDB_MODE: ${WANDB_MODE:-disabled}
+      WANDB_PROJECT: ${WANDB_PROJECT:-ditto-sn118}
+      WANDB_ENTITY: ${WANDB_ENTITY:-}
+      WANDB_RUN_NAME: ${WANDB_RUN_NAME:-}
     depends_on:
       pylon:
         condition: service_started
       dittobench-api:
         condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       - ~/.bittensor/wallets/:/root/.bittensor/wallets:ro
 
 volumes:
   pylon-data:
+  sandbox-docker-data:
