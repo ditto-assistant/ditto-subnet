@@ -12,10 +12,10 @@ Flow for one agent:
 2. **Contract check.** The submission contract fixes a ``Dockerfile`` at the
    tarball root; a tar without one fails fast (no build attempted).
 3. **Build.** ``docker build`` reads the *tarball itself* as the build context on
-   stdin — Docker unpacks it inside its own build sandbox, so the screener never
+   stdin: Docker unpacks it inside its own build sandbox, so the screener never
    re-implements safe tar extraction. BuildKit is used with an optional
-   ``gh_token`` secret (the same private-dep token dittobench uses) when
-   configured. Bounded by ``build_timeout_seconds``.
+   ``gh_token`` secret for a private build dependency, when configured. Bounded by
+   ``build_timeout_seconds``.
 4. **Serve smoke.** Run the image detached with a memory + pids cap on a
    loopback-published port, and poll ``GET /health`` until it returns 2xx or
    ``run_timeout_seconds`` elapses. No LLM key is needed — the gate never calls
@@ -30,7 +30,7 @@ flaky host does not silently promote or wrongly reject.
 
 Trust posture: the build runs on the host Docker daemon, same as dittobench's;
 wall-time is bounded by the timeout. Deeper isolation (rootless/gVisor) and an
-egress allowlist are tracked separately (roadmap C3) and are not this gate's job.
+egress allowlist are out of scope for this gate.
 """
 
 from __future__ import annotations

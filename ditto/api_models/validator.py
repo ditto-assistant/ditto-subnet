@@ -123,12 +123,12 @@ class CaseScore(BaseModel):
     """Per-case breakdown inside a :class:`ScoreReport`.
 
     Mirrors the DittoBench ``CaseScore`` wire shape (``pkg/protocol``). Optional
-    on the submission path — daemons may post only the aggregate. Carries both
-    case families: a *tool* case has ``tool_score`` (deterministic accuracy) +
-    ``quality`` (LLM judge), with ``score = 0.5*tool_score + 0.5*quality``; a
-    *memory* case has ``correct`` (LongMemEval yes/no) and ``score`` 1.0/0.0,
-    with ``tool_score``/``quality`` unused. ``kind`` discriminates the two
-    (empty on the tool-only practice path).
+    on the submission path; daemons may post only the aggregate. Scoring is
+    judge-free and deterministic: a *tool* case carries ``tool_score``
+    (deterministic trajectory + argument accuracy) and a *memory* case carries
+    its per-``answer_kind`` result in ``score``. ``kind`` discriminates the two
+    (empty on the tool-only practice path). ``quality`` and ``correct`` are
+    legacy fields, unused under judge-free scoring.
     """
 
     case_id: Annotated[str, Field(description="Stable id of the scored case.")]

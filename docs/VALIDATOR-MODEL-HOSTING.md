@@ -38,7 +38,7 @@ sequentially, so single-request latency matters more than batch throughput.
 
 Two validators serving "the same model" at different quantizations produce
 different logits and disagree at argmax ties. The consensus artifact is the
-exact weights file, not just the model id:
+exact weights file, not only the model id:
 
 - Option A: pull the explicit quantization tag and record the digest
   (`ollama show`); digests must match across the fleet.
@@ -133,10 +133,10 @@ HARNESS_GATEWAY_URL=http://host.docker.internal:11434
 `qwen/qwen3-32b` names the same locked model in docs and score reports.
 
 Also drop `openrouter.ai` from `EGRESS_PROXY_ALLOW` so the gateway is the only
-reachable LLM (the harness fails closed if it tries to route elsewhere). See
-dittobench-api `docs/sandbox-egress-hardening.md`. On Option C, only the relay
-process may reach the Chutes upstream; the sandbox still reaches only the
-relay.
+reachable LLM (the harness fails closed if it tries to route elsewhere). See the
+Sandbox egress section in dittobench-api `docs/model-lock.md`. On Option C, only
+the relay process may reach the Chutes upstream; the sandbox still reaches only
+the relay.
 
 ## Verifying reproducibility
 
@@ -146,8 +146,8 @@ scores; they must be byte-identical. Residual cross-validator composite spread
 comes only from the harness's own execution against the gateway, which k=3
 absorbs.
 
-## References (dittobench-api, private)
+## References (dittobench-api)
 
-- `docs/model-lock.md`: the harness lock design, gateway backends, and config.
+- `docs/model-lock.md`: the harness lock design, gateway backends, config, and
+  the sandbox egress firewall the lock relies on.
 - `docs/judge-determinism.md`: the judge-free grading rules.
-- `docs/sandbox-egress-hardening.md`: the egress firewall the lock relies on.

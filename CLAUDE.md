@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-Guidance for Claude Code (and humans) working in **ditto-subnet** — the
-miner-side CLI and the validator daemon for Bittensor Subnet 118. Read this
-before making changes.
+Guidance for Claude Code (and humans) working in ditto-subnet, the miner-side
+CLI and the validator daemon for Bittensor Subnet 118. Read this before making
+changes.
 
 ## What this repo is
 
@@ -14,12 +14,12 @@ the `/validator/*` and `/upload/*` endpoints) lives in
 reference memory harness lives in
 [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness).
 
-**This repo does not run an API server and has no database.** Both the miner CLI
-and the validator talk to the platform only over HTTP, and to the chain only via
-Pylon + the bittensor SDK. The **platform's OpenAPI schema is the contract** —
-there is no shared package between the repos. `ditto/api_models/` here is a thin,
+This repo does not run an API server and has no database. Both the miner CLI and
+the validator talk to the platform only over HTTP, and to the chain only via
+Pylon and the bittensor SDK. `ditto/api_models/` here is a thin,
 hand-maintained copy of the platform's wire shapes; keep it in sync with the
-platform's `api_models/` (CI guards this).
+platform's `api_models/` (CI guards this). The platform's OpenAPI schema is the
+contract; there is no shared package between the repos.
 
 ## Architecture in one paragraph
 
@@ -27,8 +27,8 @@ platform's `api_models/` (CI guards this).
 `python -m ditto.validator` (`__main__.py` builds config + clients, installs a
 SIGTERM/SIGINT drain, and runs `ValidatorWorker.run_forever`). Each sweep
 (`worker.py`) pulls agents awaiting evaluation from the platform's `/validator/*`
-API (`platform.py`), scores each through the hosted **dittobench-api** by
-presigned tarball URL (`dittobench.py`, mode B / BYOK / `run_size=full`), signs
+API (`platform.py`), scores each through its co-located dittobench-api by
+presigned tarball URL (`dittobench.py`, `run_size=full`), signs
 the score (`signing.py`, sr25519 over `f"{hotkey}:{run_id}"`), reports it back,
 then computes a weight vector (`weights.py`) and sets it on chain via
 `ditto/chain` (Pylon identity `put_weights`). `ditto/miner_cli` is the miner-side
@@ -39,7 +39,7 @@ Pylon-backed `ChainClient` (open-access reads vs. identity writes).
 ## Conventions (match the existing code)
 
 - **Pydantic only in `ditto/api_models`** (the wire-shape copy). Everything
-  internal — configs, value objects, results — uses `@dataclass(frozen=True)`.
+  internal (configs, value objects, results) uses `@dataclass(frozen=True)`.
 - **Config is env-driven dataclasses** with `parse_*_from_env()` builders and a
   `check_*_config()` validator that fails fast with a typed `*ConfigError`. Never
   boot with a placeholder or a half-set signing source. See
@@ -47,12 +47,12 @@ Pylon-backed `ChainClient` (open-access reads vs. identity writes).
 - **The validator is stateless.** No DB, no local persistence of scores. State
   the validator needs (the queue, the score ledger) lives on the platform and is
   fetched over HTTP each sweep. Do not add a `ditto/db` package or import one.
-- **Async everywhere** — httpx for HTTP, the async `ChainClient`. One agent
+- **Async everywhere**: httpx for HTTP, the async `ChainClient`. One agent
   failing to score is logged and skipped; it must never stall the sweep or block
   weight-setting for the other miners.
 - **Secrets never get logged.** The validator hotkey is public (an SS58
-  address); the signing mnemonic / wallet key and the OpenRouter key are secrets
-  — load them from the environment (Secret Manager in prod) and never log them.
+  address); the signing mnemonic / wallet key and any gateway key are secrets:
+  load them from the environment (Secret Manager in prod) and never log them.
 
 ## Commands
 
@@ -60,7 +60,7 @@ Pylon-backed `ChainClient` (open-access reads vs. identity writes).
 uv sync                              # install deps
 make lint typecheck test             # ruff + mypy + pytest (run before every PR)
 
-# run the validator worker (local plumbing — mock the bench, no key needed):
+# run the validator worker (local plumbing, mock the bench, no key needed):
 VALIDATOR_PLATFORM_API_URL=http://localhost:8000 NETUID=3 \
   VALIDATOR_DITTOBENCH_MOCK=1 \
   VALIDATOR_WALLET_NAME=<ck> VALIDATOR_WALLET_HOTKEY=<hk> VALIDATOR_HOTKEY=<ss58> \
@@ -86,9 +86,9 @@ from the `ditto-platform` repo, not here.
 ## Gotchas
 
 - **`VALIDATOR_DITTOBENCH_MOCK=1`** returns a canned `ScoreReport` and skips the
-  real dittobench-api + OpenRouter key — use it for local plumbing. When it is
-  off, `VALIDATOR_DITTOBENCH_API_URL` + `VALIDATOR_OPENROUTER_KEY` are required
-  at boot (fail-fast).
+  real dittobench-api call; use it for local plumbing. When it is off,
+  `VALIDATOR_DITTOBENCH_API_URL` is required at boot (fail-fast);
+  `VALIDATOR_OPENROUTER_KEY` is needed only when the model lock is off.
 - The worker uses the platform's lease-based **k=3** scoring contract:
   `request_job` leases a `/validator/job` ticket, `/agent/{id}/artifact` fetches
   the submission, `submit_score` posts one signed score to the public ledger

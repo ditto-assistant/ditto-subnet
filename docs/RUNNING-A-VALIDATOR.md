@@ -11,7 +11,7 @@ duties for ops or testing, but the fleet runs both on (the default).
 
 Every validator, every epoch:
 
-1. `GET /api/v1/scoring/scores` — read the best-score-per-miner ledger.
+1. `GET /api/v1/scoring/scores`: read the best-score-per-miner ledger.
 2. Fold it into the weight vector with `compute_weights` (KOTH champion + ATH
    dethroning band). This is a pure deterministic function of the ledger, so
    every validator converges under Yuma consensus.
@@ -27,7 +27,7 @@ VALIDATOR_PLATFORM_API_URL=https://platform-api.heyditto.ai
 VALIDATOR_HOTKEY=<your SS58 hotkey>
 VALIDATOR_MNEMONIC=<hotkey mnemonic>        # or VALIDATOR_WALLET_NAME + _HOTKEY
 NETUID=118
-# Weight sink — Pylon identity (production):
+# Weight sink, Pylon identity (production):
 PYLON_URL=...
 PYLON_IDENTITY_NAME=...
 PYLON_IDENTITY_TOKEN=...
@@ -60,7 +60,7 @@ Additional env on top of the weights duty's:
 ```
 VALIDATOR_DITTOBENCH_API_URL=http://localhost:8080   # your co-located engine
 VALIDATOR_RUN_SIZE=full
-VALIDATOR_OPENROUTER_KEY=...                 # legacy only: needed just when the model lock is off
+VALIDATOR_OPENROUTER_KEY=...                 # legacy only: needed when the model lock is off
 ```
 
 ### Hosting the model gateway
