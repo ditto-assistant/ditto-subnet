@@ -33,6 +33,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.sandbox-docker
+    restart: unless-stopped
     privileged: true
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
