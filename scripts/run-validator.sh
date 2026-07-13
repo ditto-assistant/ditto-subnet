@@ -2,8 +2,8 @@
 # Bring up one independent SN118 validator worker.
 #
 # Usage:
-#   cp scripts/validator.env.example validator.env   # then fill it in
-#   ./scripts/run-validator.sh [env-file]            # default: validator.env
+#   cp .env.example .env                   # then fill it in
+#   ./scripts/run-validator.sh [env-file]  # default: .env
 #
 # The worker is stateless: run it under a supervisor (systemd/pm2) with
 # restart-on-exit. Run exactly ONE instance per hotkey (two double-submit
@@ -11,10 +11,10 @@
 # Keep secrets (mnemonic/wallet, Pylon token) out of git.
 set -euo pipefail
 
-ENV_FILE="${1:-validator.env}"
+ENV_FILE="${1:-.env}"
 if [ ! -f "$ENV_FILE" ]; then
   echo "error: env file '$ENV_FILE' not found." >&2
-  echo "copy scripts/validator.env.example to '$ENV_FILE' and fill it in." >&2
+  echo "copy .env.example to '$ENV_FILE' and fill it in." >&2
   exit 1
 fi
 

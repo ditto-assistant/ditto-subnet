@@ -31,6 +31,7 @@ KOTH_MARGIN = 0.05  # relative dethrone margin (5%)
 KOTH_TAIL_SIZE = 4  # runners-up after the champion that split the tail
 KOTH_CHAMPION_SHARE = 0.9  # champion weight share (90% champion / 10% tail)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
+KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
 
 
 @dataclass(frozen=True)
@@ -121,8 +122,8 @@ class ValidatorConfig:
     failure. Set it on finney so a mis-set hyperparameter is loud."""
 
     # --- Incentive mechanism (KOTH + ATH gate). margin / tail_size /
-    # champion_share / dethrone_z are set from the frozen KOTH_* module constants
-    # above, not from env. ---
+    # champion_share / dethrone_z / confirmation_seeds are all set from the frozen
+    # KOTH_* module constants above, not from env. ---
     koth_margin: float
     """Relative margin a challenger must beat the incumbent by to dethrone it.
 
@@ -216,15 +217,6 @@ def _parse_float(name: str, default: str) -> float:
         raise ValidatorConfigError(f"{name} must be a number, got {raw!r}") from e
 
 
-def _parse_int(name: str, default: str) -> int:
-    """Parse an int env var into a typed ``ValidatorConfigError`` on garbage."""
-    raw = os.environ.get(name, default)
-    try:
-        return int(raw)
-    except ValueError as e:
-        raise ValidatorConfigError(f"{name} must be an integer, got {raw!r}") from e
-
-
 def parse_validator_config_from_env() -> ValidatorConfig:
     """Build a :class:`ValidatorConfig` from ``VALIDATOR_*`` / ``PYLON_*`` env.
 
@@ -276,15 +268,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         _require("PYLON_IDENTITY_NAME", pylon_identity_name)
         _require("PYLON_IDENTITY_TOKEN", pylon_identity_token)
 
-    # margin / tail_size / champion_share / dethrone_z are frozen (the KOTH_*
-    # module constants), not env. Confirmation-seed count stays operator-set but
-    # must match network-wide, so validate it.
-    koth_confirmation_seeds = _parse_int("VALIDATOR_KOTH_CONFIRMATION_SEEDS", "3")
-    if koth_confirmation_seeds < 1:
-        raise ValidatorConfigError(
-            "VALIDATOR_KOTH_CONFIRMATION_SEEDS must be >= 1, "
-            f"got {koth_confirmation_seeds}"
-        )
+    # All KOTH + ATH mechanism values are frozen (the KOTH_* module constants),
+    # not env, so every validator folds identically.
     min_stake_tao = _parse_float("VALIDATOR_MIN_STAKE_TAO", "0")
     if not math.isfinite(min_stake_tao) or min_stake_tao < 0:
         raise ValidatorConfigError(
@@ -318,7 +303,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_tail_size=KOTH_TAIL_SIZE,
         koth_champion_share=KOTH_CHAMPION_SHARE,
         koth_dethrone_z=KOTH_DETHRONE_Z,
-        koth_confirmation_seeds=koth_confirmation_seeds,
+        koth_confirmation_seeds=KOTH_CONFIRMATION_SEEDS,
         min_stake_tao=min_stake_tao,
         sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),

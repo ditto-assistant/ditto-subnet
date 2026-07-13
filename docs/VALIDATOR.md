@@ -118,7 +118,8 @@ point the worker at it with:
 | --- | --- |
 | `PYLON_URL` | Base URL of your Pylon service (e.g. `http://localhost:8000`). |
 | `PYLON_IDENTITY_NAME` | The Pylon identity holding this validator's hotkey. |
-| `PYLON_IDENTITY_TOKEN` | That identity's write token, authorizing `put_weights`. |
+| `PYLON_IDENTITY_TOKEN` | The Pylon token, authorizing `put_weights`. |
+| `PYLON_OPEN_ACCESS_TOKEN` | Same token; lets the worker self-check its permit. |
 
 ## 4. Model gateway
 
@@ -171,27 +172,28 @@ cd scripts/pylon
 cp pylon.env.example pylon.env      # then fill it in (never commit it)
 ```
 
-`pylon.env` names the wallet and the two tokens (a read token for open-access
-endpoints, a write token for the identity):
+`pylon.env` names the wallet and one random token that guards both open-access
+reads and the identity write. Reuse the same string for both; only split them if
+you hand the read token to a separate read-only consumer.
 
-Generate each token with OpenSSL:
+Generate the token with OpenSSL:
 
 ```sh
 openssl rand -base64 32
 ```
 
-Run the command twice and use a different output for each token. Store both
-tokens in a secret manager; do not commit them.
+Store it in a secret manager; do not commit it. If you do split read from write,
+run the command twice and use a different output for each token.
 
 ```sh
 PYLON_BITTENSOR_NETWORK=finney
-PYLON_OPEN_ACCESS_TOKEN=<random-read-token>
+PYLON_OPEN_ACCESS_TOKEN=<random-token>
 
 PYLON_IDENTITIES=["ditto"]
 PYLON_ID_DITTO_WALLET_NAME=<coldkey-name>
 PYLON_ID_DITTO_HOTKEY_NAME=<hotkey-name>
 PYLON_ID_DITTO_NETUID=118
-PYLON_ID_DITTO_TOKEN=<random-write-token>
+PYLON_ID_DITTO_TOKEN=<random-token>
 
 PYLON_DATABASE_PATH=/data/pylon.db   # persist in-flight submissions
 ```
@@ -203,17 +205,18 @@ docker compose up -d
 ```
 
 Then point the worker at it (section 3 / your validator `.env`), reusing the
-identity name and its write token:
+identity name and the same token:
 
 ```sh
 PYLON_URL=http://localhost:8000
 PYLON_IDENTITY_NAME=ditto
 PYLON_IDENTITY_TOKEN=<the same PYLON_ID_DITTO_TOKEN>
+PYLON_OPEN_ACCESS_TOKEN=<the same token>   # lets the worker self-check its permit
 ```
 
 The identity hotkey must be the validator hotkey registered on SN118 with a
 `validator_permit`; Pylon returns `403` on `put_weights` without the permit and
-stake. Keep both tokens and the wallet in a secret manager. Pylon serves its
+stake. Keep the token and the wallet in a secret manager. Pylon serves its
 OpenAPI at `http://localhost:8000/schema/swagger` once running. Full service
 reference: <https://github.com/bittensor-church/bittensor-pylon> (`docs/SERVICE.md`).
 
@@ -271,9 +274,9 @@ truth.
 ## 9. Environment reference
 
 These common knobs keep the defaults documented by the validator worker. The
-consensus-critical KOTH margin, tail size, champion share, and dethrone-z are
-frozen in code (not listed here); `VALIDATOR_KOTH_CONFIRMATION_SEEDS` (3) is the
-one mechanism value still env-set and must match network-wide.
+consensus-critical KOTH values (margin, tail size, champion share, dethrone-z,
+and confirmation seeds) are frozen in code (`ditto/validator/config.py`), not
+env-tunable, so they are not listed here.
 
 | Env | Meaning |
 | --- | --- |

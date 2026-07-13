@@ -30,6 +30,7 @@ class TestKothConfig:
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
+        assert cfg.koth_confirmation_seeds == 3
         # Cadence knobs stay env-driven, with these defaults.
         assert cfg.sweep_seconds == 120
         assert cfg.epoch_seconds == 3600
@@ -43,6 +44,7 @@ class TestKothConfig:
             "VALIDATOR_KOTH_TAIL_SIZE",
             "VALIDATOR_KOTH_CHAMPION_SHARE",
             "VALIDATOR_KOTH_DETHRONE_Z",
+            "VALIDATOR_KOTH_CONFIRMATION_SEEDS",
         ):
             monkeypatch.setenv(var, "999")
         cfg = parse_validator_config_from_env()
@@ -50,6 +52,7 @@ class TestKothConfig:
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
+        assert cfg.koth_confirmation_seeds == 3
 
 
 class TestMinStakeConfig:
