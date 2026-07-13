@@ -162,6 +162,9 @@ services:
       WANDB_ENTITY: ${WANDB_ENTITY:-}
       WANDB_RUN_NAME: ${WANDB_RUN_NAME:-}
       WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WANDB_DIR: /tmp/wandb
+      WANDB_DATA_DIR: /tmp/wandb-data
+      WANDB_CACHE_DIR: /tmp/wandb-cache
       UV_CACHE_DIR: /tmp/uv-cache
     depends_on:
       pylon:
