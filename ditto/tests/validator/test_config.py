@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ditto.validator.config import parse_validator_config_from_env
+from ditto.validator.config import FINNEY_BURN_HOTKEY, parse_validator_config_from_env
 from ditto.validator.errors import ValidatorConfigError
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -31,6 +31,8 @@ class TestKothConfig:
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
+        assert cfg.miner_emission_share == 0.2
+        assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
         # Cadence knobs stay env-driven, with these defaults.
         assert cfg.sweep_seconds == 120
         assert cfg.epoch_seconds == 3600
@@ -45,6 +47,8 @@ class TestKothConfig:
             "VALIDATOR_KOTH_CHAMPION_SHARE",
             "VALIDATOR_KOTH_DETHRONE_Z",
             "VALIDATOR_KOTH_CONFIRMATION_SEEDS",
+            "VALIDATOR_MINER_EMISSION_SHARE",
+            "VALIDATOR_BURN_HOTKEY",
         ):
             monkeypatch.setenv(var, "999")
         cfg = parse_validator_config_from_env()
@@ -53,6 +57,16 @@ class TestKothConfig:
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
+        assert cfg.miner_emission_share == 0.2
+        assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
+
+    def test_localnet_burns_to_local_owner_validator(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("SUBTENSOR_NETWORK", "local")
+        cfg = parse_validator_config_from_env()
+        assert cfg.burn_hotkey == _HOTKEY
 
 
 class TestMinStakeConfig:

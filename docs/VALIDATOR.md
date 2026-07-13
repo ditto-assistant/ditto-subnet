@@ -165,8 +165,10 @@ Each validator reads the same public median-aggregated ledger and applies the
 deterministic king-of-the-hill fold in `ditto/validator/weights.py`. A challenger
 must clear both the relative margin and statistical error band. The champion
 gets 90% of weight and the next four distinct miners split 10%; Yuma consensus
-combines validators' on-chain vectors. These consensus values are frozen in
-code, not configurable through env.
+combines validators' on-chain vectors. That miner vector receives 20% of miner
+emission; the other 80% is routed to SN118's owner-associated burn hotkey and
+burned by Subtensor. With no eligible miners, 100% is burned. These consensus
+values are frozen in code, not configurable through env.
 
 The worker sends its vector to its co-located Pylon identity. Pylon performs UID
 resolution, normalization, commit-reveal handling, retries, and the final

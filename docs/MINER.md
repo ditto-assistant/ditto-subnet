@@ -128,10 +128,15 @@ Weights use a copy-resistant king-of-the-hill mechanism:
 4. The champion receives 90% of weight; the next four distinct miners split the
    remaining 10%.
 
+The KOTH vector receives 20% of available miner emission. Validators direct the
+remaining 80% to SN118's owner-associated burn hotkey, which Subtensor burns
+rather than paying to the owner. With no eligible miners, 100% is burned.
+
 Weights are recomputed from the durable ledger each epoch, so a champion keeps
-earning until dethroned. Every validator runs the deterministic fold in
-`ditto/validator/weights.py`; Yuma consensus clips deviating vectors. Consensus
-parameters can change, so the implementation and live chain are authoritative.
+earning until dethroned. Every validator runs the deterministic fold and burn
+split in `ditto/validator/weights.py`; Yuma consensus clips deviating vectors.
+Consensus parameters can change, so the implementation and live chain are
+authoritative.
 
 ## Duplicate protection
 

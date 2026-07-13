@@ -32,6 +32,8 @@ KOTH_TAIL_SIZE = 4  # runners-up after the champion that split the tail
 KOTH_CHAMPION_SHARE = 0.9  # champion weight share (90% champion / 10% tail)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
+MINER_EMISSION_SHARE = 0.2  # release 20% of miner emission; burn the other 80%
+FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,12 @@ class ValidatorConfig:
     like ``koth_margin`` (every validator must run the same K to derive the same
     seed set). ``1`` reproduces the single-seed pre-P4 sweep, byte-identical."""
 
+    miner_emission_share: float
+    """Share of miner emission released through KOTH; the remainder is burned."""
+
+    burn_hotkey: str
+    """Owner-associated hotkey whose miner incentive Subtensor burns."""
+
     min_stake_tao: float
     """Minimum stake (TAO) this validator expects on its own hotkey before it
     submits weights. ``0`` disables the check. A companion to the
@@ -210,6 +218,17 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     _require("PYLON_IDENTITY_NAME", pylon_identity_name)
     _require("PYLON_TOKEN", pylon_token)
 
+    validator_hotkey = _require(
+        "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
+    )
+    subtensor_network = os.environ.get("SUBTENSOR_NETWORK", "finney")
+    # Finney SN118 has a fixed owner hotkey at UID 0. Localnet setup uses its
+    # validator as the subnet owner, so self-targeting preserves the same burn
+    # path without making the production target operator-configurable.
+    burn_hotkey = (
+        FINNEY_BURN_HOTKEY if subtensor_network == "finney" else validator_hotkey
+    )
+
     # All KOTH + ATH mechanism values are frozen (the KOTH_* module constants),
     # not env, so every validator folds identically.
     min_stake_tao = _parse_float("VALIDATOR_MIN_STAKE_TAO", "0")
@@ -226,21 +245,21 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         dittobench_api_url=dittobench_api_url,
         run_size=run_size,
         dittobench_mock=dittobench_mock,
-        validator_hotkey=_require(
-            "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
-        ),
+        validator_hotkey=validator_hotkey,
         wallet_name=os.environ.get("VALIDATOR_WALLET_NAME") or None,
         wallet_hotkey=os.environ.get("VALIDATOR_WALLET_HOTKEY") or None,
         netuid=int(os.environ.get("NETUID", "118")),
         pylon_url=os.environ.get("PYLON_URL", "http://localhost:8001"),
         pylon_identity_name=pylon_identity_name,
         pylon_token=pylon_token or None,
-        subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
+        subtensor_network=subtensor_network,
         koth_margin=KOTH_MARGIN,
         koth_tail_size=KOTH_TAIL_SIZE,
         koth_champion_share=KOTH_CHAMPION_SHARE,
         koth_dethrone_z=KOTH_DETHRONE_Z,
         koth_confirmation_seeds=KOTH_CONFIRMATION_SEEDS,
+        miner_emission_share=MINER_EMISSION_SHARE,
+        burn_hotkey=burn_hotkey,
         min_stake_tao=min_stake_tao,
         sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),
