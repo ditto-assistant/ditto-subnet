@@ -77,10 +77,12 @@ SCREENER_HOTKEY="$(env_value SCREENER_HOTKEY)"
 : "${SCREENER_API_TOKEN:?missing SCREENER_API_TOKEN}"
 : "${SCREENER_HOTKEY:?missing SCREENER_HOTKEY}"
 
-curl --fail --silent --show-error \
-  --header "Authorization: Bearer $SCREENER_API_TOKEN" \
-  --header "X-Screener-Hotkey: $SCREENER_HOTKEY" \
-  "$SCREENER_PLATFORM_API_URL/api/v1/screener/queue?limit=1" >/dev/null
+# Feed the bearer header over stdin so the token never appears in `ps` output.
+curl --fail --silent --show-error --config - \
+  "$SCREENER_PLATFORM_API_URL/api/v1/screener/queue?limit=1" >/dev/null <<CURL_CONFIG
+header = "Authorization: Bearer $SCREENER_API_TOKEN"
+header = "X-Screener-Hotkey: $SCREENER_HOTKEY"
+CURL_CONFIG
 
 actual_sha="$(runuser -u "$SCREENER_USER" -- git -C "$checkout" rev-parse HEAD)"
 echo "healthy: $SCREENER_UNIT active at $actual_sha; platform queue auth accepted"
