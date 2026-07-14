@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.6.4 (2026-07-14)
+
+### Bug Fixes
+
+- Support external validator Compose builds
+  ([#126](https://github.com/ditto-assistant/ditto-subnet/pull/126),
+  [`2c83860`](https://github.com/ditto-assistant/ditto-subnet/commit/2c8386013d257ebb52e4897c42b713f7c9129885))
+
+
 ## v0.6.3 (2026-07-14)
 
 ### Bug Fixes
