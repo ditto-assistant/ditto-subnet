@@ -120,6 +120,8 @@ Production acceptance is:
 - sweeps complete without recurring platform, scorer, or Pylon errors;
 - the configured hotkey is registered on SN118 and has a validator permit;
 - the hotkey's on-chain last-update block advances after weights are submitted.
+- `GET https://platform-api.heyditto.ai/api/v1/public/validators` lists the
+  hotkey as online with its signed software version and source digest.
 
 ## Upgrade and operate
 
@@ -179,6 +181,9 @@ check and identity writes.
 
 Add the shared `WANDB_API_KEY` provided by Ditto to `.env` (never commit it), or
 set `WANDB_MODE=disabled` to opt out of aggregate telemetry.
+
+The worker also posts a signed public heartbeat with its software identity and
+current phase. Long benchmark runs refresh `running_benchmark` every two minutes.
 
 ## Development
 

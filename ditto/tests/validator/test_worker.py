@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -17,9 +18,11 @@ from ditto.api_models.validator import (
     LedgerResponse,
     ScoreReport,
     SubmitScoreResponse,
+    ValidatorHeartbeatResponse,
 )
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
+from ditto.validator.errors import PlatformError
 from ditto.validator.onchain_seed import derive_seed
 from ditto.validator.weights import apply_miner_emission_cap, compute_weights
 from ditto.validator.worker import ValidatorWorker
@@ -203,6 +206,11 @@ def _platform_with_ledger(
     *, jobs: list[JobResponse], ledger: list[LedgerEntry]
 ) -> MagicMock:
     platform = MagicMock()
+    platform.submit_heartbeat = AsyncMock(
+        return_value=ValidatorHeartbeatResponse(
+            accepted=True, seen_at=datetime.now(UTC)
+        )
+    )
     # Ticket poll: hand out one ticket per job, then 204 (None) to end the sweep.
     platform.request_job = AsyncMock(side_effect=[*jobs, None])
     platform.get_ledger = AsyncMock(
@@ -248,6 +256,20 @@ class TestRunOnce:
 
         n = await worker.run_once()
         assert n == 1
+        heartbeats = [
+            call.args[0] for call in platform.submit_heartbeat.await_args_list
+        ]
+        assert [heartbeat.state for heartbeat in heartbeats] == [
+            "polling",
+            "running_benchmark",
+            "polling",
+            "updating_weights",
+            "idle",
+        ]
+        heartbeat = heartbeats[0]
+        assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
+        assert heartbeat.protocol_version == 1
+        assert len(heartbeat.code_digest) == 64
         assert platform.submit_score.await_count == 1
         assert (
             platform.submit_score.await_args.kwargs["ticket_deadline"] == job.deadline
@@ -255,6 +277,47 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once_with(
             {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
         )
+
+    async def test_heartbeat_failure_does_not_block_scoring(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_heartbeat.side_effect = PlatformError("platform old")
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker.run_once(set_weights=False) == 0
+        platform.request_job.assert_awaited_once()
+
+    async def test_long_benchmark_refreshes_running_heartbeat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(worker_mod, "_ACTIVE_HEARTBEAT_SECONDS", 0.001)
+        platform = _platform_with_ledger(jobs=[_job("5MinerA" + "x" * 41)], ledger=[])
+
+        async def slow_score(**_: object) -> ScoreReport:
+            await asyncio.sleep(0.005)
+            return _report("run", 0.9)
+
+        dittobench = MagicMock(score_tarball=AsyncMock(side_effect=slow_score))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        states = [
+            call.args[0].state for call in platform.submit_heartbeat.await_args_list
+        ]
+        assert states.count("running_benchmark") >= 2
+        assert states[-1] == "idle"
 
     async def test_forwards_tarball_sha_to_scorer(self) -> None:
         # The registered digest must be forwarded so dittobench re-verifies the
