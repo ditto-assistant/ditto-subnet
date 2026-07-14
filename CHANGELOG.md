@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.6.3 (2026-07-14)
+
+### Bug Fixes
+
+- Report isolated validator container health
+  ([#124](https://github.com/ditto-assistant/ditto-subnet/pull/124),
+  [`6597f56`](https://github.com/ditto-assistant/ditto-subnet/commit/6597f56170fbbf9db3d7249b3209dcc1a81556bf))
+
+
 ## v0.6.2 (2026-07-14)
 
 ### Bug Fixes
