@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.2.2 (2026-07-14)
+
+### Bug Fixes
+
+- Probe screener harness inside isolated network
+  ([#112](https://github.com/ditto-assistant/ditto-subnet/pull/112),
+  [`054063b`](https://github.com/ditto-assistant/ditto-subnet/commit/054063b35f4eb618a30d7ff14a15036693013831))
+
+
 ## v0.2.1 (2026-07-14)
 
 ### Bug Fixes
