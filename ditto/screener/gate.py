@@ -19,9 +19,9 @@ Flow for one agent:
    ``build_timeout_seconds``.
 4. **Serve smoke.** Run the image detached with a memory + pids cap and poll
    ``GET /health`` until it returns 2xx.
-5. **Model canary.** Point the production provider environment at a host-side
-   fake OpenAI-compatible endpoint, call ``POST /run``, and require the harness
-   to return a random token known only to the fake model response.
+5. **Model canary.** Put the harness and a locked-down fake OpenAI-compatible
+   sidecar on a private Docker network, call ``POST /run``, and require the
+   harness to return a random token known only to the fake model response.
 6. **Teardown.** The container + image are always removed.
 
 A pass is "built, served, and consumed a model response"; anything else fails
@@ -46,17 +46,18 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import tarfile
 import tempfile
 import tomllib
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
 
-from ditto.screener.model_canary import LOCKED_HARNESS_MODEL, ModelCallCanary
+from ditto.screener.model_canary import LOCKED_HARNESS_MODEL
 
 if TYPE_CHECKING:
     from ditto.screener.config import ScreenerConfig
@@ -69,6 +70,11 @@ _LOG_TAIL_BYTES = 2000
 _PROBE_INTERVAL_SECONDS = 1.0
 _MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 _MAX_CANARY_RESPONSE_BYTES = 64 * 1024
+_CANARY_IMAGE = (
+    "python:3.12-alpine@sha256:"
+    "6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
+)
+_CANARY_ALIAS = "model-canary"
 
 
 @dataclass(frozen=True)
@@ -114,6 +120,10 @@ class BuildGate:
         """Screen one agent end-to-end; never raises."""
         tag = f"ditto-screen/{agent_id}:latest"
         container = f"ditto-screen-{agent_id}"
+        canary_container = f"ditto-canary-{agent_id}"
+        network = f"ditto-screen-{agent_id}"
+        canary_state_dir = tempfile.mkdtemp(prefix="ditto-canary-state-")
+        os.chmod(canary_state_dir, 0o755)
         tmp_path: str | None = None
         try:
             tmp_path, dl_detail = await self._download_verified(download_url, sha256)
@@ -127,7 +137,13 @@ class BuildGate:
             if not built:
                 return GateResult(False, f"build failed: {build_detail}")
 
-            served, serve_detail = await self._run_and_probe(tag, container)
+            served, serve_detail = await self._run_and_probe(
+                tag,
+                container,
+                canary_container=canary_container,
+                network=network,
+                canary_state_dir=canary_state_dir,
+            )
             if not served:
                 return GateResult(False, f"serve check failed: {serve_detail}")
             return GateResult(True, "")
@@ -135,7 +151,13 @@ class BuildGate:
             logger.exception("gate error for agent_id=%s", agent_id)
             return GateResult(False, f"screener error: {type(e).__name__}: {e}")
         finally:
-            await self._teardown(container, tag)
+            await self._teardown(
+                container,
+                tag,
+                canary_container=canary_container,
+                network=network,
+            )
+            shutil.rmtree(canary_state_dir, ignore_errors=True)
             if tmp_path is not None:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
@@ -242,58 +264,143 @@ class BuildGate:
             return True, ""
         return False, _log_tail(out)
 
-    async def _run_and_probe(self, tag: str, container: str) -> tuple[bool, str]:
+    async def _run_and_probe(
+        self,
+        tag: str,
+        container: str,
+        *,
+        canary_container: str,
+        network: str,
+        canary_state_dir: str,
+    ) -> tuple[bool, str]:
         """Run the image, await health, then prove it consumes a model response."""
         port = self._config.container_port
-        async with ModelCallCanary() as canary:
-            gateway = canary.gateway_url
-            run_args = [
+        token = f"ditto-canary-{secrets.token_hex(16)}"
+        model_called_path = os.path.join(canary_state_dir, "model-called")
+        started, detail = await self._start_canary_sidecar(
+            canary_container=canary_container,
+            network=network,
+            token=token,
+            state_dir=canary_state_dir,
+        )
+        if not started:
+            return False, detail
+
+        gateway = f"http://{_CANARY_ALIAS}:8080"
+        run_args = [
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            container,
+            "--network",
+            network,
+            "--memory",
+            self._config.build_memory,
+            "--pids-limit",
+            str(self._config.pids_limit),
+            "--publish",
+            f"127.0.0.1::{port}",
+        ]
+        for key, value in self._config.smoke_env:
+            run_args += ["-e", f"{key}={value}"]
+        # Mirror the production scorer's locked provider contract. These are
+        # appended last so an operator's legacy smoke env cannot bypass the
+        # fake gateway.
+        canary_env = {
+            "DITTOBENCH_PROVIDER": "chutes",
+            "DITTOBENCH_MODEL": LOCKED_HARNESS_MODEL,
+            "CHUTES_BASE_URL": f"{gateway}/v1",
+            "CHUTES_API_KEY": "relay",
+            "OPENAI_BASE_URL": f"{gateway}/v1",
+            "OPENAI_API_KEY": "relay",
+            "OLLAMA_BASE_URL": gateway,
+        }
+        for key, value in canary_env.items():
+            run_args += ["-e", f"{key}={value}"]
+        run_args.append(tag)
+        code, out = await self._run(run_args, timeout=self._config.run_timeout_seconds)
+        if code != 0:
+            return False, f"container did not start: {_log_tail(out)}"
+
+        mapped = await self._published_port(container, port)
+        if mapped is None:
+            return False, "could not resolve published port"
+
+        harness_base = f"http://127.0.0.1:{mapped}"
+        healthy, detail = await self._wait_healthy(harness_base)
+        if not healthy:
+            return False, detail
+        return await self._run_model_canary(
+            harness_base,
+            token=token,
+            model_called_path=model_called_path,
+        )
+
+    async def _start_canary_sidecar(
+        self,
+        *,
+        canary_container: str,
+        network: str,
+        token: str,
+        state_dir: str,
+    ) -> tuple[bool, str]:
+        """Start the fake gateway beside the harness on an internal network."""
+        code, out = await self._run(
+            ["network", "create", "--internal", network], timeout=30.0
+        )
+        if code != 0:
+            return False, f"could not create canary network: {_log_tail(out)}"
+
+        script = str(Path(__file__).with_name("model_canary.py").resolve())
+        code, out = await self._run(
+            [
                 "run",
                 "-d",
                 "--rm",
                 "--name",
-                container,
+                canary_container,
+                "--network",
+                network,
+                "--network-alias",
+                _CANARY_ALIAS,
+                "--read-only",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
                 "--memory",
-                self._config.build_memory,
+                "64m",
                 "--pids-limit",
-                str(self._config.pids_limit),
-                "--add-host",
-                "host.docker.internal:host-gateway",
-                "--publish",
-                f"127.0.0.1::{port}",
-            ]
-            for key, value in self._config.smoke_env:
-                run_args += ["-e", f"{key}={value}"]
-            # Mirror the production scorer's locked provider contract. These are
-            # appended last so an operator's legacy smoke env cannot bypass the
-            # fake gateway.
-            canary_env = {
-                "DITTOBENCH_PROVIDER": "chutes",
-                "DITTOBENCH_MODEL": LOCKED_HARNESS_MODEL,
-                "CHUTES_BASE_URL": f"{gateway}/v1",
-                "CHUTES_API_KEY": "relay",
-                "OPENAI_BASE_URL": f"{gateway}/v1",
-                "OPENAI_API_KEY": "relay",
-                "OLLAMA_BASE_URL": gateway,
-            }
-            for key, value in canary_env.items():
-                run_args += ["-e", f"{key}={value}"]
-            run_args.append(tag)
-            code, out = await self._run(
-                run_args, timeout=self._config.run_timeout_seconds
+                "32",
+                "-e",
+                f"DITTO_CANARY_TOKEN={token}",
+                "-e",
+                "DITTO_CANARY_STATE_FILE=/state/model-called",
+                "-v",
+                f"{script}:/app/model_canary.py:ro",
+                "-v",
+                f"{state_dir}:/state",
+                _CANARY_IMAGE,
+                "python",
+                "/app/model_canary.py",
+            ],
+            timeout=self._config.run_timeout_seconds,
+        )
+        if code != 0:
+            return False, f"model canary did not start: {_log_tail(out)}"
+
+        probe = (
+            "import socket; socket.create_connection(('127.0.0.1', 8080), 2).close()"
+        )
+        for _ in range(20):
+            code, _ = await self._run(
+                ["exec", canary_container, "python", "-c", probe], timeout=5.0
             )
-            if code != 0:
-                return False, f"container did not start: {_log_tail(out)}"
-
-            mapped = await self._published_port(container, port)
-            if mapped is None:
-                return False, "could not resolve published port"
-
-            harness_base = f"http://127.0.0.1:{mapped}"
-            healthy, detail = await self._wait_healthy(harness_base)
-            if not healthy:
-                return False, detail
-            return await self._run_model_canary(harness_base, canary)
+            if code == 0:
+                return True, ""
+            await asyncio.sleep(0.1)
+        return False, "model canary did not become ready"
 
     async def _wait_healthy(self, harness_base: str) -> tuple[bool, str]:
         """Poll the submitted container's health endpoint until the deadline."""
@@ -314,7 +421,11 @@ class BuildGate:
         return False, f"/health never healthy within {deadline:g}s ({last})"
 
     async def _run_model_canary(
-        self, harness_base: str, canary: ModelCallCanary
+        self,
+        harness_base: str,
+        *,
+        token: str,
+        model_called_path: str | None,
     ) -> tuple[bool, str]:
         """Run one hidden-response case and verify the gateway response was used."""
         request = {
@@ -345,14 +456,14 @@ class BuildGate:
         except httpx.HTTPError as e:
             return False, f"model canary /run failed: {type(e).__name__}"
 
-        if canary.model_calls == 0:
+        if model_called_path is not None and not os.path.exists(model_called_path):
             return False, "model canary observed no model call"
         try:
             payload = json.loads(body)
             final_text = payload.get("final_text", "")
         except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
             return False, "model canary /run returned an invalid response"
-        if not isinstance(final_text, str) or canary.token not in final_text:
+        if not isinstance(final_text, str) or token not in final_text:
             return False, "model canary response was not used by the harness"
         return True, ""
 
@@ -367,10 +478,19 @@ class BuildGate:
         line = out.strip().splitlines()[-1]
         return line.rsplit(":", 1)[-1].strip() or None
 
-    async def _teardown(self, container: str, tag: str) -> None:
+    async def _teardown(
+        self,
+        container: str,
+        tag: str,
+        *,
+        canary_container: str,
+        network: str,
+    ) -> None:
         """Best-effort removal of the container + image; never raises."""
         try:
             await self._run(["rm", "-f", container], timeout=30.0)
+            await self._run(["rm", "-f", canary_container], timeout=30.0)
+            await self._run(["network", "rm", network], timeout=30.0)
             await self._run(["rmi", "-f", tag], timeout=30.0)
         except Exception:  # noqa: BLE001 - teardown must never mask a result
             logger.warning("teardown issue for %s / %s", container, tag, exc_info=True)
