@@ -9,6 +9,11 @@
       "passed": {
         "type": "boolean"
       },
+      "policy_version": {
+        "default": 1,
+        "minimum": 1,
+        "type": "integer"
+      },
       "screener_hotkey": {
         "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
         "type": "string"
@@ -170,6 +175,11 @@
           "$ref": "#/$defs/ScreenerQueueItem"
         },
         "type": "array"
+      },
+      "required_policy_version": {
+        "default": 2,
+        "minimum": 1,
+        "type": "integer"
       }
     },
     "required": [

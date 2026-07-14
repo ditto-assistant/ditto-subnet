@@ -15,13 +15,13 @@ def test_message_matches_platform_format() -> None:
     # f"{screener_hotkey}:{agent_id}:{passed}".encode() — including Python's
     # bool str form ("True"/"False").
     msg = verdict_signing_message(screener_hotkey=_HOTKEY, agent_id=_AGENT, passed=True)
-    assert msg == f"{_HOTKEY}:{_AGENT}:True".encode()
-    assert msg.endswith(b":True")
+    assert msg == f"{_HOTKEY}:{_AGENT}:True:2".encode()
+    assert msg.endswith(b":True:2")
 
     msg_false = verdict_signing_message(
         screener_hotkey=_HOTKEY, agent_id=_AGENT, passed=False
     )
-    assert msg_false.endswith(b":False")
+    assert msg_false.endswith(b":False:2")
 
 
 class _FakeKeypair:
@@ -39,4 +39,4 @@ def test_sign_verdict_signs_canonical_message() -> None:
     kp = _FakeKeypair()
     sig = sign_verdict(kp, screener_hotkey=_HOTKEY, agent_id=_AGENT, passed=False)
     assert sig == ("ab" * 64)
-    assert kp.signed == f"{_HOTKEY}:{_AGENT}:False".encode()
+    assert kp.signed == f"{_HOTKEY}:{_AGENT}:False:2".encode()

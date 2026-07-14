@@ -68,7 +68,9 @@ class _FakePlatform:
             expires_at=datetime.now(UTC),
         )
 
-    async def submit_result(self, agent_id, *, signature, passed, detail=""):  # type: ignore[no-untyped-def]
+    async def submit_result(  # type: ignore[no-untyped-def]
+        self, agent_id, *, signature, passed, policy_version, detail=""
+    ):
         if self.submit_error is not None:
             raise self.submit_error
         self.verdicts.append(
@@ -76,6 +78,7 @@ class _FakePlatform:
                 "agent_id": agent_id,
                 "signature": signature,
                 "passed": passed,
+                "policy_version": policy_version,
                 "detail": detail,
             }
         )
@@ -106,6 +109,7 @@ async def test_screen_one_pass_posts_signed_pass_verdict(
     assert len(platform.verdicts) == 1
     v = platform.verdicts[0]
     assert v["passed"] is True and v["signature"] == "cd" * 64 and v["detail"] == ""
+    assert v["policy_version"] == 2
 
 
 async def test_screen_one_fail_forwards_detail(

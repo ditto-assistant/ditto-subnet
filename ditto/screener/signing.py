@@ -2,7 +2,7 @@
 
 The screener signs each verdict so the platform can verify it came from the
 claimed hotkey and that the ``passed`` boolean was not flipped in transit. The
-signature binds the canonical string ``{screener_hotkey}:{agent_id}:{passed}``
+signature binds ``{screener_hotkey}:{agent_id}:{passed}:{policy_version}``
 — the exact string the platform's ``/screener/agent/{id}/result`` rebuilds and
 verifies. Never log the key.
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.screener.errors import ScreenerConfigError
 
 if TYPE_CHECKING:
@@ -47,24 +48,36 @@ def load_screener_keypair(config: ScreenerConfig) -> Any:
 
 
 def verdict_signing_message(
-    *, screener_hotkey: str, agent_id: UUID, passed: bool
+    *,
+    screener_hotkey: str,
+    agent_id: UUID,
+    passed: bool,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> bytes:
     """Build the canonical bytes a verdict signature is computed over.
 
-    ``{screener_hotkey}:{agent_id}:{passed}``. ``passed`` uses Python's ``bool``
-    ``str`` form (``True`` / ``False``), matching the platform's
+    ``{screener_hotkey}:{agent_id}:{passed}:{policy_version}``. ``passed`` uses
+    Python's ``bool`` ``str`` form (``True`` / ``False``), matching the platform's
     ``f"...:{payload.passed}"`` (a Pydantic ``bool``), so both sides format it
     identically.
     """
-    return f"{screener_hotkey}:{agent_id}:{passed}".encode()
+    return f"{screener_hotkey}:{agent_id}:{passed}:{policy_version}".encode()
 
 
 def sign_verdict(
-    keypair: Any, *, screener_hotkey: str, agent_id: UUID, passed: bool
+    keypair: Any,
+    *,
+    screener_hotkey: str,
+    agent_id: UUID,
+    passed: bool,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> str:
     """Return the hex sr25519 signature over the canonical verdict payload."""
     message = verdict_signing_message(
-        screener_hotkey=screener_hotkey, agent_id=agent_id, passed=passed
+        screener_hotkey=screener_hotkey,
+        agent_id=agent_id,
+        passed=passed,
+        policy_version=policy_version,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

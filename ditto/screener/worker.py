@@ -18,7 +18,7 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ditto.api_models.screener import ScreenerQueueItem
+from ditto.api_models.screener import SCREENING_POLICY_VERSION, ScreenerQueueItem
 from ditto.screener.errors import PlatformError
 from ditto.screener.signing import sign_verdict
 
@@ -67,6 +67,12 @@ class ScreenerWorker:
     async def _sweep(self, stop: asyncio.Event) -> int:
         """Screen every agent currently in the queue; return how many were done."""
         queue = await self._platform.get_queue()
+        if queue.required_policy_version > SCREENING_POLICY_VERSION:
+            raise PlatformError(
+                "platform requires screening policy "
+                f"{queue.required_policy_version}, worker supports "
+                f"{SCREENING_POLICY_VERSION}"
+            )
         if not queue.items:
             return 0
         logger.info("screener sweep: %d agent(s) to screen", len(queue.items))
@@ -93,11 +99,13 @@ class ScreenerWorker:
                 screener_hotkey=self._config.screener_hotkey,
                 agent_id=agent_id,
                 passed=result.passed,
+                policy_version=SCREENING_POLICY_VERSION,
             )
             resp = await self._platform.submit_result(
                 agent_id,
                 signature=signature,
                 passed=result.passed,
+                policy_version=SCREENING_POLICY_VERSION,
                 detail=result.detail,
             )
             logger.info(
