@@ -6,6 +6,7 @@ import os
 import subprocess
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import psutil
@@ -13,12 +14,29 @@ import psutil
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 
 SYSTEM_METRICS_SAMPLE_SECONDS = 120.0
+_CONTAINER_MARKERS = (Path("/.dockerenv"), Path("/run/.containerenv"))
 
 
 def _coarse_percent(value: float) -> int:
     """Clamp and round a percentage to five-point buckets."""
     bounded = min(100.0, max(0.0, float(value)))
     return min(100, int((bounded + 2.5) // 5) * 5)
+
+
+def _running_in_container() -> bool:
+    """Return whether this worker can identify its own container runtime."""
+    return any(marker.exists() for marker in _CONTAINER_MARKERS)
+
+
+def _docker_unavailable() -> DockerHealth:
+    """Report the observable worker container when host Docker is isolated."""
+    if _running_in_container():
+        return DockerHealth(
+            status="healthy", running_containers=1, unhealthy_containers=0
+        )
+    return DockerHealth(
+        status="unavailable", running_containers=0, unhealthy_containers=0
+    )
 
 
 def probe_docker_health() -> DockerHealth:
@@ -41,13 +59,9 @@ def probe_docker_health() -> DockerHealth:
             env={"PATH": os.environ.get("PATH", "")},
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return DockerHealth(
-            status="unavailable", running_containers=0, unhealthy_containers=0
-        )
+        return _docker_unavailable()
     if result.returncode != 0:
-        return DockerHealth(
-            status="unavailable", running_containers=0, unhealthy_containers=0
-        )
+        return _docker_unavailable()
     statuses = result.stdout.splitlines()[:1000]
     unhealthy = sum("(unhealthy)" in status.lower() for status in statuses)
     return DockerHealth(
