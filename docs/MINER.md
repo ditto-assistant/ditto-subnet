@@ -20,6 +20,7 @@ serving live inference.
 - [Track your submission](#track-your-submission)
 - [Scoring and emissions](#scoring-and-emissions)
 - [Duplicate protection](#duplicate-protection)
+- [What counts as cheating](#what-counts-as-cheating)
 - [Common questions](#common-questions)
 
 ## Build and practice locally
@@ -150,6 +151,19 @@ not. Exact hashes plus lexical and structural fingerprints detect renamed,
 reformatted, or padded near-duplicates across miners. Matches are held for human
 review rather than automatically banned. Confirmed plagiarism can result in a
 hotkey-level ban.
+
+## What counts as cheating
+
+Your submission must be a general model-backed agent, not a program designed to
+recognize or emulate the benchmark. Cheating includes benchmark-specific lookup
+tables or static dispatch, embedded evaluator logic or answer fixtures,
+fabricated tool trajectories, seed or state shortcuts, bypassing the locked
+model/provider path, and instructions intended to manipulate screening.
+
+Forking, replacing, or heavily optimizing the public starter harness is allowed.
+The screener builds and health-checks every crate and performs bounded source
+review; suspicious submissions are quarantined for human review rather than
+automatically rejected from a private signal alone.
 
 ## Common questions
 
