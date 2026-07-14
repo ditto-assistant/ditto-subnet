@@ -57,8 +57,14 @@ class _FakePlatform:
         self.verdicts: list[dict] = []
         self.submit_error: Exception | None = None
         self.stop_after_queue: asyncio.Event | None = None
+        self.required_policy_version = SCREENING_POLICY_VERSION
+        self.claim_calls = 0
+
+    async def get_required_policy_version(self) -> int:
+        return self.required_policy_version
 
     async def claim_next(self) -> ScreenerQueueResponse:
+        self.claim_calls += 1
         items = self._queues.pop(0) if self._queues else []
         # Signal the loop to stop once the queue has drained (first empty sweep),
         # AFTER the item-bearing sweeps have been served + processed.
@@ -178,4 +184,22 @@ async def test_run_forever_exits_immediately_when_stopped(
     stop = asyncio.Event()
     stop.set()
     await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
+
+
+async def test_policy_mismatch_does_not_claim(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[_item(uuid4())]])
+    platform.required_policy_version = SCREENING_POLICY_VERSION - 1
+    gate = _FakeGate(GateResult(True, ""))
+    worker = _worker(make_config(), platform, gate)
+
+    try:
+        await worker._sweep(asyncio.Event())
+    except PlatformError as exc:
+        assert "policy mismatch before claim" in str(exc)
+    else:
+        raise AssertionError("policy mismatch must stop before claiming")
+
+    assert platform.claim_calls == 0
     assert gate.calls == []

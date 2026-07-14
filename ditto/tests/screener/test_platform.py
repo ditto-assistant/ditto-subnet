@@ -37,6 +37,7 @@ async def test_claim_next_parses_leased_item(
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/api/v1/screener/claim"
+        assert request.url.params["policy_version"] == str(SCREENING_POLICY_VERSION)
         _assert_auth(request)
         return httpx.Response(
             200,
@@ -64,6 +65,28 @@ async def test_claim_next_parses_leased_item(
     assert resp.count == 1
     assert resp.items[0].agent_id == _AGENT
     assert resp.items[0].sha256 == "de" * 32
+
+
+async def test_policy_preflight_is_read_only(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/screener/queue"
+        _assert_auth(request)
+        return httpx.Response(
+            200,
+            json={
+                "items": [],
+                "count": 0,
+                "required_policy_version": SCREENING_POLICY_VERSION,
+            },
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        required = await client.get_required_policy_version()
+    assert required == SCREENING_POLICY_VERSION
 
 
 async def test_get_artifact_parses_url(
