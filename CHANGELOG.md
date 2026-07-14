@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.2.1 (2026-07-14)
+
+### Bug Fixes
+
+- Repair canary networking and bump screening policy
+  ([#111](https://github.com/ditto-assistant/ditto-subnet/pull/111),
+  [`48c54de`](https://github.com/ditto-assistant/ditto-subnet/commit/48c54de7934c5b52396ec9cff14b2b520d0bdf1a))
+
+
 ## v0.2.0 (2026-07-14)
 
 ### Bug Fixes
