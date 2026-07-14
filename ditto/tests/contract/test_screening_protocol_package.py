@@ -36,3 +36,22 @@ def test_worker_uses_canonical_signing_message() -> None:
         )
         == expected
     )
+
+
+def test_attempt_signatures_are_lease_bound() -> None:
+    hotkey = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempt_id = UUID("776a3bb8-5847-40db-b2af-42f93f20233c")
+    message = verdict_signing_message(
+        screener_hotkey=hotkey,
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        passed=False,
+    )
+    assert (
+        message
+        == (
+            "ditto-screen-verdict:v2:"
+            f"{hotkey}:{agent_id}:{attempt_id}:False:{SCREENING_POLICY_VERSION}"
+        ).encode()
+    )

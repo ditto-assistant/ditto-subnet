@@ -57,6 +57,7 @@ def sign_verdict(
     agent_id: UUID,
     passed: bool,
     policy_version: int = SCREENING_POLICY_VERSION,
+    attempt_id: UUID | None = None,
 ) -> str:
     """Return the hex sr25519 signature over the canonical verdict payload."""
     message = verdict_signing_message(
@@ -64,6 +65,7 @@ def sign_verdict(
         agent_id=agent_id,
         passed=passed,
         policy_version=policy_version,
+        attempt_id=attempt_id,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

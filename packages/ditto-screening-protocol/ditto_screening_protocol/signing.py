@@ -13,6 +13,12 @@ def verdict_signing_message(
     agent_id: UUID,
     passed: bool,
     policy_version: int = SCREENING_POLICY_VERSION,
+    attempt_id: UUID | None = None,
 ) -> bytes:
     """Return the exact bytes signed by the screener and verified by the API."""
+    if attempt_id is not None:
+        return (
+            "ditto-screen-verdict:v2:"
+            f"{screener_hotkey}:{agent_id}:{attempt_id}:{passed}:{policy_version}"
+        ).encode()
     return f"{screener_hotkey}:{agent_id}:{passed}:{policy_version}".encode()
