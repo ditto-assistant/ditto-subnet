@@ -2,8 +2,7 @@
 
 The Docker CLI layer (``BuildGate._run``) is stubbed per-test so we exercise the
 orchestration (download -> verify -> dockerfile check -> build -> serve smoke ->
-teardown) without a real daemon; HTTP (artifact download + /health probe) is a
-mocked transport.
+teardown) without a real daemon; artifact-download HTTP is a mocked transport.
 """
 
 from __future__ import annotations
@@ -90,13 +89,11 @@ def _gate_with(
     return gate
 
 
-def _ok_run(port_line: str = "127.0.0.1:49999") -> Callable[..., Any]:
+def _ok_run() -> Callable[..., Any]:
     async def _run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         cmd = args[0]
         if cmd == "build" and stdin is not None:
             stdin.read()  # drain the context like docker would
-        if cmd == "port":
-            return (0, port_line)
         return (0, "")
 
     return _run
@@ -126,8 +123,6 @@ async def test_smoke_env_injected_into_run(
         run_calls.append(args)
         if args[0] == "build" and stdin is not None:
             stdin.read()
-        if args[0] == "port":
-            return (0, "127.0.0.1:49999")
         return (0, "")
 
     cfg = make_config(smoke_env=(("OPENROUTER_API_KEY", "sk-dummy"), ("FOO", "bar")))
@@ -144,6 +139,10 @@ async def test_smoke_env_injected_into_run(
     assert "OPENROUTER_API_KEY=sk-dummy" in run_args
     assert "FOO=bar" in run_args
     assert "--network" in run_args
+    assert "--network-alias" in run_args
+    alias_index = run_args.index("--network-alias")
+    assert run_args[alias_index + 1] == "harness"
+    assert "--publish" not in run_args
     assert "DITTOBENCH_PROVIDER=chutes" in run_args
     assert "CHUTES_API_KEY=relay" in run_args
     assert "CHUTES_BASE_URL=http://model-canary:8080/v1" in run_args
@@ -158,6 +157,9 @@ async def test_smoke_env_injected_into_run(
 
     network_args = next(a for a in run_calls if a[:2] == ["network", "create"])
     assert "--internal" in network_args
+
+    probe_calls = [a for a in run_calls if a[0] == "exec"]
+    assert any("http://harness:8080/health" in a for a in probe_calls)
 
 
 async def test_model_canary_rejects_harness_that_makes_no_model_call(
@@ -292,9 +294,17 @@ async def test_unhealthy_serve_times_out(
 ) -> None:
     tar = _valid_tar()
     sha = hashlib.sha256(tar).hexdigest()
-    # run_timeout small so the probe loop exits quickly; /health returns 503.
+    # run_timeout small so the probe loop exits quickly; the in-network probe fails.
     cfg = make_config(run_timeout_seconds=0.05)
-    gate = _gate_with(cfg, _ok_run(), tar=tar, health_status=503)
+
+    async def _run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
+        if args[0] == "build" and stdin is not None:
+            stdin.read()
+        if args[0] == "exec" and any("http://harness:" in arg for arg in args):
+            return (1, "HTTP Error 503: Service Unavailable")
+        return (0, "")
+
+    gate = _gate_with(cfg, _run, tar=tar)
     async with gate._client:
         res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
     assert not res.passed and "never healthy" in res.detail
