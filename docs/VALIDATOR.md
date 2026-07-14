@@ -182,6 +182,9 @@ check and identity writes.
 Add the shared `WANDB_API_KEY` provided by Ditto to `.env` (never commit it), or
 set `WANDB_MODE=disabled` to opt out of aggregate telemetry.
 
+The worker also posts a signed public heartbeat with its software identity and
+current phase. Long benchmark runs refresh `running_benchmark` every two minutes.
+
 ## Development
 
 For local code work outside Compose:

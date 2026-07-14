@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -255,8 +256,17 @@ class TestRunOnce:
 
         n = await worker.run_once()
         assert n == 1
-        platform.submit_heartbeat.assert_awaited_once()
-        heartbeat = platform.submit_heartbeat.await_args.args[0]
+        heartbeats = [
+            call.args[0] for call in platform.submit_heartbeat.await_args_list
+        ]
+        assert [heartbeat.state for heartbeat in heartbeats] == [
+            "polling",
+            "running_benchmark",
+            "polling",
+            "updating_weights",
+            "idle",
+        ]
+        heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
         assert heartbeat.protocol_version == 1
         assert len(heartbeat.code_digest) == 64
@@ -281,6 +291,33 @@ class TestRunOnce:
 
         assert await worker.run_once(set_weights=False) == 0
         platform.request_job.assert_awaited_once()
+
+    async def test_long_benchmark_refreshes_running_heartbeat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(worker_mod, "_ACTIVE_HEARTBEAT_SECONDS", 0.001)
+        platform = _platform_with_ledger(jobs=[_job("5MinerA" + "x" * 41)], ledger=[])
+
+        async def slow_score(**_: object) -> ScoreReport:
+            await asyncio.sleep(0.005)
+            return _report("run", 0.9)
+
+        dittobench = MagicMock(score_tarball=AsyncMock(side_effect=slow_score))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        states = [
+            call.args[0].state for call in platform.submit_heartbeat.await_args_list
+        ]
+        assert states.count("running_benchmark") >= 2
+        assert states[-1] == "idle"
 
     async def test_forwards_tarball_sha_to_scorer(self) -> None:
         # The registered digest must be forwarded so dittobench re-verifies the

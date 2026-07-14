@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -40,6 +40,7 @@ async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
         platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
         assert await platform.request_job() is None
 
+
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 
 
@@ -56,6 +57,7 @@ def _request() -> ValidatorHeartbeatRequest:
         software_version="0.1.0",
         protocol_version=1,
         code_digest="ab" * 32,
+        state="running_benchmark",
         timestamp=1_752_443_200,
         signature="cd" * 64,
     )
@@ -74,7 +76,9 @@ async def test_submit_heartbeat_posts_signed_contract() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        response = await PlatformClient(_config(), http).submit_heartbeat(_request())
+        response = await PlatformClient(_config(), http, MagicMock()).submit_heartbeat(
+            _request()
+        )
 
     assert response.accepted is True
     assert captured["url"] == "https://platform.example/api/v1/validator/heartbeat"
@@ -88,4 +92,6 @@ async def test_submit_heartbeat_surfaces_rejection() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(PlatformError, match=r"heartbeat rejected \(401\)"):
-            await PlatformClient(_config(), http).submit_heartbeat(_request())
+            await PlatformClient(_config(), http, MagicMock()).submit_heartbeat(
+                _request()
+            )

@@ -132,13 +132,14 @@ def heartbeat_signing_message(
     software_version: str,
     protocol_version: int,
     code_digest: str,
+    state: str,
     timestamp: int,
 ) -> bytes:
-    """Build the canonical v1 software-heartbeat payload."""
+    """Build the canonical v1 software and runtime heartbeat payload."""
     return (
         "ditto-validator-heartbeat:v1:"
         f"{validator_hotkey}:{software_version}:{protocol_version}:"
-        f"{code_digest}:{timestamp}"
+        f"{code_digest}:{state}:{timestamp}"
     ).encode()
 
 
@@ -149,6 +150,7 @@ def sign_heartbeat(
     software_version: str,
     protocol_version: int,
     code_digest: str,
+    state: str,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -157,6 +159,7 @@ def sign_heartbeat(
         software_version=software_version,
         protocol_version=protocol_version,
         code_digest=code_digest,
+        state=state,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

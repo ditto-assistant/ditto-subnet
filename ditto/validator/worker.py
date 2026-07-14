@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from ditto.api_models.validator import ValidatorHeartbeatRequest
+from ditto.api_models.validator import ValidatorHeartbeatRequest, ValidatorRuntimeState
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
 from ditto.validator.crn import confirmation_seeds
@@ -80,6 +80,10 @@ _BLOCK_SECONDS = 12.0
 # submit through (subtensor's ``SettingWeightsTooFast`` error, SDK / Pylon
 # message variants).
 _RATE_LIMIT_MARKERS = ("rate limit", "ratelimit", "too fast", "toofast")
+
+# Keep a validator visibly online throughout a long full benchmark. This is a
+# protocol cadence, not an operator tuning knob.
+_ACTIVE_HEARTBEAT_SECONDS = 120.0
 
 
 def _is_rate_limit_error(error: Exception) -> bool:
@@ -142,6 +146,7 @@ class ValidatorWorker:
         # Starts at the baseline so a just-booted validator that has not scored
         # anything yet never mistakes the whole ledger for stale.
         self._current_bench_version = DEFAULT_BENCH_VERSION
+        self._last_heartbeat_timestamp = 0
 
     async def run_once(self, *, set_weights: bool = True) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
@@ -161,7 +166,7 @@ class ValidatorWorker:
         cadence.
         """
         started = time.monotonic()
-        await self._report_heartbeat()
+        await self._report_heartbeat("polling")
         scored: list[ScoredAgentStat] = []
         failed = 0
         queue_depth = 0
@@ -196,6 +201,7 @@ class ValidatorWorker:
 
         outcome = _WeightOutcome()
         if set_weights:
+            await self._report_heartbeat("updating_weights")
             outcome = await self._update_weights()
         self._telemetry.record_sweep(
             SweepStats(
@@ -208,19 +214,22 @@ class ValidatorWorker:
                 weights_submitted=outcome.submitted,
             )
         )
+        await self._report_heartbeat("idle")
         return queue_depth
 
-    async def _report_heartbeat(self) -> None:
-        """Best-effort signed software report; never gate scoring or weights."""
+    async def _report_heartbeat(self, state: ValidatorRuntimeState) -> None:
+        """Best-effort signed build + runtime report; never gate validator work."""
         try:
             build = validator_build_info()
-            timestamp = int(time.time())
+            timestamp = max(int(time.time()), self._last_heartbeat_timestamp + 1)
+            self._last_heartbeat_timestamp = timestamp
             signature = sign_heartbeat(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
                 software_version=build.software_version,
                 protocol_version=build.protocol_version,
                 code_digest=build.code_digest,
+                state=state,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -228,12 +237,21 @@ class ValidatorWorker:
                 software_version=build.software_version,
                 protocol_version=build.protocol_version,
                 code_digest=build.code_digest,
+                state=state,
                 timestamp=timestamp,
                 signature=signature,
             )
             await self._platform.submit_heartbeat(request)
         except Exception as e:  # noqa: BLE001 - observability must never gate work
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
+
+    async def _heartbeat_while_active(self, stop: asyncio.Event) -> None:
+        """Refresh ``running_benchmark`` until the current scorer call ends."""
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=_ACTIVE_HEARTBEAT_SECONDS)
+            except TimeoutError:
+                await self._report_heartbeat("running_benchmark")
 
     async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.
@@ -610,13 +628,23 @@ class ValidatorWorker:
                 f"sha256 mismatch for agent {agent_id}: "
                 f"expected={expected_sha256} artifact={artifact.sha256}"
             )
-        report = await self._dittobench.score_tarball(
-            tarball_url=artifact.download_url,
-            tarball_sha256=artifact.sha256,
-            seed=seed,
-            dataset_sha256=dataset_sha256,
-            run_size=run_size,
+        await self._report_heartbeat("running_benchmark")
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_while_active(heartbeat_stop)
         )
+        try:
+            report = await self._dittobench.score_tarball(
+                tarball_url=artifact.download_url,
+                tarball_sha256=artifact.sha256,
+                seed=seed,
+                dataset_sha256=dataset_sha256,
+                run_size=run_size,
+            )
+        finally:
+            heartbeat_stop.set()
+            await heartbeat_task
+            await self._report_heartbeat("polling")
         details = getattr(self._dittobench, "last_details", None)
         bench_version = (
             details.get("bench_version") if isinstance(details, dict) else None
@@ -772,6 +800,7 @@ class ValidatorWorker:
                 )
             except Exception:  # noqa: BLE001 - a sweep must never kill the loop
                 logger.exception("sweep failed; retrying next sweep")
+                await self._report_heartbeat("error")
             await self._sleep_or_stop(stop, self._config.sweep_seconds)
 
     async def _chain_min_epoch_seconds(self) -> float:

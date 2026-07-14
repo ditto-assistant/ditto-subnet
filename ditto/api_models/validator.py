@@ -22,7 +22,7 @@ through this endpoint unchanged.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -35,6 +35,14 @@ from ditto.api_models.upload import (
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
+
+ValidatorRuntimeState = Literal[
+    "polling",
+    "running_benchmark",
+    "updating_weights",
+    "idle",
+    "error",
+]
 
 
 class JobRequest(BaseModel):
@@ -115,7 +123,7 @@ class JobResponse(BaseModel):
 
 
 class ValidatorHeartbeatRequest(BaseModel):
-    """Signed proof of the validator build currently serving a hotkey."""
+    """Signed proof of the validator build and its current runtime state."""
 
     validator_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Reporting validator hotkey.")
@@ -136,6 +144,10 @@ class ValidatorHeartbeatRequest(BaseModel):
             pattern=_CODE_DIGEST_PATTERN,
             description="SHA-256 of the installed validator Python source.",
         ),
+    ]
+    state: Annotated[
+        ValidatorRuntimeState,
+        Field(description="Current validator worker phase."),
     ]
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
