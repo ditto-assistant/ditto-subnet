@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.3.0 (2026-07-14)
+
+### Features
+
+- Define leased screening attempts
+  ([#113](https://github.com/ditto-assistant/ditto-subnet/pull/113),
+  [`92045cb`](https://github.com/ditto-assistant/ditto-subnet/commit/92045cbc7afb88d3ce29a6f6c1ef09196094c780))
+
+
 ## v0.2.2 (2026-07-14)
 
 ### Bug Fixes
