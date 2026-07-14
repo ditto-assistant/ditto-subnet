@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.5.0 (2026-07-14)
+
+### Features
+
+- Report privacy-safe fleet system health
+  ([#119](https://github.com/ditto-assistant/ditto-subnet/pull/119),
+  [`ec80571`](https://github.com/ditto-assistant/ditto-subnet/commit/ec8057163c5b1f2ad87717234c124f2383ec1e52))
+
+
 ## v0.4.3 (2026-07-14)
 
 ### Bug Fixes
