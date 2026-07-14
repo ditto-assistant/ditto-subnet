@@ -86,7 +86,7 @@ services:
   # at host.docker.internal:11435.
   model-relay:
     build:
-      context: https://github.com/ditto-assistant/dittobench-api.git#8406d7290dfaef19f0f39b173e9227972c415b62
+      context: https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=63243b62744d636e704650cfec21837878604e49
       target: relay
     restart: unless-stopped
     environment:
@@ -101,7 +101,7 @@ services:
   dittobench-api:
     build:
       # Pin the scorer and relay to one reviewed dittobench-api revision.
-      context: https://github.com/ditto-assistant/dittobench-api.git#8406d7290dfaef19f0f39b173e9227972c415b62
+      context: https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=63243b62744d636e704650cfec21837878604e49
       target: sandbox
     restart: unless-stopped
     network_mode: service:sandbox-docker
