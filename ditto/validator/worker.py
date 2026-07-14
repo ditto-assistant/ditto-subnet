@@ -210,7 +210,20 @@ class ValidatorWorker:
         # or this sweep's cap is hit. Each ticket pins the dataset all three
         # validators score, so scores stay comparable for the median.
         while queue_depth < self._config.queue_limit:
-            job = await self._platform.request_job()
+            try:
+                job = await self._platform.request_job()
+            except PlatformError as e:
+                # Scoring-plane availability must not gate the independent
+                # weight path.  In particular, a platform validation/config
+                # error can otherwise abort every due sweep before the durable
+                # ledger (or its safe empty-ledger burn vector) reaches Pylon.
+                logger.warning(
+                    "job request failed; ending scoring sweep so weights can "
+                    "proceed: %s",
+                    e,
+                )
+                failed += 1
+                break
             if job is None:
                 break  # 204: no ticket available
             queue_depth += 1
