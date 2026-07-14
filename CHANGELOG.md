@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.4.2 (2026-07-14)
+
+### Bug Fixes
+
+- Require screening policy handshake
+  ([#116](https://github.com/ditto-assistant/ditto-subnet/pull/116),
+  [`2ee244b`](https://github.com/ditto-assistant/ditto-subnet/commit/2ee244ba6edce0880907ab27983cdf75a4c8970b))
+
+
 ## v0.4.1 (2026-07-14)
 
 ### Bug Fixes
