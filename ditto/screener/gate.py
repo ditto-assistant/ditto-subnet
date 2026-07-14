@@ -10,8 +10,8 @@ Flow for one agent:
    ``max_tarball_bytes``, and re-check its SHA-256 against the queue value (the
    URL is presigned but the bytes are still attacker-controlled).
 2. **Contract + policy check.** Reject unsafe archive entries, require a root
-   Rust crate with a direct ``ditto-harness`` dependency, and detect known
-   benchmark-private answer logic before any build is attempted.
+   Rust crate, and detect known benchmark-private answer logic before any build
+   is attempted. The crate may use, fork, or replace ``ditto-harness``.
 3. **Build.** ``docker build`` reads the *tarball itself* as the build context on
    stdin: Docker unpacks it inside its own build sandbox, so the screener never
    re-implements safe tar extraction. BuildKit is used with an optional
@@ -224,25 +224,6 @@ class BuildGate:
                     return "contract failed: Cargo.toml is invalid"
                 if not isinstance(manifest.get("package"), dict):
                     return "contract failed: Cargo.toml has no package"
-                dependencies = manifest.get("dependencies", {})
-                harness = (
-                    dependencies.get("ditto-harness")
-                    if isinstance(dependencies, dict)
-                    else None
-                )
-                if harness is None and isinstance(dependencies, dict):
-                    harness = next(
-                        (
-                            value
-                            for value in dependencies.values()
-                            if isinstance(value, dict)
-                            and value.get("package") == "ditto-harness"
-                        ),
-                        None,
-                    )
-                if harness is None:
-                    return "contract failed: ditto-harness must be a direct dependency"
-
                 matched: set[bytes] = set()
                 scanned = 0
                 for name, member in members.items():

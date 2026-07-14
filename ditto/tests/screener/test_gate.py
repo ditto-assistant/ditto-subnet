@@ -37,10 +37,7 @@ def _make_tar(files: dict[str, bytes]) -> bytes:
 def _valid_tar(**overrides: bytes) -> bytes:
     files = {
         "Dockerfile": b"FROM scratch\n",
-        "Cargo.toml": (
-            b'[package]\nname = "agent"\nversion = "0.1.0"\n'
-            b'[dependencies]\nditto-harness = { git = "https://example.test" }\n'
-        ),
+        "Cargo.toml": (b'[package]\nname = "agent"\nversion = "0.1.0"\n'),
         "src/main.rs": b"fn main() {}\n",
     }
     files.update(overrides)
@@ -240,6 +237,18 @@ async def test_python_only_solver_fails_contract_before_build(
         res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
     assert not res.passed and "Cargo.toml" in res.detail
     assert "build" not in calls
+
+
+async def test_independent_rust_implementation_is_allowed(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """Miners may fork or replace ditto-harness; dependency choice is not policy."""
+    tar = _valid_tar()
+    sha = hashlib.sha256(tar).hexdigest()
+    gate = _gate_with(make_config(), _ok_run(), tar=tar)
+    async with gate._client:
+        res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
+    assert res.passed
 
 
 async def test_benchmark_specific_answer_logic_fails_policy(
