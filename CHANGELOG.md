@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.6.2 (2026-07-14)
+
+### Bug Fixes
+
+- Extend validator benchmark timeout to 75 minutes
+  ([#125](https://github.com/ditto-assistant/ditto-subnet/pull/125),
+  [`22121f7`](https://github.com/ditto-assistant/ditto-subnet/commit/22121f776741b6aaab4d9f189d9daef9520c5f93))
+
+
 ## v0.6.1 (2026-07-14)
 
 ### Bug Fixes
