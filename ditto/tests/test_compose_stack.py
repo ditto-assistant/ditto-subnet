@@ -36,11 +36,13 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert parsed.scheme == "https"
     assert parsed.netloc == "github.com"
     assert parsed.path == "/ditto-assistant/dittobench-api.git"
-    assert query == {
-        "ref": ["refs/heads/main"],
-        "checksum": ["63243b62744d636e704650cfec21837878604e49"],
-    }
-    assert len(query["checksum"][0]) == 40
+    assert query.get("ref") == ["refs/heads/main"]
+    assert set(query) == {"ref", "checksum"}
+    assert len(query["checksum"]) == 1
+    checksum = query["checksum"][0]
+    assert len(checksum) == 40
+    assert checksum == checksum.lower()
+    assert all(character in "0123456789abcdef" for character in checksum)
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]

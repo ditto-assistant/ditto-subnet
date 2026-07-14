@@ -74,11 +74,12 @@ if [ "$origin" != "$repository" ]; then
 fi
 
 if ! git -C "$checkout" cat-file -e "$checksum^{commit}" 2>/dev/null; then
-  printf 'fetching pinned dittobench-api context %s\n' "$checksum" >&2
-  git -C "$checkout" fetch --quiet --depth 1 origin "$ref"
+  printf 'fetching pinned dittobench-api context %s (%s)\n' \
+    "$checksum" "$ref" >&2
+  git -C "$checkout" fetch --quiet --depth 1 origin "$checksum"
   resolved="$(git -C "$checkout" rev-parse FETCH_HEAD)"
   if [ "$resolved" != "$checksum" ]; then
-    die "dittobench-api $ref resolved to $resolved, expected $checksum"
+    die "dittobench-api fetch resolved to $resolved, expected $checksum"
   fi
 fi
 
