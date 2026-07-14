@@ -143,6 +143,21 @@ class PaymentSubmissionError(MinerCliError):
     pass
 
 
+class PaymentSignerMismatchError(PaymentSubmissionError):
+    """Raised before payment when the selected coldkey does not own the hotkey.
+
+    This can happen when:
+    - A hotkey file was copied or placed under a different coldkey wallet
+      directory. The filesystem layout does not establish on-chain ownership.
+    - The hotkey's owner changed on chain but the miner still selects the old
+      coldkey wallet when uploading.
+
+    No payment has been submitted when this error is raised.
+    """
+
+    pass
+
+
 class PaymentFinalizationTimeoutError(MinerCliError):
     """Raised when an accepted extrinsic does not finalize in time.
 

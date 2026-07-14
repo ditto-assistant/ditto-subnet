@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from ditto.miner_cli.errors import (
     PaymentFinalizationTimeoutError,
+    PaymentSignerMismatchError,
     PaymentSubmissionError,
 )
 from ditto.miner_cli.models import PaymentReceipt
@@ -25,6 +26,65 @@ if TYPE_CHECKING:
     import bittensor
 
 logger = logging.getLogger(__name__)
+
+
+def preflight_payment_signer(
+    *,
+    live_wallet: bittensor.Wallet,
+    hotkey_ss58: str,
+    subtensor_network: str,
+    chain_endpoint: str | None = None,
+) -> None:
+    """Verify the payment signer owns the claimed hotkey on chain.
+
+    Wallet directory layout is not evidence of ownership: a hotkey file can
+    be stored beneath any named coldkey wallet. The upload API checks the
+    authoritative ``SubtensorModule.Owner`` entry at the payment block, so the
+    CLI performs the same check before showing the payment confirmation.
+
+    Raises:
+        PaymentSignerMismatchError: The selected coldkey is not the hotkey's
+            current on-chain owner, or the hotkey has no on-chain owner.
+        PaymentSubmissionError: The signer address or on-chain owner could not
+            be resolved. The check fails closed so no payment is risked.
+    """
+    chain_target = chain_endpoint or subtensor_network
+
+    try:
+        signer_ss58 = str(live_wallet.coldkeypub.ss58_address)
+    except Exception as e:
+        raise PaymentSubmissionError(
+            f"could not read the selected wallet's coldkey address: {e}; "
+            "refusing payment because signer ownership could not be verified"
+        ) from e
+
+    try:
+        subtensor = _connect_subtensor(chain_target)
+        owner_ss58 = subtensor.get_hotkey_owner(hotkey_ss58)
+    except PaymentSubmissionError:
+        raise
+    except Exception as e:
+        raise PaymentSubmissionError(
+            f"could not verify on-chain owner for hotkey {hotkey_ss58} "
+            f"on subtensor {chain_target!r}: {e}; refusing payment"
+        ) from e
+
+    if owner_ss58 is None:
+        raise PaymentSignerMismatchError(
+            f"hotkey {hotkey_ss58} has no on-chain owner on subtensor "
+            f"{chain_target!r}; refusing payment before funds are sent"
+        )
+
+    if signer_ss58 != str(owner_ss58):
+        raise PaymentSignerMismatchError(
+            "payment signer mismatch detected before payment:\n"
+            f"  hotkey:                {hotkey_ss58}\n"
+            f"  on-chain owner:         {owner_ss58}\n"
+            f"  selected wallet signer: {signer_ss58}\n"
+            "The wallet folder association does not establish ownership. "
+            "Select the coldkey that owns this hotkey on chain. "
+            "No funds were sent."
+        )
 
 
 def submit_eval_payment(
@@ -81,12 +141,7 @@ def submit_eval_payment(
     # explicit ``chain_endpoint``, pass the URL directly; otherwise
     # use the network identifier from the locked-pair lookup.
     chain_target = chain_endpoint or subtensor_network
-    try:
-        subtensor = bittensor.Subtensor(network=chain_target)
-    except Exception as e:
-        raise PaymentSubmissionError(
-            f"could not connect to subtensor {chain_target!r}: {e}"
-        ) from e
+    subtensor = _connect_subtensor(chain_target)
 
     try:
         response = subtensor.transfer(
@@ -143,6 +198,18 @@ def submit_eval_payment(
         block_number=block_number,
         extrinsic_index=extrinsic_index,
     )
+
+
+def _connect_subtensor(chain_target: str) -> bittensor.Subtensor:
+    """Construct a Subtensor client and translate connection failures."""
+    import bittensor
+
+    try:
+        return bittensor.Subtensor(network=chain_target)
+    except Exception as e:
+        raise PaymentSubmissionError(
+            f"could not connect to subtensor {chain_target!r}: {e}"
+        ) from e
 
 
 def _normalize_block_hash(raw: str | None) -> str:

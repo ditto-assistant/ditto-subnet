@@ -26,10 +26,96 @@ import pytest
 
 from ditto.miner_cli.errors import (
     PaymentFinalizationTimeoutError,
+    PaymentSignerMismatchError,
     PaymentSubmissionError,
 )
 from ditto.miner_cli.models import PaymentReceipt
-from ditto.miner_cli.payment import submit_eval_payment
+from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
+
+
+class TestPreflightPaymentSigner:
+    HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+    COLDKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+    OTHER_COLDKEY = "5FCfAonRZgTFrTd9HREEyeJjDpT397KMzizE6T3DvebLFE7n"
+
+    def _wallet(self, signer: str = COLDKEY) -> MagicMock:
+        wallet = MagicMock()
+        wallet.coldkeypub.ss58_address = signer
+        return wallet
+
+    def test_matching_on_chain_owner_passes(self, monkeypatch) -> None:
+        subtensor = MagicMock()
+        subtensor.get_hotkey_owner.return_value = self.COLDKEY
+        ctor = MagicMock(return_value=subtensor)
+        monkeypatch.setattr(bittensor, "Subtensor", ctor)
+
+        preflight_payment_signer(
+            live_wallet=self._wallet(),
+            hotkey_ss58=self.HOTKEY,
+            subtensor_network="finney",
+        )
+
+        ctor.assert_called_once_with(network="finney")
+        subtensor.get_hotkey_owner.assert_called_once_with(self.HOTKEY)
+
+    def test_mismatch_aborts_with_both_addresses_and_no_funds_message(
+        self, monkeypatch
+    ) -> None:
+        subtensor = MagicMock()
+        subtensor.get_hotkey_owner.return_value = self.COLDKEY
+        monkeypatch.setattr(bittensor, "Subtensor", MagicMock(return_value=subtensor))
+
+        with pytest.raises(PaymentSignerMismatchError) as exc:
+            preflight_payment_signer(
+                live_wallet=self._wallet(self.OTHER_COLDKEY),
+                hotkey_ss58=self.HOTKEY,
+                subtensor_network="finney",
+            )
+
+        message = str(exc.value)
+        assert self.COLDKEY in message
+        assert self.OTHER_COLDKEY in message
+        assert "folder association does not establish ownership" in message
+        assert "No funds were sent" in message
+
+    def test_unregistered_hotkey_fails_closed(self, monkeypatch) -> None:
+        subtensor = MagicMock()
+        subtensor.get_hotkey_owner.return_value = None
+        monkeypatch.setattr(bittensor, "Subtensor", MagicMock(return_value=subtensor))
+
+        with pytest.raises(PaymentSignerMismatchError, match="no on-chain owner"):
+            preflight_payment_signer(
+                live_wallet=self._wallet(),
+                hotkey_ss58=self.HOTKEY,
+                subtensor_network="finney",
+            )
+
+    def test_owner_lookup_failure_fails_closed(self, monkeypatch) -> None:
+        subtensor = MagicMock()
+        subtensor.get_hotkey_owner.side_effect = RuntimeError("rpc unavailable")
+        monkeypatch.setattr(bittensor, "Subtensor", MagicMock(return_value=subtensor))
+
+        with pytest.raises(PaymentSubmissionError, match="refusing payment"):
+            preflight_payment_signer(
+                live_wallet=self._wallet(),
+                hotkey_ss58=self.HOTKEY,
+                subtensor_network="finney",
+            )
+
+    def test_chain_endpoint_is_used_for_owner_lookup(self, monkeypatch) -> None:
+        subtensor = MagicMock()
+        subtensor.get_hotkey_owner.return_value = self.COLDKEY
+        ctor = MagicMock(return_value=subtensor)
+        monkeypatch.setattr(bittensor, "Subtensor", ctor)
+
+        preflight_payment_signer(
+            live_wallet=self._wallet(),
+            hotkey_ss58=self.HOTKEY,
+            subtensor_network="local",
+            chain_endpoint="ws://example.org:9944",
+        )
+
+        ctor.assert_called_once_with(network="ws://example.org:9944")
 
 
 def make_extrinsic_receipt(
