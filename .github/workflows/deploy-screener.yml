@@ -1,0 +1,47 @@
+name: Deploy production screener
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production-screener
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Verify deploy configuration
+        env:
+          WIF: ${{ secrets.GCP_WIF_PROVIDER }}
+          SA: ${{ secrets.GCP_PLATFORM_DEPLOY_SA }}
+        run: |
+          : "${WIF:?GCP_WIF_PROVIDER repo secret is not set}"
+          : "${SA:?GCP_PLATFORM_DEPLOY_SA repo secret is not set}"
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_PLATFORM_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy and verify
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          gcloud compute ssh ditto-screener-prod \
+            --project ditto-app-dev \
+            --zone us-central1-a \
+            --tunnel-through-iap \
+            --quiet \
+            --command "sudo SCREENER_EXPECTED_SHA=$DEPLOY_SHA /opt/ditto/screener/src/scripts/update-screener.sh"
