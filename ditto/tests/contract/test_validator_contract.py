@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.tests.contract._schema import SHARED_MODELS, compute_contract
 
 _GOLDEN = Path(__file__).parent / "validator_contract.json"
@@ -34,3 +35,14 @@ def test_validator_models_match_platform_contract() -> None:
         f"validator_contract.json from ditto-platform via "
         f"scripts/gen_validator_contract.py and commit it with the change."
     )
+
+
+def test_public_agent_status_matches_platform_generated_contract() -> None:
+    """Keep the shared lifecycle enum aligned with the platform contract."""
+    golden = json.loads(_GOLDEN.read_text())
+    definitions = {
+        tuple(schema["$defs"]["AgentStatus"]["enum"])
+        for schema in golden.values()
+        if "AgentStatus" in schema.get("$defs", {})
+    }
+    assert definitions == {tuple(status.value for status in AgentStatus)}

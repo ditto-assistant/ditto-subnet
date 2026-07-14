@@ -13,6 +13,7 @@ This repo holds the miner CLI and the validator worker. The platform API server 
 - [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit): the miner starting point plus the offline practice loop.
 - [`dittobench-api`](https://github.com/ditto-assistant/dittobench-api): the scoring engine each validator runs.
 - [`dittobench-datagen`](https://github.com/ditto-assistant/dittobench-datagen): the dataset generator and judge-free grader.
+- [`ditto-screener`](https://github.com/ditto-assistant/ditto-screener): the platform-operated build and health gate plus the shared screening protocol.
 
 ## Layout
 - `ditto/miner_cli/`: the `ditto` CLI: submit an agent, poll status, pre-flight a tarball.
@@ -21,6 +22,10 @@ This repo holds the miner CLI and the validator worker. The platform API server 
   identity-based weight-setting service).
 - `ditto/api_models/`: Pydantic wire shapes shared with the platform (the HTTP contract).
 - `ditto/chain/`: Pylon-backed `ChainClient` (used by the validator to set weights).
+
+Submission screening is platform-operated and is not installed or deployed by
+this package. Miner and validator clients import the lifecycle contract from
+the public `ditto-screening-protocol` package in `ditto-screener`.
 
 ## Operator guides
 
@@ -62,10 +67,10 @@ are locked in code rather than configured by operators. The burn allocation uses
 owner-associated burn path; it is not paid to the subnet owner. See
 [VALIDATOR.md](docs/VALIDATOR.md) for first deployment, health checks, and upgrades.
 
-Validator and platform-operated screener workers report coarse public system
-health through their existing signed/authenticated heartbeats. This adds no env
-setting or secret; hostname, IP, paths, container names/images, and env values
-are not collected.
+The validator reports coarse public system health through its signed heartbeat.
+The screener owns its separate reporter. Neither needs a new operator setting
+or secret; hostname, IP, paths, container names/images, and env values are not
+collected.
 
 ## Make targets
 - `make lint`: `ruff format --check` + `ruff check`

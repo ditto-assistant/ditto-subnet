@@ -8,7 +8,6 @@ COPY --from=ghcr.io/astral-sh/uv@sha256:0f36cb9361a3346885ca3677e3767016687b5a17
 
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./
-COPY packages/ditto-screening-protocol ./packages/ditto-screening-protocol
 COPY ditto ./ditto
 RUN uv sync --frozen --no-dev --extra telemetry
 
