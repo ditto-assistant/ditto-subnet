@@ -9,14 +9,15 @@ signature. It never touches the platform DB directly.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import TYPE_CHECKING
-from uuid import UUID
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+from uuid import UUID, uuid4
 
 import httpx
 
 from ditto.api_models.validator import (
     ArtifactResponse,
+    JobRequest,
     JobResponse,
     LedgerResponse,
     ScoreReport,
@@ -24,6 +25,7 @@ from ditto.api_models.validator import (
     SubmitScoreResponse,
 )
 from ditto.validator.errors import PlatformError
+from ditto.validator.signing import sign_job_request
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -38,9 +40,12 @@ _SCORING_PREFIX = "/api/v1/scoring"
 class PlatformClient:
     """HTTP client for one platform base URL."""
 
-    def __init__(self, config: ValidatorConfig, client: httpx.AsyncClient) -> None:
+    def __init__(
+        self, config: ValidatorConfig, client: httpx.AsyncClient, keypair: Any
+    ) -> None:
         self._config = config
         self._client = client
+        self._keypair = keypair
         self._base = config.platform_api_url.rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
 
@@ -53,8 +58,23 @@ class PlatformClient:
         and the ``deadline`` to score by.
         """
         url = f"{self._base}{_PREFIX}/job"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = JobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_job_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
         try:
-            resp = await self._client.post(url, headers=self._headers)
+            resp = await self._client.post(
+                url, headers=self._headers, json=payload.model_dump(mode="json")
+            )
         except httpx.HTTPError as e:
             raise PlatformError(f"job request failed: {e}") from e
         if resp.status_code == 204:

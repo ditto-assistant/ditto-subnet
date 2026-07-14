@@ -18,12 +18,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from ditto.validator.errors import ValidatorConfigError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from ditto.validator.config import ValidatorConfig
 
 
@@ -98,4 +97,30 @@ def sign_score(
         seed=seed,
     )
     signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def job_signing_message(
+    *, validator_hotkey: str, nonce: UUID, requested_at: datetime
+) -> bytes:
+    """Build canonical bytes proving ownership for one job claim."""
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return f"validator-job:{validator_hotkey}:{nonce}:{requested}".encode()
+
+
+def sign_job_request(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Return the sr25519 signature for a fresh, one-time job claim."""
+    signature: bytes = keypair.sign(
+        job_signing_message(
+            validator_hotkey=validator_hotkey,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
     return signature.hex()
