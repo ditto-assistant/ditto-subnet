@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.4.0 (2026-07-14)
+
+### Features
+
+- Report active screening and scoring work
+  ([#114](https://github.com/ditto-assistant/ditto-subnet/pull/114),
+  [`c22bc80`](https://github.com/ditto-assistant/ditto-subnet/commit/c22bc8024c3fb2d3589a19828e4ce36b1b849990))
+
+
 ## v0.3.0 (2026-07-14)
 
 ### Features
