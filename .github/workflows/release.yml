@@ -21,6 +21,7 @@ jobs:
       - name: Check out the merged commit
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           ref: ${{ github.ref_name }}
           token: ${{ secrets.RELEASE_TOKEN }}
 
@@ -33,7 +34,10 @@ jobs:
       - name: Bootstrap the existing v0.1.0 baseline
         run: |
           if ! git tag --list 'v[0-9]*' | grep -q .; then
-            git tag --annotate v0.1.0 "${{ github.event.before }}" \
+            release_setup_commit=$(git log --diff-filter=A --format=%H -- \
+              .github/workflows/release.yml | tail -1)
+            baseline_commit=$(git rev-parse "${release_setup_commit}^")
+            git tag --annotate v0.1.0 "$baseline_commit" \
               --message "Ditto Subnet v0.1.0"
             git push origin v0.1.0
           fi
