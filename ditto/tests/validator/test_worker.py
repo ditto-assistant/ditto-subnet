@@ -903,6 +903,43 @@ class TestRunOnce:
         assert await worker.run_once() == 0
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
 
+    async def test_job_poll_failure_still_submits_safe_idle_weights(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=PlatformError("invalid request"))
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        assert await worker.run_once() == 0
+        chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
+
+    async def test_job_poll_failure_preserves_accepted_score_weights(self) -> None:
+        ledger = [_entry("5Champion" + "x" * 39, 0.85)]
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
+        platform.request_job = AsyncMock(side_effect=PlatformError("unavailable"))
+        chain = MagicMock()
+        chain.put_weights = AsyncMock()
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        assert await worker.run_once() == 0
+        chain.put_weights.assert_awaited_once_with(
+            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
+        )
+
     async def test_stale_ledger_is_still_folded_with_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
