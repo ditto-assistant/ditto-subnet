@@ -17,6 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      released: ${{ steps.semantic-release.outputs.released || 'false' }}
+      version: ${{ steps.semantic-release.outputs.version }}
+      tag: ${{ steps.semantic-release.outputs.tag }}
+      commit_sha: ${{ steps.semantic-release.outputs.commit_sha }}
     steps:
       - name: Check out the merged commit
         uses: actions/checkout@v4
@@ -48,8 +53,88 @@ jobs:
           fi
 
       - name: Version, tag, and create the GitHub release
+        id: semantic-release
         uses: python-semantic-release/python-semantic-release@8f4d8c4e3e4fcd2b8df16444b148aa49920cc4d3
         with:
           github_token: ${{ secrets.RELEASE_TOKEN }}
           git_committer_name: github-actions
           git_committer_email: actions@users.noreply.github.com
+
+  publish-validator-image:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/ditto-assistant/ditto-subnet-validator
+      COMPATIBILITY_EPOCH: "1"
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+
+      # Release commits use [skip ci], so repeat the complete code checks on the
+      # exact source that will be published instead of trusting the parent run.
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Verify the exact release source
+        run: |
+          uv sync --group dev
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy ditto/
+          uv run pytest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and smoke-test the release image
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          docker buildx build --load --platform linux/amd64 \
+            --build-arg "DITTO_VERSION=$VERSION" \
+            --build-arg "DITTO_REVISION=$REVISION" \
+            --build-arg "VALIDATOR_COMPATIBILITY_EPOCH=$COMPATIBILITY_EPOCH" \
+            --build-arg "VALIDATOR_HEARTBEAT_PROTOCOL=4" \
+            --tag ditto-validator-release-smoke:local .
+          docker run --rm --entrypoint uv ditto-validator-release-smoke:local \
+            run --no-sync python -c \
+            'from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH as e; assert e == 1'
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' ditto-validator-release-smoke:local)" = "$COMPATIBILITY_EPOCH"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' ditto-validator-release-smoke:local)" = "4"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' ditto-validator-release-smoke:local)" = "$REVISION"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable and compatibility-scoped tags
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            DITTO_VERSION=${{ needs.release.outputs.version }}
+            DITTO_REVISION=${{ needs.release.outputs.commit_sha }}
+            VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
+            VALIDATOR_HEARTBEAT_PROTOCOL=4
+          tags: |
+            ${{ env.IMAGE }}:${{ needs.release.outputs.tag }}
+            ${{ env.IMAGE }}:sha-${{ needs.release.outputs.commit_sha }}
+            ${{ env.IMAGE }}:compat-${{ env.COMPATIBILITY_EPOCH }}

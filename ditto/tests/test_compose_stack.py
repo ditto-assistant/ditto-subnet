@@ -5,9 +5,13 @@ from urllib.parse import parse_qs, urlsplit
 
 import yaml
 
+from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
+
 COMPOSE_PATH = Path(__file__).parents[2] / "docker-compose.yml"
 COMPOSE_WRAPPER_PATH = Path(__file__).parents[2] / "scripts/validator-compose.sh"
 SANDBOX_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile.sandbox-docker"
+DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
+RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 
 
 def test_ollama_is_pinned_with_functional_embedding_healthcheck() -> None:
@@ -108,3 +112,68 @@ def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
     assert wallet_mount["target"].endswith(
         "/wallets/${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}"
     )
+
+
+def test_only_validator_is_an_explicit_auto_update_target() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    services = compose["services"]
+    targeted = [
+        name
+        for name, service in services.items()
+        if service.get("labels", {}).get("io.heyditto.validator.auto-update-target")
+        == "true"
+    ]
+
+    assert targeted == ["ditto-subnet"]
+    validator = services["ditto-subnet"]
+    assert validator["image"].endswith("ditto-subnet-validator:local}")
+    assert validator["pull_policy"] == "build"
+    assert validator["build"]["context"] == "."
+    assert validator["build"]["args"]["VALIDATOR_COMPATIBILITY_EPOCH"] == "1"
+    assert int(validator["build"]["args"]["VALIDATOR_HEARTBEAT_PROTOCOL"]) == (
+        HEARTBEAT_PROTOCOL_VERSION
+    )
+    assert validator["environment"]["VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH"] == "1"
+    assert validator["stop_grace_period"] == "80m"
+    assert validator["environment"]["VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS"] == "4500"
+
+    # These services are deliberately outside updater scope and retain their
+    # existing deployment boundaries/pins.
+    for name in (
+        "pylon",
+        "sandbox-docker",
+        "ollama",
+        "model-relay",
+        "dittobench-api",
+    ):
+        assert "io.heyditto.validator.auto-update-target" not in services[name].get(
+            "labels", {}
+        )
+
+
+def test_validator_image_and_release_channel_share_compatibility_metadata() -> None:
+    dockerfile = DOCKERFILE_PATH.read_text()
+    workflow = RELEASE_WORKFLOW_PATH.read_text()
+
+    assert "ARG VALIDATOR_COMPATIBILITY_EPOCH=1" in dockerfile
+    assert (
+        f"ARG VALIDATOR_HEARTBEAT_PROTOCOL={HEARTBEAT_PROTOCOL_VERSION}" in dockerfile
+    )
+    assert (
+        'io.heyditto.validator.compatibility-epoch="$VALIDATOR_COMPATIBILITY_EPOCH"'
+        in dockerfile
+    )
+    assert 'io.heyditto.validator.update-protocol="1"' in dockerfile
+    assert (
+        'io.heyditto.validator.heartbeat-protocol="$VALIDATOR_HEARTBEAT_PROTOCOL"'
+        in dockerfile
+    )
+    assert 'io.heyditto.validator.compose-schema="1"' in dockerfile
+
+    assert 'COMPATIBILITY_EPOCH: "1"' in workflow
+    assert "ditto-subnet-validator" in workflow
+    assert ":compat-${{ env.COMPATIBILITY_EPOCH }}" in workflow
+    assert ":sha-${{ needs.release.outputs.commit_sha }}" in workflow
+    assert "packages: write" in workflow
+    assert "secrets.GITHUB_TOKEN" in workflow
+    assert ":latest" not in workflow

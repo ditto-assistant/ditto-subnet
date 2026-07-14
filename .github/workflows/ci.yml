@@ -6,6 +6,36 @@ on:
     branches: [main]
 
 jobs:
+  compose-config:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compose-version: "v2.40.3"
+            compose-sha256: dba9d98e1ba5bfe11d88c99b9bd32fc4a0624a30fafe68eea34d61a3e42fd372
+          - compose-version: "v5.1.2"
+            compose-sha256: c372e512a36e67716b0b3a1264ccdc461dec7a7beff601b81f7c5fb008e3511e
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned Docker Compose ${{ matrix.compose-version }}
+        env:
+          COMPOSE_VERSION: ${{ matrix.compose-version }}
+          COMPOSE_SHA256: ${{ matrix.compose-sha256 }}
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-x86_64" \
+            --output /tmp/docker-compose
+          echo "$COMPOSE_SHA256  /tmp/docker-compose" | sha256sum --check --strict
+          chmod +x /tmp/docker-compose
+          test "$(/tmp/docker-compose version --short)" = "${COMPOSE_VERSION#v}"
+
+      - name: Validate production Compose model
+        run: |
+          /tmp/docker-compose --env-file .env.example \
+            --project-directory . -f docker-compose.yml config --quiet
+
   lint-and-test:
     runs-on: ubuntu-latest
     strategy:
@@ -13,10 +43,10 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
         with:
           enable-cache: true
 

@@ -19,6 +19,7 @@ htmlcov/
 
 # Env files
 .env
+.validator-update/
 .env.local
 
 # Local docker-compose overrides for dev / smoke testing. Tracked

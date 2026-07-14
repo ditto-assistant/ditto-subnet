@@ -13,6 +13,7 @@ supervisor.
 - [First deployment](#first-deployment)
 - [Verify health](#verify-health)
 - [Upgrade and operate](#upgrade-and-operate)
+- [Automatic validator updates (opt-in)](#automatic-validator-updates-opt-in)
 - [How scoring and weights work](#how-scoring-and-weights-work)
 - [Optional observability](#optional-observability)
 - [Development](#development)
@@ -185,6 +186,193 @@ systemctl is-enabled docker
 systemctl is-active docker
 ./scripts/validator-compose.sh ps
 ```
+
+## Automatic validator updates (opt-in)
+
+Automatic updates are disabled by default. SN118 does not use Watchtower:
+Watchtower is archived, does not recommend itself for production, cannot pull
+the existing local-only validator build, and has no post-update health rollback.
+Its lifecycle hooks are disabled by default, run inside an old target image that
+must already contain a correct bounded-drain command, and do not solve that
+rollback gap. It also needs a long-lived host Docker socket mount. Instead, this
+repository provides a short-lived host updater run by a jittered systemd timer.
+
+Two validator deployments were reviewed as design references at exact commits:
+
+- SN44 TurboVision at
+  [`3d8033cef740cd0c34a989183dcf3fa9f0c32467`](https://github.com/score-technologies/turbovision/tree/3d8033cef740cd0c34a989183dcf3fa9f0c32467)
+  combines mutable `mikhaelscore/turbovision:latest` with `build: .`, inherits
+  the update label through a common service block, and runs an unpinned
+  `containrrr/watchtower` with a read-write Docker socket, 60-second polling,
+  cleanup, and a 30-second stop grace. Its
+  [publish workflow](https://github.com/score-technologies/turbovision/blob/3d8033cef740cd0c34a989183dcf3fa9f0c32467/.github/workflows/docker_push.yml)
+  pushes `latest` and SHA tags to Docker Hub using repository credentials.
+- SN97 Constantinople at
+  [`ffdd0877d9b7124f99e4337ffbf6a7b86850a98a`](https://github.com/unconst/Constantinople/tree/ffdd0877d9b7124f99e4337ffbf6a7b86850a98a)
+  uses mutable application `latest`, `pull_policy: always`, and unpinned
+  Watchtower `latest` with a read-write socket, five-minute polling, cleanup,
+  and rolling restart. Both validator and miner carry enable labels. Its
+  [workflow](https://github.com/unconst/Constantinople/blob/ffdd0877d9b7124f99e4337ffbf6a7b86850a98a/.github/workflows/docker.yml)
+  publishes GHCR tags with the built-in token, while the default
+  [Compose file](https://github.com/unconst/Constantinople/blob/ffdd0877d9b7124f99e4337ffbf6a7b86850a98a/docker-compose.yml)
+  names a Docker Hub image.
+
+Label opt-in, bounded polling, and immutable release identifiers are useful
+patterns. Their restart policies are not safe to reuse for SN118: neither
+reference drains active work, gates the wire protocol and release line, or
+automatically restores a failed application image. A restart can therefore cut
+through SN118's 75-minute benchmark inside its 90-minute lease, lose the signed
+score submission, and race the same-lease resume and monotonic progress rules.
+
+The release workflow publishes only the validator worker to
+`ghcr.io/ditto-assistant/ditto-subnet-validator`. It never publishes or updates
+Pylon, `dittobench-api`, the model relay, Ollama, or `sandbox-docker`. Releases
+has semantic-version and source-SHA tags for audit and discovery. `compat-1` is
+the moving discovery tag; the updater resolves it to a registry digest before
+draining anything, and that digest is the immutable deployment boundary.
+
+Each candidate must carry the expected source, exact release version and
+40-character revision, validator marker, heartbeat protocol, update protocol,
+Compose schema, and compatibility epoch. A candidate that changes any
+compatibility field, crosses the running major/minor release line, or is not
+strictly newer fails closed. Minor and major upgrades require a supervised
+migration even when a moving compatibility tag advances. A breaking platform
+wire, consensus, required
+configuration, wallet, or sidecar boundary change must increment the epoch and
+requires a manual operator migration; the old timer remains on its previous
+channel.
+
+### Registry availability and legacy local builds
+
+The release workflow publishes with its built-in `GITHUB_TOKEN`; no new
+repository secret is required. An organization administrator must make the
+GHCR package public after its first publication. Once public, validators pull
+anonymously and need no registry credential or new secret. Until that one-time
+visibility step is complete, `docker pull` fails and the updater leaves the
+running validator untouched.
+
+Existing v0.6.x validators are local builds and do not have the cooperative
+drain or trusted image metadata. The updater intentionally refuses to signal or
+replace them. Do not claim that enabling the timer upgrades such a container.
+Coordinate one supervised maintenance window when the validator has no live
+ticket, then perform the first registry-based deployment. After that migration,
+all automatic updates use the bounded drain below. New installations can start
+from the registry image directly.
+
+Preflight the public image and, for a new or already-drained installation,
+start only the validator worker from it:
+
+```sh
+docker pull ghcr.io/ditto-assistant/ditto-subnet-validator:compat-1
+IMAGE=ghcr.io/ditto-assistant/ditto-subnet-validator
+DIGEST="$(docker image inspect --format '{{ range .RepoDigests }}{{ println . }}{{ end }}' \
+  "$IMAGE:compat-1" | awk -v prefix="$IMAGE@" 'index($0, prefix) == 1 { print; exit }')"
+test -n "$DIGEST"
+DITTO_SUBNET_IMAGE="$DIGEST" \
+  ./scripts/validator-compose.sh up -d --no-deps --no-build --pull never \
+  ditto-subnet
+./scripts/validator-auto-update.sh status
+```
+
+Do not use those commands to interrupt a live legacy benchmark. The first
+migration is the precise boundary that cannot be automated safely because old
+images have no drain control.
+
+### Enable and verify
+
+Set the opt-in only after `status` reports a semantic version, full revision,
+and update state:
+
+```sh
+sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=true/' .env
+sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
+  ./scripts/install-validator-auto-update.sh
+systemctl list-timers ditto-validator-auto-update.timer
+sudo systemctl status ditto-validator-auto-update.timer
+sudo journalctl -u ditto-validator-auto-update.service --since today
+./scripts/validator-auto-update.sh status
+```
+
+The timer checks 15 minutes after boot and every 15 minutes thereafter, with up
+to five minutes of jitter so validators do not restart together. The service
+runs as the non-root Docker-capable operator with systemd hardening. Docker
+socket access is still host-root-equivalent authority, but it is not exposed on
+a TCP port or mounted into a long-lived container; the updater process exists
+only for one check.
+
+For an available update, the script:
+
+1. pulls the compatibility channel and resolves it to an immutable digest;
+2. validates all image and service-scope labels before sending a signal;
+3. asks the worker to stop claiming new tickets;
+4. lets any claimed benchmark finish through signed score submission;
+5. waits for an explicit local `drained` acknowledgement, not merely an empty
+   `active_agent_id` (unticketed re-scores are also protected);
+6. recreates only the labelled `ditto-subnet` service with `--no-deps`, in a
+   quiescent bootstrap mode that cannot claim, re-score, or set weights;
+7. waits for a compatibility-matched state backed by an accepted signed
+   platform heartbeat;
+8. commits the new digest and explicitly resumes work; and
+9. retains the previous image under a local rollback tag.
+
+A candidate that fails readiness has never been allowed to claim a ticket. The
+same quiescent handshake applies while restoring a rollback image, preventing a
+readiness decision or interrupted updater from cutting through new work. Resume
+is persisted in the container's writable layer before work is allowed, so a
+later Docker or host restart does not re-enter bootstrap drain. A subsequent
+timer also recovers any quiescent commit left by a power loss before considering
+candidate suppression. An atomic `.validator-update/transaction.env` journal is
+written before the old container stops; after a crash or reboot, the next run
+restores the retained image for any uncommitted phase, or finishes resuming and
+recording an already committed candidate.
+
+If readiness fails, the failed candidate digest is recorded and suppressed;
+later timer runs do not repeat that replacement. A different digest on the
+compatibility channel clears the suppression after it passes readiness.
+
+The default drain deadline is 4,800 seconds: five minutes beyond the 75-minute
+benchmark cap and inside the platform's 90-minute lease. If work never drains,
+the updater sends resume, performs no stop or replacement, and retries on the
+next timer. It never force-kills a benchmark. The Compose service also has an
+80-minute stop grace period as a defensive boundary for ordinary ticket/manual
+operations. Do not use it as the update gate: a three-seed stale re-score can
+exceed 80 minutes, so only the cooperative drain acknowledgement is safe.
+
+### Emergency disable and rollback
+
+Disable both future timer runs and any in-flight updater. Stopping the oneshot
+invokes its phase-aware cleanup: it resumes a pending drain or restores the
+retained image if replacement had already stopped the old container.
+
+```sh
+sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
+sudo systemctl disable --now ditto-validator-auto-update.timer
+sudo systemctl stop ditto-validator-auto-update.service
+./scripts/validator-auto-update.sh status
+```
+
+If a replacement does not reach readiness, the updater automatically restores
+the retained previous image and exits nonzero. For a later manual rollback,
+keep automatic updates disabled and use the same cooperative drain path:
+
+```sh
+sudo systemctl disable --now ditto-validator-auto-update.timer
+sudo systemctl stop ditto-validator-auto-update.service
+sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
+./scripts/validator-auto-update.sh rollback
+./scripts/validator-compose.sh ps
+./scripts/validator-compose.sh logs --since 10m ditto-subnet
+```
+
+Old images are not automatically deleted. After an observation window, an
+operator may remove superseded rollback tags manually. Never enable broad image
+cleanup or delete the currently recorded `PREVIOUS_IMAGE` in
+`.validator-update/last-update.env` until rollback is no longer needed.
+
+The updater uses the repository Compose wrapper and works with the supported
+Compose v2 and v5 lines. It leaves the immutable reviewed `dittobench-api`
+ref/checksum, scorer/relay pins, wallet mounts, Pylon data, and all other service
+definitions untouched.
 
 ## How scoring and weights work
 

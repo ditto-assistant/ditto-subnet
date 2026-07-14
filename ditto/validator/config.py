@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass
 
 from ditto.validator.errors import ValidatorConfigError
+from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
 
 # --- Frozen consensus constants (KOTH + ATH gate) ---
 # NOT env-tunable: every validator must fold the public ledger with byte-identical
@@ -199,6 +200,17 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         ValidatorConfigError: When a required value is missing, no signing
             source is configured, or ``run_size`` is invalid.
     """
+    expected_compatibility_epoch = os.environ.get(
+        "VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH",
+        str(VALIDATOR_COMPATIBILITY_EPOCH),
+    )
+    if expected_compatibility_epoch != str(VALIDATOR_COMPATIBILITY_EPOCH):
+        raise ValidatorConfigError(
+            "validator compatibility epoch mismatch: image is "
+            f"{VALIDATOR_COMPATIBILITY_EPOCH}, deployment expects "
+            f"{expected_compatibility_epoch}"
+        )
+
     run_size = os.environ.get("VALIDATOR_RUN_SIZE", "full")
     if run_size not in {"small", "medium", "full"}:
         raise ValidatorConfigError(

@@ -313,6 +313,186 @@ class TestRunOnce:
             {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
         )
 
+    async def test_pre_requested_drain_claims_no_work(self) -> None:
+        platform = _platform_with_ledger(jobs=[_job("5Miner" + "x" * 42)], ledger=[])
+        drain = asyncio.Event()
+        drain.set()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker.run_once(drain_requested=drain) == 0
+
+        platform.request_job.assert_not_awaited()
+        platform.get_ledger.assert_not_awaited()
+        worker._weight_setter.put_weights.assert_not_called()
+
+    async def test_drain_during_ticket_submits_it_and_claims_no_second(self) -> None:
+        first = _job("5MinerA" + "x" * 41)
+        second = _job("5MinerB" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[first, second], ledger=[])
+        drain = asyncio.Event()
+
+        async def score_and_request_drain(**_: object) -> ScoreReport:
+            drain.set()
+            return _report("run", 0.9)
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=score_and_request_drain)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(put_weights=AsyncMock()),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker.run_once(drain_requested=drain) == 1
+
+        assert platform.request_job.await_count == 1
+        platform.submit_score.assert_awaited_once()
+        platform.get_ledger.assert_not_awaited()
+        worker._weight_setter.put_weights.assert_not_awaited()
+
+    async def test_drain_ack_waits_for_same_lease_monotonic_submission(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        drain = asyncio.Event()
+        submit_started = asyncio.Event()
+        allow_submit = asyncio.Event()
+        events: list[tuple[str, str]] = []
+
+        async def score_and_request_drain(**_: object) -> ScoreReport:
+            drain.set()
+            return _report("run", 0.9)
+
+        async def blocked_submit(
+            *_args: object, **_kwargs: object
+        ) -> SubmitScoreResponse:
+            events.append(("submit", "started"))
+            submit_started.set()
+            await allow_submit.wait()
+            events.append(("submit", "finished"))
+            return SubmitScoreResponse(
+                agent_id=job.agent_id,
+                status=AgentStatus.SCORED,
+                accepted=True,
+            )
+
+        platform.submit_score = AsyncMock(side_effect=blocked_submit)
+        config = _config()
+        config.sweep_seconds = 0.001
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        chain.put_weights = AsyncMock()
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(
+                score_tarball=AsyncMock(side_effect=score_and_request_drain)
+            ),
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        def capture_state(state: str, **_: object) -> None:
+            events.append(("state", state))
+
+        monkeypatch.setattr(worker_mod, "write_update_state", capture_state)
+        stop = asyncio.Event()
+        task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
+
+        await asyncio.wait_for(submit_started.wait(), timeout=1)
+        assert ("state", "drained") not in events
+        assert platform.request_job.await_count == 1
+
+        running = [
+            call.args[0]
+            for call in platform.submit_heartbeat.await_args_list
+            if call.args[0].state == "running_benchmark"
+        ]
+        progresses = [heartbeat.benchmark_progress for heartbeat in running]
+        assert [progress.stage for progress in progresses if progress is not None] == [
+            "preparing",
+            "finalizing",
+            "submitting_result",
+        ]
+        assert all(
+            progress.ticket_deadline == job.deadline
+            for progress in progresses
+            if progress is not None
+        )
+
+        allow_submit.set()
+        for _ in range(100):
+            if ("state", "drained") in events:
+                break
+            await asyncio.sleep(0.001)
+        assert ("state", "drained") in events
+        assert events.index(("submit", "finished")) < events.index(("state", "drained"))
+        platform.submit_score.assert_awaited_once()
+        assert platform.request_job.await_count == 1
+
+        drain.clear()
+        for _ in range(100):
+            if ("state", "ready") in events[events.index(("state", "drained")) + 1 :]:
+                break
+            await asyncio.sleep(0.001)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+        assert ("state", "ready") in events[events.index(("state", "drained")) + 1 :]
+
+    async def test_quiescent_bootstrap_authenticates_before_claiming_work(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        config = _config()
+        config.sweep_seconds = 0.001
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        states: list[tuple[str, bool]] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **kwargs: states.append(
+                (state, bool(kwargs.get("platform_accepted")))
+            ),
+        )
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+        task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
+
+        for _ in range(100):
+            if ("drained", True) in states:
+                break
+            await asyncio.sleep(0.001)
+        assert ("drained", True) in states
+        platform.submit_heartbeat.assert_awaited()
+        platform.request_job.assert_not_awaited()
+
+        drain.clear()
+        for _ in range(100):
+            if platform.request_job.await_count:
+                break
+            await asyncio.sleep(0.001)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+        platform.request_job.assert_awaited_once()
+
     async def test_heartbeat_failure_does_not_block_scoring(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
         platform.submit_heartbeat.side_effect = PlatformError("platform old")

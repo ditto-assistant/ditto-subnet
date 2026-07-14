@@ -46,6 +46,7 @@ from ditto.validator.telemetry import (
     ValidatorTelemetry,
     scored_agent_stat,
 )
+from ditto.validator.update_control import write_update_state
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
     agents_needing_rescore,
@@ -176,6 +177,13 @@ class ValidatorWorker:
         # anything yet never mistakes the whole ledger for stale.
         self._current_bench_version = DEFAULT_BENCH_VERSION
         self._last_heartbeat_timestamp = 0
+        self._platform_accepted = False
+        # Cooperative updater drains are acknowledged only after both the
+        # independent scoring and weight loops have finished their current
+        # unit of work. These flags are mutated without an intervening await,
+        # so their check/set transitions are atomic within this event loop.
+        self._scoring_active = False
+        self._weights_active = False
         self._active_agent_id: UUID | None = None
         self._active_ticket_deadline: datetime | None = None
         self._benchmark_progress: BenchmarkProgress | None = None
@@ -185,7 +193,13 @@ class ValidatorWorker:
         self._retain_failed_progress_until = 0.0
         self._system_metrics = system_metrics
 
-    async def run_once(self, *, set_weights: bool = True) -> int:
+    async def run_once(
+        self,
+        *,
+        set_weights: bool = True,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
+    ) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
 
         Every validator does both halves:
@@ -204,6 +218,7 @@ class ValidatorWorker:
         """
         started = time.monotonic()
         await self._report_heartbeat("polling")
+        write_update_state("working", platform_accepted=self._platform_accepted)
         scored: list[ScoredAgentStat] = []
         failed = 0
         queue_depth = 0
@@ -214,6 +229,8 @@ class ValidatorWorker:
         # or this sweep's cap is hit. Each ticket pins the dataset all three
         # validators score, so scores stay comparable for the median.
         while scoring_available and queue_depth < self._config.queue_limit:
+            if self._new_work_blocked(stop_requested, drain_requested):
+                break
             try:
                 job = await self._platform.request_job()
             except PlatformError as e:
@@ -264,13 +281,18 @@ class ValidatorWorker:
                 logger.warning("scoring agent %s failed: %s", job.agent_id, e)
                 failed += 1
                 continue
-        if scoring_available:
-            await self._rescore_stale_champions()
+        if scoring_available and not self._new_work_blocked(
+            stop_requested, drain_requested
+        ):
+            await self._rescore_stale_champions(
+                stop_requested=stop_requested,
+                drain_requested=drain_requested,
+            )
 
         outcome = _WeightOutcome()
         onchain_last_update_block: int | None = None
         onchain_observed_block: int | None = None
-        if set_weights:
+        if set_weights and not self._new_work_blocked(stop_requested, drain_requested):
             await self._report_heartbeat("updating_weights")
             outcome = await self._update_weights()
             (
@@ -364,6 +386,8 @@ class ValidatorWorker:
                 signature=signature,
             )
             response = await self._platform.submit_heartbeat(request)
+            if response.accepted:
+                self._platform_accepted = True
             return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
@@ -571,7 +595,12 @@ class ValidatorWorker:
             leaderboard=leaderboard, weights=weights, submitted=submitted
         )
 
-    async def _rescore_stale_champions(self) -> None:
+    async def _rescore_stale_champions(
+        self,
+        *,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
         """Read the ledger and re-score any champion/tail agents scored under an
         older bench_version than this scorer now produces.
 
@@ -586,10 +615,18 @@ class ValidatorWorker:
         except PlatformError as e:
             logger.warning("ledger fetch for re-score failed; skipping: %s", e)
             return
-        await self._rescore_stale_champion_and_tail(ledger)
+        await self._rescore_stale_champion_and_tail(
+            ledger,
+            stop_requested=stop_requested,
+            drain_requested=drain_requested,
+        )
 
     async def _rescore_stale_champion_and_tail(
-        self, ledger: LedgerResponse
+        self,
+        ledger: LedgerResponse,
+        *,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
     ) -> LedgerResponse:
         """Re-evaluate the champion + participation-tail agents whose ledger
         bench_version is older than this validator's current scorer version,
@@ -634,6 +671,8 @@ class ValidatorWorker:
         )
         rescored = 0
         for e in stale:
+            if self._new_work_blocked(stop_requested, drain_requested):
+                break
             submitted = await self._confirm_and_submit(
                 e.agent_id, e.sha256, e.miner_hotkey, seeds=sweep_seeds
             )
@@ -1129,40 +1168,78 @@ class ValidatorWorker:
             )
         return await self._submit_report(agent_id, miner_hotkey, representative)
 
-    async def run_forever(self, stop: asyncio.Event) -> None:
+    async def run_forever(
+        self,
+        stop: asyncio.Event,
+        *,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
         """Run independent scoring and weight loops until ``stop`` is set.
 
         A scoring sweep can spend hours on its bounded batch of full benchmark
         runs. Weight cadence therefore cannot be a flag checked before that
         sweep and acted on afterward: doing so starves chain updates whenever
         the queue is busy. The dedicated weight task starts immediately and
-        then follows the greater of the configured and on-chain intervals.
+        then follows the greater of the configured and on-chain intervals. A
+        cooperative updater drain stops both loops from starting new work and
+        is acknowledged only after their current work has completed.
         """
+        write_update_state("ready", platform_accepted=self._platform_accepted)
         weight_task = asyncio.create_task(
-            self._run_weights_forever(stop),
+            self._run_weights_forever(stop, drain_requested=drain_requested),
             name="validator-weights",
         )
         try:
             while not stop.is_set():
+                if drain_requested is not None and drain_requested.is_set():
+                    await self._acknowledge_drain(stop, drain_requested)
+                    continue
                 try:
-                    n = await self.run_once(set_weights=False)
+                    self._scoring_active = True
+                    if drain_requested is None:
+                        n = await self.run_once(set_weights=False)
+                    else:
+                        n = await self.run_once(
+                            set_weights=False,
+                            stop_requested=stop,
+                            drain_requested=drain_requested,
+                        )
                     logger.info("scoring sweep complete: %d agent(s)", n)
                 except Exception:  # noqa: BLE001 - a sweep must never kill the loop
                     logger.exception("scoring sweep failed; retrying next sweep")
                     await self._report_heartbeat("error")
-                await self._sleep_or_stop(stop, self._config.sweep_seconds)
+                    # A failed heartbeat may have cleared platform acceptance;
+                    # never leave an earlier accepted state on disk.
+                    write_update_state(
+                        "working", platform_accepted=self._platform_accepted
+                    )
+                finally:
+                    self._scoring_active = False
+                await self._sleep_or_stop_or_drain(
+                    stop, self._config.sweep_seconds, drain_requested
+                )
         finally:
             weight_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await weight_task
+            write_update_state("stopping")
 
-    async def _run_weights_forever(self, stop: asyncio.Event) -> None:
+    async def _run_weights_forever(
+        self,
+        stop: asyncio.Event,
+        *,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
         """Submit weights immediately and then once per effective epoch."""
         chain_floor = await self._chain_min_epoch_seconds()
         while not stop.is_set():
+            if drain_requested is not None and drain_requested.is_set():
+                await self._wait_for_resume_or_stop(stop, drain_requested)
+                continue
             started = time.monotonic()
             outcome = _WeightOutcome()
             try:
+                self._weights_active = True
                 # Do not overwrite an active benchmark heartbeat with the
                 # short weight state; benchmark progress remains the useful
                 # public current-work signal.
@@ -1176,6 +1253,8 @@ class ValidatorWorker:
                 )
             except Exception:  # noqa: BLE001 - weights retry next epoch
                 logger.exception("weight epoch failed; retrying next epoch")
+            finally:
+                self._weights_active = False
             last_update, observed_block = await self._observe_onchain_weight_state()
             self._telemetry.record_sweep(
                 SweepStats(
@@ -1198,7 +1277,62 @@ class ValidatorWorker:
             # is reflected without coupling this task to the scoring loop.
             chain_floor = await self._chain_min_epoch_seconds()
             epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
-            await self._sleep_or_stop(stop, epoch_seconds)
+            await self._sleep_or_stop_or_drain(stop, epoch_seconds, drain_requested)
+
+    async def _acknowledge_drain(
+        self, stop: asyncio.Event, drain_requested: asyncio.Event
+    ) -> None:
+        """Publish drained only once scoring and weight work are quiescent."""
+        while self._weights_active and not stop.is_set():
+            await self._sleep_or_stop(stop, 0.05)
+        if stop.is_set():
+            return
+        await self._report_heartbeat("idle")
+        write_update_state("drained", platform_accepted=self._platform_accepted)
+        await self._wait_for_resume_or_stop(stop, drain_requested)
+        if not stop.is_set():
+            write_update_state("ready", platform_accepted=self._platform_accepted)
+
+    @staticmethod
+    def _new_work_blocked(*events: asyncio.Event | None) -> bool:
+        """Whether shutdown/drain has forbidden another unit of work."""
+        return any(event is not None and event.is_set() for event in events)
+
+    async def _wait_for_resume_or_stop(
+        self, stop: asyncio.Event, drain_requested: asyncio.Event
+    ) -> None:
+        """Remain quiescent until USR2 resumes work or shutdown is requested."""
+        next_bootstrap_heartbeat = 0.0
+        while drain_requested.is_set() and not stop.is_set():
+            now = time.monotonic()
+            if not self._platform_accepted and now >= next_bootstrap_heartbeat:
+                await self._report_heartbeat("idle")
+                write_update_state("drained", platform_accepted=self._platform_accepted)
+                next_bootstrap_heartbeat = now + 5.0
+            await ValidatorWorker._sleep_or_stop(stop, 0.05)
+
+    @staticmethod
+    async def _sleep_or_stop_or_drain(
+        stop: asyncio.Event,
+        seconds: float,
+        drain_requested: asyncio.Event | None,
+    ) -> None:
+        """Sleep until cadence, shutdown, or a cooperative drain request."""
+        if drain_requested is None:
+            await ValidatorWorker._sleep_or_stop(stop, seconds)
+            return
+        stop_task = asyncio.create_task(stop.wait())
+        drain_task = asyncio.create_task(drain_requested.wait())
+        try:
+            await asyncio.wait(
+                {stop_task, drain_task},
+                timeout=seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in (stop_task, drain_task):
+                task.cancel()
+            await asyncio.gather(stop_task, drain_task, return_exceptions=True)
 
     async def _chain_min_epoch_seconds(self) -> float:
         """The chain-enforced floor (seconds) on the weight-set cadence.
