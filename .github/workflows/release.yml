@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the merged commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Pin the release branch to the tested merge
+        run: git reset --hard "${{ github.sha }}"
+
+      # The code already reported 0.1.0 before release automation existed.
+      # Anchor that historical version to the parent of this first release-aware
+      # merge so the setup feature itself advances the project to 0.2.0.
+      - name: Bootstrap the existing v0.1.0 baseline
+        run: |
+          if ! git tag --list 'v[0-9]*' | grep -q .; then
+            git tag --annotate v0.1.0 "${{ github.event.before }}" \
+              --message "Ditto Subnet v0.1.0"
+            git push origin v0.1.0
+          fi
+
+      - name: Version, tag, and create the GitHub release
+        uses: python-semantic-release/python-semantic-release@8f4d8c4e3e4fcd2b8df16444b148aa49920cc4d3
+        with:
+          github_token: ${{ secrets.RELEASE_TOKEN }}
+          git_committer_name: github-actions
+          git_committer_email: actions@users.noreply.github.com

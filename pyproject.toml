@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ditto"
-version = "0.0.1"
+version = "0.1.0"
 description = "Ditto Bittensor Subnet 118 (SN118): miner CLI + validator for the Rust agent-memory-harness incentive layer."
 readme = "README.md"
 license = "MIT"
@@ -88,3 +88,17 @@ markers = [
     "e2e: end-to-end tests through the full stack",
 ]
 addopts = ["-m", "not slow and not integration and not localnet and not e2e"]
+
+# ─── Releases ────────────────────────────────────────────────────────────────
+
+[tool.semantic_release]
+allow_zero_version = true
+build_command = "python -m ensurepip && python -m pip install --disable-pip-version-check uv==0.11.28 && uv lock && uv build"
+commit_message = "chore(release): v{version} [skip ci]"
+tag_format = "v{version}"
+version_toml = ["pyproject.toml:project.version"]
+version_variables = ["ditto/__init__.py:__version__"]
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
