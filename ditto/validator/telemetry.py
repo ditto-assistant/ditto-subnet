@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -94,6 +95,8 @@ class SweepStats:
     leaderboard: list[tuple[str, float]] = field(default_factory=list)
     weights: dict[str, float] = field(default_factory=dict)  # miner -> weight
     weights_submitted: bool = False
+    weights_due: bool = False
+    burn_hotkey: str | None = None
 
 
 def per_category_means(report: ScoreReport) -> dict[str, float]:
@@ -153,6 +156,7 @@ class ValidatorTelemetry:
         self._wandb: Any = None
         self._run: Any = None
         self._step = 0
+        self._last_weight_submission_at: float | None = None
         if config.enabled:
             self._init_run()
 
@@ -203,23 +207,55 @@ class ValidatorTelemetry:
 
     def _log_sweep(self, stats: SweepStats) -> None:
         wandb = self._wandb
-        champion = (
-            max(stats.weights, key=lambda m: stats.weights[m])
-            if stats.weights
-            else None
-        )
         payload: dict[str, Any] = {
             "sweep/duration_s": stats.sweep_duration_s,
             "sweep/queue_depth": stats.queue_depth,
             "sweep/scored_count": len(stats.scored),
             "sweep/failed_count": stats.failed_count,
-            "weights/miner_count": len(stats.weights),
-            "weights/submitted": int(stats.weights_submitted),
-            "ledger/positive_miner_count": len(stats.leaderboard),
-            "ledger/champion_composite": (
-                stats.leaderboard[0][1] if stats.leaderboard else 0.0
-            ),
         }
+
+        now = time.time()
+        if stats.weights_due:
+            miner_weights = {
+                hotkey: weight
+                for hotkey, weight in stats.weights.items()
+                if hotkey != stats.burn_hotkey and weight > 0.0
+            }
+            burn_share = (
+                stats.weights.get(stats.burn_hotkey, 0.0)
+                if stats.burn_hotkey is not None
+                else 0.0
+            )
+            safe_idle = bool(stats.weights) and not miner_weights and burn_share > 0.0
+            if stats.weights_submitted:
+                self._last_weight_submission_at = now
+            payload.update(
+                {
+                    # These describe the latest *due* weight attempt. Omitting
+                    # them on ordinary scoring sweeps keeps W&B from replacing a
+                    # real hourly success with a misleading zero every two minutes.
+                    "weights/submitted": int(stats.weights_submitted),
+                    "weights/status": (
+                        "safe_idle"
+                        if stats.weights_submitted and safe_idle
+                        else "miner_weights"
+                        if stats.weights_submitted
+                        else "failed"
+                    ),
+                    "weights/idle_burn": int(stats.weights_submitted and safe_idle),
+                    "weights/miner_count": len(miner_weights),
+                    "weights/burn_share": burn_share,
+                    "ledger/positive_miner_count": len(stats.leaderboard),
+                    "ledger/champion_composite": (
+                        stats.leaderboard[0][1] if stats.leaderboard else 0.0
+                    ),
+                }
+            )
+        if self._last_weight_submission_at is not None:
+            payload["weights/last_success_unix"] = self._last_weight_submission_at
+            payload["weights/last_success_age_seconds"] = max(
+                0.0, now - self._last_weight_submission_at
+            )
 
         scores_tbl = wandb.Table(
             columns=[
@@ -262,19 +298,30 @@ class ValidatorTelemetry:
             for category, mean in sorted(s.per_category.items()):
                 cat_tbl.add_data(s.miner_hotkey, s.agent_id, category, mean)
 
-        lb_tbl = wandb.Table(columns=["rank", "miner", "composite"])
-        for rank, (miner, composite) in enumerate(stats.leaderboard, start=1):
-            lb_tbl.add_data(rank, miner, composite)
-
-        w_tbl = wandb.Table(columns=["miner", "weight", "role"])
-        for miner, weight in sorted(stats.weights.items(), key=lambda kv: -kv[1]):
-            role = "champion" if miner == champion else "tail"
-            w_tbl.add_data(miner, weight, role)
-
         payload["scores"] = scores_tbl
         payload["category_means"] = cat_tbl
-        payload["leaderboard"] = lb_tbl
-        payload["weights"] = w_tbl
+        if stats.weights_due:
+            champion = (
+                max(miner_weights, key=lambda hotkey: miner_weights[hotkey])
+                if miner_weights
+                else None
+            )
+            lb_tbl = wandb.Table(columns=["rank", "miner", "composite"])
+            for rank, (miner, composite) in enumerate(stats.leaderboard, start=1):
+                lb_tbl.add_data(rank, miner, composite)
+
+            w_tbl = wandb.Table(columns=["miner", "weight", "role"])
+            for miner, weight in sorted(stats.weights.items(), key=lambda kv: -kv[1]):
+                role = (
+                    "burn"
+                    if miner == stats.burn_hotkey
+                    else "champion"
+                    if miner == champion
+                    else "tail"
+                )
+                w_tbl.add_data(miner, weight, role)
+            payload["leaderboard"] = lb_tbl
+            payload["weights"] = w_tbl
         wandb.log(payload, step=self._step)
         self._step += 1
 
