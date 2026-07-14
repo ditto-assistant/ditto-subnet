@@ -20,6 +20,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from ditto.api_models.benchmark_progress import (
+    BenchmarkProgress,
+    benchmark_progress_signing_token,
+)
 from ditto.api_models.system_health import (
     SystemMetrics,
     system_metrics_signing_token,
@@ -139,9 +143,18 @@ def heartbeat_signing_message(
     state: str,
     active_agent_id: UUID | None = None,
     system_metrics: SystemMetrics | None = None,
+    benchmark_progress: BenchmarkProgress | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
+    if protocol_version >= 4:
+        return (
+            "ditto-validator-heartbeat:v4:"
+            f"{validator_hotkey}:{software_version}:{protocol_version}:"
+            f"{code_digest}:{state}:{active_agent_id or ''}:"
+            f"{system_metrics_signing_token(system_metrics)}:"
+            f"{benchmark_progress_signing_token(benchmark_progress)}:{timestamp}"
+        ).encode()
     if protocol_version >= 3:
         return (
             "ditto-validator-heartbeat:v3:"
@@ -172,6 +185,7 @@ def sign_heartbeat(
     state: str,
     active_agent_id: UUID | None = None,
     system_metrics: SystemMetrics | None = None,
+    benchmark_progress: BenchmarkProgress | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -183,6 +197,7 @@ def sign_heartbeat(
         state=state,
         active_agent_id=active_agent_id,
         system_metrics=system_metrics,
+        benchmark_progress=benchmark_progress,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

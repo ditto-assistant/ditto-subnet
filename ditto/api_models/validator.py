@@ -25,9 +25,10 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.system_health import SystemMetrics
 from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
@@ -167,6 +168,13 @@ class ValidatorHeartbeatRequest(BaseModel):
             description="Optional coarse host telemetry under heartbeat protocol v3.",
         ),
     ] = None
+    benchmark_progress: Annotated[
+        BenchmarkProgress | None,
+        Field(
+            default=None,
+            description="Optional privacy-safe benchmark progress under protocol v4.",
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -177,6 +185,18 @@ class ValidatorHeartbeatRequest(BaseModel):
             description="sr25519 signature over the canonical heartbeat payload.",
         ),
     ]
+
+    @model_validator(mode="after")
+    def progress_requires_v4_active_ticket(self) -> ValidatorHeartbeatRequest:
+        if self.benchmark_progress is None:
+            return self
+        if self.protocol_version < 4:
+            raise ValueError("benchmark progress requires heartbeat protocol v4")
+        if self.state != "running_benchmark" or self.active_agent_id is None:
+            raise ValueError(
+                "benchmark progress requires running_benchmark and active_agent_id"
+            )
+        return self
 
 
 class ValidatorHeartbeatResponse(BaseModel):

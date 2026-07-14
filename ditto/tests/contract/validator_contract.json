@@ -834,6 +834,58 @@
   },
   "ValidatorHeartbeatRequest": {
     "$defs": {
+      "BenchmarkProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "completed": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "stage": {
+            "enum": [
+              "preparing",
+              "building_harness",
+              "starting_harness",
+              "running_benchmark",
+              "finalizing",
+              "submitting_result",
+              "failed_retrying"
+            ],
+            "type": "string"
+          },
+          "ticket_deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "stage",
+          "ticket_deadline"
+        ],
+        "type": "object"
+      },
       "DockerHealth": {
         "additionalProperties": false,
         "properties": {
@@ -909,6 +961,17 @@
           {
             "format": "uuid",
             "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "benchmark_progress": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BenchmarkProgress"
           },
           {
             "type": "null"

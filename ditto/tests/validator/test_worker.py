@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_progress import MAX_BENCHMARK_CHECKS
 from ditto.api_models.validator import (
     ArtifactResponse,
     JobResponse,
@@ -22,7 +23,8 @@ from ditto.api_models.validator import (
 )
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
-from ditto.validator.errors import PlatformError
+from ditto.validator.dittobench import DittobenchProgressSnapshot
+from ditto.validator.errors import DittobenchError, PlatformError
 from ditto.validator.onchain_seed import derive_seed
 from ditto.validator.weights import apply_miner_emission_cap, compute_weights
 from ditto.validator.worker import ValidatorWorker
@@ -262,20 +264,38 @@ class TestRunOnce:
         assert [heartbeat.state for heartbeat in heartbeats] == [
             "polling",
             "running_benchmark",
+            "running_benchmark",
+            "running_benchmark",
             "polling",
             "updating_weights",
             "idle",
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 3
+        assert heartbeat.protocol_version == 4
         assert len(heartbeat.code_digest) == 64
         running = [
             heartbeat
             for heartbeat in heartbeats
             if heartbeat.state == "running_benchmark"
         ]
-        assert [heartbeat.active_agent_id for heartbeat in running] == [job.agent_id]
+        assert [heartbeat.active_agent_id for heartbeat in running] == [
+            job.agent_id,
+            job.agent_id,
+            job.agent_id,
+        ]
+        progresses = [heartbeat.benchmark_progress for heartbeat in running]
+        assert all(progress is not None for progress in progresses)
+        assert [progress.stage for progress in progresses if progress is not None] == [
+            "preparing",
+            "finalizing",
+            "submitting_result",
+        ]
+        assert all(
+            progress.ticket_deadline == job.deadline
+            for progress in progresses
+            if progress is not None
+        )
         assert all(
             heartbeat.active_agent_id is None
             for heartbeat in heartbeats
@@ -329,6 +349,356 @@ class TestRunOnce:
         ]
         assert states.count("running_benchmark") >= 2
         assert states[-1] == "idle"
+
+    async def test_ticketed_progress_maps_stages_and_clears_after_submit(self) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+
+        async def score_with_progress(  # type: ignore[no-untyped-def]
+            *, progress_callback, **_
+        ) -> ScoreReport:
+            for snapshot in (
+                DittobenchProgressSnapshot(stage="building_harness"),
+                DittobenchProgressSnapshot(stage="starting_harness"),
+                DittobenchProgressSnapshot(stage="running_benchmark"),
+                DittobenchProgressSnapshot(
+                    stage="running_benchmark", completed=51, total=114
+                ),
+                DittobenchProgressSnapshot(
+                    stage="finalizing", completed=114, total=114
+                ),
+            ):
+                await progress_callback(snapshot)
+            return _report("run", 0.9).model_copy(update={"n": 114})
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(
+                score_tarball=AsyncMock(side_effect=score_with_progress)
+            ),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        report = await worker._score_job(job)
+
+        assert report.n == 114
+        progress = [
+            call.args[0].benchmark_progress
+            for call in platform.submit_heartbeat.await_args_list
+            if call.args[0].benchmark_progress is not None
+        ]
+        assert [item.stage for item in progress] == [
+            "preparing",
+            "building_harness",
+            "starting_harness",
+            "running_benchmark",
+            "finalizing",
+            "submitting_result",
+        ]
+        assert all(item.ticket_deadline == job.deadline for item in progress)
+        cleared = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert cleared.state == "polling"
+        assert cleared.active_agent_id is None
+        assert cleared.benchmark_progress is None
+        platform.submit_score.assert_awaited_once()
+
+    async def test_failed_run_reports_only_generic_retry_stage(self) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+
+        async def fail_score(  # type: ignore[no-untyped-def]
+            *, progress_callback, **_
+        ) -> ScoreReport:
+            await progress_callback(
+                DittobenchProgressSnapshot(stage="building_harness")
+            )
+            raise DittobenchError("private build log and container id")
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(score_tarball=AsyncMock(side_effect=fail_score)),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        with pytest.raises(DittobenchError):
+            await worker._score_job(job)
+
+        serialized = [
+            call.args[0].model_dump(mode="json")
+            for call in platform.submit_heartbeat.await_args_list
+        ]
+        assert [
+            body["benchmark_progress"]["stage"]
+            for body in serialized
+            if body["benchmark_progress"] is not None
+        ] == ["preparing", "building_harness", "failed_retrying"]
+        assert "private build log" not in str(serialized)
+        assert serialized[-1]["benchmark_progress"]["stage"] == "failed_retrying"
+        sent = platform.submit_heartbeat.await_count
+        assert await worker._report_heartbeat("polling") is True
+        assert platform.submit_heartbeat.await_count == sent
+        platform.submit_score.assert_not_awaited()
+
+    async def test_same_stage_counts_are_bucketed_throttled_and_reset(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        deadline = datetime.now(UTC) + timedelta(hours=1)
+
+        await worker._begin_active_ticket(uuid4(), deadline)
+        await worker._publish_benchmark_progress("running_benchmark")
+        sent = platform.submit_heartbeat.await_count
+        await worker._publish_benchmark_progress(
+            "running_benchmark", completed=5, total=100
+        )
+        assert platform.submit_heartbeat.await_count == sent
+
+        assert worker._last_progress_heartbeat_monotonic is not None
+        worker._last_progress_heartbeat_monotonic -= 61
+        await worker._publish_benchmark_progress(
+            "running_benchmark", completed=10, total=100
+        )
+        assert platform.submit_heartbeat.await_count == sent + 1
+
+        # A same-stage poll with unstable/malformed counts cannot erase a safe
+        # aggregate already delivered, including on the periodic refresh.
+        await worker._publish_benchmark_progress("running_benchmark")
+        await worker._emit_active_heartbeat()
+        retained = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert retained.benchmark_progress.completed == 10
+        assert retained.benchmark_progress.total == 100
+
+        # Internal scorer phases may recur, but public lifecycle never regresses.
+        await worker._on_dittobench_progress(
+            DittobenchProgressSnapshot(stage="starting_harness")
+        )
+        assert worker._benchmark_progress is not None
+        assert worker._benchmark_progress.stage == "running_benchmark"
+
+        await worker._publish_benchmark_progress(
+            "failed_retrying", completed=10, total=100
+        )
+        failed = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert failed.benchmark_progress.stage == "failed_retrying"
+
+        worker._clear_active_ticket()
+        next_agent = uuid4()
+        next_deadline = deadline + timedelta(minutes=30)
+        await worker._begin_active_ticket(next_agent, next_deadline)
+        latest = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert latest.active_agent_id == next_agent
+        assert latest.benchmark_progress is not None
+        assert latest.benchmark_progress.stage == "preparing"
+        assert latest.benchmark_progress.ticket_deadline == next_deadline
+
+    async def test_failed_delivery_does_not_advance_progress_throttle(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        await worker._begin_active_ticket(
+            uuid4(), datetime.now(UTC) + timedelta(hours=1)
+        )
+        last_delivered = worker._last_progress_heartbeat_monotonic
+        platform.submit_heartbeat.return_value = ValidatorHeartbeatResponse(
+            accepted=False, seen_at=datetime.now(UTC)
+        )
+
+        assert await worker._publish_benchmark_progress("building_harness") is False
+        assert worker._last_progress_heartbeat_monotonic == last_delivered
+
+    async def test_failed_stage_is_retried_before_visibility_retention(self) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        accepted = lambda value: ValidatorHeartbeatResponse(  # noqa: E731
+            accepted=value, seen_at=datetime.now(UTC)
+        )
+        platform.submit_heartbeat.side_effect = [
+            accepted(True),  # preparing
+            accepted(False),  # raw scorer failed stage
+            accepted(True),  # exception-path forced retry
+        ]
+
+        async def fail_after_failed_status(  # type: ignore[no-untyped-def]
+            *, progress_callback, **_
+        ) -> ScoreReport:
+            await progress_callback(DittobenchProgressSnapshot(stage="failed_retrying"))
+            raise DittobenchError("private scorer failure")
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(
+                score_tarball=AsyncMock(side_effect=fail_after_failed_status)
+            ),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        with pytest.raises(DittobenchError):
+            await worker._score_job(job)
+
+        progress = [
+            call.args[0].benchmark_progress
+            for call in platform.submit_heartbeat.await_args_list
+        ]
+        assert [item.stage for item in progress if item is not None] == [
+            "preparing",
+            "failed_retrying",
+            "failed_retrying",
+        ]
+        assert platform.submit_heartbeat.await_count == 3
+        sent = platform.submit_heartbeat.await_count
+        assert await worker._report_heartbeat("polling") is True
+        assert platform.submit_heartbeat.await_count == sent
+
+    async def test_overlapping_sends_record_only_the_accepted_snapshot(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        await worker._begin_active_ticket(
+            uuid4(), datetime.now(UTC) + timedelta(hours=1)
+        )
+        platform.submit_heartbeat.reset_mock()
+
+        first_started = asyncio.Event()
+        first_release = asyncio.Event()
+        second_started = asyncio.Event()
+        second_release = asyncio.Event()
+        requests: list[Any] = []
+
+        async def serialize(request: Any) -> ValidatorHeartbeatResponse:
+            requests.append(request)
+            if len(requests) == 1:
+                first_started.set()
+                await first_release.wait()
+            else:
+                second_started.set()
+                await second_release.wait()
+            return ValidatorHeartbeatResponse(accepted=True, seen_at=datetime.now(UTC))
+
+        platform.submit_heartbeat.side_effect = serialize
+        first = asyncio.create_task(
+            worker._publish_benchmark_progress(
+                "running_benchmark", completed=10, total=100
+            )
+        )
+        await first_started.wait()
+        second = asyncio.create_task(
+            worker._publish_benchmark_progress("finalizing", completed=100, total=100)
+        )
+        while (
+            worker._benchmark_progress is None
+            or worker._benchmark_progress.stage != "finalizing"
+        ):
+            await asyncio.sleep(0)
+
+        first_release.set()
+        await second_started.wait()
+        assert requests[0].benchmark_progress.completed == 10
+        assert worker._last_progress_bucket == 10
+
+        second_release.set()
+        assert await first is True
+        assert await second is True
+        assert requests[1].benchmark_progress.stage == "finalizing"
+        assert worker._last_progress_bucket == 100
+
+    @pytest.mark.parametrize(
+        ("n", "ticket_deadline"),
+        [
+            (0, datetime.now(UTC) + timedelta(hours=1)),
+            (MAX_BENCHMARK_CHECKS + 1, datetime.now(UTC) + timedelta(hours=1)),
+            (114, datetime(2026, 7, 14, 12, 0, 0)),
+        ],
+    )
+    async def test_invalid_telemetry_cannot_block_terminal_score_submission(
+        self, n: int, ticket_deadline: datetime
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        report = _report("run", 0.9).model_copy(update={"n": n})
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(score_tarball=AsyncMock(return_value=report)),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        result = await worker._evaluate_and_submit(
+            uuid4(),
+            "ab" * 32,
+            "5MinerA" + "x" * 41,
+            ticket_deadline=ticket_deadline,
+        )
+
+        assert result.n == n
+        platform.submit_score.assert_awaited_once()
+
+    async def test_hanging_progress_heartbeat_cannot_block_terminal_submit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(worker_mod, "_ACTIVE_TELEMETRY_TIMEOUT_SECONDS", 0.001)
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+
+        async def hang(_: object) -> None:
+            await asyncio.Event().wait()
+
+        platform.submit_heartbeat = AsyncMock(side_effect=hang)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(
+                score_tarball=AsyncMock(return_value=_report("run", 0.9))
+            ),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        report = await asyncio.wait_for(worker._score_job(job), timeout=0.2)
+
+        assert report.composite == 0.9
+        platform.submit_score.assert_awaited_once()
+
+    async def test_unticketed_rescore_has_no_agent_or_progress(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        dittobench = MagicMock(
+            score_tarball=AsyncMock(return_value=_report("rescore", 0.8))
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker._evaluate(uuid4(), "ab" * 32, seed=7)
+
+        running = platform.submit_heartbeat.await_args_list[0].args[0]
+        assert running.state == "running_benchmark"
+        assert running.active_agent_id is None
+        assert running.benchmark_progress is None
+        assert dittobench.score_tarball.await_args.kwargs["progress_callback"] is None
 
     async def test_forwards_tarball_sha_to_scorer(self) -> None:
         # The registered digest must be forwarded so dittobench re-verifies the

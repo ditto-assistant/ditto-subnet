@@ -11,6 +11,7 @@ from uuid import UUID
 
 import bittensor
 
+from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.validator.signing import (
     heartbeat_signing_message,
@@ -253,3 +254,148 @@ def test_protocol_v2_heartbeat_message_remains_backward_compatible() -> None:
             f"{_HOTKEY}:0.4.2:2:{'ab' * 32}:idle::1752443200"
         ).encode()
     )
+
+
+def test_protocol_v1_heartbeat_message_remains_backward_compatible() -> None:
+    message = heartbeat_signing_message(
+        validator_hotkey=_HOTKEY,
+        software_version="0.4.2",
+        protocol_version=1,
+        code_digest="ab" * 32,
+        state="idle",
+        timestamp=1_752_443_200,
+    )
+    assert (
+        message
+        == (
+            "ditto-validator-heartbeat:v1:"
+            f"{_HOTKEY}:0.4.2:1:{'ab' * 32}:idle:1752443200"
+        ).encode()
+    )
+
+
+def test_protocol_v3_heartbeat_message_remains_backward_compatible() -> None:
+    metrics = SystemMetrics(
+        collected_at=1_752_443_200,
+        cpu_percent=15,
+        memory_percent=40,
+        disk_percent=55,
+        docker=DockerHealth(
+            status="healthy", running_containers=4, unhealthy_containers=0
+        ),
+    )
+    message = heartbeat_signing_message(
+        validator_hotkey=_HOTKEY,
+        software_version="0.4.2",
+        protocol_version=3,
+        code_digest="ab" * 32,
+        state="idle",
+        system_metrics=metrics,
+        timestamp=1_752_443_200,
+    )
+    assert (
+        message
+        == (
+            "ditto-validator-heartbeat:v3:"
+            f"{_HOTKEY}:0.4.2:3:{'ab' * 32}:idle::"
+            "1752443200,15,40,55,healthy,4,0:1752443200"
+        ).encode()
+    )
+
+
+def test_protocol_v4_heartbeat_binds_progress_and_exact_ticket() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    progress = BenchmarkProgress(
+        stage="running_benchmark",
+        completed=51,
+        total=114,
+        ticket_deadline=_DEADLINE,
+    )
+    signature = sign_heartbeat(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        software_version="0.4.2",
+        protocol_version=4,
+        code_digest="ab" * 32,
+        state="running_benchmark",
+        active_agent_id=_AGENT,
+        benchmark_progress=progress,
+        timestamp=1_752_443_200,
+    )
+    verifier = bittensor.Keypair(ss58_address=keypair.ss58_address)
+    original = heartbeat_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        software_version="0.4.2",
+        protocol_version=4,
+        code_digest="ab" * 32,
+        state="running_benchmark",
+        active_agent_id=_AGENT,
+        benchmark_progress=progress,
+        timestamp=1_752_443_200,
+    )
+    assert verifier.verify(original, bytes.fromhex(signature))
+    for tampered in (
+        progress.model_copy(update={"completed": 57}),
+        progress.model_copy(update={"stage": "failed_retrying"}),
+        progress.model_copy(
+            update={"ticket_deadline": _DEADLINE + timedelta(minutes=30)}
+        ),
+    ):
+        message = heartbeat_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            software_version="0.4.2",
+            protocol_version=4,
+            code_digest="ab" * 32,
+            state="running_benchmark",
+            active_agent_id=_AGENT,
+            benchmark_progress=tampered,
+            timestamp=1_752_443_200,
+        )
+        assert not verifier.verify(message, bytes.fromhex(signature))
+
+
+def test_protocol_v4_heartbeat_canonical_vector() -> None:
+    """Freeze the exact cross-repository protocol-v4 signature bytes."""
+    agent_id = UUID("11111111-2222-4333-8444-555555555555")
+    progress = BenchmarkProgress(
+        stage="running_benchmark",
+        completed=51,
+        total=114,
+        ticket_deadline=datetime(2030, 1, 1, tzinfo=UTC),
+    )
+    actual = heartbeat_signing_message(
+        validator_hotkey=_HOTKEY,
+        software_version="1.2.3",
+        protocol_version=4,
+        code_digest="ab" * 32,
+        state="running_benchmark",
+        active_agent_id=agent_id,
+        system_metrics=None,
+        benchmark_progress=progress,
+        timestamp=1_784_020_800,
+    )
+    expected = (
+        b"ditto-validator-heartbeat:v4:"
+        b"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:"
+        b"1.2.3:4:"
+        b"abababababababababababababababababababababababababababababababab:"
+        b"running_benchmark:11111111-2222-4333-8444-555555555555:-:"
+        b"running_benchmark,51,114,2030-01-01T00:00:00.000000+00:00:"
+        b"1784020800"
+    )
+    assert actual == expected
+
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_heartbeat(
+        keypair,
+        validator_hotkey=_HOTKEY,
+        software_version="1.2.3",
+        protocol_version=4,
+        code_digest="ab" * 32,
+        state="running_benchmark",
+        active_agent_id=agent_id,
+        system_metrics=None,
+        benchmark_progress=progress,
+        timestamp=1_784_020_800,
+    )
+    assert keypair.verify(expected, bytes.fromhex(signature))
