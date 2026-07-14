@@ -177,14 +177,14 @@
         "type": "array"
       },
       "required_policy_version": {
-        "default": 2,
         "minimum": 1,
         "type": "integer"
       }
     },
     "required": [
       "items",
-      "count"
+      "count",
+      "required_policy_version"
     ],
     "type": "object"
   }

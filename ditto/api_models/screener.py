@@ -59,7 +59,7 @@ class ScreenerQueueResponse(BaseModel):
     required_policy_version: Annotated[
         int,
         Field(ge=1, description="Minimum screening policy required for a pass."),
-    ] = SCREENING_POLICY_VERSION
+    ]
 
 
 class ScreenResultRequest(BaseModel):

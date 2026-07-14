@@ -58,7 +58,11 @@ class _FakePlatform:
         # AFTER the item-bearing sweeps have been served + processed.
         if self.stop_after_queue is not None and not items:
             self.stop_after_queue.set()
-        return ScreenerQueueResponse(items=items, count=len(items))
+        return ScreenerQueueResponse(
+            items=items,
+            count=len(items),
+            required_policy_version=2,
+        )
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
         return ArtifactResponse(
