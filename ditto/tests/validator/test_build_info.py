@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from ditto import __version__
 from ditto.validator.build_info import source_digest, validator_build_info
 
 
@@ -16,6 +17,6 @@ def test_source_digest_is_stable_and_content_sensitive(tmp_path: Path) -> None:
 
 def test_build_info_has_public_protocol_identity() -> None:
     info = validator_build_info()
-    assert info.software_version == "0.1.0"
+    assert info.software_version == __version__
     assert info.protocol_version == 1
     assert len(info.code_digest) == 64
