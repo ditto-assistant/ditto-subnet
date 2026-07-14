@@ -268,8 +268,19 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 1
+        assert heartbeat.protocol_version == 2
         assert len(heartbeat.code_digest) == 64
+        running = [
+            heartbeat
+            for heartbeat in heartbeats
+            if heartbeat.state == "running_benchmark"
+        ]
+        assert [heartbeat.active_agent_id for heartbeat in running] == [job.agent_id]
+        assert all(
+            heartbeat.active_agent_id is None
+            for heartbeat in heartbeats
+            if heartbeat.state != "running_benchmark"
+        )
         assert platform.submit_score.await_count == 1
         assert (
             platform.submit_score.await_args.kwargs["ticket_deadline"] == job.deadline

@@ -1,9 +1,8 @@
 """The screener sweep loop.
 
-One sweep: pull agents in ``uploaded`` from the platform, screen each through the
-build gate, and post a signed pass/fail verdict that promotes it to
-``evaluating`` or ``screening_failed``. Agents are processed one at a time —
-builds are heavy and serial keeps host load predictable.
+One sweep: lease one eligible agent from the platform, screen it through the
+build gate, and post a lease-bound signed verdict. Agents are processed one at
+a time because builds are heavy and serial execution keeps host load predictable.
 
 A single bad submission or a transient platform error must never stall the loop:
 each agent is guarded, and a failed platform call is logged and retried next
@@ -65,8 +64,8 @@ class ScreenerWorker:
         logger.info("screener worker stopped")
 
     async def _sweep(self, stop: asyncio.Event) -> int:
-        """Screen every agent currently in the queue; return how many were done."""
-        queue = await self._platform.get_queue()
+        """Lease and screen the next eligible agent; return how many were done."""
+        queue = await self._platform.claim_next()
         if queue.required_policy_version > SCREENING_POLICY_VERSION:
             raise PlatformError(
                 "platform requires screening policy "
@@ -87,6 +86,9 @@ class ScreenerWorker:
     async def _screen_one(self, item: ScreenerQueueItem) -> None:
         """Gate one agent and post its signed verdict. Never raises."""
         agent_id = item.agent_id
+        if item.attempt_id is None:
+            logger.error("claimed agent_id=%s without a screening attempt id", agent_id)
+            return
         try:
             artifact = await self._platform.get_artifact(agent_id)
             result = await self._gate.screen(
@@ -100,6 +102,7 @@ class ScreenerWorker:
                 agent_id=agent_id,
                 passed=result.passed,
                 policy_version=SCREENING_POLICY_VERSION,
+                attempt_id=item.attempt_id,
             )
             resp = await self._platform.submit_result(
                 agent_id,
@@ -107,6 +110,7 @@ class ScreenerWorker:
                 passed=result.passed,
                 policy_version=SCREENING_POLICY_VERSION,
                 detail=result.detail,
+                attempt_id=item.attempt_id,
             )
             logger.info(
                 "screened agent_id=%s miner=%s passed=%s -> %s%s",

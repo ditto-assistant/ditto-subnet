@@ -147,6 +147,7 @@ class ValidatorWorker:
         # anything yet never mistakes the whole ledger for stale.
         self._current_bench_version = DEFAULT_BENCH_VERSION
         self._last_heartbeat_timestamp = 0
+        self._active_agent_id: UUID | None = None
 
     async def run_once(self, *, set_weights: bool = True) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
@@ -230,6 +231,7 @@ class ValidatorWorker:
                 protocol_version=build.protocol_version,
                 code_digest=build.code_digest,
                 state=state,
+                active_agent_id=self._active_agent_id,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -238,6 +240,7 @@ class ValidatorWorker:
                 protocol_version=build.protocol_version,
                 code_digest=build.code_digest,
                 state=state,
+                active_agent_id=self._active_agent_id,
                 timestamp=timestamp,
                 signature=signature,
             )
@@ -628,6 +631,7 @@ class ValidatorWorker:
                 f"sha256 mismatch for agent {agent_id}: "
                 f"expected={expected_sha256} artifact={artifact.sha256}"
             )
+        self._active_agent_id = agent_id
         await self._report_heartbeat("running_benchmark")
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.create_task(
@@ -644,6 +648,7 @@ class ValidatorWorker:
         finally:
             heartbeat_stop.set()
             await heartbeat_task
+            self._active_agent_id = None
             await self._report_heartbeat("polling")
         details = getattr(self._dittobench, "last_details", None)
         bench_version = (

@@ -29,8 +29,10 @@ def _item(agent_id: UUID) -> ScreenerQueueItem:
         miner_hotkey=_MINER,
         name="a",
         sha256="de" * 32,
-        status=AgentStatus.UPLOADED,
+        status=AgentStatus.SCREENING,
         created_at=datetime.now(UTC),
+        attempt_id=uuid4(),
+        lease_deadline=datetime.now(UTC),
     )
 
 
@@ -56,7 +58,7 @@ class _FakePlatform:
         self.submit_error: Exception | None = None
         self.stop_after_queue: asyncio.Event | None = None
 
-    async def get_queue(self) -> ScreenerQueueResponse:
+    async def claim_next(self) -> ScreenerQueueResponse:
         items = self._queues.pop(0) if self._queues else []
         # Signal the loop to stop once the queue has drained (first empty sweep),
         # AFTER the item-bearing sweeps have been served + processed.
@@ -77,7 +79,14 @@ class _FakePlatform:
         )
 
     async def submit_result(  # type: ignore[no-untyped-def]
-        self, agent_id, *, signature, passed, policy_version, detail=""
+        self,
+        agent_id,
+        *,
+        signature,
+        passed,
+        policy_version,
+        detail="",
+        attempt_id,
     ):
         if self.submit_error is not None:
             raise self.submit_error
@@ -88,6 +97,7 @@ class _FakePlatform:
                 "passed": passed,
                 "policy_version": policy_version,
                 "detail": detail,
+                "attempt_id": attempt_id,
             }
         )
 
@@ -118,6 +128,7 @@ async def test_screen_one_pass_posts_signed_pass_verdict(
     v = platform.verdicts[0]
     assert v["passed"] is True and v["signature"] == "cd" * 64 and v["detail"] == ""
     assert v["policy_version"] == SCREENING_POLICY_VERSION
+    assert v["attempt_id"] is not None
 
 
 async def test_screen_one_fail_forwards_detail(

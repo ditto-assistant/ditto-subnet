@@ -834,6 +834,18 @@
   },
   "ValidatorHeartbeatRequest": {
     "properties": {
+      "active_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "code_digest": {
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"

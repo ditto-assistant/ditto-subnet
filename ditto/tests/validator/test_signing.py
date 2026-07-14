@@ -143,9 +143,10 @@ def test_heartbeat_signature_binds_build_state_and_timestamp() -> None:
         keypair,
         validator_hotkey=keypair.ss58_address,
         software_version="0.1.0",
-        protocol_version=1,
+        protocol_version=2,
         code_digest="ab" * 32,
         state="running_benchmark",
+        active_agent_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
         timestamp=1_752_443_200,
     )
     verifier = bittensor.Keypair(ss58_address=keypair.ss58_address)
@@ -153,9 +154,10 @@ def test_heartbeat_signature_binds_build_state_and_timestamp() -> None:
         heartbeat_signing_message(
             validator_hotkey=keypair.ss58_address,
             software_version="0.1.0",
-            protocol_version=1,
+            protocol_version=2,
             code_digest="ab" * 32,
             state="running_benchmark",
+            active_agent_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
             timestamp=1_752_443_200,
         ),
         bytes.fromhex(signature),
@@ -164,9 +166,10 @@ def test_heartbeat_signature_binds_build_state_and_timestamp() -> None:
         heartbeat_signing_message(
             validator_hotkey=keypair.ss58_address,
             software_version="0.1.0",
-            protocol_version=1,
+            protocol_version=2,
             code_digest="cd" * 32,
             state="running_benchmark",
+            active_agent_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
             timestamp=1_752_443_200,
         ),
         bytes.fromhex(signature),
@@ -175,9 +178,22 @@ def test_heartbeat_signature_binds_build_state_and_timestamp() -> None:
         heartbeat_signing_message(
             validator_hotkey=keypair.ss58_address,
             software_version="0.1.0",
-            protocol_version=1,
+            protocol_version=2,
             code_digest="ab" * 32,
             state="idle",
+            active_agent_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
+            timestamp=1_752_443_200,
+        ),
+        bytes.fromhex(signature),
+    )
+    assert not verifier.verify(
+        heartbeat_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            software_version="0.1.0",
+            protocol_version=2,
+            code_digest="ab" * 32,
+            state="running_benchmark",
+            active_agent_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
             timestamp=1_752_443_200,
         ),
         bytes.fromhex(signature),
