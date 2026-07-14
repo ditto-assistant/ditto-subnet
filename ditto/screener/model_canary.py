@@ -15,6 +15,7 @@ import contextlib
 import json
 import os
 import secrets
+import sys
 from pathlib import Path
 from types import TracebackType
 
@@ -57,7 +58,14 @@ class ModelCallCanary:
     def _record_model_call(self) -> None:
         self.model_calls += 1
         if self._state_file is not None:
-            Path(self._state_file).touch()
+            try:
+                Path(self._state_file).touch()
+            except OSError as error:
+                print(
+                    f"could not persist canary state marker: {error}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     async def __aexit__(
         self,
@@ -75,6 +83,8 @@ class ModelCallCanary:
     ) -> None:
         status = "200 OK"
         payload: dict[str, object]
+        request_line = "unread"
+        headers: dict[str, str] = {}
         try:
             raw_headers = await asyncio.wait_for(
                 reader.readuntil(b"\r\n\r\n"), timeout=5
@@ -82,6 +92,7 @@ class ModelCallCanary:
             if len(raw_headers) > _MAX_HEADER_BYTES:
                 raise ValueError("headers too large")
             lines = raw_headers.decode("latin-1").split("\r\n")
+            request_line = lines[0]
             method, path, _version = lines[0].split(" ", 2)
             headers = {
                 key.strip().casefold(): value.strip()
@@ -89,11 +100,10 @@ class ModelCallCanary:
                 if ":" in line
                 for key, value in [line.split(":", 1)]
             }
-            length = int(headers.get("content-length", "0"))
-            if length < 0 or length > _MAX_BODY_BYTES:
-                raise ValueError("body too large")
-            if length:
-                await asyncio.wait_for(reader.readexactly(length), timeout=5)
+            if headers.get("expect", "").casefold() == "100-continue":
+                writer.write(b"HTTP/1.1 100 Continue\r\n\r\n")
+                await writer.drain()
+            await self._read_request_body(reader, headers)
 
             if method == "POST" and path.rstrip("/") in {
                 "/v1/chat/completions",
@@ -150,6 +160,8 @@ class ModelCallCanary:
                     "embeddings": [vector],
                     "data": [{"index": 0, "embedding": vector}],
                 }
+            elif method == "GET" and path.rstrip("/") == "/__ditto_canary_state":
+                payload = {"model_calls": self.model_calls}
             else:
                 status = "404 Not Found"
                 payload = {"error": {"message": "unsupported canary endpoint"}}
@@ -160,7 +172,28 @@ class ModelCallCanary:
             asyncio.IncompleteReadError,
             asyncio.LimitOverrunError,
             OSError,
-        ):
+        ) as error:
+            if (
+                request_line == "unread"
+                and isinstance(error, asyncio.IncompleteReadError)
+                and not error.partial
+            ):
+                writer.close()
+                with contextlib.suppress(ConnectionError):
+                    await writer.wait_closed()
+                return
+            framing = {
+                key: headers[key]
+                for key in ("content-length", "transfer-encoding", "expect")
+                if key in headers
+            }
+            print(
+                "malformed canary request: "
+                f"{type(error).__name__}: {error}; "
+                f"request={request_line!r}; framing={framing!r}",
+                file=sys.stderr,
+                flush=True,
+            )
             status = "400 Bad Request"
             payload = {"error": {"message": "malformed canary request"}}
 
@@ -177,6 +210,50 @@ class ModelCallCanary:
         writer.close()
         with contextlib.suppress(ConnectionError):
             await writer.wait_closed()
+
+    @staticmethod
+    async def _read_request_body(
+        reader: asyncio.StreamReader, headers: dict[str, str]
+    ) -> bytes:
+        """Read a bounded fixed-length or chunked HTTP request body."""
+        transfer_encodings = {
+            value.strip().casefold()
+            for value in headers.get("transfer-encoding", "").split(",")
+            if value.strip()
+        }
+        if transfer_encodings:
+            if transfer_encodings != {"chunked"}:
+                raise ValueError("unsupported transfer encoding")
+            return await ModelCallCanary._read_chunked_body(reader)
+
+        length = int(headers.get("content-length", "0"))
+        if length < 0 or length > _MAX_BODY_BYTES:
+            raise ValueError("body too large")
+        if not length:
+            return b""
+        return await asyncio.wait_for(reader.readexactly(length), timeout=5)
+
+    @staticmethod
+    async def _read_chunked_body(reader: asyncio.StreamReader) -> bytes:
+        body = bytearray()
+        while True:
+            raw_size = await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=5)
+            size_text = raw_size[:-2].split(b";", 1)[0].strip()
+            if not size_text:
+                raise ValueError("missing chunk size")
+            size = int(size_text, 16)
+            if size < 0 or len(body) + size > _MAX_BODY_BYTES:
+                raise ValueError("body too large")
+            if size == 0:
+                while True:
+                    trailer = await asyncio.wait_for(
+                        reader.readuntil(b"\r\n"), timeout=5
+                    )
+                    if trailer == b"\r\n":
+                        return bytes(body)
+            body.extend(await asyncio.wait_for(reader.readexactly(size), timeout=5))
+            if await asyncio.wait_for(reader.readexactly(2), timeout=5) != b"\r\n":
+                raise ValueError("malformed chunk terminator")
 
 
 async def _serve_sidecar() -> None:

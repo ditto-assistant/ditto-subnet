@@ -102,6 +102,14 @@ class ScreenerWorker:
                 sha256=item.sha256,
                 download_url=str(artifact.download_url),
             )
+            if result.retryable:
+                logger.warning(
+                    "screening agent_id=%s hit retryable screener failure; "
+                    "no verdict submitted: %s",
+                    agent_id,
+                    result.detail,
+                )
+                return
             signature = sign_verdict(
                 self._keypair,
                 screener_hotkey=self._config.screener_hotkey,

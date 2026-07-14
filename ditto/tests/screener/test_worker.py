@@ -148,6 +148,22 @@ async def test_screen_one_fail_forwards_detail(
     assert v["passed"] is False and "E0432" in v["detail"]
 
 
+async def test_screen_one_retryable_failure_submits_no_verdict(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(
+        GateResult(
+            False,
+            'model canary /run failed: HTTP 500: {"error":"temporary"}',
+            retryable=True,
+        )
+    )
+    worker = _worker(make_config(), platform, gate)
+    await worker._screen_one(_item(uuid4()))
+    assert platform.verdicts == []
+
+
 async def test_verdict_platform_error_swallowed(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

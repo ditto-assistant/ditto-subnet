@@ -19,7 +19,13 @@ from uuid import UUID
 import httpx
 
 from ditto.screener.config import ScreenerConfig
-from ditto.screener.gate import BuildGate, GateResult, _log_tail, dockerfile_at_root
+from ditto.screener.gate import (
+    BuildGate,
+    GateResult,
+    _detail_tail,
+    _log_tail,
+    dockerfile_at_root,
+)
 from ditto.screener.model_canary import ModelCallCanary
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
@@ -61,6 +67,7 @@ def test_log_tail_trims() -> None:
     long = "x" * 5000
     tail = _log_tail(long)
     assert tail.startswith("…") and len(tail) <= 2001
+    assert len(_detail_tail("x" * 5000)) == 3900
 
 
 # --- screen() orchestration ----------------------------------------------
@@ -81,6 +88,11 @@ def _gate_with(
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     gate = BuildGate(cfg, http)
     gate._run = run_stub  # type: ignore[method-assign]
+
+    async def _pass_canary(*_: Any, **__: Any) -> GateResult:
+        return GateResult(True, "")
+
+    gate._run_model_canary = _pass_canary  # type: ignore[method-assign]
 
     return gate
 
@@ -106,20 +118,25 @@ async def test_pass_builds_and_serves(
     assert res == GateResult(True, "")
 
 
-async def test_screening_does_not_run_model_canary(
+async def test_screening_runs_model_canary(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
     tar = _valid_tar()
     sha = hashlib.sha256(tar).hexdigest()
     gate = _gate_with(make_config(), _ok_run(), tar=tar)
 
-    async def _unexpected_canary(*_: Any, **__: Any) -> tuple[bool, str]:
-        raise AssertionError("model-call canary must remain disabled")
+    calls = 0
 
-    gate._run_model_canary = _unexpected_canary  # type: ignore[method-assign,assignment]
+    async def _observed_canary(*_: Any, **__: Any) -> GateResult:
+        nonlocal calls
+        calls += 1
+        return GateResult(True, "")
+
+    gate._run_model_canary = _observed_canary  # type: ignore[method-assign]
     async with gate._client:
         res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
     assert res == GateResult(True, "")
+    assert calls == 1
 
 
 async def test_smoke_env_injected_into_run(
@@ -179,15 +196,16 @@ async def test_model_canary_rejects_harness_that_makes_no_model_call(
 ) -> None:
     tar = _valid_tar()
     gate = _gate_with(make_config(), _ok_run(), tar=tar)
-    # The implementation remains unit-tested while orchestration is disabled.
-    ok, detail = await gate._run_model_canary(
+    del gate._run_model_canary  # type: ignore[attr-defined]
+    result = await gate._run_model_canary(
         "http://127.0.0.1:8080",
         token="hidden",
         model_called_path="/definitely/missing/model-called",
     )
     await gate._client.aclose()
-    assert not ok
-    assert detail == "model canary observed no model call"
+    assert not result.passed
+    assert not result.retryable
+    assert result.detail == "model canary observed no model call"
 
 
 async def test_model_canary_requires_harness_to_use_hidden_response(
@@ -222,13 +240,61 @@ async def test_model_canary_requires_harness_to_use_hidden_response(
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
             gate = BuildGate(make_config(), client)
             async with client:
-                ok, detail = await gate._run_model_canary(
+                result = await gate._run_model_canary(
                     "http://127.0.0.1:8080",
                     token=canary.token,
                     model_called_path=state_file,
                 )
-            assert ok, detail
+            assert result.passed, result.detail
             assert canary.model_calls == 1
+
+
+async def test_model_canary_http_failure_is_retryable_and_keeps_body(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    gate = _gate_with(make_config(), _ok_run(), tar=_valid_tar())
+    del gate._run_model_canary  # type: ignore[attr-defined]
+
+    async def _http_500(*_: Any, **__: Any) -> tuple[int, str]:
+        return 22, 'HTTP 500: {"error":"provider response was incompatible"}'
+
+    gate._request_from_sidecar = _http_500  # type: ignore[method-assign]
+    result = await gate._run_model_canary(
+        "http://harness:8080",
+        token="hidden",
+        model_called_path=None,
+        probe_container="canary",
+    )
+    await gate._client.aclose()
+
+    assert not result.passed
+    assert result.retryable
+    assert "HTTP 500" in result.detail
+    assert "provider response was incompatible" in result.detail
+
+
+async def test_failure_diagnostics_include_bounded_container_logs(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    gate = _gate_with(make_config(), _ok_run(), tar=_valid_tar())
+
+    async def _logs(args: list[str], **_: Any) -> tuple[int, str]:
+        if args == ["logs", "harness"]:
+            return 0, "harness error body"
+        if args == ["logs", "canary"]:
+            return 0, "gateway request log"
+        return 0, ""
+
+    gate._run = _logs  # type: ignore[method-assign]
+    detail = await gate._with_container_logs(
+        "model canary /run failed: HTTP 500",
+        harness_container="harness",
+        canary_container="canary",
+    )
+    await gate._client.aclose()
+
+    assert "harness error body" in detail
+    assert "gateway request log" in detail
 
 
 async def test_sha_mismatch_fails_before_build(

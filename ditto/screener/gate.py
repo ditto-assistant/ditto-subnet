@@ -1,4 +1,4 @@
-"""The screener build gate: does the crate build and serve?
+"""The screener build gate: does the crate build, serve, and use the model?
 
 The gate is deliberately cheaper than a full DittoBench run. It verifies the
 image and service contract before a submission can consume a scoring run.
@@ -18,16 +18,16 @@ Flow for one agent:
    ``build_timeout_seconds``.
 4. **Serve smoke.** Run the image detached with a memory + pids cap and poll
    ``GET /health`` until it returns 2xx.
-5. **Model gateway.** Put the harness and a locked-down fake OpenAI-compatible
-   sidecar on a private Docker network so startup matches the scoring runtime.
-   The synthetic ``POST /run`` assertion is temporarily disabled while its
-   compatibility with the canonical starter kit is repaired and E2E-tested.
+5. **Model canary.** Put the harness and a locked-down fake OpenAI-compatible
+   sidecar on a private Docker network, call ``POST /run``, and require the
+   harness to return a random token known only to the fake model response.
 6. **Teardown.** The container + image are always removed.
 
-A pass is "built and served"; anything else fails
-with a short ``detail`` (build-log tail or the failing stage) that rides the
-verdict for the miner's benefit. Every stage is best-effort and never raises into
-the worker loop: an
+A pass is "built, served, and consumed a model response". Deterministic contract
+violations fail; transient canary or screener failures are marked retryable and
+must never become a signed rejection. Failures include a short ``detail``
+(response body, container-log tail, or failing stage) for the miner and operator.
+Every stage is best-effort and never raises into the worker loop: an
 infrastructure error (Docker down) is reported as a non-pass with detail, so a
 flaky host does not silently promote or wrongly reject.
 
@@ -47,7 +47,6 @@ import json
 import logging
 import os
 import secrets
-import shutil
 import tarfile
 import tempfile
 import tomllib
@@ -68,6 +67,7 @@ logger = logging.getLogger(__name__)
 
 # Bytes of a failing build log to attach to the verdict detail.
 _LOG_TAIL_BYTES = 2000
+_MAX_GATE_DETAIL_CHARS = 3900
 # How long to wait between /health probes while the container boots.
 _PROBE_INTERVAL_SECONDS = 1.0
 _MAX_UNPACKED_BYTES = 64 * 1024 * 1024
@@ -78,10 +78,6 @@ _CANARY_IMAGE = (
 )
 _CANARY_ALIAS = "model-canary"
 _HARNESS_ALIAS = "harness"
-# Emergency production safeguard: the synthetic /run assertion produced false
-# rejections against valid starter-kit-derived harnesses. Keep this locked in
-# code (not operator-configurable) until the canary has a real container E2E test.
-_MODEL_CALL_CANARY_ENABLED = False
 
 
 @dataclass(frozen=True)
@@ -90,6 +86,11 @@ class GateResult:
 
     passed: bool
     detail: str
+    retryable: bool = False
+
+    def __post_init__(self) -> None:
+        if self.passed and self.retryable:
+            raise ValueError("a passing gate result cannot be retryable")
 
 
 def dockerfile_at_root(member_names: list[str]) -> bool:
@@ -108,6 +109,14 @@ def _log_tail(text: str) -> str:
     if len(trimmed) <= _LOG_TAIL_BYTES:
         return trimmed
     return "…" + trimmed[-_LOG_TAIL_BYTES:]
+
+
+def _detail_tail(text: str) -> str:
+    """Keep a result detail below the shared protocol's 4,000-char cap."""
+    trimmed = text.strip()
+    if len(trimmed) <= _MAX_GATE_DETAIL_CHARS:
+        return trimmed
+    return "…" + trimmed[-(_MAX_GATE_DETAIL_CHARS - 1) :]
 
 
 class BuildGate:
@@ -129,8 +138,6 @@ class BuildGate:
         container = f"ditto-screen-{agent_id}"
         canary_container = f"ditto-canary-{agent_id}"
         network = f"ditto-screen-{agent_id}"
-        canary_state_dir = tempfile.mkdtemp(prefix="ditto-canary-state-")
-        os.chmod(canary_state_dir, 0o755)
         tmp_path: str | None = None
         try:
             tmp_path, dl_detail = await self._download_verified(download_url, sha256)
@@ -144,19 +151,26 @@ class BuildGate:
             if not built:
                 return GateResult(False, f"build failed: {build_detail}")
 
-            served, serve_detail = await self._run_and_probe(
+            serve_result = await self._run_and_probe(
                 tag,
                 container,
                 canary_container=canary_container,
                 network=network,
-                canary_state_dir=canary_state_dir,
             )
-            if not served:
-                return GateResult(False, f"serve check failed: {serve_detail}")
+            if not serve_result.passed:
+                return GateResult(
+                    False,
+                    f"serve check failed: {serve_result.detail}",
+                    retryable=serve_result.retryable,
+                )
             return GateResult(True, "")
         except Exception as e:  # noqa: BLE001 - the loop must never die on one agent
             logger.exception("gate error for agent_id=%s", agent_id)
-            return GateResult(False, f"screener error: {type(e).__name__}: {e}")
+            return GateResult(
+                False,
+                f"screener error: {type(e).__name__}: {e}",
+                retryable=True,
+            )
         finally:
             await self._teardown(
                 container,
@@ -164,7 +178,6 @@ class BuildGate:
                 canary_container=canary_container,
                 network=network,
             )
-            shutil.rmtree(canary_state_dir, ignore_errors=True)
             if tmp_path is not None:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
@@ -278,20 +291,17 @@ class BuildGate:
         *,
         canary_container: str,
         network: str,
-        canary_state_dir: str,
-    ) -> tuple[bool, str]:
+    ) -> GateResult:
         """Run the image and await health against the isolated fake gateway."""
         port = self._config.container_port
         token = f"ditto-canary-{secrets.token_hex(16)}"
-        model_called_path = os.path.join(canary_state_dir, "model-called")
         started, detail = await self._start_canary_sidecar(
             canary_container=canary_container,
             network=network,
             token=token,
-            state_dir=canary_state_dir,
         )
         if not started:
-            return False, detail
+            return GateResult(False, detail, retryable=True)
 
         gateway = f"http://{_CANARY_ALIAS}:8080"
         run_args = [
@@ -328,21 +338,37 @@ class BuildGate:
         run_args.append(tag)
         code, out = await self._run(run_args, timeout=self._config.run_timeout_seconds)
         if code != 0:
-            return False, f"container did not start: {_log_tail(out)}"
+            return GateResult(False, f"container did not start: {_log_tail(out)}")
 
         harness_base = f"http://{_HARNESS_ALIAS}:{port}"
         healthy, detail = await self._wait_healthy(
             harness_base, probe_container=canary_container
         )
         if not healthy:
-            return False, detail
-        if not _MODEL_CALL_CANARY_ENABLED:
-            return True, ""
-        return await self._run_model_canary(
+            return GateResult(
+                False,
+                await self._with_container_logs(
+                    detail,
+                    harness_container=container,
+                    canary_container=canary_container,
+                ),
+            )
+        result = await self._run_model_canary(
             harness_base,
             token=token,
-            model_called_path=model_called_path,
+            model_called_path=None,
             probe_container=canary_container,
+        )
+        if result.passed:
+            return result
+        return GateResult(
+            False,
+            await self._with_container_logs(
+                result.detail,
+                harness_container=container,
+                canary_container=canary_container,
+            ),
+            retryable=result.retryable,
         )
 
     async def _start_canary_sidecar(
@@ -351,7 +377,6 @@ class BuildGate:
         canary_container: str,
         network: str,
         token: str,
-        state_dir: str,
     ) -> tuple[bool, str]:
         """Start the fake gateway beside the harness on an internal network."""
         code, out = await self._run(
@@ -383,12 +408,8 @@ class BuildGate:
                 "32",
                 "-e",
                 f"DITTO_CANARY_TOKEN={token}",
-                "-e",
-                "DITTO_CANARY_STATE_FILE=/state/model-called",
                 "-v",
                 f"{script}:/app/model_canary.py:ro",
-                "-v",
-                f"{state_dir}:/state",
                 _CANARY_IMAGE,
                 "python",
                 "/app/model_canary.py",
@@ -445,7 +466,7 @@ class BuildGate:
         token: str,
         model_called_path: str | None,
         probe_container: str | None = None,
-    ) -> tuple[bool, str]:
+    ) -> GateResult:
         """Run one hidden-response case and verify the gateway response was used."""
         request = {
             "case_id": secrets.token_hex(16),
@@ -463,7 +484,11 @@ class BuildGate:
                 timeout=min(self._config.run_timeout_seconds, 30.0),
             )
             if code != 0:
-                return False, f"model canary /run failed: {_log_tail(out)}"
+                return GateResult(
+                    False,
+                    f"model canary /run failed: {_log_tail(out)}",
+                    retryable=True,
+                )
             body = out.encode()
         else:
             try:
@@ -474,32 +499,66 @@ class BuildGate:
                     timeout=min(self._config.run_timeout_seconds, 30.0),
                 ) as response:
                     if not 200 <= response.status_code < 300:
-                        return (
+                        body = await response.aread()
+                        return GateResult(
                             False,
-                            f"model canary /run returned HTTP {response.status_code}",
+                            "model canary /run returned "
+                            f"HTTP {response.status_code}: "
+                            f"{_log_tail(body.decode(errors='replace'))}",
+                            retryable=True,
                         )
                     streamed = bytearray()
                     async for chunk in response.aiter_bytes():
                         streamed.extend(chunk)
                         if len(streamed) > _MAX_CANARY_RESPONSE_BYTES:
-                            return (
+                            return GateResult(
                                 False,
                                 "model canary /run response exceeded safety cap",
                             )
                     body = bytes(streamed)
             except httpx.HTTPError as e:
-                return False, f"model canary /run failed: {type(e).__name__}"
+                return GateResult(
+                    False,
+                    f"model canary /run failed: {type(e).__name__}",
+                    retryable=True,
+                )
 
-        if model_called_path is not None and not os.path.exists(model_called_path):
-            return False, "model canary observed no model call"
+        if probe_container is not None:
+            state_code, state_out = await self._request_from_sidecar(
+                probe_container,
+                "http://127.0.0.1:8080/__ditto_canary_state",
+                timeout=5.0,
+            )
+            if state_code != 0:
+                return GateResult(
+                    False,
+                    f"model canary state check failed: {_log_tail(state_out)}",
+                    retryable=True,
+                )
+            try:
+                model_calls = json.loads(state_out).get("model_calls")
+            except (json.JSONDecodeError, AttributeError):
+                return GateResult(
+                    False, "model canary returned invalid state", retryable=True
+                )
+            if not isinstance(model_calls, int):
+                return GateResult(
+                    False, "model canary returned invalid state", retryable=True
+                )
+            if model_calls < 1:
+                return GateResult(False, "model canary observed no model call")
+        elif model_called_path is not None and not os.path.exists(model_called_path):
+            return GateResult(False, "model canary observed no model call")
         try:
             payload = json.loads(body)
             final_text = payload.get("final_text", "")
         except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
-            return False, "model canary /run returned an invalid response"
+            return GateResult(False, "model canary /run returned an invalid response")
         if not isinstance(final_text, str) or token not in final_text:
-            return False, "model canary response was not used by the harness"
-        return True, ""
+            return GateResult(
+                False, "model canary response was not used by the harness"
+            )
+        return GateResult(True, "")
 
     async def _request_from_sidecar(
         self,
@@ -515,21 +574,66 @@ class BuildGate:
         if payload is not None:
             encoded = base64.b64encode(json.dumps(payload).encode()).decode()
             method = "POST"
-        script = (
-            "import base64,sys,urllib.error,urllib.request;"
-            "url,method,data=sys.argv[1:4];"
-            "body=base64.b64decode(data) if data else None;"
-            "req=urllib.request.Request(url,data=body,method=method,"
-            "headers={'Content-Type':'application/json'});"
-            "r=urllib.request.urlopen(req,timeout=5);"
-            f"out=r.read({_MAX_CANARY_RESPONSE_BYTES + 1});"
-            f"assert len(out)<={_MAX_CANARY_RESPONSE_BYTES},'response too large';"
-            "sys.stdout.buffer.write(out)"
-        )
+        script = f"""\
+import base64
+import sys
+import urllib.error
+import urllib.request
+
+url, method, data, timeout_raw = sys.argv[1:5]
+body = base64.b64decode(data) if data else None
+request = urllib.request.Request(
+    url, data=body, method=method, headers={{"Content-Type": "application/json"}}
+)
+try:
+    response = urllib.request.urlopen(request, timeout=float(timeout_raw))
+except urllib.error.HTTPError as error:
+    response = error
+output = response.read({_MAX_CANARY_RESPONSE_BYTES + 1})
+if len(output) > {_MAX_CANARY_RESPONSE_BYTES}:
+    sys.stdout.write("response exceeded safety cap")
+    raise SystemExit(23)
+if not 200 <= response.status < 300:
+    sys.stdout.buffer.write(f"HTTP {{response.status}}: ".encode() + output)
+    raise SystemExit(22)
+sys.stdout.buffer.write(output)
+"""
         return await self._run(
-            ["exec", container, "python", "-c", script, url, method, encoded],
+            [
+                "exec",
+                container,
+                "python",
+                "-c",
+                script,
+                url,
+                method,
+                encoded,
+                str(timeout),
+            ],
             timeout=timeout,
         )
+
+    async def _with_container_logs(
+        self,
+        detail: str,
+        *,
+        harness_container: str,
+        canary_container: str,
+    ) -> str:
+        """Attach bounded Docker logs before teardown removes the containers."""
+        sections: list[str] = []
+        for label, container in (
+            ("harness", harness_container),
+            ("model-canary", canary_container),
+        ):
+            _code, output = await self._run(["logs", container], timeout=15.0)
+            if output.strip():
+                sections.append(f"{label} logs:\n{_log_tail(output)}")
+        if not sections:
+            return detail
+        diagnostics = _log_tail("\n".join(sections))
+        logger.warning("screener container diagnostics: %s", diagnostics)
+        return _detail_tail(f"{detail}\n{diagnostics}")
 
     async def _teardown(
         self,
