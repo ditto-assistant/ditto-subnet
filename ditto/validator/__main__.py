@@ -63,7 +63,7 @@ async def _amain() -> int:
 
     try:
         async with httpx.AsyncClient(timeout=config.http_timeout_seconds) as http:
-            platform = PlatformClient(config, http)
+            platform = PlatformClient(config, http, keypair)
             dittobench = DittobenchClient(config, http)
 
             # Every validator both scores and sets weights, so it always runs a

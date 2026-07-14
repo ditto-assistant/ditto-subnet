@@ -249,6 +249,9 @@ class TestRunOnce:
         n = await worker.run_once()
         assert n == 1
         assert platform.submit_score.await_count == 1
+        assert (
+            platform.submit_score.await_args.kwargs["ticket_deadline"] == job.deadline
+        )
         chain.put_weights.assert_awaited_once_with(
             {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
         )

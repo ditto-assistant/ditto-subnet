@@ -34,6 +34,32 @@ from ditto.api_models.upload import (
 )
 
 
+class JobRequest(BaseModel):
+    """Fresh, one-time signed request to claim a scoring ticket."""
+
+    validator_hotkey: Annotated[
+        str, Field(pattern=_SS58_PATTERN, description="Claiming validator hotkey.")
+    ]
+    nonce: Annotated[UUID, Field(description="One-time claim nonce.")]
+    requested_at: Annotated[
+        datetime, Field(description="UTC time at which the claim was signed.")
+    ]
+    signature: Annotated[
+        str,
+        Field(
+            pattern=_SIGNATURE_HEX_PATTERN,
+            description="sr25519 signature over the canonical claim payload.",
+        ),
+    ]
+
+    @field_validator("requested_at")
+    @classmethod
+    def requested_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("requested_at must include a timezone")
+        return value
+
+
 class JobResponse(BaseModel):
     """Returned by ``POST /validator/job`` when a ticket is issued.
 
@@ -293,24 +319,29 @@ class SubmitScoreRequest(BaseModel):
     """Body of ``POST /validator/agent/{agent_id}/score``.
 
     The validator authenticates by signing a canonical payload binding the
-    agent id and the report contents — the UTF-8 bytes of
-    ``f"{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}"`` — with
-    the validator's hotkey keypair. The platform reconstructs and verifies the
-    same bytes, so a captured signature cannot be replayed against a different
-    agent nor cover an altered composite.
+    agent id, exact ticket lease, and report contents. The platform reconstructs
+    and verifies the same bytes, so a captured response from an expired lease
+    cannot be replayed after the ticket is reissued.
     """
 
     validator_hotkey: Annotated[
         str,
         Field(pattern=_SS58_PATTERN, description="Reporting validator's SS58 hotkey."),
     ]
+    ticket_deadline: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description="Exact deadline from the JobResponse ticket lease.",
+        ),
+    ] = None
     signature: Annotated[
         str,
         Field(
             pattern=_SIGNATURE_HEX_PATTERN,
             description=(
                 "Hex sr25519 signature over "
-                "``{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}``."
+                "the agent, exact ticket deadline, run, composite, and seed."
             ),
         ),
     ]
@@ -322,6 +353,7 @@ class SubmitScoreRequest(BaseModel):
                 "validator_hotkey": (
                     "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
                 ),
+                "ticket_deadline": "2026-07-09T12:30:00Z",
                 "signature": "ab" * 64,
                 "report": {
                     "run_id": "run_2026-06-08_abc123",
