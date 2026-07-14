@@ -1,8 +1,8 @@
-"""The screener build gate: does the submitted crate build and serve?
+"""The screener build gate: does the crate build, serve, and use the model?
 
-The gate is deliberately cheaper than a full DittoBench run — it answers only
-"does this compile into an image that comes up and serves ``/health``?" so a
-broken submission is rejected before it costs a scoring run.
+The gate is deliberately cheaper than a full DittoBench run. It verifies the
+image, service contract, and one synthetic model-call canary before a submission
+can consume a scoring run.
 
 Flow for one agent:
 
@@ -17,15 +17,17 @@ Flow for one agent:
    re-implements safe tar extraction. BuildKit is used with an optional
    ``gh_token`` secret for a private build dependency, when configured. Bounded by
    ``build_timeout_seconds``.
-4. **Serve smoke.** Run the image detached with a memory + pids cap on a
-   loopback-published port, and poll ``GET /health`` until it returns 2xx or
-   ``run_timeout_seconds`` elapses. No LLM key is needed — the gate never calls
-   ``/run``.
-5. **Teardown.** The container + image are always removed.
+4. **Serve smoke.** Run the image detached with a memory + pids cap and poll
+   ``GET /health`` until it returns 2xx.
+5. **Model canary.** Point the production provider environment at a host-side
+   fake OpenAI-compatible endpoint, call ``POST /run``, and require the harness
+   to return a random token known only to the fake model response.
+6. **Teardown.** The container + image are always removed.
 
-A pass is "built AND served"; anything else is a fail with a short ``detail``
-(build-log tail or the failing stage) that rides the verdict for the miner's
-benefit. Every stage is best-effort and never raises into the worker loop: an
+A pass is "built, served, and consumed a model response"; anything else fails
+with a short ``detail`` (build-log tail or the failing stage) that rides the
+verdict for the miner's benefit. Every stage is best-effort and never raises into
+the worker loop: an
 infrastructure error (Docker down) is reported as a non-pass with detail, so a
 flaky host does not silently promote or wrongly reject.
 
@@ -40,8 +42,10 @@ import asyncio
 import contextlib
 import hashlib
 import io
+import json
 import logging
 import os
+import secrets
 import tarfile
 import tempfile
 import tomllib
@@ -51,6 +55,8 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
+
+from ditto.screener.model_canary import LOCKED_HARNESS_MODEL, ModelCallCanary
 
 if TYPE_CHECKING:
     from ditto.screener.config import ScreenerConfig
@@ -62,6 +68,7 @@ _LOG_TAIL_BYTES = 2000
 # How long to wait between /health probes while the container boots.
 _PROBE_INTERVAL_SECONDS = 1.0
 _MAX_UNPACKED_BYTES = 64 * 1024 * 1024
+_MAX_CANARY_RESPONSE_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -91,7 +98,7 @@ def _log_tail(text: str) -> str:
 
 
 class BuildGate:
-    """Runs the build+serve check for one agent at a time.
+    """Runs the build, serve, and model-call checks for one agent at a time.
 
     Docker CLI calls are funnelled through :meth:`_run` so tests can stub the
     subprocess layer; HTTP (download + health probe) uses the injected client.
@@ -236,50 +243,118 @@ class BuildGate:
         return False, _log_tail(out)
 
     async def _run_and_probe(self, tag: str, container: str) -> tuple[bool, str]:
-        """Run the image detached and poll ``/health`` until it serves."""
+        """Run the image, await health, then prove it consumes a model response."""
         port = self._config.container_port
-        run_args = [
-            "run",
-            "-d",
-            "--rm",
-            "--name",
-            container,
-            "--memory",
-            self._config.build_memory,
-            "--pids-limit",
-            str(self._config.pids_limit),
-            "--publish",
-            f"127.0.0.1::{port}",
-        ]
-        # Inject smoke env (e.g. a dummy OPENROUTER_API_KEY): the reference
-        # harness builds its LLM-backed Baseline before binding /health, so
-        # without a key it exits before serving and the probe never connects.
-        for key, value in self._config.smoke_env:
-            run_args += ["-e", f"{key}={value}"]
-        run_args.append(tag)
-        code, out = await self._run(run_args, timeout=self._config.run_timeout_seconds)
-        if code != 0:
-            return False, f"container did not start: {_log_tail(out)}"
+        async with ModelCallCanary() as canary:
+            gateway = canary.gateway_url
+            run_args = [
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                container,
+                "--memory",
+                self._config.build_memory,
+                "--pids-limit",
+                str(self._config.pids_limit),
+                "--add-host",
+                "host.docker.internal:host-gateway",
+                "--publish",
+                f"127.0.0.1::{port}",
+            ]
+            for key, value in self._config.smoke_env:
+                run_args += ["-e", f"{key}={value}"]
+            # Mirror the production scorer's locked provider contract. These are
+            # appended last so an operator's legacy smoke env cannot bypass the
+            # fake gateway.
+            canary_env = {
+                "DITTOBENCH_PROVIDER": "chutes",
+                "DITTOBENCH_MODEL": LOCKED_HARNESS_MODEL,
+                "CHUTES_BASE_URL": f"{gateway}/v1",
+                "CHUTES_API_KEY": "relay",
+                "OPENAI_BASE_URL": f"{gateway}/v1",
+                "OPENAI_API_KEY": "relay",
+                "OLLAMA_BASE_URL": gateway,
+            }
+            for key, value in canary_env.items():
+                run_args += ["-e", f"{key}={value}"]
+            run_args.append(tag)
+            code, out = await self._run(
+                run_args, timeout=self._config.run_timeout_seconds
+            )
+            if code != 0:
+                return False, f"container did not start: {_log_tail(out)}"
 
-        mapped = await self._published_port(container, port)
-        if mapped is None:
-            return False, "could not resolve published port"
+            mapped = await self._published_port(container, port)
+            if mapped is None:
+                return False, "could not resolve published port"
 
-        base = f"http://127.0.0.1:{mapped}{self._config.health_path}"
+            harness_base = f"http://127.0.0.1:{mapped}"
+            healthy, detail = await self._wait_healthy(harness_base)
+            if not healthy:
+                return False, detail
+            return await self._run_model_canary(harness_base, canary)
+
+    async def _wait_healthy(self, harness_base: str) -> tuple[bool, str]:
+        """Poll the submitted container's health endpoint until the deadline."""
+        url = f"{harness_base}{self._config.health_path}"
         deadline = self._config.run_timeout_seconds
         waited = 0.0
         last = "no response"
         while waited < deadline:
             try:
-                resp = await self._client.get(base, timeout=5.0)
+                resp = await self._client.get(url, timeout=5.0)
                 if 200 <= resp.status_code < 300:
                     return True, ""
                 last = f"HTTP {resp.status_code}"
             except httpx.HTTPError as e:
-                last = f"{type(e).__name__}"
+                last = type(e).__name__
             await asyncio.sleep(_PROBE_INTERVAL_SECONDS)
             waited += _PROBE_INTERVAL_SECONDS
         return False, f"/health never healthy within {deadline:g}s ({last})"
+
+    async def _run_model_canary(
+        self, harness_base: str, canary: ModelCallCanary
+    ) -> tuple[bool, str]:
+        """Run one hidden-response case and verify the gateway response was used."""
+        request = {
+            "case_id": secrets.token_hex(16),
+            "system_prompt": "You are a concise assistant.",
+            "user_input": "Give a brief acknowledgement.",
+            "tools": [],
+            "tool_endpoint": "",
+            "user_id": secrets.token_hex(16),
+        }
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{harness_base}/run",
+                json=request,
+                timeout=min(self._config.run_timeout_seconds, 30.0),
+            ) as response:
+                if not 200 <= response.status_code < 300:
+                    return (
+                        False,
+                        f"model canary /run returned HTTP {response.status_code}",
+                    )
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > _MAX_CANARY_RESPONSE_BYTES:
+                        return False, "model canary /run response exceeded safety cap"
+        except httpx.HTTPError as e:
+            return False, f"model canary /run failed: {type(e).__name__}"
+
+        if canary.model_calls == 0:
+            return False, "model canary observed no model call"
+        try:
+            payload = json.loads(body)
+            final_text = payload.get("final_text", "")
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            return False, "model canary /run returned an invalid response"
+        if not isinstance(final_text, str) or canary.token not in final_text:
+            return False, "model canary response was not used by the harness"
+        return True, ""
 
     async def _published_port(self, container: str, container_port: int) -> str | None:
         """Resolve the ephemeral host port Docker mapped for ``container_port``."""
