@@ -551,6 +551,7 @@ class ValidatorWorker:
             seed=job.seed,
             dataset_sha256=job.dataset_sha256,
             run_size=job.run_size,
+            ticket_deadline=job.deadline,
         )
 
     async def _evaluate(
@@ -602,21 +603,33 @@ class ValidatorWorker:
         return report
 
     async def _submit_report(
-        self, agent_id: UUID, miner_hotkey: str, report: ScoreReport
+        self,
+        agent_id: UUID,
+        miner_hotkey: str,
+        report: ScoreReport,
+        *,
+        ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Sign and submit an already-scored :class:`ScoreReport`. The signature
-        binds ``(validator_hotkey, agent_id, run_id, composite, seed)`` of this
-        exact run; any advisory ``confirmation_composites`` it carries rides
-        unsigned (like ``composite_stderr``)."""
+        binds ``(validator_hotkey, agent_id, ticket_deadline, run_id, composite,
+        seed)`` of this exact run. The ticket deadline is the lease identity, so
+        a late result cannot be replayed after reissue. Advisory
+        ``confirmation_composites`` rides unsigned (like ``composite_stderr``)."""
         signature = sign_score(
             self._keypair,
             validator_hotkey=self._config.validator_hotkey,
             agent_id=agent_id,
+            ticket_deadline=ticket_deadline,
             run_id=report.run_id,
             composite=report.composite,
             seed=report.seed,
         )
-        await self._platform.submit_score(agent_id, signature=signature, report=report)
+        await self._platform.submit_score(
+            agent_id,
+            signature=signature,
+            report=report,
+            ticket_deadline=ticket_deadline,
+        )
         logger.info(
             "scored agent %s (miner=%s composite=%.3f seed=%d)",
             agent_id,
@@ -635,6 +648,7 @@ class ValidatorWorker:
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
+        ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
         path used by the ticket sweep (:meth:`_score_job`)."""
@@ -645,7 +659,12 @@ class ValidatorWorker:
             dataset_sha256=dataset_sha256,
             run_size=run_size,
         )
-        return await self._submit_report(agent_id, miner_hotkey, report)
+        return await self._submit_report(
+            agent_id,
+            miner_hotkey,
+            report,
+            ticket_deadline=ticket_deadline,
+        )
 
     async def _confirm_and_submit(
         self,

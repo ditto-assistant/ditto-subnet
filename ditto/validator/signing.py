@@ -16,6 +16,7 @@ the key.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from ditto.validator.errors import ValidatorConfigError
@@ -54,18 +55,27 @@ def score_signing_message(
     *,
     validator_hotkey: str,
     agent_id: UUID,
+    ticket_deadline: datetime | None = None,
     run_id: str,
     composite: float,
     seed: int,
 ) -> bytes:
     """Build the canonical bytes a score signature is computed over.
 
-    ``{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}``. The
+    ``{validator_hotkey}:{agent_id}:{ticket_deadline}:{run_id}:``
+    ``{composite!r}:{seed}``. The exact ticket deadline is the lease identity;
     platform reconstructs this exact string from the request to verify, so both
     sides MUST format it identically — in particular ``composite`` uses Python's
     shortest round-trip float repr, which the JSON transport preserves.
     """
-    return (f"{validator_hotkey}:{agent_id}:{run_id}:{composite!r}:{seed}").encode()
+    lease = (
+        ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
+        if ticket_deadline is not None
+        else ""
+    )
+    return (
+        f"{validator_hotkey}:{agent_id}:{lease}:{run_id}:{composite!r}:{seed}"
+    ).encode()
 
 
 def sign_score(
@@ -73,6 +83,7 @@ def sign_score(
     *,
     validator_hotkey: str,
     agent_id: UUID,
+    ticket_deadline: datetime | None = None,
     run_id: str,
     composite: float,
     seed: int,
@@ -81,6 +92,7 @@ def sign_score(
     message = score_signing_message(
         validator_hotkey=validator_hotkey,
         agent_id=agent_id,
+        ticket_deadline=ticket_deadline,
         run_id=run_id,
         composite=composite,
         seed=seed,

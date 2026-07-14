@@ -769,6 +769,18 @@
         "pattern": "^[0-9a-fA-F]{128}$",
         "type": "string"
       },
+      "ticket_deadline": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "validator_hotkey": {
         "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
         "type": "string"

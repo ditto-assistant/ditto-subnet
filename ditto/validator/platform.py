@@ -9,6 +9,7 @@ signature. It never touches the platform DB directly.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -97,12 +98,18 @@ class PlatformClient:
         return ArtifactResponse.model_validate(resp.json())
 
     async def submit_score(
-        self, agent_id: UUID, *, signature: str, report: ScoreReport
+        self,
+        agent_id: UUID,
+        *,
+        signature: str,
+        report: ScoreReport,
+        ticket_deadline: datetime | None = None,
     ) -> SubmitScoreResponse:
         """Report a signed score for ``agent_id``."""
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/score"
         payload = SubmitScoreRequest(
             validator_hotkey=self._config.validator_hotkey,
+            ticket_deadline=ticket_deadline,
             signature=signature,
             report=report,
         )
