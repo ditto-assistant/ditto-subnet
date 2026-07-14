@@ -28,7 +28,7 @@ from ditto.miner_cli.models import NetworkConfig
 NETWORKS: dict[str, NetworkConfig] = {
     "finney": NetworkConfig(
         name="finney",
-        api_url="https://api.ditto.subnet.ai",
+        api_url="https://platform-api.heyditto.ai/",
         subtensor_network="finney",
     ),
     "test": NetworkConfig(
@@ -44,11 +44,11 @@ NETWORKS: dict[str, NetworkConfig] = {
 }
 """Canonical (API URL, subtensor network) pairs keyed by user-facing name.
 
-``finney`` (mainnet) and ``test`` (testnet) API URLs are placeholders
-until the API host is provisioned. The ``local`` entry points at the
-local docker-compose stack used by integration tests and manual smoke;
-the matching subtensor must be supplied by the developer (bittensor's
-localnet workflow, not bundled in this repo).
+``finney`` (mainnet) points at the production platform API. The ``test``
+(testnet) URL remains a placeholder until that API host is provisioned.
+The ``local`` entry points at the local docker-compose stack used by
+integration tests and manual smoke; the matching subtensor must be supplied
+by the developer (bittensor's localnet workflow, not bundled in this repo).
 """
 
 
