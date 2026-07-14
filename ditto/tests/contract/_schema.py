@@ -1,9 +1,8 @@
 """Structural contract of the worker-facing wire models.
 
-There is no shared package between ``ditto-subnet`` and ``ditto-platform``: the
-modules under ``ditto/api_models/`` here are hand-maintained copies of the
-platform's, and the **platform's OpenAPI schema is the contract**. This module
-reduces those models to their *structure* — field names, types, required-ness —
+The validator models under ``ditto/api_models/`` remain hand-maintained copies
+of the platform's. This module reduces those models to their *structure* —
+field names, types, required-ness —
 dropping prose (``title`` / ``description`` / ``example(s)``) so a docstring
 edit on one side does not look like a contract break, while a renamed, retyped,
 added, or removed field does.
@@ -36,16 +35,6 @@ SHARED_MODELS = [
     "LedgerResponse",
 ]
 
-# The screener request/response models (the ``/screener/*`` boundary). The
-# ``/artifact`` shape is ``ArtifactResponse`` above — shared with the validator
-# and imported from ``ditto.api_models.validator`` on both sides.
-SCREENER_MODELS = [
-    "ScreenerQueueItem",
-    "ScreenerQueueResponse",
-    "ScreenResultRequest",
-    "ScreenResultResponse",
-]
-
 # Cosmetic JSON-Schema keys that carry prose/illustration, not structure.
 _STRIP_KEYS = {"title", "description", "examples", "example"}
 
@@ -70,8 +59,3 @@ def compute_contract(
     mod = importlib.import_module(module)
 
     return {name: _strip(getattr(mod, name).model_json_schema()) for name in models}
-
-
-def compute_screener_contract() -> dict[str, Any]:
-    """The screener-boundary counterpart of :func:`compute_contract`."""
-    return compute_contract(SCREENER_MODELS, "ditto.api_models.screener")

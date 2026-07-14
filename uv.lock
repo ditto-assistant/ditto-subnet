@@ -531,6 +531,7 @@ dependencies = [
     { name = "bittensor" },
     { name = "bittensor-pylon-client" },
     { name = "bittensor-wallet" },
+    { name = "ditto-screening-protocol" },
     { name = "httpx" },
     { name = "pydantic" },
 ]
@@ -556,6 +557,7 @@ requires-dist = [
     { name = "bittensor", specifier = ">=10.2.1" },
     { name = "bittensor-pylon-client", git = "https://github.com/bittensor-church/bittensor-pylon?subdirectory=pylon_client" },
     { name = "bittensor-wallet", specifier = ">=4.1.0" },
+    { name = "ditto-screening-protocol", directory = "packages/ditto-screening-protocol" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2" },
     { name = "wandb", marker = "extra == 'telemetry'", specifier = ">=0.17" },
@@ -571,6 +573,17 @@ dev = [
     { name = "pytest-cov", specifier = ">=5" },
     { name = "ruff", specifier = ">=0.6" },
 ]
+
+[[package]]
+name = "ditto-screening-protocol"
+version = "0.1.0"
+source = { directory = "packages/ditto-screening-protocol" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2" }]
 
 [[package]]
 name = "docker"
