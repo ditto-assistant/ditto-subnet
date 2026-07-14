@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.6.6 (2026-07-14)
+
+### Bug Fixes
+
+- Report durable weight telemetry status
+  ([#129](https://github.com/ditto-assistant/ditto-subnet/pull/129),
+  [`dc54030`](https://github.com/ditto-assistant/ditto-subnet/commit/dc540308613ed038f03862829a23e01829e2026d))
+
+
 ## v0.6.5 (2026-07-14)
 
 ### Bug Fixes
