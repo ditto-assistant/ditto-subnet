@@ -12,11 +12,14 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 ROOT = Path(__file__).parents[2]
 UPDATER = ROOT / "scripts/validator-auto-update.sh"
 IMAGE_REPOSITORY = "ghcr.io/ditto-assistant/ditto-subnet-validator"
 CHANNEL = f"{IMAGE_REPOSITORY}:compat-1"
 DIGEST = f"{IMAGE_REPOSITORY}@sha256:" + "2" * 64
+FAILED_DIGEST = f"{IMAGE_REPOSITORY}@sha256:" + "3" * 64
 SOURCE = "https://github.com/ditto-assistant/ditto-subnet"
 
 
@@ -51,6 +54,7 @@ def _initial_state() -> dict[str, Any]:
         "fail_candidate": False,
         "fail_resume": False,
         "fail_stop": False,
+        "interrupt_resume_image": None,
         "images": {old["id"]: old, CHANNEL: new, DIGEST: new},
         "container": {
             "id": "validator-1",
@@ -75,6 +79,7 @@ FAKE_DOCKER = r"""#!/usr/bin/env python3
 import json
 import os
 import re
+import signal
 import sys
 
 path = os.environ["FAKE_DOCKER_STATE"]
@@ -129,16 +134,20 @@ elif args[:1] == ["exec"]:
     print(json.dumps(state["container"]["runtime_state"], separators=(",", ":")))
     save()
 elif args[:1] == ["kill"]:
-    signal = next(
+    signal_name = next(
         value.split("=", 1)[1] for value in args if value.startswith("--signal=")
     )
-    if signal == "USR2" and state["fail_resume"]:
+    if signal_name == "USR2" and state["fail_resume"]:
         save()
         raise SystemExit(1)
-    if signal == "USR1" and state["drain_mode"] == "success":
+    if signal_name == "USR1" and state["drain_mode"] == "success":
         state["container"]["runtime_state"]["state"] = "drained"
-    elif signal == "USR2":
+    elif signal_name == "USR2":
         state["container"]["runtime_state"]["state"] = "working"
+        if state.get("interrupt_resume_image") == state["container"]["image"]:
+            state["interrupt_resume_image"] = None
+            save()
+            os.kill(os.getppid(), signal.SIGTERM)
     save()
 elif args[:2] == ["image", "tag"]:
     state["images"][args[3]] = image(args[2])
@@ -238,6 +247,44 @@ def test_disabled_mode_does_not_touch_docker(
     state = _read_state(state_path)
     assert state["calls"] == []
     assert not any(call[0] == "up" for call in state["compose_calls"])
+
+
+def test_timeout_budget_is_bounded_by_operator_drain_and_readiness_settings(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    env["VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS"] = "5400"
+    env["VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS"] = "600"
+
+    result = _run(env, "budget")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "TIMEOUT_START_SECONDS=8104",
+        "TIMEOUT_STOP_SECONDS=2103",
+    ]
+    assert _read_state(state_path)["calls"] == []
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS", "0"),
+        ("VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS", "invalid"),
+        ("VALIDATOR_AUTO_UPDATE_CHECK_SECONDS", "-1"),
+    ],
+)
+def test_timeout_budget_rejects_non_positive_settings(
+    updater_env: tuple[dict[str, str], Path, Path], name: str, value: str
+) -> None:
+    env, state_path, _ = updater_env
+    env[name] = value
+
+    result = _run(env, "budget")
+
+    assert result.returncode == 1
+    assert "must be a positive integer" in result.stderr
+    assert _read_state(state_path)["calls"] == []
 
 
 def test_scope_label_failure_stops_before_any_container_mutation(
@@ -456,6 +503,56 @@ def test_success_replaces_only_validator_and_retains_rollback(
     assert f"CURRENT_IMAGE={DIGEST}" in record.read_text()
 
 
+def test_term_at_committed_boundary_resumes_candidate_from_journal(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    state = _read_state(state_path)
+    state["interrupt_resume_image"] = "sha256:" + "2" * 64
+    state_path.write_text(json.dumps(state))
+
+    result = _run(env, "run")
+
+    assert result.returncode == 143, result.stderr
+    interrupted = _read_state(state_path)
+    assert interrupted["container"]["image"] == "sha256:" + "2" * 64
+    assert interrupted["container"]["runtime_state"]["state"] == "working"
+    transaction = Path(env["DITTO_VALIDATOR_UPDATE_STATE_DIR"]) / "transaction.env"
+    assert "PHASE=committed" in transaction.read_text()
+
+    retry = _run(env, "run")
+    assert retry.returncode == 0, retry.stderr
+    assert not transaction.exists()
+    assert "already running validator" in retry.stderr
+
+
+def test_term_at_rollback_ready_boundary_resumes_previous_image_from_journal(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    state = _read_state(state_path)
+    state["fail_candidate"] = True
+    state["interrupt_resume_image"] = "sha256:" + "1" * 64
+    state_path.write_text(json.dumps(state))
+
+    result = _run(env, "run")
+
+    assert result.returncode == 143, result.stderr
+    interrupted = _read_state(state_path)
+    assert interrupted["container"]["image"] == "sha256:" + "1" * 64
+    assert interrupted["container"]["runtime_state"]["state"] == "working"
+    updater_state = Path(env["DITTO_VALIDATOR_UPDATE_STATE_DIR"])
+    transaction = updater_state / "transaction.env"
+    assert "PHASE=rollback_ready" in transaction.read_text()
+    assert not (updater_state / "failed-candidate").exists()
+
+    retry = _run(env, "run")
+    assert retry.returncode == 0, retry.stderr
+    assert "candidate is suppressed" in retry.stderr
+    assert (updater_state / "failed-candidate").read_text().strip() == DIGEST
+    assert not transaction.exists()
+
+
 def test_failed_candidate_readiness_automatically_restores_previous_image(
     updater_env: tuple[dict[str, str], Path, Path],
 ) -> None:
@@ -488,6 +585,48 @@ def test_failed_candidate_readiness_automatically_restores_previous_image(
     recovered = _read_state(state_path)
     assert not any(call[0] == "up" for call in recovered["compose_calls"])
     assert recovered["container"]["runtime_state"]["state"] == "working"
+
+
+def test_deferred_new_channel_keeps_older_failed_digest_suppressed(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    updater_state = Path(env["DITTO_VALIDATOR_UPDATE_STATE_DIR"])
+    updater_state.mkdir()
+    failed_file = updater_state / "failed-candidate"
+    failed_file.write_text(FAILED_DIGEST + "\n")
+    state = _read_state(state_path)
+    failed_image = {
+        **state["images"][DIGEST],
+        "id": "sha256:" + "3" * 64,
+        "repo_digests": [FAILED_DIGEST],
+    }
+    state["images"][FAILED_DIGEST] = failed_image
+    state["container"]["runtime_state"]["state"] = "starting"
+    state["container"]["runtime_state"]["platform_accepted"] = False
+    state_path.write_text(json.dumps(state))
+
+    deferred = _run(env, "run")
+
+    assert deferred.returncode == 0, deferred.stderr
+    assert "deferring update" in deferred.stderr
+    assert failed_file.read_text().strip() == FAILED_DIGEST
+
+    state = _read_state(state_path)
+    state["images"][CHANNEL] = failed_image
+    state["container"]["runtime_state"]["state"] = "working"
+    state["container"]["runtime_state"]["platform_accepted"] = True
+    state["calls"] = []
+    state["compose_calls"] = []
+    state_path.write_text(json.dumps(state))
+
+    rollback = _run(env, "run")
+
+    assert rollback.returncode == 0, rollback.stderr
+    assert "candidate is suppressed" in rollback.stderr
+    final = _read_state(state_path)
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert not any(call[0] == "up" for call in final["compose_calls"])
 
 
 def test_power_loss_journal_restores_uncommitted_candidate_before_suppression(

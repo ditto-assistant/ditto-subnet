@@ -21,6 +21,16 @@ service_user="${DITTO_VALIDATOR_UPDATE_USER:-${SUDO_USER:-}}"
   die "set DITTO_VALIDATOR_UPDATE_USER to the non-root operator who can run Docker"
 id "$service_user" >/dev/null 2>&1 || die "operator user does not exist: $service_user"
 
+timeout_budget="$("$ROOT_DIR/scripts/validator-auto-update.sh" budget)"
+start_timeout_seconds="$(
+  awk -F= '$1 == "TIMEOUT_START_SECONDS" { print $2 }' <<<"$timeout_budget"
+)"
+stop_timeout_seconds="$(
+  awk -F= '$1 == "TIMEOUT_STOP_SECONDS" { print $2 }' <<<"$timeout_budget"
+)"
+[[ "$start_timeout_seconds" =~ ^[1-9][0-9]*$ ]] || die "invalid updater start timeout budget"
+[[ "$stop_timeout_seconds" =~ ^[1-9][0-9]*$ ]] || die "invalid updater stop timeout budget"
+
 mkdir -p "$ROOT_DIR/.validator-update"
 chown "$service_user":"$(id -gn "$service_user")" "$ROOT_DIR/.validator-update"
 
@@ -37,8 +47,8 @@ User=$service_user
 WorkingDirectory=$ROOT_DIR
 Environment=DITTO_SUBNET_BUILD_CACHE=$ROOT_DIR/.validator-update/build-cache
 ExecStart=$ROOT_DIR/scripts/validator-auto-update.sh run
-TimeoutStartSec=180min
-TimeoutStopSec=10min
+TimeoutStartSec=${start_timeout_seconds}s
+TimeoutStopSec=${stop_timeout_seconds}s
 UMask=0077
 NoNewPrivileges=true
 CapabilityBoundingSet=

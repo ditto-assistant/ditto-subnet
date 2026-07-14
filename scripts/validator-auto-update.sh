@@ -71,6 +71,24 @@ require_positive_integer() {
   [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "$name must be a positive integer"
 }
 
+show_timeout_budget() {
+  local check_seconds drain_timeout ready_timeout
+  drain_timeout="$(setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 4800)"
+  ready_timeout="$(setting VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS 180)"
+  check_seconds="$(setting VALIDATOR_AUTO_UPDATE_CHECK_SECONDS 5)"
+  require_positive_integer VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS "$drain_timeout"
+  require_positive_integer VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS "$ready_timeout"
+  require_positive_integer VALIDATOR_AUTO_UPDATE_CHECK_SECONDS "$check_seconds"
+
+  # Start covers the drain, candidate verification, automatic rollback, and a
+  # conservative extra readiness window. Stop covers cleanup's direct resume
+  # plus rollback readiness and rollback resume, with bounded Docker overhead.
+  printf 'TIMEOUT_START_SECONDS=%d\n' \
+    "$((drain_timeout + 4 * ready_timeout + 4 * check_seconds + 300))"
+  printf 'TIMEOUT_STOP_SECONDS=%d\n' \
+    "$((3 * ready_timeout + 3 * check_seconds + 300))"
+}
+
 docker_image_label() {
   local image="$1" label="$2" value
   value="$(
@@ -441,16 +459,16 @@ perform_replacement() {
     fi
     record_transaction rollback_ready "$rollback_ref" "$current_image_id" \
       "$candidate_ref" "$candidate_image_id" "$candidate_version" "$candidate_revision"
-    OLD_CONTAINER_STOPPED=false
-    TRANSACTION_COMPLETE=true
     container="$(target_container)"
     DRAINED_CONTAINER="$container"
     resume_and_verify "$container" "$ready_timeout" "$check_seconds" || \
       die "previous image was restored quiescently but could not be resumed"
-    DRAINED_CONTAINER=""
     if [ "$allow_downgrade" != "true" ]; then
       printf '%s\n' "$candidate_ref" >"$FAILED_CANDIDATE_FILE"
     fi
+    OLD_CONTAINER_STOPPED=false
+    TRANSACTION_COMPLETE=true
+    DRAINED_CONTAINER=""
     rm -f "$TRANSACTION_FILE"
     die "candidate failed readiness and the previous image was restored"
   fi
@@ -459,22 +477,47 @@ perform_replacement() {
     "$candidate_ref" "$candidate_image_id" "$candidate_version" "$candidate_revision"
   record_transaction committed "$rollback_ref" "$current_image_id" \
     "$candidate_ref" "$candidate_image_id" "$candidate_version" "$candidate_revision"
-  record_success "$rollback_ref" "$candidate_ref" "$candidate_version" "$candidate_revision"
-  OLD_CONTAINER_STOPPED=false
-  TRANSACTION_COMPLETE=true
   container="$(target_container)"
   DRAINED_CONTAINER="$container"
   resume_and_verify "$container" "$ready_timeout" "$check_seconds" || \
     die "candidate was committed quiescently but could not be resumed"
+  record_success "$rollback_ref" "$candidate_ref" "$candidate_version" "$candidate_revision"
+  if [ "$allow_downgrade" != "true" ]; then
+    rm -f "$FAILED_CANDIDATE_FILE"
+  fi
+  OLD_CONTAINER_STOPPED=false
+  TRANSACTION_COMPLETE=true
   DRAINED_CONTAINER=""
   rm -f "$TRANSACTION_FILE"
   log "updated validator $current_version -> $candidate_version; retained rollback image $rollback_ref"
 }
 
 cleanup() {
-  local status=$?
+  local status=$? journal_container journal_phase
   trap - EXIT INT TERM
   set +e
+  journal_phase="$(transaction_value PHASE 2>/dev/null || true)"
+  case "$journal_phase" in
+    rollback_ready | committed)
+      # These journal phases identify the image that owns the quiescent target.
+      # Recover from the durable phase rather than depending on the assignment
+      # order of the in-memory flags around the journal write.
+      journal_container="$(target_container 2>/dev/null || true)"
+      if [ -n "$journal_container" ]; then
+        log "interrupted at $journal_phase; resuming the journal-selected validator"
+        if resume_and_verify "$journal_container" "$CLEANUP_READY_TIMEOUT" "$CLEANUP_CHECK_SECONDS"; then
+          OLD_CONTAINER_STOPPED=false
+          TRANSACTION_COMPLETE=true
+          DRAINED_CONTAINER=""
+        else
+          log "CRITICAL: could not resume the $journal_phase validator"
+        fi
+        # Do not spend a second readiness window on the same container below.
+        # If journal recovery failed, the rollback block remains armed.
+        DRAINED_CONTAINER=""
+      fi
+      ;;
+  esac
   if [ -n "$DRAINED_CONTAINER" ]; then
     log "interrupted after drain; resuming the original validator"
     if resume_and_verify "$DRAINED_CONTAINER" "$CLEANUP_READY_TIMEOUT" "$CLEANUP_CHECK_SECONDS"; then
@@ -563,9 +606,14 @@ show_status() {
 
 mode="${1:-run}"
 case "$mode" in
-  run | rollback | status) ;;
-  *) die "usage: $0 [run|status|rollback]" ;;
+  budget | run | rollback | status) ;;
+  *) die "usage: $0 [run|status|rollback|budget]" ;;
 esac
+
+if [ "$mode" = "budget" ]; then
+  show_timeout_budget
+  exit 0
+fi
 
 command -v docker >/dev/null 2>&1 || die "Docker is not installed"
 [ -x "$COMPOSE" ] || die "validator Compose wrapper is not executable"
@@ -620,4 +668,3 @@ if [ -f "$FAILED_CANDIDATE_FILE" ] && [ "$(cat "$FAILED_CANDIDATE_FILE")" = "$ca
   exit 0
 fi
 perform_replacement "$candidate_digest_ref" false "$drain_timeout" "$ready_timeout" "$check_seconds"
-rm -f "$FAILED_CANDIDATE_FILE"

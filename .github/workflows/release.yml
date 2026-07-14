@@ -75,6 +75,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
 
       # Release commits use [skip ci], so repeat the complete code checks on the
       # exact source that will be published instead of trusting the parent run.
@@ -93,6 +94,7 @@ jobs:
           uv run ruff check .
           uv run mypy ditto/
           uv run pytest
+          uv run pytest -m integration ditto/tests/test_validator_auto_update.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

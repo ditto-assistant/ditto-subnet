@@ -260,8 +260,7 @@ class TestRunOnce:
             keypair=keypair,
         )
 
-        n = await worker.run_once()
-        assert n == 1
+        assert await worker.run_once() == 1
         heartbeats = [
             call.args[0] for call in platform.submit_heartbeat.await_args_list
         ]
@@ -387,7 +386,7 @@ class TestRunOnce:
 
         platform.submit_score = AsyncMock(side_effect=blocked_submit)
         config = _config()
-        config.sweep_seconds = 0.001
+        config.sweep_seconds = 120
         chain = MagicMock()
         chain.get_weights_rate_limit = AsyncMock(return_value=None)
         chain.put_weights = AsyncMock()
@@ -441,9 +440,13 @@ class TestRunOnce:
 
         drain.clear()
         for _ in range(100):
-            if ("state", "ready") in events[events.index(("state", "drained")) + 1 :]:
+            resumed = ("state", "ready") in events[
+                events.index(("state", "drained")) + 1 :
+            ]
+            if resumed and chain.put_weights.await_count:
                 break
             await asyncio.sleep(0.001)
+        assert chain.put_weights.await_count == 1
         stop.set()
         await asyncio.wait_for(task, timeout=1)
         assert ("state", "ready") in events[events.index(("state", "drained")) + 1 :]
@@ -504,7 +507,7 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once(set_weights=False) == 0
+        assert (await worker.run_once(set_weights=False)).queue_depth == 0
         platform.request_job.assert_awaited_once()
 
     async def test_failed_preflight_claims_no_ticket_but_still_sets_weights(
@@ -1037,7 +1040,7 @@ class TestRunOnce:
         )
         n = await worker.run_once()
 
-        assert n == 1  # the item was pulled...
+        assert n.queue_depth == 1  # the item was pulled...
         dittobench.score_tarball.assert_not_awaited()  # ...but never scored
         platform.submit_score.assert_not_awaited()
         chain.put_weights.assert_awaited_once_with(
@@ -1074,7 +1077,7 @@ class TestRunOnce:
         )
         n = await worker.run_once()
 
-        assert n == 1  # counted against the sweep cap...
+        assert n.queue_depth == 1  # counted against the sweep cap...
         platform.get_artifact.assert_not_awaited()  # ...but refused unscored
         dittobench.score_tarball.assert_not_awaited()
         platform.submit_score.assert_not_awaited()
@@ -1138,7 +1141,7 @@ class TestRunOnce:
         )
         n = await worker.run_once()
 
-        assert n == 1  # counted against the sweep cap...
+        assert n.queue_depth == 1  # counted against the sweep cap...
         platform.get_artifact.assert_not_awaited()  # ...but not even fetched
         dittobench.score_tarball.assert_not_awaited()
         platform.submit_score.assert_not_awaited()
@@ -1159,7 +1162,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
 
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with(
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
@@ -1176,7 +1179,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
 
     async def test_job_poll_failure_still_submits_safe_idle_weights(self) -> None:
@@ -1193,7 +1196,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
 
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
 
     async def test_job_poll_failure_preserves_accepted_score_weights(self) -> None:
@@ -1211,7 +1214,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
 
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with(
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
@@ -1261,7 +1264,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.has_validator_permit.assert_awaited_once()
         chain.put_weights.assert_not_awaited()
 
@@ -1279,7 +1282,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with(
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
@@ -1300,7 +1303,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once()
 
     async def test_stake_below_minimum_skips_weight_submission(self) -> None:
@@ -1322,7 +1325,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.get_stake_tao.assert_awaited_once()
         chain.put_weights.assert_not_awaited()
 
@@ -1343,7 +1346,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with(
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
@@ -1366,7 +1369,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once()
 
     async def test_min_stake_disabled_never_reads_stake(self) -> None:
@@ -1386,7 +1389,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.get_stake_tao.assert_not_awaited()
         chain.put_weights.assert_awaited_once()
 
@@ -1411,7 +1414,7 @@ class TestRunOnce:
             keypair=keypair,
         )
         n = await worker.run_once(set_weights=False)
-        assert n == 1
+        assert n.queue_depth == 1
         assert platform.submit_score.await_count == 1
         platform.get_ledger.assert_awaited()  # read for the stale-champion re-score
         chain.put_weights.assert_not_awaited()
@@ -1447,7 +1450,7 @@ class TestRunOnce:
         )
 
         n = await worker.run_once()
-        assert n == 2
+        assert n.queue_depth == 2
         # The lone eligible miner receives the released 20%; 80% stays burned.
         chain.put_weights.assert_awaited_once_with(
             {"5MinerG" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
@@ -1468,7 +1471,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_not_awaited()
 
     async def test_put_weights_retries_transient_failure(

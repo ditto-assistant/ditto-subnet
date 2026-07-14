@@ -8,6 +8,8 @@ on:
 jobs:
   compose-config:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -18,6 +20,8 @@ jobs:
             compose-sha256: c372e512a36e67716b0b3a1264ccdc461dec7a7beff601b81f7c5fb008e3511e
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Install pinned Docker Compose ${{ matrix.compose-version }}
         env:
@@ -44,6 +48,8 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
@@ -67,3 +73,6 @@ jobs:
 
       - name: pytest
         run: uv run pytest
+
+      - name: Validator updater integration tests
+        run: uv run pytest -m integration ditto/tests/test_validator_auto_update.py

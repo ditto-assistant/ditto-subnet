@@ -193,6 +193,15 @@ def _parse_float(name: str, default: str) -> float:
         raise ValidatorConfigError(f"{name} must be a number, got {raw!r}") from e
 
 
+def check_validator_compatibility_config(expected_epoch: str) -> None:
+    """Fail closed when deployment and image compatibility epochs differ."""
+    if expected_epoch != str(VALIDATOR_COMPATIBILITY_EPOCH):
+        raise ValidatorConfigError(
+            "validator compatibility epoch mismatch: image is "
+            f"{VALIDATOR_COMPATIBILITY_EPOCH}, deployment expects {expected_epoch}"
+        )
+
+
 def parse_validator_config_from_env() -> ValidatorConfig:
     """Build a :class:`ValidatorConfig` from ``VALIDATOR_*`` / ``PYLON_*`` env.
 
@@ -204,12 +213,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         "VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH",
         str(VALIDATOR_COMPATIBILITY_EPOCH),
     )
-    if expected_compatibility_epoch != str(VALIDATOR_COMPATIBILITY_EPOCH):
-        raise ValidatorConfigError(
-            "validator compatibility epoch mismatch: image is "
-            f"{VALIDATOR_COMPATIBILITY_EPOCH}, deployment expects "
-            f"{expected_compatibility_epoch}"
-        )
+    check_validator_compatibility_config(expected_compatibility_epoch)
 
     run_size = os.environ.get("VALIDATOR_RUN_SIZE", "full")
     if run_size not in {"small", "medium", "full"}:
