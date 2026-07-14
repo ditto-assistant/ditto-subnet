@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.7.0 (2026-07-14)
+
+### Features
+
+- Show screening reasons in miner status
+  ([#131](https://github.com/ditto-assistant/ditto-subnet/pull/131),
+  [`0b59d46`](https://github.com/ditto-assistant/ditto-subnet/commit/0b59d46d7ca2ffdb2c84edf5336fd79b17042361))
+
+
 ## v0.6.6 (2026-07-14)
 
 ### Bug Fixes
