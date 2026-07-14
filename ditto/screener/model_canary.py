@@ -17,7 +17,7 @@ from types import TracebackType
 
 _MAX_HEADER_BYTES = 64 * 1024
 _MAX_BODY_BYTES = 1024 * 1024
-_EMBED_DIMENSIONS = 32
+_EMBED_DIMENSIONS = 768
 LOCKED_HARNESS_MODEL = "qwen/qwen3-32b"
 
 
@@ -143,6 +143,7 @@ class ModelCallCanary:
             UnicodeError,
             asyncio.IncompleteReadError,
             asyncio.LimitOverrunError,
+            OSError,
         ):
             status = "400 Bad Request"
             payload = {"error": {"message": "malformed canary request"}}
