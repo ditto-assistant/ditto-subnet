@@ -50,7 +50,8 @@ class TestStatusByAgentId:
         client = MagicMock()
         client.get_agent_status.return_value = AgentStatusResponse(
             agent_id=agent_id,
-            status=AgentStatus.SCREENING,
+            status=AgentStatus.REJECTED,
+            screening_reason="Remove the bundled credential and resubmit",
         )
 
         with patch(
@@ -61,7 +62,8 @@ class TestStatusByAgentId:
         out = capsys.readouterr().out
         assert exit_code == 0
         assert str(agent_id) in out
-        assert "screening" in out
+        assert "rejected" in out
+        assert "Reason: Remove the bundled credential and resubmit" in out
         client.get_agent_status.assert_called_once_with(agent_id=agent_id)
 
     def test_json_flag_emits_parseable_json(
@@ -81,7 +83,11 @@ class TestStatusByAgentId:
 
         # Output must be valid JSON on a single line.
         payload = json.loads(capsys.readouterr().out.strip())
-        assert payload == {"agent_id": str(agent_id), "status": "uploaded"}
+        assert payload == {
+            "agent_id": str(agent_id),
+            "status": "uploaded",
+            "screening_reason": None,
+        }
 
     def test_404_returns_exit_code_3(self, capsys: pytest.CaptureFixture[str]) -> None:
         agent_id = uuid4()
@@ -109,6 +115,7 @@ class TestStatusByHotkey:
             status=AgentStatus.UPLOADED,
             sha256="ab" * 32,
             created_at=datetime(2026, 6, 16, 12, 0, tzinfo=UTC),
+            screening_reason="Remove the bundled credential and resubmit",
         )
 
         fake_handle = MagicMock(hotkey_ss58=HOTKEY)
@@ -127,6 +134,7 @@ class TestStatusByHotkey:
         out = capsys.readouterr().out
         assert exit_code == 0
         assert HOTKEY in out
+        assert "Reason:  Remove the bundled credential and resubmit" in out
         client.get_agent_by_hotkey.assert_called_once_with(miner_hotkey=HOTKEY)
 
     def test_missing_hotkey_fields_exits_one_with_help_message(
@@ -178,6 +186,7 @@ class TestStatusByHotkey:
             status=AgentStatus.UPLOADED,
             sha256="ab" * 32,
             created_at=datetime(2026, 6, 16, 12, 0, tzinfo=UTC),
+            screening_reason="Remove the bundled credential and resubmit",
         )
 
         fake_handle = MagicMock(hotkey_ss58=HOTKEY)
@@ -201,10 +210,14 @@ class TestStatusByHotkey:
             "status",
             "sha256",
             "created_at",
+            "screening_reason",
         }
         assert payload["agent_id"] == str(agent_id)
         assert payload["miner_hotkey"] == HOTKEY
         assert payload["status"] == "uploaded"
+        assert (
+            payload["screening_reason"] == "Remove the bundled credential and resubmit"
+        )
 
     def test_wallet_not_found_returns_exit_one(
         self, capsys: pytest.CaptureFixture[str]

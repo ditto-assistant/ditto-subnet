@@ -213,13 +213,18 @@ class TestAgentStatus:
             )
             return httpx.Response(
                 200,
-                json={"agent_id": str(agent_id), "status": "uploaded"},
+                json={
+                    "agent_id": str(agent_id),
+                    "status": "rejected",
+                    "screening_reason": "Remove the bundled credential and resubmit",
+                },
             )
 
         with make_client(handler) as client:
             result = client.get_agent_status(agent_id=agent_id)
 
         assert result.agent_id == agent_id
+        assert result.screening_reason == "Remove the bundled credential and resubmit"
 
     def test_404_with_1200_raises_agent_not_found(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -260,6 +265,7 @@ class TestAgentByHotkey:
                     "status": "uploaded",
                     "sha256": "ab" * 32,
                     "created_at": "2026-06-15T12:00:00Z",
+                    "screening_reason": "Remove the bundled credential and resubmit",
                 },
             )
 
@@ -268,6 +274,7 @@ class TestAgentByHotkey:
 
         assert captured["query"] == {"miner_hotkey": self.HOTKEY}
         assert result.miner_hotkey == self.HOTKEY
+        assert result.screening_reason == "Remove the bundled credential and resubmit"
 
     def test_404_with_1201_raises_hotkey_not_found(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
