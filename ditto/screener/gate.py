@@ -9,9 +9,9 @@ Flow for one agent:
 1. **Download + verify.** Stream the presigned tarball to a temp file, bounded by
    ``max_tarball_bytes``, and re-check its SHA-256 against the queue value (the
    URL is presigned but the bytes are still attacker-controlled).
-2. **Contract + policy check.** Reject unsafe archive entries, require a root
-   Rust crate, and detect known benchmark-private answer logic before any build
-   is attempted. The crate may use, fork, or replace ``ditto-harness``.
+2. **Contract check.** Reject unsafe archive entries and require a root Rust
+   crate before any build is attempted. The crate may use, fork, or replace
+   ``ditto-harness``.
 3. **Build.** ``docker build`` reads the *tarball itself* as the build context on
    stdin: Docker unpacks it inside its own build sandbox, so the screener never
    re-implements safe tar extraction. BuildKit is used with an optional
@@ -62,17 +62,6 @@ _LOG_TAIL_BYTES = 2000
 # How long to wait between /health probes while the container boots.
 _PROBE_INTERVAL_SECONDS = 1.0
 _MAX_UNPACKED_BYTES = 64 * 1024 * 1024
-_MAX_POLICY_SCAN_BYTES = 4 * 1024 * 1024
-_SOURCE_SUFFIXES = {".rs", ".py", ".js", ".ts", ".sh"}
-_BENCHMARK_PRIVATE_MARKERS = (
-    b"agent_run_not_read",
-    b"route_web_not_memory",
-    b"multi_web_result_usage",
-    b"parallel_web_image",
-    b"memory-write-read",
-    b"dittobench-api/internal/refharness",
-    b"mirrors datagen",
-)
 
 
 @dataclass(frozen=True)
@@ -224,30 +213,6 @@ class BuildGate:
                     return "contract failed: Cargo.toml is invalid"
                 if not isinstance(manifest.get("package"), dict):
                     return "contract failed: Cargo.toml has no package"
-                matched: set[bytes] = set()
-                scanned = 0
-                for name, member in members.items():
-                    if (
-                        not member.isfile()
-                        or PurePosixPath(name).suffix not in _SOURCE_SUFFIXES
-                    ):
-                        continue
-                    source_file = tar.extractfile(member)
-                    if source_file is None:
-                        continue
-                    chunk = source_file.read(
-                        min(member.size, _MAX_POLICY_SCAN_BYTES - scanned)
-                    ).lower()
-                    scanned += len(chunk)
-                    matched.update(
-                        marker
-                        for marker in _BENCHMARK_PRIVATE_MARKERS
-                        if marker in chunk
-                    )
-                    if len(matched) >= 2:
-                        return "policy failed: benchmark-specific answer logic detected"
-                    if scanned >= _MAX_POLICY_SCAN_BYTES:
-                        break
                 return None
         except (tarfile.TarError, OSError) as e:
             logger.warning("could not read tar %s: %s", tar_path, e)

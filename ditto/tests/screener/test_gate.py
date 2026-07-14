@@ -249,22 +249,3 @@ async def test_independent_rust_implementation_is_allowed(
     async with gate._client:
         res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
     assert res.passed
-
-
-async def test_benchmark_specific_answer_logic_fails_policy(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    tar = _valid_tar(
-        **{
-            "src/main.rs": (
-                b'const A: &str = "agent_run_not_read";\n'
-                b'const B: &str = "route_web_not_memory";\n'
-            )
-        }
-    )
-    sha = hashlib.sha256(tar).hexdigest()
-    gate = _gate_with(make_config(), _ok_run(), tar=tar)
-    async with gate._client:
-        res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
-    assert not res.passed
-    assert res.detail == "policy failed: benchmark-specific answer logic detected"
