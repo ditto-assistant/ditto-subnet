@@ -82,10 +82,6 @@ def _gate_with(
     gate = BuildGate(cfg, http)
     gate._run = run_stub  # type: ignore[method-assign]
 
-    async def _pass_canary(*_: Any, **__: Any) -> tuple[bool, str]:
-        return True, ""
-
-    gate._run_model_canary = _pass_canary  # type: ignore[method-assign,assignment]
     return gate
 
 
@@ -105,6 +101,22 @@ async def test_pass_builds_and_serves(
     tar = _valid_tar()
     sha = hashlib.sha256(tar).hexdigest()
     gate = _gate_with(make_config(), _ok_run(), tar=tar)
+    async with gate._client:
+        res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
+    assert res == GateResult(True, "")
+
+
+async def test_screening_does_not_run_model_canary(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tar = _valid_tar()
+    sha = hashlib.sha256(tar).hexdigest()
+    gate = _gate_with(make_config(), _ok_run(), tar=tar)
+
+    async def _unexpected_canary(*_: Any, **__: Any) -> tuple[bool, str]:
+        raise AssertionError("model-call canary must remain disabled")
+
+    gate._run_model_canary = _unexpected_canary  # type: ignore[method-assign,assignment]
     async with gate._client:
         res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
     assert res == GateResult(True, "")
@@ -167,9 +179,7 @@ async def test_model_canary_rejects_harness_that_makes_no_model_call(
 ) -> None:
     tar = _valid_tar()
     gate = _gate_with(make_config(), _ok_run(), tar=tar)
-    # Restore the real check for this focused unit test. The mocked /run endpoint
-    # never calls the external canary server.
-    del gate._run_model_canary  # type: ignore[attr-defined]
+    # The implementation remains unit-tested while orchestration is disabled.
     ok, detail = await gate._run_model_canary(
         "http://127.0.0.1:8080",
         token="hidden",

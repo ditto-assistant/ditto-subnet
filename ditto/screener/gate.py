@@ -1,8 +1,7 @@
-"""The screener build gate: does the crate build, serve, and use the model?
+"""The screener build gate: does the crate build and serve?
 
 The gate is deliberately cheaper than a full DittoBench run. It verifies the
-image, service contract, and one synthetic model-call canary before a submission
-can consume a scoring run.
+image and service contract before a submission can consume a scoring run.
 
 Flow for one agent:
 
@@ -19,12 +18,13 @@ Flow for one agent:
    ``build_timeout_seconds``.
 4. **Serve smoke.** Run the image detached with a memory + pids cap and poll
    ``GET /health`` until it returns 2xx.
-5. **Model canary.** Put the harness and a locked-down fake OpenAI-compatible
-   sidecar on a private Docker network, call ``POST /run``, and require the
-   harness to return a random token known only to the fake model response.
+5. **Model gateway.** Put the harness and a locked-down fake OpenAI-compatible
+   sidecar on a private Docker network so startup matches the scoring runtime.
+   The synthetic ``POST /run`` assertion is temporarily disabled while its
+   compatibility with the canonical starter kit is repaired and E2E-tested.
 6. **Teardown.** The container + image are always removed.
 
-A pass is "built, served, and consumed a model response"; anything else fails
+A pass is "built and served"; anything else fails
 with a short ``detail`` (build-log tail or the failing stage) that rides the
 verdict for the miner's benefit. Every stage is best-effort and never raises into
 the worker loop: an
@@ -78,6 +78,10 @@ _CANARY_IMAGE = (
 )
 _CANARY_ALIAS = "model-canary"
 _HARNESS_ALIAS = "harness"
+# Emergency production safeguard: the synthetic /run assertion produced false
+# rejections against valid starter-kit-derived harnesses. Keep this locked in
+# code (not operator-configurable) until the canary has a real container E2E test.
+_MODEL_CALL_CANARY_ENABLED = False
 
 
 @dataclass(frozen=True)
@@ -276,7 +280,7 @@ class BuildGate:
         network: str,
         canary_state_dir: str,
     ) -> tuple[bool, str]:
-        """Run the image, await health, then prove it consumes a model response."""
+        """Run the image and await health against the isolated fake gateway."""
         port = self._config.container_port
         token = f"ditto-canary-{secrets.token_hex(16)}"
         model_called_path = os.path.join(canary_state_dir, "model-called")
@@ -332,6 +336,8 @@ class BuildGate:
         )
         if not healthy:
             return False, detail
+        if not _MODEL_CALL_CANARY_ENABLED:
+            return True, ""
         return await self._run_model_canary(
             harness_base,
             token=token,
