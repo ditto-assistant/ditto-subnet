@@ -28,6 +28,11 @@ jobs:
       - name: Pin the release branch to the tested merge
         run: git reset --hard "${{ github.sha }}"
 
+      - name: Configure the release committer
+        run: |
+          git config user.name github-actions
+          git config user.email actions@users.noreply.github.com
+
       # The code already reported 0.1.0 before release automation existed.
       # Anchor that historical version to the parent of this first release-aware
       # merge so the setup feature itself advances the project to 0.2.0.
