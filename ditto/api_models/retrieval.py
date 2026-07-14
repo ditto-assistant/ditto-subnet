@@ -33,6 +33,12 @@ class AgentResponse(BaseModel):
     created_at: Annotated[
         datetime, Field(description="When the upload row was inserted (UTC).")
     ]
+    screening_reason: Annotated[
+        str | None,
+        Field(
+            description="Public-safe reason for the current screening outcome.",
+        ),
+    ] = None
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -43,6 +49,7 @@ class AgentResponse(BaseModel):
                 "status": "uploaded",
                 "sha256": "deadbeef" * 8,
                 "created_at": "2026-06-08T12:00:00Z",
+                "screening_reason": None,
             }
         }
     )
@@ -58,12 +65,19 @@ class AgentStatusResponse(BaseModel):
 
     agent_id: Annotated[UUID, Field(description="Echoes the path-param id.")]
     status: Annotated[AgentStatus, Field(description="Lifecycle state.")]
+    screening_reason: Annotated[
+        str | None,
+        Field(
+            description="Public-safe reason for the current screening outcome.",
+        ),
+    ] = None
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "agent_id": "550e8400-e29b-41d4-a716-446655440000",
                 "status": "screening",
+                "screening_reason": None,
             }
         }
     )

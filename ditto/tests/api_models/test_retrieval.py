@@ -53,11 +53,11 @@ class TestAgentStatusResponse:
         assert parsed.agent_id == UUID("550e8400-e29b-41d4-a716-446655440000")
         assert parsed.status == AgentStatus.SCREENING
 
-    def test_minimal_shape(self) -> None:
-        """Polling endpoint: only two fields. Any extra field is a
-        regression on the wire-size contract."""
+    def test_stable_polling_shape(self) -> None:
+        """Polling includes the optional miner-visible screening reason."""
         parsed = AgentStatusResponse.model_validate(
             _load_fixture("agent_status_response_v1.json")
         )
         dumped = parsed.model_dump()
-        assert set(dumped.keys()) == {"agent_id", "status"}
+        assert set(dumped.keys()) == {"agent_id", "status", "screening_reason"}
+        assert dumped["screening_reason"] is None

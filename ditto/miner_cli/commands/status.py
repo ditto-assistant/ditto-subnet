@@ -130,12 +130,18 @@ def _status_by_id(client: ApiClient, *, agent_id: UUID, as_json: bool) -> int:
     if as_json:
         print(
             json.dumps(
-                {"agent_id": str(response.agent_id), "status": response.status.value}
+                {
+                    "agent_id": str(response.agent_id),
+                    "status": response.status.value,
+                    "screening_reason": response.screening_reason,
+                }
             )
         )
     else:
         print(f"Agent:  {response.agent_id}")
         print(f"Status: {response.status.value}")
+        if response.screening_reason:
+            print(f"Reason: {response.screening_reason}")
     return 0
 
 
@@ -166,6 +172,7 @@ def _status_by_hotkey(
                     "status": agent.status.value,
                     "sha256": agent.sha256,
                     "created_at": agent.created_at.isoformat(),
+                    "screening_reason": agent.screening_reason,
                 }
             )
         )
@@ -176,4 +183,6 @@ def _status_by_hotkey(
         print(f"Status:  {agent.status.value}")
         print(f"sha256:  {agent.sha256}")
         print(f"Created: {agent.created_at.isoformat()}")
+        if agent.screening_reason:
+            print(f"Reason:  {agent.screening_reason}")
     return 0
