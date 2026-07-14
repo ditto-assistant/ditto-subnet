@@ -31,11 +31,12 @@ def _make_client(
     return PlatformClient(cfg, http), http
 
 
-async def test_get_queue_parses_items(
+async def test_claim_next_parses_leased_item(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v1/screener/queue"
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/screener/claim"
         _assert_auth(request)
         return httpx.Response(
             200,
@@ -46,8 +47,10 @@ async def test_get_queue_parses_items(
                         "miner_hotkey": _MINER,
                         "name": "alpha",
                         "sha256": "de" * 32,
-                        "status": "uploaded",
+                        "status": "screening",
                         "created_at": "2026-07-06T12:00:00Z",
+                        "attempt_id": "550e8400-e29b-41d4-a716-446655440001",
+                        "lease_deadline": "2026-07-06T12:30:00Z",
                     }
                 ],
                 "count": 1,
@@ -57,7 +60,7 @@ async def test_get_queue_parses_items(
 
     client, http = _make_client(make_config(), handler)
     async with http:
-        resp = await client.get_queue()
+        resp = await client.claim_next()
     assert resp.count == 1
     assert resp.items[0].agent_id == _AGENT
     assert resp.items[0].sha256 == "de" * 32
@@ -105,7 +108,11 @@ async def test_submit_result_posts_signed_verdict(
     client, http = _make_client(make_config(), handler)
     async with http:
         resp = await client.submit_result(
-            _AGENT, signature="ab" * 64, passed=True, detail="ok"
+            _AGENT,
+            signature="ab" * 64,
+            passed=True,
+            detail="ok",
+            attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
         )
     assert resp.accepted is True
     assert resp.status.value == "evaluating"
@@ -113,6 +120,7 @@ async def test_submit_result_posts_signed_verdict(
     assert captured["signature"] == "ab" * 64
     assert captured["detail"] == "ok"
     assert captured["policy_version"] == SCREENING_POLICY_VERSION
+    assert captured["attempt_id"] == "550e8400-e29b-41d4-a716-446655440001"
 
 
 async def test_non_200_raises_platform_error(
@@ -124,4 +132,9 @@ async def test_non_200_raises_platform_error(
     client, http = _make_client(make_config(), handler)
     async with http:
         with pytest.raises(PlatformError, match="409"):
-            await client.submit_result(_AGENT, signature="ab" * 64, passed=True)
+            await client.submit_result(
+                _AGENT,
+                signature="ab" * 64,
+                passed=True,
+                attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+            )

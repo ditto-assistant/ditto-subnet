@@ -43,17 +43,17 @@ class PlatformClient:
             "X-Screener-Hotkey": config.screener_hotkey,
         }
 
-    async def get_queue(self) -> ScreenerQueueResponse:
-        """Pull agents awaiting screening (status ``uploaded``), oldest first."""
-        url = f"{self._base}{_PREFIX}/queue"
-        params = {"limit": self._config.queue_limit}
+    async def claim_next(self) -> ScreenerQueueResponse:
+        """Lease one agent for screening, oldest eligible first."""
+        url = f"{self._base}{_PREFIX}/claim"
+        params = {"limit": 1}
         try:
-            resp = await self._client.get(url, params=params, headers=self._headers)
+            resp = await self._client.post(url, params=params, headers=self._headers)
         except httpx.HTTPError as e:
-            raise PlatformError(f"queue fetch failed: {e}") from e
+            raise PlatformError(f"screening claim failed: {e}") from e
         if resp.status_code != 200:
             raise PlatformError(
-                f"queue rejected ({resp.status_code}): {resp.text[:200]}"
+                f"screening claim rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return ScreenerQueueResponse.model_validate(resp.json())
 
@@ -78,6 +78,7 @@ class PlatformClient:
         passed: bool,
         policy_version: int = SCREENING_POLICY_VERSION,
         detail: str = "",
+        attempt_id: UUID,
     ) -> ScreenResultResponse:
         """Report a signed pass/fail verdict for ``agent_id``."""
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/result"
@@ -87,6 +88,7 @@ class PlatformClient:
             passed=passed,
             policy_version=policy_version,
             detail=detail,
+            attempt_id=attempt_id,
         )
         try:
             resp = await self._client.post(

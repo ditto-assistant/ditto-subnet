@@ -2,9 +2,8 @@
 
 The screener signs each verdict so the platform can verify it came from the
 claimed hotkey and that the ``passed`` boolean was not flipped in transit. The
-signature binds ``{screener_hotkey}:{agent_id}:{passed}:{policy_version}``
-— the exact string the platform's ``/screener/agent/{id}/result`` rebuilds and
-verifies. Never log the key.
+The current signature also binds the platform-issued screening attempt id, so a
+verdict cannot be replayed against another lease. Never log the key.
 """
 
 from __future__ import annotations

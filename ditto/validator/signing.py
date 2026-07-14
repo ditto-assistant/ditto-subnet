@@ -133,9 +133,16 @@ def heartbeat_signing_message(
     protocol_version: int,
     code_digest: str,
     state: str,
+    active_agent_id: UUID | None = None,
     timestamp: int,
 ) -> bytes:
-    """Build the canonical v1 software and runtime heartbeat payload."""
+    """Build the canonical versioned software and runtime heartbeat payload."""
+    if protocol_version >= 2:
+        return (
+            "ditto-validator-heartbeat:v2:"
+            f"{validator_hotkey}:{software_version}:{protocol_version}:"
+            f"{code_digest}:{state}:{active_agent_id or ''}:{timestamp}"
+        ).encode()
     return (
         "ditto-validator-heartbeat:v1:"
         f"{validator_hotkey}:{software_version}:{protocol_version}:"
@@ -151,6 +158,7 @@ def sign_heartbeat(
     protocol_version: int,
     code_digest: str,
     state: str,
+    active_agent_id: UUID | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -160,6 +168,7 @@ def sign_heartbeat(
         protocol_version=protocol_version,
         code_digest=code_digest,
         state=state,
+        active_agent_id=active_agent_id,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

@@ -149,6 +149,13 @@ class ValidatorHeartbeatRequest(BaseModel):
         ValidatorRuntimeState,
         Field(description="Current validator worker phase."),
     ]
+    active_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description="Agent currently being benchmarked under protocol v2.",
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -156,7 +163,7 @@ class ValidatorHeartbeatRequest(BaseModel):
         str,
         Field(
             pattern=_SIGNATURE_HEX_PATTERN,
-            description="sr25519 signature over the canonical v1 heartbeat payload.",
+            description="sr25519 signature over the canonical heartbeat payload.",
         ),
     ]
 
