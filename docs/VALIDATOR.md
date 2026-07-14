@@ -34,7 +34,9 @@ while Pylon persists any in-flight weight submission in its named volume. A
 restart does not lose scored work.
 
 Screening is not part of this stack. The platform runs the pre-benchmark build
-and health gate on a dedicated host before a submission reaches validators.
+and health gate from
+[`ditto-screener`](https://github.com/ditto-assistant/ditto-screener) before a
+submission reaches validators.
 
 ## Requirements
 

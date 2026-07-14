@@ -1,4 +1,4 @@
-"""Privacy-bounded host telemetry for validator and screener heartbeats."""
+"""Privacy-bounded host telemetry for validator heartbeats."""
 
 from __future__ import annotations
 
