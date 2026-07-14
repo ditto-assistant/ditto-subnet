@@ -46,6 +46,9 @@ class TestResolveNetwork:
 
 
 class TestNetworksTable:
+    def test_finney_uses_production_platform_api(self) -> None:
+        assert NETWORKS["finney"].api_url == "https://platform-api.heyditto.ai/"
+
     def test_finney_is_mainnet_chain(self) -> None:
         """``finney`` is the bittensor SDK identifier for mainnet. The
         subtensor_network field echoes the dict key so there is no
