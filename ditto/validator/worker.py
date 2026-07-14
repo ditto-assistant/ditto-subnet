@@ -261,6 +261,8 @@ class ValidatorWorker:
                 leaderboard=outcome.leaderboard,
                 weights=outcome.weights,
                 weights_submitted=outcome.submitted,
+                weights_due=set_weights,
+                burn_hotkey=self._config.burn_hotkey,
             )
         )
         await self._report_heartbeat("idle")
