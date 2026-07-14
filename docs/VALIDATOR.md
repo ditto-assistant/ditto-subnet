@@ -3,7 +3,8 @@
 A validator leases miner submissions from the platform, scores them in an
 isolated local sandbox, publishes signed results, and sets weights on Finney.
 The supported production deployment is the root Docker Compose stack: one
-`.env`, one `docker compose up -d`, and no separate process supervisor.
+`.env`, one `./scripts/validator-compose.sh up -d`, and no separate process
+supervisor.
 
 ## Contents
 
@@ -41,7 +42,9 @@ submission reaches validators.
 ## Requirements
 
 - Linux x86-64 host with at least 4 vCPU, 16 GB RAM, and 80 GB free disk.
-- Docker Engine with Docker Compose v2. Docker must start at boot.
+- Docker Engine with the Docker Compose plugin v2 or newer, including v5.
+  Docker must start at boot.
+- Git, used for the repository clone and verified `dittobench-api` build cache.
 - A local Bittensor wallet whose hotkey is registered on Finney SN118 and has a
   validator permit.
 - A Chutes API key for the locked `Qwen/Qwen3-32B-TEE` model.
@@ -77,17 +80,27 @@ hardcodes SN118 for both the worker and Pylon. For a local chain, explicitly
 replace `VALIDATOR_PLATFORM_API_URL` and `SUBTENSOR_NETWORK`; do not reuse the
 production `.env`.
 
-The wallet stays on the host and is mounted read-only. The loaded wallet hotkey
-must exactly match `VALIDATOR_HOTKEY`. Never put a mnemonic in `.env`, and never
+The wallet stays on the host. The `ditto-subnet` worker receives only the
+configured hotkey file, and the bind mount is read-only; Pylon retains its own
+read-only wallet mount for weight submission. The loaded wallet hotkey must
+exactly match `VALIDATOR_HOTKEY`. Never put a mnemonic in `.env`, and never
 commit `.env`.
+
+Use the repository wrapper for every Compose command. It reads the reviewed
+`dittobench-api` ref and checksum from `docker-compose.yml`, fetches that exact
+commit into `~/.cache/ditto-subnet` when it is not already cached, refuses a ref
+and checksum mismatch, and gives Compose a clean detached local build context.
+This preserves the immutable source pin while avoiding the remote-context path
+bug in Compose 2.40 and 5.0. The wrapper fails before startup if Docker, Buildx,
+the Compose plugin, or the pinned source cannot be verified.
 
 Validate the configuration and start the complete stack from the repository
 root:
 
 ```sh
-docker compose config --quiet
-docker compose up -d --build
-docker compose ps
+./scripts/validator-compose.sh config --quiet
+./scripts/validator-compose.sh up -d --build
+./scripts/validator-compose.sh ps
 ```
 
 Compose services use `restart: unless-stopped`, so Docker brings the validator
@@ -100,8 +113,8 @@ All six services should be `Up`; `ollama`, `sandbox-docker`, and
 `dittobench-api` should also report `healthy`:
 
 ```sh
-docker compose ps
-docker compose logs --since 10m ditto-subnet
+./scripts/validator-compose.sh ps
+./scripts/validator-compose.sh logs --since 10m ditto-subnet
 curl -fsS https://platform-api.heyditto.ai/health
 ```
 
@@ -132,19 +145,19 @@ downtime and is not required:
 
 ```sh
 git pull --ff-only
-docker compose config --quiet
-docker compose up -d --build
-docker compose ps
+./scripts/validator-compose.sh config --quiet
+./scripts/validator-compose.sh up -d --build
+./scripts/validator-compose.sh ps
 ```
 
 Useful commands:
 
 ```sh
-docker compose logs -f ditto-subnet
-docker compose logs --since 10m sandbox-docker
-docker compose logs --since 10m dittobench-api
-docker compose logs --since 10m pylon
-docker compose restart ditto-subnet
+./scripts/validator-compose.sh logs -f ditto-subnet
+./scripts/validator-compose.sh logs --since 10m sandbox-docker
+./scripts/validator-compose.sh logs --since 10m dittobench-api
+./scripts/validator-compose.sh logs --since 10m pylon
+./scripts/validator-compose.sh restart ditto-subnet
 ```
 
 If `sandbox-docker` exits, check its logs first. It must run privileged so its
@@ -155,7 +168,7 @@ stack rather than adding a second supervisor:
 ```sh
 systemctl is-enabled docker
 systemctl is-active docker
-docker compose ps
+./scripts/validator-compose.sh ps
 ```
 
 ## How scoring and weights work
