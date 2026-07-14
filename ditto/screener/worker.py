@@ -65,8 +65,14 @@ class ScreenerWorker:
 
     async def _sweep(self, stop: asyncio.Event) -> int:
         """Lease and screen the next eligible agent; return how many were done."""
+        required_policy = await self._platform.get_required_policy_version()
+        if required_policy != SCREENING_POLICY_VERSION:
+            raise PlatformError(
+                "screening policy mismatch before claim: platform requires "
+                f"{required_policy}, worker supports {SCREENING_POLICY_VERSION}"
+            )
         queue = await self._platform.claim_next()
-        if queue.required_policy_version > SCREENING_POLICY_VERSION:
+        if queue.required_policy_version != SCREENING_POLICY_VERSION:
             raise PlatformError(
                 "platform requires screening policy "
                 f"{queue.required_policy_version}, worker supports "

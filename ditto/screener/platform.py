@@ -43,10 +43,26 @@ class PlatformClient:
             "X-Screener-Hotkey": config.screener_hotkey,
         }
 
+    async def get_required_policy_version(self) -> int:
+        """Read the platform policy without claiming or mutating queue state."""
+        url = f"{self._base}{_PREFIX}/queue"
+        try:
+            resp = await self._client.get(
+                url, params={"limit": 1}, headers=self._headers
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"screening policy check failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"screening policy check rejected ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
+        return ScreenerQueueResponse.model_validate(resp.json()).required_policy_version
+
     async def claim_next(self) -> ScreenerQueueResponse:
         """Lease one agent for screening, oldest eligible first."""
         url = f"{self._base}{_PREFIX}/claim"
-        params = {"limit": 1}
+        params = {"limit": 1, "policy_version": SCREENING_POLICY_VERSION}
         try:
             resp = await self._client.post(url, params=params, headers=self._headers)
         except httpx.HTTPError as e:
