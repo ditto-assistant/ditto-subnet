@@ -56,9 +56,9 @@ ditto verify --path <agent.tar.gz>      # pre-flight checks only; no chain/API c
 cp .env.example .env
 # Fill in the wallet names, validator hotkey, Pylon token, Chutes key, and shared W&B key.
 # Set WANDB_MODE=disabled instead if you opt out of aggregate telemetry.
-docker compose config --quiet
-docker compose up -d --build
-docker compose ps
+./scripts/validator-compose.sh config --quiet
+./scripts/validator-compose.sh up -d --build
+./scripts/validator-compose.sh ps
 ```
 
 The root Compose stack runs the worker, Pylon, model gateway, scorer, Ollama embedder, and
