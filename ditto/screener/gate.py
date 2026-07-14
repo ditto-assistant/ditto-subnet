@@ -39,6 +39,7 @@ egress allowlist are out of scope for this gate.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import io
@@ -50,6 +51,7 @@ import shutil
 import tarfile
 import tempfile
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -75,6 +77,7 @@ _CANARY_IMAGE = (
     "6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
 )
 _CANARY_ALIAS = "model-canary"
+_HARNESS_ALIAS = "harness"
 
 
 @dataclass(frozen=True)
@@ -295,12 +298,12 @@ class BuildGate:
             container,
             "--network",
             network,
+            "--network-alias",
+            _HARNESS_ALIAS,
             "--memory",
             self._config.build_memory,
             "--pids-limit",
             str(self._config.pids_limit),
-            "--publish",
-            f"127.0.0.1::{port}",
         ]
         for key, value in self._config.smoke_env:
             run_args += ["-e", f"{key}={value}"]
@@ -323,18 +326,17 @@ class BuildGate:
         if code != 0:
             return False, f"container did not start: {_log_tail(out)}"
 
-        mapped = await self._published_port(container, port)
-        if mapped is None:
-            return False, "could not resolve published port"
-
-        harness_base = f"http://127.0.0.1:{mapped}"
-        healthy, detail = await self._wait_healthy(harness_base)
+        harness_base = f"http://{_HARNESS_ALIAS}:{port}"
+        healthy, detail = await self._wait_healthy(
+            harness_base, probe_container=canary_container
+        )
         if not healthy:
             return False, detail
         return await self._run_model_canary(
             harness_base,
             token=token,
             model_called_path=model_called_path,
+            probe_container=canary_container,
         )
 
     async def _start_canary_sidecar(
@@ -402,20 +404,30 @@ class BuildGate:
             await asyncio.sleep(0.1)
         return False, "model canary did not become ready"
 
-    async def _wait_healthy(self, harness_base: str) -> tuple[bool, str]:
+    async def _wait_healthy(
+        self, harness_base: str, *, probe_container: str | None = None
+    ) -> tuple[bool, str]:
         """Poll the submitted container's health endpoint until the deadline."""
         url = f"{harness_base}{self._config.health_path}"
         deadline = self._config.run_timeout_seconds
         waited = 0.0
         last = "no response"
         while waited < deadline:
-            try:
-                resp = await self._client.get(url, timeout=5.0)
-                if 200 <= resp.status_code < 300:
+            if probe_container is not None:
+                code, out = await self._request_from_sidecar(
+                    probe_container, url, timeout=5.0
+                )
+                if code == 0:
                     return True, ""
-                last = f"HTTP {resp.status_code}"
-            except httpx.HTTPError as e:
-                last = type(e).__name__
+                last = _log_tail(out) or "unreachable"
+            else:
+                try:
+                    resp = await self._client.get(url, timeout=5.0)
+                    if 200 <= resp.status_code < 300:
+                        return True, ""
+                    last = f"HTTP {resp.status_code}"
+                except httpx.HTTPError as e:
+                    last = type(e).__name__
             await asyncio.sleep(_PROBE_INTERVAL_SECONDS)
             waited += _PROBE_INTERVAL_SECONDS
         return False, f"/health never healthy within {deadline:g}s ({last})"
@@ -426,6 +438,7 @@ class BuildGate:
         *,
         token: str,
         model_called_path: str | None,
+        probe_container: str | None = None,
     ) -> tuple[bool, str]:
         """Run one hidden-response case and verify the gateway response was used."""
         request = {
@@ -436,25 +449,40 @@ class BuildGate:
             "tool_endpoint": "",
             "user_id": secrets.token_hex(16),
         }
-        try:
-            async with self._client.stream(
-                "POST",
+        if probe_container is not None:
+            code, out = await self._request_from_sidecar(
+                probe_container,
                 f"{harness_base}/run",
-                json=request,
+                payload=request,
                 timeout=min(self._config.run_timeout_seconds, 30.0),
-            ) as response:
-                if not 200 <= response.status_code < 300:
-                    return (
-                        False,
-                        f"model canary /run returned HTTP {response.status_code}",
-                    )
-                body = bytearray()
-                async for chunk in response.aiter_bytes():
-                    body.extend(chunk)
-                    if len(body) > _MAX_CANARY_RESPONSE_BYTES:
-                        return False, "model canary /run response exceeded safety cap"
-        except httpx.HTTPError as e:
-            return False, f"model canary /run failed: {type(e).__name__}"
+            )
+            if code != 0:
+                return False, f"model canary /run failed: {_log_tail(out)}"
+            body = out.encode()
+        else:
+            try:
+                async with self._client.stream(
+                    "POST",
+                    f"{harness_base}/run",
+                    json=request,
+                    timeout=min(self._config.run_timeout_seconds, 30.0),
+                ) as response:
+                    if not 200 <= response.status_code < 300:
+                        return (
+                            False,
+                            f"model canary /run returned HTTP {response.status_code}",
+                        )
+                    streamed = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        streamed.extend(chunk)
+                        if len(streamed) > _MAX_CANARY_RESPONSE_BYTES:
+                            return (
+                                False,
+                                "model canary /run response exceeded safety cap",
+                            )
+                    body = bytes(streamed)
+            except httpx.HTTPError as e:
+                return False, f"model canary /run failed: {type(e).__name__}"
 
         if model_called_path is not None and not os.path.exists(model_called_path):
             return False, "model canary observed no model call"
@@ -467,16 +495,35 @@ class BuildGate:
             return False, "model canary response was not used by the harness"
         return True, ""
 
-    async def _published_port(self, container: str, container_port: int) -> str | None:
-        """Resolve the ephemeral host port Docker mapped for ``container_port``."""
-        code, out = await self._run(
-            ["port", container, str(container_port)], timeout=15.0
+    async def _request_from_sidecar(
+        self,
+        container: str,
+        url: str,
+        *,
+        payload: Mapping[str, object] | None = None,
+        timeout: float,
+    ) -> tuple[int, str]:
+        """Make an HTTP request from inside the isolated Docker network."""
+        encoded = ""
+        method = "GET"
+        if payload is not None:
+            encoded = base64.b64encode(json.dumps(payload).encode()).decode()
+            method = "POST"
+        script = (
+            "import base64,sys,urllib.error,urllib.request;"
+            "url,method,data=sys.argv[1:4];"
+            "body=base64.b64decode(data) if data else None;"
+            "req=urllib.request.Request(url,data=body,method=method,"
+            "headers={'Content-Type':'application/json'});"
+            "r=urllib.request.urlopen(req,timeout=5);"
+            f"out=r.read({_MAX_CANARY_RESPONSE_BYTES + 1});"
+            f"assert len(out)<={_MAX_CANARY_RESPONSE_BYTES},'response too large';"
+            "sys.stdout.buffer.write(out)"
         )
-        if code != 0 or not out.strip():
-            return None
-        # e.g. "127.0.0.1:49153" (last line, last colon-field).
-        line = out.strip().splitlines()[-1]
-        return line.rsplit(":", 1)[-1].strip() or None
+        return await self._run(
+            ["exec", container, "python", "-c", script, url, method, encoded],
+            timeout=timeout,
+        )
 
     async def _teardown(
         self,
