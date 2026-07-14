@@ -11,8 +11,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.screener.errors import ScreenerConfigError
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    verdict_signing_message,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -45,23 +48,6 @@ def load_screener_keypair(config: ScreenerConfig) -> Any:
             f"({keypair.ss58_address} != {config.screener_hotkey})"
         )
     return keypair
-
-
-def verdict_signing_message(
-    *,
-    screener_hotkey: str,
-    agent_id: UUID,
-    passed: bool,
-    policy_version: int = SCREENING_POLICY_VERSION,
-) -> bytes:
-    """Build the canonical bytes a verdict signature is computed over.
-
-    ``{screener_hotkey}:{agent_id}:{passed}:{policy_version}``. ``passed`` uses
-    Python's ``bool`` ``str`` form (``True`` / ``False``), matching the platform's
-    ``f"...:{payload.passed}"`` (a Pydantic ``bool``), so both sides format it
-    identically.
-    """
-    return f"{screener_hotkey}:{agent_id}:{passed}:{policy_version}".encode()
 
 
 def sign_verdict(
