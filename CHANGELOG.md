@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.6.0 (2026-07-14)
+
+### Chores
+
+- Remove extracted screener runtime
+  ([#120](https://github.com/ditto-assistant/ditto-subnet/pull/120),
+  [`ab66cc2`](https://github.com/ditto-assistant/ditto-subnet/commit/ab66cc22d7383eb2d1379bc39ed5e9bc396c1557))
+
+### Features
+
+- Report privacy-safe benchmark progress
+  ([#121](https://github.com/ditto-assistant/ditto-subnet/pull/121),
+  [`d783d80`](https://github.com/ditto-assistant/ditto-subnet/commit/d783d800e1a35f69684a0685cf963461cc104e0a))
+
+
 ## v0.5.0 (2026-07-14)
 
 ### Features
