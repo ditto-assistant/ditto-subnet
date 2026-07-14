@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.6.1 (2026-07-14)
+
+### Bug Fixes
+
+- Point miner CLI at production API
+  ([#123](https://github.com/ditto-assistant/ditto-subnet/pull/123),
+  [`402545b`](https://github.com/ditto-assistant/ditto-subnet/commit/402545ba583d0057a733271f5641c9adb9be622a))
+
+
 ## v0.6.0 (2026-07-14)
 
 ### Chores
