@@ -18,6 +18,7 @@ dependencies = [
     "async-substrate-interface",
     "httpx>=0.27",
     "pydantic>=2",
+    "psutil>=5.9",
     "ditto-screening-protocol==0.6.0",
 ]
 

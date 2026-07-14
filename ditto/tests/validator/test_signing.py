@@ -11,6 +11,7 @@ from uuid import UUID
 
 import bittensor
 
+from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.validator.signing import (
     heartbeat_signing_message,
     job_signing_message,
@@ -197,4 +198,58 @@ def test_heartbeat_signature_binds_build_state_and_timestamp() -> None:
             timestamp=1_752_443_200,
         ),
         bytes.fromhex(signature),
+    )
+
+
+def test_protocol_v3_heartbeat_signature_binds_system_metrics() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    metrics = SystemMetrics(
+        collected_at=1_752_443_200,
+        cpu_percent=15,
+        memory_percent=40,
+        disk_percent=55,
+        docker=DockerHealth(
+            status="healthy", running_containers=4, unhealthy_containers=0
+        ),
+    )
+    signature = sign_heartbeat(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        software_version="0.4.2",
+        protocol_version=3,
+        code_digest="ab" * 32,
+        state="idle",
+        system_metrics=metrics,
+        timestamp=1_752_443_200,
+    )
+    tampered = metrics.model_copy(update={"memory_percent": 90})
+    assert not keypair.verify(
+        heartbeat_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            software_version="0.4.2",
+            protocol_version=3,
+            code_digest="ab" * 32,
+            state="idle",
+            system_metrics=tampered,
+            timestamp=1_752_443_200,
+        ),
+        bytes.fromhex(signature),
+    )
+
+
+def test_protocol_v2_heartbeat_message_remains_backward_compatible() -> None:
+    message = heartbeat_signing_message(
+        validator_hotkey=_HOTKEY,
+        software_version="0.4.2",
+        protocol_version=2,
+        code_digest="ab" * 32,
+        state="idle",
+        timestamp=1_752_443_200,
+    )
+    assert (
+        message
+        == (
+            "ditto-validator-heartbeat:v2:"
+            f"{_HOTKEY}:0.4.2:2:{'ab' * 32}:idle::1752443200"
+        ).encode()
     )

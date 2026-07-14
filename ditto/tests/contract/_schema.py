@@ -35,6 +35,11 @@ SHARED_MODELS = [
     "LedgerResponse",
 ]
 
+SHARED_SCREENER_HEARTBEAT_MODELS = [
+    "ScreenerHeartbeatRequest",
+    "ScreenerHeartbeatResponse",
+]
+
 # Cosmetic JSON-Schema keys that carry prose/illustration, not structure.
 _STRIP_KEYS = {"title", "description", "examples", "example"}
 

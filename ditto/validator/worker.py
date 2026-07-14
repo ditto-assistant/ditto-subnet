@@ -57,6 +57,7 @@ if TYPE_CHECKING:
         ScoreReport,
     )
     from ditto.chain import ChainClient
+    from ditto.system_health import SystemMetricsCollector
     from ditto.validator.config import ValidatorConfig
     from ditto.validator.dittobench import DittobenchClient
     from ditto.validator.platform import PlatformClient
@@ -123,6 +124,7 @@ class ValidatorWorker:
         keypair: Any,
         weight_setter: Any | None = None,
         telemetry: ValidatorTelemetry | None = None,
+        system_metrics: SystemMetricsCollector | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -148,6 +150,7 @@ class ValidatorWorker:
         self._current_bench_version = DEFAULT_BENCH_VERSION
         self._last_heartbeat_timestamp = 0
         self._active_agent_id: UUID | None = None
+        self._system_metrics = system_metrics
 
     async def run_once(self, *, set_weights: bool = True) -> int:
         """Run one full sweep. Returns the number of agents pulled from the queue.
@@ -224,6 +227,11 @@ class ValidatorWorker:
             build = validator_build_info()
             timestamp = max(int(time.time()), self._last_heartbeat_timestamp + 1)
             self._last_heartbeat_timestamp = timestamp
+            system_metrics = (
+                self._system_metrics.collect()
+                if self._system_metrics is not None
+                else None
+            )
             signature = sign_heartbeat(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
@@ -232,6 +240,7 @@ class ValidatorWorker:
                 code_digest=build.code_digest,
                 state=state,
                 active_agent_id=self._active_agent_id,
+                system_metrics=system_metrics,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -241,6 +250,7 @@ class ValidatorWorker:
                 code_digest=build.code_digest,
                 state=state,
                 active_agent_id=self._active_agent_id,
+                system_metrics=system_metrics,
                 timestamp=timestamp,
                 signature=signature,
             )

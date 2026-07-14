@@ -62,6 +62,11 @@ are locked in code rather than configured by operators. The burn allocation uses
 owner-associated burn path; it is not paid to the subnet owner. See
 [VALIDATOR.md](docs/VALIDATOR.md) for first deployment, health checks, and upgrades.
 
+Validator and platform-operated screener workers report coarse public system
+health through their existing signed/authenticated heartbeats. This adds no env
+setting or secret; hostname, IP, paths, container names/images, and env values
+are not collected.
+
 ## Make targets
 - `make lint`: `ruff format --check` + `ruff check`
 - `make format`: `ruff format` + `ruff check --fix`

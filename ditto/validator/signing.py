@@ -20,6 +20,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from ditto.api_models.system_health import (
+    SystemMetrics,
+    system_metrics_signing_token,
+)
 from ditto.validator.errors import ValidatorConfigError
 
 if TYPE_CHECKING:
@@ -134,9 +138,17 @@ def heartbeat_signing_message(
     code_digest: str,
     state: str,
     active_agent_id: UUID | None = None,
+    system_metrics: SystemMetrics | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
+    if protocol_version >= 3:
+        return (
+            "ditto-validator-heartbeat:v3:"
+            f"{validator_hotkey}:{software_version}:{protocol_version}:"
+            f"{code_digest}:{state}:{active_agent_id or ''}:"
+            f"{system_metrics_signing_token(system_metrics)}:{timestamp}"
+        ).encode()
     if protocol_version >= 2:
         return (
             "ditto-validator-heartbeat:v2:"
@@ -159,6 +171,7 @@ def sign_heartbeat(
     code_digest: str,
     state: str,
     active_agent_id: UUID | None = None,
+    system_metrics: SystemMetrics | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -169,6 +182,7 @@ def sign_heartbeat(
         code_digest=code_digest,
         state=state,
         active_agent_id=active_agent_id,
+        system_metrics=system_metrics,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

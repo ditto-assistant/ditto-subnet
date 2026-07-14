@@ -833,6 +833,76 @@
     "type": "object"
   },
   "ValidatorHeartbeatRequest": {
+    "$defs": {
+      "DockerHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "running_containers": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "healthy",
+              "degraded",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "unhealthy_containers": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "running_containers",
+          "unhealthy_containers"
+        ],
+        "type": "object"
+      },
+      "SystemMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "collected_at": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cpu_percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "multipleOf": 5,
+            "type": "integer"
+          },
+          "disk_percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "multipleOf": 5,
+            "type": "integer"
+          },
+          "docker": {
+            "$ref": "#/$defs/DockerHealth"
+          },
+          "memory_percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "multipleOf": 5,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collected_at",
+          "cpu_percent",
+          "memory_percent",
+          "disk_percent",
+          "docker"
+        ],
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
     "properties": {
       "active_agent_id": {
         "anyOf": [
@@ -869,9 +939,21 @@
           "running_benchmark",
           "updating_weights",
           "idle",
-          "error"
+          "error",
+          "paused"
         ],
         "type": "string"
+      },
+      "system_metrics": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SystemMetrics"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "timestamp": {
         "minimum": 0,

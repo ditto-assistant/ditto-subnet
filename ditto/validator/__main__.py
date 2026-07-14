@@ -17,6 +17,7 @@ import signal
 import httpx
 
 from ditto.chain import ChainConfig, create_chain_client
+from ditto.system_health import SystemMetricsCollector
 from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.dittobench import DittobenchClient
 from ditto.validator.platform import PlatformClient
@@ -86,6 +87,7 @@ async def _amain() -> int:
                     chain=chain,
                     keypair=keypair,
                     telemetry=telemetry,
+                    system_metrics=SystemMetricsCollector(),
                 )
                 _apply_ditto_logging()  # re-assert: bittensor has initialised
                 await worker.run_forever(stop)

@@ -19,6 +19,10 @@ from __future__ import annotations
 
 from ditto.api_models.health import HealthResponse
 from ditto.api_models.retrieval import AgentResponse, AgentStatusResponse
+from ditto.api_models.screener import (
+    ScreenerHeartbeatRequest,
+    ScreenerHeartbeatResponse,
+)
 from ditto.api_models.upload import (
     EvalPricingResponse,
     UploadAgentResponse,
@@ -31,6 +35,8 @@ __all__ = [
     "AgentStatusResponse",
     "EvalPricingResponse",
     "HealthResponse",
+    "ScreenerHeartbeatRequest",
+    "ScreenerHeartbeatResponse",
     "UploadAgentResponse",
     "UploadCheckRequest",
     "UploadCheckResponse",
