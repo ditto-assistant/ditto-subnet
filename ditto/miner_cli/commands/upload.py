@@ -1,4 +1,4 @@
-"""``ditto upload``: full 10-step submission flow.
+"""``ditto upload``: full submission flow.
 
 Glues every other module together. Walk:
 
@@ -6,11 +6,12 @@ Glues every other module together. Walk:
 2. Run tar pre-flight; abort on any real check failing
 3. Sign ``f"{hotkey}:{sha256}"``
 4. POST /upload/check; abort on a definitive rejection
-5. GET /upload/eval-pricing for the current fee + destination address
-6. Show payment preview + interactive confirm (skipped by --yes)
-7. Submit Balances.transfer_keep_alive extrinsic via raw bittensor SDK
-8. POST /upload/agent with tar + payment proof
-9. Print returned agent_id to stdout; print poll hint to stderr
+5. Verify the selected coldkey owns the hotkey on chain
+6. GET /upload/eval-pricing for the current fee + destination address
+7. Show payment preview + interactive confirm (skipped by --yes)
+8. Submit Balances.transfer_keep_alive extrinsic via raw bittensor SDK
+9. POST /upload/agent with tar + payment proof
+10. Print returned agent_id to stdout; print poll hint to stderr
 
 Exit codes:
 - 0 success (agent_id printed to stdout)
@@ -42,7 +43,7 @@ from ditto.miner_cli.errors import (
     WalletNotFoundError,
 )
 from ditto.miner_cli.network import resolve_network
-from ditto.miner_cli.payment import submit_eval_payment
+from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
 from ditto.miner_cli.signing import sign_upload_payload
 from ditto.miner_cli.tar_validator import run_preflight
 from ditto.miner_cli.wallet import load_wallet
@@ -65,8 +66,9 @@ def add_subparser(
         "upload",
         help="Submit an agent harness tarball + payment to the Ditto API.",
         description=(
-            "Run the full 10-step upload flow: pre-flight, sign, pre-pay "
-            "check, fetch fee, confirm, pay, post tarball, return agent_id."
+            "Run the full upload flow: pre-flight, sign, pre-pay check, "
+            "verify wallet ownership, fetch fee, confirm, pay, post tarball, "
+            "return agent_id."
         ),
         parents=parents or [],
     )
@@ -197,10 +199,20 @@ def _run_upload(
                 f"pre-check rejected: codes={check_response.error_codes}"
             )
 
-        # Step 5: fetch current pricing
+        # Step 5: verify the payment coldkey owns the claimed hotkey. This is
+        # intentionally before pricing/confirmation and is never bypassed by
+        # --yes: the API enforces the same Owner record at payment time.
+        preflight_payment_signer(
+            live_wallet=live_wallet,
+            hotkey_ss58=handle.hotkey_ss58,
+            subtensor_network=subtensor_network,
+            chain_endpoint=chain_endpoint,
+        )
+
+        # Step 6: fetch current pricing
         pricing = client.get_eval_pricing()
 
-        # Step 6: confirm payment
+        # Step 7: confirm payment
         confirm_payment(
             amount_rao=pricing.amount_rao,
             dest_address=pricing.send_address,
@@ -209,7 +221,7 @@ def _run_upload(
             skip=args.yes,
         )
 
-        # Step 7: submit chain payment
+        # Step 8: submit chain payment
         print(
             f"submitting payment on subtensor={subtensor_network}...",
             file=sys.stderr,
@@ -227,7 +239,7 @@ def _run_upload(
             file=sys.stderr,
         )
 
-        # Step 8: post tar + payment proof
+        # Step 9: post tar + payment proof
         print("uploading tarball...", file=sys.stderr)
         try:
             with args.tar_path.open("rb") as tar_fh:
@@ -257,7 +269,7 @@ def _run_upload(
             )
             raise
 
-    # Step 9: print agent_id to stdout, hint to stderr
+    # Step 10: print agent_id to stdout, hint to stderr
     print(result.agent_id)
     print(
         f"\nupload succeeded. poll status with:\n  ditto status {result.agent_id}",

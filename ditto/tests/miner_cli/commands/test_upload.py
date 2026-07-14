@@ -10,6 +10,7 @@ Invariants pinned:
 - Missing wallet args: exit 1 before any work.
 - Pre-flight failure: chain payment never reached.
 - /upload/check rejection: payment never submitted.
+- Wallet ownership mismatch: confirmation and payment never reached.
 - Payment cancelled at prompt: exit 2 before chain call.
 - Upload rejection after payment: exit 1 + proof surfaced.
 """
@@ -62,6 +63,13 @@ def _patch_api_client(client_mock: MagicMock) -> MagicMock:
     ctor.return_value.__enter__.return_value = client_mock
     ctor.return_value.__exit__.return_value = False
     return ctor
+
+
+@pytest.fixture(autouse=True)
+def _stub_payment_signer_preflight():  # type: ignore[no-untyped-def]
+    """Keep orchestration tests offline unless they exercise this gate."""
+    with patch("ditto.miner_cli.commands.upload.preflight_payment_signer"):
+        yield
 
 
 def _good_preflight() -> PreflightResult:
@@ -237,6 +245,51 @@ class TestUploadFailurePaths:
         client.get_eval_pricing.assert_not_called()
         # Per-code message surfaced to stderr.
         assert "1100" in capsys.readouterr().err
+
+    def test_signer_mismatch_exits_one_before_pricing_confirm_or_payment(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="poker")
+        mismatch = (
+            "payment signer mismatch detected before payment: "
+            "on-chain owner 5Owner, selected wallet signer 5Signer. "
+            "No funds were sent."
+        )
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.preflight_payment_signer",
+                side_effect=PaymentSubmissionError(mismatch),
+            ) as ownership_check,
+            patch("ditto.miner_cli.commands.upload.confirm_payment") as confirm,
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar, yes=True))
+
+        assert rc == 1
+        assert "No funds were sent" in capsys.readouterr().err
+        ownership_check.assert_called_once()
+        client.get_eval_pricing.assert_not_called()
+        confirm.assert_not_called()
+        pay.assert_not_called()
 
     def test_cancel_at_confirm_exits_two_before_chain_call(
         self, good_tar: Path
