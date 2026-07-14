@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ditto-screening-protocol"
-version = "0.4.0"
+version = "0.5.0"
 description = "Shared wire protocol for Ditto screening workers and platform APIs."
 requires-python = ">=3.11,<3.14"
 dependencies = ["pydantic>=2"]
