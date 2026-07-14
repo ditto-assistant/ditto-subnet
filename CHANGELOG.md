@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.4.3 (2026-07-14)
+
+### Bug Fixes
+
+- Cancel timed-out validator benchmarks
+  ([#122](https://github.com/ditto-assistant/ditto-subnet/pull/122),
+  [`b837419`](https://github.com/ditto-assistant/ditto-subnet/commit/b8374198006a36ec19d171cab0ff4a649d458ee5))
+
+
 ## v0.4.2 (2026-07-14)
 
 ### Bug Fixes
