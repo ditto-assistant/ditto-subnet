@@ -18,7 +18,6 @@ dependencies = [
     "async-substrate-interface",
     "httpx>=0.27",
     "pydantic>=2",
-    "ditto-screening-protocol==0.6.0",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +28,6 @@ telemetry = ["wandb>=0.17"]
 
 [tool.uv.sources]
 bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
-ditto-screening-protocol = { path = "packages/ditto-screening-protocol" }
 
 [project.scripts]
 ditto = "ditto.miner_cli.__main__:main"
@@ -61,7 +59,7 @@ extend-select = ["I"]
 quote-style = "double"
 
 [tool.ruff.lint.isort]
-known-first-party = ["ditto", "ditto_screening_protocol"]
+known-first-party = ["ditto"]
 
 # ─── Mypy ────────────────────────────────────────────────────────────────────
 

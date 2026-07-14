@@ -7,13 +7,11 @@ dropping prose (``title`` / ``description`` / ``example(s)``) so a docstring
 edit on one side does not look like a contract break, while a renamed, retyped,
 added, or removed field does.
 
-The committed goldens (``validator_contract.json``, ``screener_contract.json``)
-are generated from the **platform** models (the source of truth). The
-``test_*_contract`` modules recompute the same structure from *this* repo's
-models and assert equality, so a worker client cannot silently drift from the
-API it calls. Regenerate a golden with the matching
-``scripts/gen_*_contract.py`` (see those files' headers for how to point them
-at a ditto-platform checkout).
+The committed ``validator_contract.json`` golden is generated from the
+**platform** models (the source of truth). The validator contract test
+recomputes the same structure from this repo's models and asserts equality, so
+the worker client cannot silently drift from the API it calls. Regenerate it
+with ``scripts/gen_validator_contract.py``.
 """
 
 from __future__ import annotations

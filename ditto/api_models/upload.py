@@ -86,5 +86,5 @@ class UploadAgentResponse(BaseModel):
 
     status: AgentStatus
     """Initial lifecycle state. Always ``uploaded`` immediately after a
-    successful upload; the screener PR moves this to ``screening``
+    successful upload; the platform-operated screening service advances it
     shortly after."""
