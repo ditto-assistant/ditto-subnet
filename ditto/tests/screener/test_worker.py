@@ -11,6 +11,8 @@ from uuid import UUID, uuid4
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
     SCREENING_POLICY_VERSION,
+    ScreenerHeartbeatRequest,
+    ScreenerHeartbeatResponse,
     ScreenerQueueItem,
     ScreenerQueueResponse,
 )
@@ -59,6 +61,11 @@ class _FakePlatform:
         self.stop_after_queue: asyncio.Event | None = None
         self.required_policy_version = SCREENING_POLICY_VERSION
         self.claim_calls = 0
+        self.heartbeats: list[ScreenerHeartbeatRequest] = []
+
+    async def submit_heartbeat(self, request):  # type: ignore[no-untyped-def]
+        self.heartbeats.append(request)
+        return ScreenerHeartbeatResponse(accepted=True, seen_at=datetime.now(UTC))
 
     async def get_required_policy_version(self) -> int:
         return self.required_policy_version
@@ -135,6 +142,10 @@ async def test_screen_one_pass_posts_signed_pass_verdict(
     assert v["passed"] is True and v["signature"] == "cd" * 64 and v["detail"] == ""
     assert v["policy_version"] == SCREENING_POLICY_VERSION
     assert v["attempt_id"] is not None
+    assert [heartbeat.state for heartbeat in platform.heartbeats] == [
+        "screening",
+        "polling",
+    ]
 
 
 async def test_screen_one_fail_forwards_detail(

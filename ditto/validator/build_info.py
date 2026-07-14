@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ditto import __version__
 
-HEARTBEAT_PROTOCOL_VERSION = 2
+HEARTBEAT_PROTOCOL_VERSION = 3
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ditto.api_models.system_health import (
+    SystemMetrics,
+    system_metrics_signing_token,
+)
 from ditto.screener.errors import ScreenerConfigError
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
@@ -65,6 +69,53 @@ def sign_verdict(
         passed=passed,
         policy_version=policy_version,
         attempt_id=attempt_id,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def heartbeat_signing_message(
+    *,
+    screener_hotkey: str,
+    software_version: str,
+    protocol_version: int,
+    policy_version: int,
+    state: str,
+    active_agent_id: UUID | None,
+    system_metrics: SystemMetrics | None,
+    timestamp: int,
+) -> bytes:
+    """Build the dedicated, versioned screener heartbeat payload."""
+    return (
+        "ditto-screener-heartbeat:v1:"
+        f"{screener_hotkey}:{software_version}:{protocol_version}:{policy_version}:"
+        f"{state}:{active_agent_id or ''}:"
+        f"{system_metrics_signing_token(system_metrics)}:{timestamp}"
+    ).encode()
+
+
+def sign_heartbeat(
+    keypair: Any,
+    *,
+    screener_hotkey: str,
+    software_version: str,
+    protocol_version: int,
+    policy_version: int,
+    state: str,
+    active_agent_id: UUID | None,
+    system_metrics: SystemMetrics | None,
+    timestamp: int,
+) -> str:
+    """Return the sr25519 signature for a screener heartbeat."""
+    message = heartbeat_signing_message(
+        screener_hotkey=screener_hotkey,
+        software_version=software_version,
+        protocol_version=protocol_version,
+        policy_version=policy_version,
+        state=state,
+        active_agent_id=active_agent_id,
+        system_metrics=system_metrics,
+        timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

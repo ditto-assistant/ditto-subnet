@@ -9,7 +9,10 @@ from uuid import UUID
 import httpx
 import pytest
 
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
+from ditto.api_models.screener import (
+    SCREENING_POLICY_VERSION,
+    ScreenerHeartbeatRequest,
+)
 from ditto.screener.config import ScreenerConfig
 from ditto.screener.errors import PlatformError
 from ditto.screener.platform import PlatformClient
@@ -87,6 +90,33 @@ async def test_policy_preflight_is_read_only(
     async with http:
         required = await client.get_required_policy_version()
     assert required == SCREENING_POLICY_VERSION
+
+
+async def test_submit_heartbeat_uses_dedicated_screener_auth(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/screener/heartbeat"
+        _assert_auth(request)
+        return httpx.Response(
+            200,
+            json={"accepted": True, "seen_at": datetime.now(UTC).isoformat()},
+        )
+
+    client, http = _make_client(make_config(), handler)
+    payload = ScreenerHeartbeatRequest(
+        screener_hotkey=make_config().screener_hotkey,
+        software_version="0.4.2",
+        protocol_version=1,
+        policy_version=SCREENING_POLICY_VERSION,
+        state="polling",
+        timestamp=1_752_443_200,
+        signature="ab" * 64,
+    )
+    async with http:
+        response = await client.submit_heartbeat(payload)
+    assert response.accepted is True
 
 
 async def test_get_artifact_parses_url(

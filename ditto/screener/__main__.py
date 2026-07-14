@@ -20,6 +20,7 @@ from ditto.screener.gate import BuildGate
 from ditto.screener.platform import PlatformClient
 from ditto.screener.signing import load_screener_keypair
 from ditto.screener.worker import ScreenerWorker
+from ditto.system_health import SystemMetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,11 @@ async def _amain() -> int:
         platform = PlatformClient(config, http)
         gate = BuildGate(config, http)
         worker = ScreenerWorker(
-            config=config, platform=platform, gate=gate, keypair=keypair
+            config=config,
+            platform=platform,
+            gate=gate,
+            keypair=keypair,
+            system_metrics=SystemMetricsCollector(),
         )
         _apply_ditto_logging()  # re-assert after bittensor init (see validator)
         await worker.run_forever(stop)

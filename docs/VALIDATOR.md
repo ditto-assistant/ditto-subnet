@@ -182,8 +182,14 @@ check and identity writes.
 Add the shared `WANDB_API_KEY` provided by Ditto to `.env` (never commit it), or
 set `WANDB_MODE=disabled` to opt out of aggregate telemetry.
 
-The worker also posts a signed public heartbeat with its software identity and
-current phase. Long benchmark runs refresh `running_benchmark` every two minutes.
+The worker also posts a signed public heartbeat with its software identity,
+current phase/work id, and an optional coarse system-health sample. CPU, memory,
+and root-disk utilization are rounded to five-point buckets; Docker contributes
+only aggregate availability and running/unhealthy counts. It never reports host
+or container identity, paths, images, env values, or secrets. Long benchmark
+runs refresh `running_benchmark` every two minutes. Collection is automatic and
+requires no new secret or operator setting; when Docker is inaccessible it is
+reported as unavailable rather than failing the validator.
 
 ## Development
 

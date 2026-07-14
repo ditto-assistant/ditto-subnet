@@ -16,6 +16,8 @@ import httpx
 
 from ditto.api_models.screener import (
     SCREENING_POLICY_VERSION,
+    ScreenerHeartbeatRequest,
+    ScreenerHeartbeatResponse,
     ScreenerQueueResponse,
     ScreenResultRequest,
     ScreenResultResponse,
@@ -42,6 +44,23 @@ class PlatformClient:
             "Authorization": f"Bearer {config.api_token}",
             "X-Screener-Hotkey": config.screener_hotkey,
         }
+
+    async def submit_heartbeat(
+        self, request: ScreenerHeartbeatRequest
+    ) -> ScreenerHeartbeatResponse:
+        """Publish a signed report under the dedicated screener boundary."""
+        url = f"{self._base}{_PREFIX}/heartbeat"
+        try:
+            resp = await self._client.post(
+                url, json=request.model_dump(mode="json"), headers=self._headers
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"screener heartbeat failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"screener heartbeat rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return ScreenerHeartbeatResponse.model_validate(resp.json())
 
     async def get_required_policy_version(self) -> int:
         """Read the platform policy without claiming or mutating queue state."""

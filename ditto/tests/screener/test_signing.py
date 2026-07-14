@@ -5,7 +5,13 @@ from __future__ import annotations
 from uuid import UUID
 
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
-from ditto.screener.signing import sign_verdict, verdict_signing_message
+from ditto.api_models.system_health import DockerHealth, SystemMetrics
+from ditto.screener.signing import (
+    heartbeat_signing_message,
+    sign_heartbeat,
+    sign_verdict,
+    verdict_signing_message,
+)
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
@@ -60,3 +66,39 @@ def test_attempt_signature_binds_exact_lease() -> None:
             f"{_HOTKEY}:{_AGENT}:{_ATTEMPT}:True:{SCREENING_POLICY_VERSION}"
         ).encode()
     )
+
+
+def test_screener_heartbeat_binds_dedicated_identity_and_metrics() -> None:
+    kp = _FakeKeypair()
+    metrics = SystemMetrics(
+        collected_at=1_752_443_200,
+        cpu_percent=15,
+        memory_percent=40,
+        disk_percent=55,
+        docker=DockerHealth(
+            status="healthy", running_containers=2, unhealthy_containers=0
+        ),
+    )
+    sig = sign_heartbeat(
+        kp,
+        screener_hotkey=_HOTKEY,
+        software_version="0.4.2",
+        protocol_version=1,
+        policy_version=SCREENING_POLICY_VERSION,
+        state="screening",
+        active_agent_id=_AGENT,
+        system_metrics=metrics,
+        timestamp=1_752_443_200,
+    )
+    assert sig == "ab" * 64
+    assert kp.signed == heartbeat_signing_message(
+        screener_hotkey=_HOTKEY,
+        software_version="0.4.2",
+        protocol_version=1,
+        policy_version=SCREENING_POLICY_VERSION,
+        state="screening",
+        active_agent_id=_AGENT,
+        system_metrics=metrics,
+        timestamp=1_752_443_200,
+    )
+    assert b"validator" not in kp.signed
