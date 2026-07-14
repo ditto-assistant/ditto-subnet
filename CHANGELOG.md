@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.4.1 (2026-07-14)
+
+### Bug Fixes
+
+- Temporarily disable model canary
+  ([#115](https://github.com/ditto-assistant/ditto-subnet/pull/115),
+  [`83acde6`](https://github.com/ditto-assistant/ditto-subnet/commit/83acde695cf13475aeb235a0d84086216cd71568))
+
+
 ## v0.4.0 (2026-07-14)
 
 ### Features
