@@ -55,7 +55,7 @@ class ScreenerConfig:
     """Hard cap on a single ``docker build`` (crate compile is slow)."""
 
     run_timeout_seconds: float
-    """Hard cap on the container serve/health smoke check."""
+    """Hard cap on the container serve, health, and model-call smoke check."""
 
     build_memory: str
     """``docker run --memory`` limit for the serve-smoke container (e.g. ``2g``)."""
@@ -77,13 +77,10 @@ class ScreenerConfig:
     smoke_env: tuple[tuple[str, str], ...]
     """Env vars injected (``docker run -e K=V``) into the serve-smoke container.
 
-    The reference harness builds its full LLM-backed ``Baseline`` — which reads
-    ``OPENROUTER_API_KEY`` — *before* it binds the ``/health`` listener, so a
-    container run with no key exits before serving and the smoke check times out
-    with a connect error. The gate never calls ``/run``, so a **dummy** key is
-    enough: it lets the server boot and answer ``/health`` without ever making an
-    LLM call. Defaults to a placeholder ``OPENROUTER_API_KEY``; override via
-    ``SCREENER_SMOKE_ENV`` (comma-separated ``K=V`` pairs) for other providers."""
+    The canary appends its locked Chutes/OpenAI-compatible gateway settings after
+    these values. This tuple remains available for unrelated boot-time variables
+    needed before ``/health`` binds. Defaults to a placeholder OpenRouter key for
+    older reference harnesses; no real provider credential is ever injected."""
 
     max_tarball_bytes: int
     """Reject an artifact larger than this before building. It is a download DoS
@@ -178,9 +175,8 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         health_path=os.environ.get("SCREENER_HEALTH_PATH", "/health"),
         container_port=_parse_int("SCREENER_CONTAINER_PORT", "8080"),
         smoke_env=_parse_env_pairs(
-            # A dummy LLM key so the reference harness (which builds its
-            # OpenRouter-backed Baseline before binding /health) can boot far
-            # enough to serve /health; the gate never calls /run so it is unused.
+            # Compatibility key for older harness startup. The runtime canary
+            # separately forces the model path to its fake external gateway.
             "SCREENER_SMOKE_ENV",
             "OPENROUTER_API_KEY=sk-screener-smoke",
         ),

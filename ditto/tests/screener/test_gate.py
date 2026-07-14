@@ -19,6 +19,7 @@ import httpx
 
 from ditto.screener.config import ScreenerConfig
 from ditto.screener.gate import BuildGate, GateResult, _log_tail, dockerfile_at_root
+from ditto.screener.model_canary import ModelCallCanary
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _URL = "https://storage.test/agent.tar.gz"
@@ -79,6 +80,11 @@ def _gate_with(
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     gate = BuildGate(cfg, http)
     gate._run = run_stub  # type: ignore[method-assign]
+
+    async def _pass_canary(*_: Any) -> tuple[bool, str]:
+        return True, ""
+
+    gate._run_model_canary = _pass_canary  # type: ignore[method-assign,assignment]
     return gate
 
 
@@ -133,6 +139,61 @@ async def test_smoke_env_injected_into_run(
     assert "-e" in run_args
     assert "OPENROUTER_API_KEY=sk-dummy" in run_args
     assert "FOO=bar" in run_args
+    assert "host.docker.internal:host-gateway" in run_args
+    assert "DITTOBENCH_PROVIDER=chutes" in run_args
+    assert "CHUTES_API_KEY=relay" in run_args
+    assert any(
+        value.startswith("CHUTES_BASE_URL=http://host.docker.internal:")
+        for value in run_args
+    )
+
+
+async def test_model_canary_rejects_harness_that_makes_no_model_call(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tar = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tar=tar)
+    # Restore the real check for this focused unit test. The mocked /run endpoint
+    # never calls the external canary server.
+    del gate._run_model_canary  # type: ignore[attr-defined]
+    canary = ModelCallCanary()
+    ok, detail = await gate._run_model_canary("http://127.0.0.1:8080", canary)
+    await gate._client.aclose()
+    assert not ok
+    assert detail == "model canary observed no model call"
+
+
+async def test_model_canary_requires_harness_to_use_hidden_response(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    async with ModelCallCanary() as canary:
+        local_gateway = canary.gateway_url.replace("host.docker.internal", "127.0.0.1")
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/run"
+            async with httpx.AsyncClient() as model_client:
+                model_response = await model_client.post(
+                    f"{local_gateway}/v1/chat/completions",
+                    json={"model": "canary", "messages": []},
+                )
+            token = model_response.json()["choices"][0]["message"]["content"]
+            return httpx.Response(
+                200,
+                json={
+                    "final_text": token,
+                    "tool_calls": [],
+                    "prompt_tokens": 1,
+                    "output_tokens": 1,
+                    "latency_ms": 1,
+                },
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        gate = BuildGate(make_config(), client)
+        async with client:
+            ok, detail = await gate._run_model_canary("http://127.0.0.1:8080", canary)
+        assert ok, detail
+        assert canary.model_calls == 1
 
 
 async def test_sha_mismatch_fails_before_build(
