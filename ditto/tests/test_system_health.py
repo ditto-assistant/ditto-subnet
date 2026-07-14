@@ -64,15 +64,19 @@ def test_docker_probe_reports_its_own_hardened_container(monkeypatch: Any) -> No
     )
 
 
-def test_docker_probe_remains_unavailable_on_an_unobservable_host(
-    monkeypatch: Any,
-) -> None:
-    monkeypatch.setattr(
-        system_health.subprocess,
-        "run",
+@pytest.mark.parametrize(
+    "probe_result",
+    (
+        Mock(side_effect=OSError("docker probe failed")),
+        Mock(side_effect=system_health.subprocess.TimeoutExpired("docker", 2.0)),
         Mock(return_value=SimpleNamespace(returncode=1, stdout="")),
-    )
-    monkeypatch.setattr(system_health, "_running_in_container", lambda: False)
+    ),
+)
+def test_docker_probe_failure_remains_unavailable_inside_container(
+    monkeypatch: Any, probe_result: Mock
+) -> None:
+    monkeypatch.setattr(system_health.subprocess, "run", probe_result)
+    monkeypatch.setattr(system_health, "_running_in_container", lambda: True)
 
     assert system_health.probe_docker_health() == DockerHealth(
         status="unavailable", running_containers=0, unhealthy_containers=0

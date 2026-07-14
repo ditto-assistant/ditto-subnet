@@ -28,8 +28,8 @@ def _running_in_container() -> bool:
     return any(marker.exists() for marker in _CONTAINER_MARKERS)
 
 
-def _docker_unavailable() -> DockerHealth:
-    """Report the observable worker container when host Docker is isolated."""
+def _docker_cli_missing() -> DockerHealth:
+    """Report the worker itself when the hardened image intentionally omits Docker."""
     if _running_in_container():
         return DockerHealth(
             status="healthy", running_containers=1, unhealthy_containers=0
@@ -58,10 +58,16 @@ def probe_docker_health() -> DockerHealth:
             timeout=2.0,
             env={"PATH": os.environ.get("PATH", "")},
         )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return _docker_unavailable()
+    except FileNotFoundError:
+        return _docker_cli_missing()
+    except (OSError, subprocess.TimeoutExpired):
+        return DockerHealth(
+            status="unavailable", running_containers=0, unhealthy_containers=0
+        )
     if result.returncode != 0:
-        return _docker_unavailable()
+        return DockerHealth(
+            status="unavailable", running_containers=0, unhealthy_containers=0
+        )
     statuses = result.stdout.splitlines()[:1000]
     unhealthy = sum("(unhealthy)" in status.lower() for status in statuses)
     return DockerHealth(
