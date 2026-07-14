@@ -193,6 +193,20 @@ runs refresh `running_benchmark` every two minutes. Collection is automatic and
 requires no new secret or operator setting; when Docker is inaccessible it is
 reported as unavailable rather than failing the validator.
 
+For a live scoring ticket, heartbeat protocol v4 also reports one allowlisted
+benchmark stage (`preparing`, `building_harness`, `starting_harness`,
+`running_benchmark`, `finalizing`, `submitting_result`, or
+`failed_retrying`). During the running stage it may include only aggregate
+completed/total check counts; the platform derives a coarse percentage. Stage
+changes publish promptly, while same-stage count changes are limited to one per
+minute and a five-percent bucket change. The signed progress is bound to the
+active public agent and exact private ticket deadline. It never carries case
+IDs or order, prompts, expected answers, tool names, memory or dataset content,
+seeds or hashes, partial scores, per-case latency, model output, run/container
+IDs, paths, logs, or error bodies. Progress and heartbeat failures remain
+best-effort and cannot fail scoring or result submission. Older validators
+without progress continue to report an unknown-progress active state.
+
 ## Development
 
 For local code work outside Compose:

@@ -13,12 +13,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import httpx
 
+from ditto.api_models.benchmark_progress import (
+    MAX_BENCHMARK_CHECKS,
+    BenchmarkProgressStage,
+)
 from ditto.api_models.validator import ScoreReport
 from ditto.validator.errors import DittobenchError
 
@@ -30,6 +36,63 @@ logger = logging.getLogger(__name__)
 # Terminal job states reported by dittobench-api's store.
 _DONE = "done"
 _FAILED = "failed"
+
+_PROGRESS_STAGE_BY_STATUS: dict[str, BenchmarkProgressStage] = {
+    "queued": "preparing",
+    "building": "building_harness",
+    "generating": "starting_harness",
+    "seeding": "running_benchmark",
+    "running": "running_benchmark",
+    "scoring": "finalizing",
+    "done": "finalizing",
+    "failed": "failed_retrying",
+}
+_STABLE_COUNT_STATUSES = {"running", "scoring", "done"}
+
+
+@dataclass(frozen=True)
+class DittobenchProgressSnapshot:
+    """Allowlisted progress extracted from an otherwise private scorer job."""
+
+    stage: BenchmarkProgressStage
+    completed: int | None = None
+    total: int | None = None
+
+
+ProgressCallback = Callable[[DittobenchProgressSnapshot], Awaitable[None]]
+
+
+def safe_progress_snapshot(payload: object) -> DittobenchProgressSnapshot | None:
+    """Extract only status and aggregate counts from a DittoBench poll response.
+
+    Pre-running totals can change while the generated suite is assembled, so
+    counts remain unknown until the raw scorer reaches ``running``. Malformed
+    counts degrade to unknown without affecting the benchmark.
+    """
+    if not isinstance(payload, dict):
+        return None
+    raw_status = payload.get("status")
+    if not isinstance(raw_status, str):
+        return None
+    stage = _PROGRESS_STAGE_BY_STATUS.get(raw_status)
+    if stage is None or raw_status not in _STABLE_COUNT_STATUSES:
+        return None if stage is None else DittobenchProgressSnapshot(stage=stage)
+
+    raw_progress = payload.get("progress")
+    if not isinstance(raw_progress, dict):
+        return DittobenchProgressSnapshot(stage=stage)
+    completed = raw_progress.get("done")
+    total = raw_progress.get("total")
+    if (
+        type(completed) is not int
+        or type(total) is not int
+        or completed < 0
+        or total < 1
+        or completed > total
+        or total > MAX_BENCHMARK_CHECKS
+    ):
+        return DittobenchProgressSnapshot(stage=stage)
+    return DittobenchProgressSnapshot(stage=stage, completed=completed, total=total)
 
 
 class DittobenchClient:
@@ -52,6 +115,7 @@ class DittobenchClient:
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
@@ -80,7 +144,7 @@ class DittobenchClient:
             dataset_sha256=dataset_sha256,
             run_size=run_size,
         )
-        return await self._poll(run_id)
+        return await self._poll(run_id, progress_callback=progress_callback)
 
     def _mock_report(self) -> ScoreReport:
         """Canned report for ``VALIDATOR_DITTOBENCH_MOCK`` (local plumbing tests)."""
@@ -139,7 +203,9 @@ class DittobenchClient:
         logger.info("dittobench run %s started for tarball", run_id)
         return str(run_id)
 
-    async def _poll(self, run_id: str) -> ScoreReport:
+    async def _poll(
+        self, run_id: str, *, progress_callback: ProgressCallback | None = None
+    ) -> ScoreReport:
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
         deadline = self._config.dittobench_timeout_seconds
         waited = 0.0
@@ -151,6 +217,16 @@ class DittobenchClient:
                         f"poll rejected ({resp.status_code}): {resp.text[:200]}"
                     )
                 data = resp.json()
+                if not isinstance(data, dict):
+                    raise DittobenchError("poll response was not a JSON object")
+                snapshot = safe_progress_snapshot(data)
+                if snapshot is not None and progress_callback is not None:
+                    try:
+                        await progress_callback(snapshot)
+                    except Exception:  # noqa: BLE001 - telemetry never gates scoring
+                        logger.warning(
+                            "dittobench progress callback failed; scoring continues"
+                        )
                 status = data.get("status")
                 if status == _DONE:
                     rep = data.get("report")

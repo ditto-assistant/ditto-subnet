@@ -21,7 +21,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
+from ditto.api_models.benchmark_progress import (
+    BenchmarkProgress,
+    BenchmarkProgressStage,
+)
 from ditto.api_models.validator import ValidatorHeartbeatRequest, ValidatorRuntimeState
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
@@ -49,7 +54,6 @@ from ditto.validator.weights import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from uuid import UUID
 
     from ditto.api_models.validator import (
         JobResponse,
@@ -59,7 +63,11 @@ if TYPE_CHECKING:
     from ditto.chain import ChainClient
     from ditto.system_health import SystemMetricsCollector
     from ditto.validator.config import ValidatorConfig
-    from ditto.validator.dittobench import DittobenchClient
+    from ditto.validator.dittobench import (
+        DittobenchClient,
+        DittobenchProgressSnapshot,
+        ProgressCallback,
+    )
     from ditto.validator.platform import PlatformClient
 
 logger = logging.getLogger(__name__)
@@ -85,6 +93,24 @@ _RATE_LIMIT_MARKERS = ("rate limit", "ratelimit", "too fast", "toofast")
 # Keep a validator visibly online throughout a long full benchmark. This is a
 # protocol cadence, not an operator tuning knob.
 _ACTIVE_HEARTBEAT_SECONDS = 120.0
+# Count-only updates are intentionally slower than the scorer's ten-second poll.
+# Stage transitions still publish immediately.
+_PROGRESS_UPDATE_SECONDS = 60.0
+# Active ticket work must never wait on the platform client's normal HTTP timeout.
+_ACTIVE_TELEMETRY_TIMEOUT_SECONDS = 2.0
+# Keep a successfully reported generic failure visible through at least one
+# progress reporting interval. A new ticket supersedes it immediately.
+_FAILED_PROGRESS_MIN_VISIBLE_SECONDS = 60.0
+
+_PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
+    "preparing": 0,
+    "building_harness": 1,
+    "starting_harness": 2,
+    "running_benchmark": 3,
+    "finalizing": 4,
+    "submitting_result": 5,
+    "failed_retrying": 6,
+}
 
 
 def _is_rate_limit_error(error: Exception) -> bool:
@@ -150,6 +176,12 @@ class ValidatorWorker:
         self._current_bench_version = DEFAULT_BENCH_VERSION
         self._last_heartbeat_timestamp = 0
         self._active_agent_id: UUID | None = None
+        self._active_ticket_deadline: datetime | None = None
+        self._benchmark_progress: BenchmarkProgress | None = None
+        self._last_progress_heartbeat_monotonic: float | None = None
+        self._last_progress_bucket: int | None = None
+        self._active_heartbeat_lock = asyncio.Lock()
+        self._retain_failed_progress_until = 0.0
         self._system_metrics = system_metrics
 
     async def run_once(self, *, set_weights: bool = True) -> int:
@@ -221,8 +253,23 @@ class ValidatorWorker:
         await self._report_heartbeat("idle")
         return queue_depth
 
-    async def _report_heartbeat(self, state: ValidatorRuntimeState) -> None:
+    async def _report_heartbeat(
+        self,
+        state: ValidatorRuntimeState,
+        *,
+        active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
+    ) -> bool:
         """Best-effort signed build + runtime report; never gate validator work."""
+        if active_snapshot is None:
+            active_agent_id = self._active_agent_id
+            benchmark_progress = self._benchmark_progress
+        else:
+            active_agent_id, benchmark_progress = active_snapshot
+        if (
+            active_agent_id is None
+            and time.monotonic() < self._retain_failed_progress_until
+        ):
+            return True
         try:
             build = validator_build_info()
             timestamp = max(int(time.time()), self._last_heartbeat_timestamp + 1)
@@ -239,8 +286,9 @@ class ValidatorWorker:
                 protocol_version=build.protocol_version,
                 code_digest=build.code_digest,
                 state=state,
-                active_agent_id=self._active_agent_id,
+                active_agent_id=active_agent_id,
                 system_metrics=system_metrics,
+                benchmark_progress=benchmark_progress,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -249,14 +297,17 @@ class ValidatorWorker:
                 protocol_version=build.protocol_version,
                 code_digest=build.code_digest,
                 state=state,
-                active_agent_id=self._active_agent_id,
+                active_agent_id=active_agent_id,
                 system_metrics=system_metrics,
+                benchmark_progress=benchmark_progress,
                 timestamp=timestamp,
                 signature=signature,
             )
-            await self._platform.submit_heartbeat(request)
+            response = await self._platform.submit_heartbeat(request)
+            return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
+            return False
 
     async def _heartbeat_while_active(self, stop: asyncio.Event) -> None:
         """Refresh ``running_benchmark`` until the current scorer call ends."""
@@ -264,7 +315,144 @@ class ValidatorWorker:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=_ACTIVE_HEARTBEAT_SECONDS)
             except TimeoutError:
-                await self._report_heartbeat("running_benchmark")
+                await self._emit_active_heartbeat()
+
+    @staticmethod
+    def _progress_bucket(progress: BenchmarkProgress) -> int | None:
+        """Return the platform-facing five-percent bucket for throttling only."""
+        if progress.completed is None or progress.total is None:
+            return None
+        percent = progress.completed * 100 // progress.total
+        return min(100, percent // 5 * 5)
+
+    async def _emit_active_heartbeat(self) -> bool:
+        """Attempt one active heartbeat and remember its aggregate progress."""
+        async with self._active_heartbeat_lock:
+            active_snapshot = (self._active_agent_id, self._benchmark_progress)
+            sent_progress = active_snapshot[1]
+            delivered = await self._report_heartbeat_bounded(
+                "running_benchmark", active_snapshot=active_snapshot
+            )
+            if delivered and sent_progress is not None:
+                self._last_progress_heartbeat_monotonic = time.monotonic()
+                self._last_progress_bucket = self._progress_bucket(sent_progress)
+            return delivered
+
+    async def _report_heartbeat_bounded(
+        self,
+        state: ValidatorRuntimeState,
+        *,
+        active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
+    ) -> bool:
+        """Bound telemetry I/O while a ticket is on the submission path."""
+        try:
+            return await asyncio.wait_for(
+                self._report_heartbeat(state, active_snapshot=active_snapshot),
+                timeout=_ACTIVE_TELEMETRY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("validator progress heartbeat timed out; scoring continues")
+            return False
+
+    async def _publish_benchmark_progress(
+        self,
+        stage: BenchmarkProgressStage,
+        *,
+        completed: int | None = None,
+        total: int | None = None,
+    ) -> bool:
+        """Cache safe progress and publish stage/count changes at bounded cadence."""
+        if self._active_ticket_deadline is None or self._active_agent_id is None:
+            return False
+        try:
+            previous = self._benchmark_progress
+            if previous is not None:
+                # DittoBench can briefly move from ``running`` back through its
+                # internal ``seeding``/``generating`` phases. Public progress is
+                # one monotonic lifecycle, so never regress a signed stage.
+                if _PROGRESS_STAGE_ORDER[stage] < _PROGRESS_STAGE_ORDER[previous.stage]:
+                    return False
+                # An unstable/malformed same-stage poll must not erase a count
+                # already accepted by the platform and later look like a
+                # regression. Preserve the last safe aggregate instead.
+                if (
+                    stage == previous.stage
+                    and completed is None
+                    and total is None
+                    and previous.completed is not None
+                ):
+                    completed = previous.completed
+                    total = previous.total
+            progress = BenchmarkProgress(
+                stage=stage,
+                completed=completed,
+                total=total,
+                ticket_deadline=self._active_ticket_deadline,
+            )
+            self._benchmark_progress = progress
+            bucket = self._progress_bucket(progress)
+            stage_changed = previous is None or previous.stage != progress.stage
+            count_update_due = (
+                not stage_changed
+                and bucket is not None
+                and bucket != self._last_progress_bucket
+                and (
+                    self._last_progress_heartbeat_monotonic is None
+                    or time.monotonic() - self._last_progress_heartbeat_monotonic
+                    >= _PROGRESS_UPDATE_SECONDS
+                )
+            )
+            # The scorer's terminal failed poll is followed immediately by its
+            # exception. Retry that one generic heartbeat so the exception path
+            # knows whether a failure state was actually accepted before it
+            # suppresses the clearing heartbeat for the visibility window.
+            if stage_changed or count_update_due or stage == "failed_retrying":
+                return await self._emit_active_heartbeat()
+            return False
+        except Exception:  # noqa: BLE001 - telemetry validation is fail-open
+            logger.warning("benchmark progress update dropped; scoring continues")
+            return False
+
+    async def _on_dittobench_progress(
+        self, snapshot: DittobenchProgressSnapshot
+    ) -> None:
+        """Map an already-sanitized scorer snapshot onto the signed heartbeat."""
+        completed = snapshot.completed
+        total = snapshot.total
+        if snapshot.stage == "finalizing" and (
+            completed is None or total is None or completed != total
+        ):
+            previous = self._benchmark_progress
+            if (
+                previous is None
+                or previous.completed is None
+                or previous.completed != previous.total
+            ):
+                return
+            completed = previous.completed
+            total = previous.total
+        await self._publish_benchmark_progress(
+            snapshot.stage, completed=completed, total=total
+        )
+
+    async def _begin_active_ticket(
+        self, agent_id: UUID, ticket_deadline: datetime
+    ) -> None:
+        """Reset progress throttling and publish artifact preparation promptly."""
+        self._retain_failed_progress_until = 0.0
+        self._active_agent_id = agent_id
+        self._active_ticket_deadline = ticket_deadline
+        self._benchmark_progress = None
+        self._last_progress_heartbeat_monotonic = None
+        self._last_progress_bucket = None
+        await self._publish_benchmark_progress("preparing")
+
+    def _clear_active_ticket(self) -> None:
+        self._active_agent_id = None
+        self._active_ticket_deadline = None
+        self._benchmark_progress = None
+        self._last_progress_heartbeat_monotonic = None
+        self._last_progress_bucket = None
 
     async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.
@@ -622,14 +810,42 @@ class ValidatorWorker:
         dataset_sha256: str | None = None,
         run_size: str | None = None,
     ) -> ScoreReport:
-        """Fetch an agent's artifact and score it (no sign, no submit). Returns
-        the raw :class:`ScoreReport`.
+        """Run an unticketed re-score with generic, agent-free heartbeats.
 
         ``seed`` pins the dataset seed. ``dataset_sha256`` (from the ticket)
         selects the canonical /v1/score path, where the engine regenerates that
         exact dataset and fails on a hash mismatch (tamper-evidence). The re-score
         sweep passes a common ``seed`` (CRN) but no ``dataset_sha256`` (its
         comparison is across a fresh common dataset, not a platform-pinned one)."""
+        await self._report_heartbeat("running_benchmark")
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_while_active(heartbeat_stop)
+        )
+        try:
+            return await self._evaluate_artifact(
+                agent_id,
+                expected_sha256,
+                seed=seed,
+                dataset_sha256=dataset_sha256,
+                run_size=run_size,
+            )
+        finally:
+            heartbeat_stop.set()
+            await heartbeat_task
+            await self._report_heartbeat("polling")
+
+    async def _evaluate_artifact(
+        self,
+        agent_id: UUID,
+        expected_sha256: str,
+        *,
+        seed: int | None = None,
+        dataset_sha256: str | None = None,
+        run_size: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> ScoreReport:
+        """Fetch, verify, and score one artifact without managing heartbeats."""
         artifact = await self._platform.get_artifact(agent_id)
         # The caller and the artifact response both carry the registered digest; a
         # mismatch means the platform is inconsistent about which blob this agent
@@ -641,25 +857,14 @@ class ValidatorWorker:
                 f"sha256 mismatch for agent {agent_id}: "
                 f"expected={expected_sha256} artifact={artifact.sha256}"
             )
-        self._active_agent_id = agent_id
-        await self._report_heartbeat("running_benchmark")
-        heartbeat_stop = asyncio.Event()
-        heartbeat_task = asyncio.create_task(
-            self._heartbeat_while_active(heartbeat_stop)
+        report = await self._dittobench.score_tarball(
+            tarball_url=artifact.download_url,
+            tarball_sha256=artifact.sha256,
+            seed=seed,
+            dataset_sha256=dataset_sha256,
+            run_size=run_size,
+            progress_callback=progress_callback,
         )
-        try:
-            report = await self._dittobench.score_tarball(
-                tarball_url=artifact.download_url,
-                tarball_sha256=artifact.sha256,
-                seed=seed,
-                dataset_sha256=dataset_sha256,
-                run_size=run_size,
-            )
-        finally:
-            heartbeat_stop.set()
-            await heartbeat_task
-            self._active_agent_id = None
-            await self._report_heartbeat("polling")
         details = getattr(self._dittobench, "last_details", None)
         bench_version = (
             details.get("bench_version") if isinstance(details, dict) else None
@@ -723,19 +928,62 @@ class ValidatorWorker:
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
         path used by the ticket sweep (:meth:`_score_job`)."""
-        report = await self._evaluate(
-            agent_id,
-            expected_sha256,
-            seed=seed,
-            dataset_sha256=dataset_sha256,
-            run_size=run_size,
+        if ticket_deadline is None:
+            report = await self._evaluate(
+                agent_id,
+                expected_sha256,
+                seed=seed,
+                dataset_sha256=dataset_sha256,
+                run_size=run_size,
+            )
+            return await self._submit_report(agent_id, miner_hotkey, report)
+
+        await self._begin_active_ticket(agent_id, ticket_deadline)
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_while_active(heartbeat_stop)
         )
-        return await self._submit_report(
-            agent_id,
-            miner_hotkey,
-            report,
-            ticket_deadline=ticket_deadline,
-        )
+        failure_reported = False
+        try:
+            report = await self._evaluate_artifact(
+                agent_id,
+                expected_sha256,
+                seed=seed,
+                dataset_sha256=dataset_sha256,
+                run_size=run_size,
+                progress_callback=self._on_dittobench_progress,
+            )
+            await self._publish_benchmark_progress(
+                "finalizing", completed=report.n, total=report.n
+            )
+            await self._publish_benchmark_progress(
+                "submitting_result", completed=report.n, total=report.n
+            )
+            return await self._submit_report(
+                agent_id,
+                miner_hotkey,
+                report,
+                ticket_deadline=ticket_deadline,
+            )
+        except Exception:
+            previous = self._benchmark_progress
+            completed = previous.completed if previous is not None else None
+            total = previous.total if previous is not None else None
+            with contextlib.suppress(Exception):
+                failure_reported = await self._publish_benchmark_progress(
+                    "failed_retrying", completed=completed, total=total
+                )
+            if failure_reported:
+                self._retain_failed_progress_until = (
+                    time.monotonic() + _FAILED_PROGRESS_MIN_VISIBLE_SECONDS
+                )
+            raise
+        finally:
+            heartbeat_stop.set()
+            await heartbeat_task
+            self._clear_active_ticket()
+            if not failure_reported:
+                await self._report_heartbeat_bounded("polling")
 
     async def _confirm_and_submit(
         self,
