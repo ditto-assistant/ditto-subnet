@@ -524,7 +524,7 @@ wheels = [
 
 [[package]]
 name = "ditto"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "async-substrate-interface" },
@@ -576,7 +576,7 @@ dev = [
 
 [[package]]
 name = "ditto-screening-protocol"
-version = "0.1.0"
+version = "0.2.0"
 source = { directory = "packages/ditto-screening-protocol" }
 dependencies = [
     { name = "pydantic" },
