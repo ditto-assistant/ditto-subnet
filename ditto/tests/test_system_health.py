@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
 
+from ditto import system_health
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.system_health import SystemMetricsCollector
 
@@ -47,6 +49,38 @@ def test_docker_health_is_aggregate_and_consistent() -> None:
         DockerHealth(status="healthy", running_containers=2, unhealthy_containers=1)
     with pytest.raises(ValidationError):
         DockerHealth(status="unavailable", running_containers=1, unhealthy_containers=0)
+
+
+def test_docker_probe_reports_its_own_hardened_container(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        system_health.subprocess,
+        "run",
+        Mock(side_effect=FileNotFoundError),
+    )
+    monkeypatch.setattr(system_health, "_running_in_container", lambda: True)
+
+    assert system_health.probe_docker_health() == DockerHealth(
+        status="healthy", running_containers=1, unhealthy_containers=0
+    )
+
+
+@pytest.mark.parametrize(
+    "probe_result",
+    (
+        Mock(side_effect=OSError("docker probe failed")),
+        Mock(side_effect=system_health.subprocess.TimeoutExpired("docker", 2.0)),
+        Mock(return_value=SimpleNamespace(returncode=1, stdout="")),
+    ),
+)
+def test_docker_probe_failure_remains_unavailable_inside_container(
+    monkeypatch: Any, probe_result: Mock
+) -> None:
+    monkeypatch.setattr(system_health.subprocess, "run", probe_result)
+    monkeypatch.setattr(system_health, "_running_in_container", lambda: True)
+
+    assert system_health.probe_docker_health() == DockerHealth(
+        status="unavailable", running_containers=0, unhealthy_containers=0
+    )
 
 
 def test_collector_rounds_and_caches_for_two_minutes() -> None:
