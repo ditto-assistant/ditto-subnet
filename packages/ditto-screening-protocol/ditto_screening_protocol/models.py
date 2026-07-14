@@ -22,6 +22,7 @@ class AgentStatus(StrEnum):
     SCREENING = "screening"
     SCREENING_PASSED = "screening_passed"
     SCREENING_FAILED = "screening_failed"
+    REJECTED = "rejected"
     EVALUATING = "evaluating"
     SCORED = "scored"
     LIVE = "live"
@@ -44,6 +45,24 @@ class ScreenerQueueItem(BaseModel):
     created_at: Annotated[
         datetime, Field(description="When the upload row was inserted (UTC).")
     ]
+    attempt_id: Annotated[
+        UUID | None,
+        Field(
+            description=(
+                "Opaque lease id returned by the claim endpoint. Null only for "
+                "legacy read-only queue responses."
+            ),
+        ),
+    ] = None
+    lease_deadline: Annotated[
+        datetime | None,
+        Field(
+            description=(
+                "UTC deadline for this screening attempt. A verdict arriving "
+                "after it expires must not be accepted."
+            ),
+        ),
+    ] = None
 
 
 class ScreenerQueueResponse(BaseModel):
@@ -90,6 +109,15 @@ class ScreenResultRequest(BaseModel):
         str,
         Field(pattern=_SS58_PATTERN, description="Reporting screener's SS58 hotkey."),
     ]
+    attempt_id: Annotated[
+        UUID | None,
+        Field(
+            description=(
+                "Claimed screening-attempt lease. Required by lease-aware "
+                "platforms and bound into the v2 verdict signature."
+            ),
+        ),
+    ] = None
     signature: Annotated[
         str,
         Field(
