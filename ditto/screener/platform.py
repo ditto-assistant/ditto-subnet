@@ -15,6 +15,7 @@ from uuid import UUID
 import httpx
 
 from ditto.api_models.screener import (
+    SCREENING_POLICY_VERSION,
     ScreenerQueueResponse,
     ScreenResultRequest,
     ScreenResultResponse,
@@ -70,7 +71,13 @@ class PlatformClient:
         return ArtifactResponse.model_validate(resp.json())
 
     async def submit_result(
-        self, agent_id: UUID, *, signature: str, passed: bool, detail: str = ""
+        self,
+        agent_id: UUID,
+        *,
+        signature: str,
+        passed: bool,
+        policy_version: int = SCREENING_POLICY_VERSION,
+        detail: str = "",
     ) -> ScreenResultResponse:
         """Report a signed pass/fail verdict for ``agent_id``."""
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/result"
@@ -78,6 +85,7 @@ class PlatformClient:
             screener_hotkey=self._config.screener_hotkey,
             signature=signature,
             passed=passed,
+            policy_version=policy_version,
             detail=detail,
         )
         try:

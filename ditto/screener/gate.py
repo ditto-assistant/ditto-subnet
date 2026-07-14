@@ -9,8 +9,9 @@ Flow for one agent:
 1. **Download + verify.** Stream the presigned tarball to a temp file, bounded by
    ``max_tarball_bytes``, and re-check its SHA-256 against the queue value (the
    URL is presigned but the bytes are still attacker-controlled).
-2. **Contract check.** The submission contract fixes a ``Dockerfile`` at the
-   tarball root; a tar without one fails fast (no build attempted).
+2. **Contract check.** Reject unsafe archive entries and require a root Rust
+   crate before any build is attempted. The crate may use, fork, or replace
+   ``ditto-harness``.
 3. **Build.** ``docker build`` reads the *tarball itself* as the build context on
    stdin: Docker unpacks it inside its own build sandbox, so the screener never
    re-implements safe tar extraction. BuildKit is used with an optional
@@ -43,7 +44,9 @@ import logging
 import os
 import tarfile
 import tempfile
+import tomllib
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -58,6 +61,7 @@ logger = logging.getLogger(__name__)
 _LOG_TAIL_BYTES = 2000
 # How long to wait between /health probes while the container boots.
 _PROBE_INTERVAL_SECONDS = 1.0
+_MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -108,8 +112,9 @@ class BuildGate:
             tmp_path, dl_detail = await self._download_verified(download_url, sha256)
             if tmp_path is None:
                 return GateResult(False, dl_detail)
-            if not self._has_root_dockerfile(tmp_path):
-                return GateResult(False, "no Dockerfile at tarball root")
+            contract_error = self._contract_error(tmp_path)
+            if contract_error is not None:
+                return GateResult(False, contract_error)
 
             built, build_detail = await self._build(tmp_path, tag)
             if not built:
@@ -160,14 +165,58 @@ class BuildGate:
             return None, f"sha256 mismatch (got {digest[:12]}…)"
         return path, ""
 
-    def _has_root_dockerfile(self, tar_path: str) -> bool:
-        """List the tar (no extraction) and check for a root Dockerfile."""
+    def _contract_error(self, tar_path: str) -> str | None:
+        """Validate the archive and Rust harness contract without extracting it."""
         try:
             with tarfile.open(tar_path, mode="r:gz") as tar:
-                return dockerfile_at_root(tar.getnames())
+                members: dict[str, tarfile.TarInfo] = {}
+                unpacked = 0
+                for member in tar.getmembers():
+                    name = member.name.removeprefix("./")
+                    if not name and member.isdir():
+                        continue
+                    path = PurePosixPath(name)
+                    if (
+                        not name
+                        or name.startswith("/")
+                        or "\\" in name
+                        or (path.parts and path.parts[0].endswith(":"))
+                        or ".." in path.parts
+                    ):
+                        return "contract failed: unsafe archive path"
+                    if name in members:
+                        return "contract failed: duplicate archive path"
+                    if not (member.isfile() or member.isdir()):
+                        return "contract failed: links and special files are forbidden"
+                    unpacked += member.size
+                    if unpacked > _MAX_UNPACKED_BYTES:
+                        return "contract failed: archive expands beyond the safety cap"
+                    members[name] = member
+
+                if "Dockerfile" not in members or not members["Dockerfile"].isfile():
+                    return "contract failed: no Dockerfile at tarball root"
+                manifest_member = members.get("Cargo.toml")
+                if manifest_member is None or not manifest_member.isfile():
+                    return "contract failed: no Cargo.toml at tarball root"
+                if not any(
+                    name.startswith("src/") and name.endswith(".rs") and member.isfile()
+                    for name, member in members.items()
+                ):
+                    return "contract failed: no Rust source under src/"
+
+                manifest_file = tar.extractfile(manifest_member)
+                if manifest_file is None:
+                    return "contract failed: Cargo.toml is unreadable"
+                try:
+                    manifest = tomllib.loads(manifest_file.read().decode("utf-8"))
+                except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                    return "contract failed: Cargo.toml is invalid"
+                if not isinstance(manifest.get("package"), dict):
+                    return "contract failed: Cargo.toml has no package"
+                return None
         except (tarfile.TarError, OSError) as e:
             logger.warning("could not read tar %s: %s", tar_path, e)
-            return False
+            return "contract failed: archive is unreadable"
 
     async def _build(self, tar_path: str, tag: str) -> tuple[bool, str]:
         """``docker build`` from the tarball-on-stdin; returns (ok, log_tail)."""

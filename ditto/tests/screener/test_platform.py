@@ -50,6 +50,7 @@ async def test_get_queue_parses_items(
                     }
                 ],
                 "count": 1,
+                "required_policy_version": 2,
             },
         )
 
@@ -110,6 +111,7 @@ async def test_submit_result_posts_signed_verdict(
     assert captured["passed"] is True
     assert captured["signature"] == "ab" * 64
     assert captured["detail"] == "ok"
+    assert captured["policy_version"] == 2
 
 
 async def test_non_200_raises_platform_error(

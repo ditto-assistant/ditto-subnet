@@ -34,6 +34,16 @@ def _make_tar(files: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
+def _valid_tar(**overrides: bytes) -> bytes:
+    files = {
+        "Dockerfile": b"FROM scratch\n",
+        "Cargo.toml": (b'[package]\nname = "agent"\nversion = "0.1.0"\n'),
+        "src/main.rs": b"fn main() {}\n",
+    }
+    files.update(overrides)
+    return _make_tar(files)
+
+
 # --- pure helpers ---------------------------------------------------------
 
 
@@ -87,7 +97,7 @@ def _ok_run(port_line: str = "127.0.0.1:49999") -> Callable[..., Any]:
 async def test_pass_builds_and_serves(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    tar = _make_tar({"Dockerfile": b"FROM scratch\n", "Cargo.toml": b"[package]"})
+    tar = _valid_tar()
     sha = hashlib.sha256(tar).hexdigest()
     gate = _gate_with(make_config(), _ok_run(), tar=tar)
     async with gate._client:
@@ -100,7 +110,7 @@ async def test_smoke_env_injected_into_run(
 ) -> None:
     """The dummy LLM key must reach the serve container as ``-e K=V`` so the
     reference harness (LLM Baseline built before /health binds) can boot."""
-    tar = _make_tar({"Dockerfile": b"FROM scratch\n"})
+    tar = _valid_tar()
     sha = hashlib.sha256(tar).hexdigest()
     run_calls: list[list[str]] = []
 
@@ -128,7 +138,7 @@ async def test_smoke_env_injected_into_run(
 async def test_sha_mismatch_fails_before_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    tar = _make_tar({"Dockerfile": b"FROM scratch\n"})
+    tar = _valid_tar()
     built: list[str] = []
 
     async def _run(args: list[str], **_: Any) -> tuple[int, str]:
@@ -150,13 +160,14 @@ async def test_no_root_dockerfile_fails(
     gate = _gate_with(make_config(), _ok_run(), tar=tar)
     async with gate._client:
         res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
-    assert not res.passed and res.detail == "no Dockerfile at tarball root"
+    assert not res.passed
+    assert res.detail == "contract failed: no Dockerfile at tarball root"
 
 
 async def test_build_failure_reported(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    tar = _make_tar({"Dockerfile": b"FROM scratch\n"})
+    tar = _valid_tar()
     sha = hashlib.sha256(tar).hexdigest()
 
     async def _run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
@@ -176,7 +187,7 @@ async def test_build_failure_reported(
 async def test_container_start_failure_reported(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    tar = _make_tar({"Dockerfile": b"FROM scratch\n"})
+    tar = _valid_tar()
     sha = hashlib.sha256(tar).hexdigest()
 
     async def _run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
@@ -195,7 +206,7 @@ async def test_container_start_failure_reported(
 async def test_unhealthy_serve_times_out(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    tar = _make_tar({"Dockerfile": b"FROM scratch\n"})
+    tar = _valid_tar()
     sha = hashlib.sha256(tar).hexdigest()
     # run_timeout small so the probe loop exits quickly; /health returns 503.
     cfg = make_config(run_timeout_seconds=0.05)
@@ -203,3 +214,38 @@ async def test_unhealthy_serve_times_out(
     async with gate._client:
         res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
     assert not res.passed and "never healthy" in res.detail
+
+
+async def test_python_only_solver_fails_contract_before_build(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tar = _make_tar(
+        {
+            "Dockerfile": b'FROM python:3.12\nCMD ["python", "miner.py"]\n',
+            "miner.py": b"print('benchmark solver')\n",
+        }
+    )
+    sha = hashlib.sha256(tar).hexdigest()
+    calls: list[str] = []
+
+    async def _run(args: list[str], **_: Any) -> tuple[int, str]:
+        calls.append(args[0])
+        return (0, "")
+
+    gate = _gate_with(make_config(), _run, tar=tar)
+    async with gate._client:
+        res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
+    assert not res.passed and "Cargo.toml" in res.detail
+    assert "build" not in calls
+
+
+async def test_independent_rust_implementation_is_allowed(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """Miners may fork or replace ditto-harness; dependency choice is not policy."""
+    tar = _valid_tar()
+    sha = hashlib.sha256(tar).hexdigest()
+    gate = _gate_with(make_config(), _ok_run(), tar=tar)
+    async with gate._client:
+        res = await gate.screen(agent_id=_AGENT, sha256=sha, download_url=_URL)
+    assert res.passed
