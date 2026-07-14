@@ -143,35 +143,59 @@ class DittobenchClient:
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
         deadline = self._config.dittobench_timeout_seconds
         waited = 0.0
-        while waited <= deadline:
-            try:
+        try:
+            while waited <= deadline:
                 resp = await self._client.get(url)
-            except httpx.HTTPError as e:
-                raise DittobenchError(f"poll failed: {e}") from e
-            if resp.status_code != 200:
-                raise DittobenchError(
-                    f"poll rejected ({resp.status_code}): {resp.text[:200]}"
-                )
-            data = resp.json()
-            status = data.get("status")
-            if status == _DONE:
-                rep = data.get("report")
-                self.last_details = (
-                    rep["details"]
-                    if isinstance(rep, dict) and isinstance(rep.get("details"), dict)
-                    else {}
-                )
-                return self._parse_report(data)
-            if status == _FAILED:
-                raise DittobenchError(
-                    f"run {run_id} failed: {data.get('error', 'unknown')}"
-                )
-            await asyncio.sleep(self._config.dittobench_poll_seconds)
-            waited += self._config.dittobench_poll_seconds
+                if resp.status_code != 200:
+                    raise DittobenchError(
+                        f"poll rejected ({resp.status_code}): {resp.text[:200]}"
+                    )
+                data = resp.json()
+                status = data.get("status")
+                if status == _DONE:
+                    rep = data.get("report")
+                    self.last_details = (
+                        rep["details"]
+                        if isinstance(rep, dict)
+                        and isinstance(rep.get("details"), dict)
+                        else {}
+                    )
+                    return self._parse_report(data)
+                if status == _FAILED:
+                    raise DittobenchError(
+                        f"run {run_id} failed: {data.get('error', 'unknown')}"
+                    )
+                await asyncio.sleep(self._config.dittobench_poll_seconds)
+                waited += self._config.dittobench_poll_seconds
+        except httpx.HTTPError as e:
+            raise DittobenchError(f"poll failed: {e}") from e
+        except asyncio.CancelledError:
+            await self._cancel(run_id)
+            raise
+        await self._cancel(run_id)
         raise DittobenchError(
             f"run {run_id} did not finish within "
             f"{self._config.dittobench_timeout_seconds}s"
         )
+
+    async def _cancel(self, run_id: str) -> None:
+        """Best-effort cancellation so a timed-out run cannot keep the sandbox.
+
+        Older scorer revisions do not expose DELETE yet; a failed cancellation
+        is logged but never hides the original validator timeout.
+        """
+        url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
+        try:
+            resp = await self._client.delete(url)
+            if resp.status_code not in (200, 202, 404, 405):
+                logger.warning(
+                    "dittobench run %s cancellation rejected (%d): %s",
+                    run_id,
+                    resp.status_code,
+                    resp.text[:200],
+                )
+        except httpx.HTTPError as e:
+            logger.warning("dittobench run %s cancellation failed: %s", run_id, e)
 
     @staticmethod
     def _parse_report(job: dict) -> ScoreReport:
