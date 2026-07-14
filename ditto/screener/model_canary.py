@@ -1,10 +1,11 @@
 """Ephemeral fake model gateway used by the screener's runtime canary.
 
-The server runs outside the untrusted harness container and implements the small
-OpenAI-compatible surface a harness needs for one ``/run`` call. Its response
-contains a random token that never appears in the harness request. A passing
-harness must call this server and return that token, proving it consumed a model
-response rather than merely issuing a throwaway request.
+The server runs in a locked-down sidecar on the harness's isolated Docker
+network and implements the small OpenAI-compatible surface a harness needs for
+one ``/run`` call. Its response contains a random token that never appears in
+the harness request. A passing harness must call this server and return that
+token, proving it consumed a model response rather than merely issuing a
+throwaway request.
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import secrets
+from pathlib import Path
 from types import TracebackType
 
 _MAX_HEADER_BYTES = 64 * 1024
@@ -24,9 +27,19 @@ LOCKED_HARNESS_MODEL = "qwen/qwen3-32b"
 class ModelCallCanary:
     """Short-lived OpenAI-compatible HTTP server with observable call state."""
 
-    def __init__(self) -> None:
-        self.token = f"ditto-canary-{secrets.token_hex(16)}"
+    def __init__(
+        self,
+        *,
+        token: str | None = None,
+        host: str = "0.0.0.0",
+        port: int = 0,
+        state_file: str | None = None,
+    ) -> None:
+        self.token = token or f"ditto-canary-{secrets.token_hex(16)}"
         self.model_calls = 0
+        self._host = host
+        self._port = port
+        self._state_file = state_file
         self._server: asyncio.Server | None = None
 
     @property
@@ -38,10 +51,13 @@ class ModelCallCanary:
         return f"http://host.docker.internal:{port}"
 
     async def __aenter__(self) -> ModelCallCanary:
-        # Bind all host interfaces because a bridge-network container reaches the
-        # host through Docker's gateway, not through host loopback.
-        self._server = await asyncio.start_server(self._handle, "0.0.0.0", 0)
+        self._server = await asyncio.start_server(self._handle, self._host, self._port)
         return self
+
+    def _record_model_call(self) -> None:
+        self.model_calls += 1
+        if self._state_file is not None:
+            Path(self._state_file).touch()
 
     async def __aexit__(
         self,
@@ -83,7 +99,7 @@ class ModelCallCanary:
                 "/v1/chat/completions",
                 "/chat/completions",
             }:
-                self.model_calls += 1
+                self._record_model_call()
                 payload = {
                     "id": "chatcmpl-ditto-screening-canary",
                     "object": "chat.completion",
@@ -106,7 +122,7 @@ class ModelCallCanary:
                 "/v1/responses",
                 "/responses",
             }:
-                self.model_calls += 1
+                self._record_model_call()
                 payload = {
                     "id": "resp_ditto_screening_canary",
                     "object": "response",
@@ -161,3 +177,20 @@ class ModelCallCanary:
         writer.close()
         with contextlib.suppress(ConnectionError):
             await writer.wait_closed()
+
+
+async def _serve_sidecar() -> None:
+    """Run the fixed-port server used by the Docker canary sidecar."""
+    token = os.environ["DITTO_CANARY_TOKEN"]
+    state_file = os.environ.get("DITTO_CANARY_STATE_FILE")
+    async with ModelCallCanary(
+        token=token,
+        host="0.0.0.0",
+        port=8080,
+        state_file=state_file,
+    ):
+        await asyncio.Event().wait()
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised in Docker E2E
+    asyncio.run(_serve_sidecar())

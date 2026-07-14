@@ -9,7 +9,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.screener import ScreenerQueueItem, ScreenerQueueResponse
+from ditto.api_models.screener import (
+    SCREENING_POLICY_VERSION,
+    ScreenerQueueItem,
+    ScreenerQueueResponse,
+)
 from ditto.api_models.validator import ArtifactResponse
 from ditto.screener.config import ScreenerConfig
 from ditto.screener.errors import PlatformError
@@ -61,7 +65,7 @@ class _FakePlatform:
         return ScreenerQueueResponse(
             items=items,
             count=len(items),
-            required_policy_version=2,
+            required_policy_version=SCREENING_POLICY_VERSION,
         )
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
@@ -113,7 +117,7 @@ async def test_screen_one_pass_posts_signed_pass_verdict(
     assert len(platform.verdicts) == 1
     v = platform.verdicts[0]
     assert v["passed"] is True and v["signature"] == "cd" * 64 and v["detail"] == ""
-    assert v["policy_version"] == 2
+    assert v["policy_version"] == SCREENING_POLICY_VERSION
 
 
 async def test_screen_one_fail_forwards_detail(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.screener.signing import sign_verdict, verdict_signing_message
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -15,13 +16,13 @@ def test_message_matches_platform_format() -> None:
     # f"{screener_hotkey}:{agent_id}:{passed}".encode() — including Python's
     # bool str form ("True"/"False").
     msg = verdict_signing_message(screener_hotkey=_HOTKEY, agent_id=_AGENT, passed=True)
-    assert msg == f"{_HOTKEY}:{_AGENT}:True:2".encode()
-    assert msg.endswith(b":True:2")
+    assert msg == f"{_HOTKEY}:{_AGENT}:True:{SCREENING_POLICY_VERSION}".encode()
+    assert msg.endswith(f":True:{SCREENING_POLICY_VERSION}".encode())
 
     msg_false = verdict_signing_message(
         screener_hotkey=_HOTKEY, agent_id=_AGENT, passed=False
     )
-    assert msg_false.endswith(b":False:2")
+    assert msg_false.endswith(f":False:{SCREENING_POLICY_VERSION}".encode())
 
 
 class _FakeKeypair:
@@ -39,4 +40,4 @@ def test_sign_verdict_signs_canonical_message() -> None:
     kp = _FakeKeypair()
     sig = sign_verdict(kp, screener_hotkey=_HOTKEY, agent_id=_AGENT, passed=False)
     assert sig == ("ab" * 64)
-    assert kp.signed == f"{_HOTKEY}:{_AGENT}:False:2".encode()
+    assert kp.signed == f"{_HOTKEY}:{_AGENT}:False:{SCREENING_POLICY_VERSION}".encode()
