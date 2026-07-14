@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.6.5 (2026-07-14)
+
+### Bug Fixes
+
+- Keep weights running on job poll failure
+  ([#128](https://github.com/ditto-assistant/ditto-subnet/pull/128),
+  [`a218f80`](https://github.com/ditto-assistant/ditto-subnet/commit/a218f80c9fc7bd8938d294690b2e466556b018d0))
+
+### Chores
+
+- Define cheating for miners ([#127](https://github.com/ditto-assistant/ditto-subnet/pull/127),
+  [`43c7dbd`](https://github.com/ditto-assistant/ditto-subnet/commit/43c7dbd58c5b06c7737fed2154b2137178cdaced))
+
+
 ## v0.6.4 (2026-07-14)
 
 ### Bug Fixes
