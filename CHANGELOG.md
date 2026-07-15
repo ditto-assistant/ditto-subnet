@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.9.1 (2026-07-15)
+
+### Bug Fixes
+
+- Align weight updates with chain cadence
+  ([#145](https://github.com/ditto-assistant/ditto-subnet/pull/145),
+  [`a3f71c6`](https://github.com/ditto-assistant/ditto-subnet/commit/a3f71c613a6d01d5eadba1fcc0293d12721a6996))
+
+- Smoke-test each validator image architecture
+  ([#143](https://github.com/ditto-assistant/ditto-subnet/pull/143),
+  [`37424cc`](https://github.com/ditto-assistant/ditto-subnet/commit/37424ccd9687712b18f259fb428c8cdab5408209))
+
+
 ## v0.9.0 (2026-07-15)
 
 ### Features
