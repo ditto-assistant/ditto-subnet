@@ -49,9 +49,12 @@ services:
       test:
         - CMD-SHELL
         - >-
-          body='{"model":"embeddinggemma","input":"health"}';
-          response="$$(printf 'POST /api/embed HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "$${#body}" "$$body" | nc -w 10 127.0.0.1 11434)";
-          docker info >/dev/null 2>&1 && printf '%s' "$$response" | head -n 1 | grep -q ' 200 '
+          docker info >/dev/null 2>&1 &&
+          curl --silent --show-error --max-time 10 --output /dev/null
+          --write-out '%{http_code}' --request POST
+          --header 'Content-Type: application/json'
+          --data '{"model":"embeddinggemma","input":"health"}'
+          http://127.0.0.1:11434/api/embed | grep -q '^200$$'
       interval: 10s
       timeout: 15s
       retries: 30

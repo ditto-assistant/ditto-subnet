@@ -7,6 +7,7 @@ import yaml
 
 COMPOSE_PATH = Path(__file__).parents[2] / "docker-compose.yml"
 COMPOSE_WRAPPER_PATH = Path(__file__).parents[2] / "scripts/validator-compose.sh"
+SANDBOX_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile.sandbox-docker"
 
 
 def test_ollama_is_pinned_with_functional_embedding_healthcheck() -> None:
@@ -23,15 +24,29 @@ def test_ollama_is_pinned_with_functional_embedding_healthcheck() -> None:
     assert " 200 " in probe
 
 
+def test_sandbox_image_pins_dind_and_installs_curl() -> None:
+    dockerfile = SANDBOX_DOCKERFILE_PATH.read_text()
+
+    assert dockerfile.startswith(
+        "FROM docker.io/library/docker:29-dind@"
+        "sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515"
+    )
+    assert "RUN apk add --no-cache curl socat" in dockerfile
+
+
 def test_sandbox_health_and_validator_preflight_use_forwarded_embedding_route() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
     validator = compose["services"]["ditto-subnet"]
 
     probe = " ".join(sandbox["healthcheck"]["test"])
-    assert "127.0.0.1 11434" in probe
+    assert "curl --silent --show-error --max-time 10" in probe
+    assert "nc -w" not in probe
+    assert "127.0.0.1:11434/api/embed" in probe
     assert "/api/embed" in probe
     assert "embeddinggemma" in probe
+    assert "%{http_code}" in probe
+    assert "^200$$" in probe
     assert validator["environment"]["VALIDATOR_EMBED_PREFLIGHT_URL"] == (
         "http://sandbox-docker:11434/api/embed"
     )
