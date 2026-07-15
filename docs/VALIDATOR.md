@@ -177,8 +177,15 @@ Useful commands:
 
 If `sandbox-docker` exits, check its logs first. It must run privileged so its
 nested daemon can build untrusted submissions, but the scorer never mounts or
-controls the host Docker socket. If the host reboots, verify both Docker and the
-stack rather than adding a second supervisor:
+controls the host Docker socket. On startup and every six hours, the nested
+daemon automatically prunes unused containers, networks, images, and build
+cache older than 24 hours, followed by volumes that no container references.
+This bounds benchmark storage growth without touching unrelated host containers
+or deleting active benchmark resources. Prune failures are warnings and retry
+on the next cycle.
+
+If the host reboots, verify both Docker and the stack rather than adding a
+second supervisor:
 
 ```sh
 systemctl is-enabled docker

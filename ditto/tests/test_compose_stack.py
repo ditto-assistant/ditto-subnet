@@ -60,6 +60,20 @@ def test_sandbox_health_and_validator_preflight_use_forwarded_embedding_route() 
     )
 
 
+def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    sandbox = compose["services"]["sandbox-docker"]
+    entrypoint = (
+        COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
+    ).read_text()
+
+    assert sandbox["volumes"] == ["sandbox-docker-rootful-data:/var/lib/docker"]
+    assert "docker system prune --all --force --filter 'until=24h'" in entrypoint
+    assert "docker volume prune --all --force" in entrypoint
+    assert "sleep 21600" in entrypoint
+    assert "/var/run/docker.sock" not in COMPOSE_PATH.read_text()
+
+
 def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     raw_compose = COMPOSE_PATH.read_text()
     context_prefix = "${DITTOBENCH_BUILD_CONTEXT:-"
