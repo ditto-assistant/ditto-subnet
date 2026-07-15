@@ -20,6 +20,8 @@ service_user="${DITTO_VALIDATOR_UPDATE_USER:-${SUDO_USER:-}}"
 [ -n "$service_user" ] && [ "$service_user" != root ] || \
   die "set DITTO_VALIDATOR_UPDATE_USER to the non-root operator who can run Docker"
 id "$service_user" >/dev/null 2>&1 || die "operator user does not exist: $service_user"
+service_group="$(id -gn "$service_user")"
+[ -n "$service_group" ] || die "could not determine operator primary group"
 
 timeout_budget="$(
   DITTO_SUBNET_ENV_FILE="$ROOT_DIR/.env" \
@@ -49,8 +51,17 @@ stop_timeout_seconds="$(
 [[ "$start_timeout_seconds" =~ ^[1-9][0-9]*$ ]] || die "invalid updater start timeout budget"
 [[ "$stop_timeout_seconds" =~ ^[1-9][0-9]*$ ]] || die "invalid updater stop timeout budget"
 
-mkdir -p "$ROOT_DIR/.validator-update"
-chown "$service_user":"$(id -gn "$service_user")" "$ROOT_DIR/.validator-update"
+state_dir="$ROOT_DIR/.validator-update"
+install -d -m 0700 -o "$service_user" -g "$service_group" "$state_dir"
+# A prior sudo invocation may have left root-owned journals or build-cache
+# entries. Reject links before recursively repairing ownership so an attacker
+# cannot redirect installer writes outside this repo-owned private directory.
+if find "$state_dir" -type l -print -quit | grep -q .; then
+  die "remove symbolic links from $state_dir before installing"
+fi
+chown -R "$service_user:$service_group" "$state_dir"
+find "$state_dir" -type d -exec chmod 0700 {} +
+find "$state_dir" -type f -exec chmod 0600 {} +
 
 cat >"$SERVICE" <<EOF
 [Unit]

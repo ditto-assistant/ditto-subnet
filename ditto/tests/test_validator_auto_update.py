@@ -56,6 +56,7 @@ def _initial_state() -> dict[str, Any]:
         "compose_images": [],
         "compose_bootstrap_tokens": [],
         "drain_mode": "success",
+        "fail_drain_signal": False,
         "fail_candidate": False,
         "fail_resume": False,
         "fail_resume_image": None,
@@ -150,6 +151,9 @@ elif args[:1] == ["kill"]:
     signal_name = next(
         value.split("=", 1)[1] for value in args if value.startswith("--signal=")
     )
+    if signal_name == "USR1" and state.get("fail_drain_signal"):
+        save()
+        raise SystemExit(1)
     if (
         signal_name == "USR2"
         and state.get("resume_effect_then_error_image") == state["container"]["image"]
@@ -689,6 +693,24 @@ def test_starting_validator_is_deferred_without_signal(
     assert "deferring update" in result.stderr
     state = _read_state(state_path)
     assert not any(call[0] in {"kill", "stop"} for call in state["calls"])
+
+
+def test_failed_drain_signal_aborts_before_container_mutation(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    state = _read_state(state_path)
+    state["fail_drain_signal"] = True
+    state_path.write_text(json.dumps(state))
+
+    result = _run(env, "run")
+
+    assert result.returncode == 1
+    assert "could not request cooperative drain" in result.stderr
+    state = _read_state(state_path)
+    assert not any(call[0] == "stop" for call in state["calls"])
+    assert not any(call[0] == "up" for call in state["compose_calls"])
+    assert state["container"]["running"] is True
 
 
 def test_never_drained_work_resumes_without_replacement(

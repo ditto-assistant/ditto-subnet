@@ -140,6 +140,14 @@ class _WeightOutcome:
     submitted: bool = False
 
 
+@dataclass(frozen=True)
+class _SweepOutcome:
+    """Queue depth and whether this sweep completed its requested weight path."""
+
+    queue_depth: int
+    weights_ran: bool
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -199,8 +207,8 @@ class ValidatorWorker:
         set_weights: bool = True,
         stop_requested: asyncio.Event | None = None,
         drain_requested: asyncio.Event | None = None,
-    ) -> int:
-        """Run one full sweep. Returns the number of agents pulled from the queue.
+    ) -> _SweepOutcome:
+        """Run one sweep and report queue depth plus weight-path completion.
 
         Every validator does both halves:
 
@@ -290,6 +298,7 @@ class ValidatorWorker:
             )
 
         outcome = _WeightOutcome()
+        weights_ran = False
         onchain_last_update_block: int | None = None
         onchain_observed_block: int | None = None
         if set_weights and not self._new_work_blocked(stop_requested, drain_requested):
@@ -299,6 +308,7 @@ class ValidatorWorker:
                 onchain_last_update_block,
                 onchain_observed_block,
             ) = await self._observe_onchain_weight_state()
+            weights_ran = True
         self._telemetry.record_sweep(
             SweepStats(
                 sweep_duration_s=time.monotonic() - started,
@@ -315,7 +325,7 @@ class ValidatorWorker:
             )
         )
         await self._report_heartbeat("idle")
-        return queue_depth
+        return _SweepOutcome(queue_depth=queue_depth, weights_ran=weights_ran)
 
     async def _scoring_preflight(self) -> bool:
         """Functionally probe scorer dependencies before requesting a lease."""
@@ -1200,14 +1210,21 @@ class ValidatorWorker:
                 try:
                     self._scoring_active = True
                     if drain_requested is None:
-                        n = await self.run_once(set_weights=False)
+                        outcome = await self.run_once(set_weights=False)
                     else:
-                        n = await self.run_once(
+                        outcome = await self.run_once(
                             set_weights=False,
                             stop_requested=stop,
                             drain_requested=drain_requested,
                         )
-                    logger.info("scoring sweep complete: %d agent(s)", n)
+                    # Preserve compatibility with lightweight test doubles and
+                    # older embedders that still return the historical int.
+                    queue_depth = (
+                        outcome.queue_depth
+                        if isinstance(outcome, _SweepOutcome)
+                        else outcome
+                    )
+                    logger.info("scoring sweep complete: %d agent(s)", queue_depth)
                 except Exception:  # noqa: BLE001 - a sweep must never kill the loop
                     logger.exception("scoring sweep failed; retrying next sweep")
                     await self._report_heartbeat("error")
@@ -1237,7 +1254,19 @@ class ValidatorWorker:
         chain_floor = await self._chain_min_epoch_seconds()
         while not stop.is_set():
             if drain_requested is not None and drain_requested.is_set():
-                await self._wait_for_resume_or_stop(stop, drain_requested)
+                # The scoring loop is the sole drain-acknowledgement owner: it
+                # verifies that this task is inactive before publishing
+                # ``drained``. The weight loop only remains quiescent here.
+                while drain_requested.is_set() and not stop.is_set():
+                    await self._sleep_or_stop(stop, 0.05)
+                if not stop.is_set():
+                    # A drain interrupts the cadence sleep. Start a fresh
+                    # bounded epoch after resume instead of immediately
+                    # resubmitting weights and risking the chain rate limit.
+                    epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
+                    await self._sleep_or_stop_or_drain(
+                        stop, epoch_seconds, drain_requested
+                    )
                 continue
             started = time.monotonic()
             outcome = _WeightOutcome()

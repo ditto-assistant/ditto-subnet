@@ -277,7 +277,9 @@ request_bounded_drain() {
   # Track from signal delivery, not only from drain acknowledgement. TERM or a
   # power loss while the benchmark is still working must still cancel USR1.
   DRAINED_CONTAINER="$container"
-  docker kill --signal=USR1 "$container" >/dev/null
+  if ! docker kill --signal=USR1 "$container" >/dev/null; then
+    die "could not request cooperative drain from validator"
+  fi
   deadline=$((SECONDS + timeout))
   while ((SECONDS < deadline)); do
     state="$(runtime_state "$container")"

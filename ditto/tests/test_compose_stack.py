@@ -218,3 +218,13 @@ def test_systemd_unit_pins_runtime_settings_to_its_timeout_budget() -> None:
     assert "Environment=DITTO_SUBNET_ENV_FILE=" in installer
     assert "TimeoutStartSec=${start_timeout_seconds}s" in installer
     assert "TimeoutStopSec=${stop_timeout_seconds}s" in installer
+
+
+def test_installer_repairs_private_updater_state_ownership() -> None:
+    installer = INSTALLER_PATH.read_text()
+
+    assert 'install -d -m 0700 -o "$service_user" -g "$service_group"' in installer
+    assert 'find "$state_dir" -type l -print -quit' in installer
+    assert 'chown -R "$service_user:$service_group" "$state_dir"' in installer
+    assert 'find "$state_dir" -type d -exec chmod 0700 {} +' in installer
+    assert 'find "$state_dir" -type f -exec chmod 0600 {} +' in installer

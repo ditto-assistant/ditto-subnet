@@ -260,7 +260,9 @@ class TestRunOnce:
             keypair=keypair,
         )
 
-        assert await worker.run_once() == 1
+        outcome = await worker.run_once()
+        assert outcome.queue_depth == 1
+        assert outcome.weights_ran
         heartbeats = [
             call.args[0] for call in platform.submit_heartbeat.await_args_list
         ]
@@ -324,7 +326,9 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once(drain_requested=drain) == 0
+        outcome = await worker.run_once(drain_requested=drain)
+        assert outcome.queue_depth == 0
+        assert not outcome.weights_ran
 
         platform.request_job.assert_not_awaited()
         platform.get_ledger.assert_not_awaited()
@@ -350,7 +354,9 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once(drain_requested=drain) == 1
+        outcome = await worker.run_once(drain_requested=drain)
+        assert outcome.queue_depth == 1
+        assert not outcome.weights_ran
 
         assert platform.request_job.await_count == 1
         platform.submit_score.assert_awaited_once()
@@ -1666,6 +1672,93 @@ class TestIndependentWeightLoop:
         assert stats.onchain_last_update_block == 100
         assert stats.onchain_observed_block == 110
         assert stats.scoring_sweep is False
+
+    async def test_drain_ack_waits_for_active_weight_update(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        weight_started = asyncio.Event()
+        release_weight = asyncio.Event()
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        config = _config()
+        config.sweep_seconds = 0.001
+        worker = ValidatorWorker(
+            config=config,
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker.run_once = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+
+        async def blocked_weight_update() -> worker_mod._WeightOutcome:
+            weight_started.set()
+            await release_weight.wait()
+            return worker_mod._WeightOutcome(submitted=True)
+
+        worker._update_weights = blocked_weight_update  # type: ignore[method-assign]
+        worker._observe_onchain_weight_state = AsyncMock(return_value=(1, 2))  # type: ignore[method-assign]
+        worker._report_heartbeat = AsyncMock()  # type: ignore[method-assign]
+        states: list[str] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **_kwargs: states.append(state),
+        )
+
+        task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
+        await asyncio.wait_for(weight_started.wait(), timeout=1)
+        drain.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert "drained" not in states
+
+        release_weight.set()
+        for _ in range(100):
+            if "drained" in states:
+                break
+            await asyncio.sleep(0.001)
+        assert "drained" in states
+        drain.clear()
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    async def test_failed_sweep_rewrites_stale_platform_acceptance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stop = asyncio.Event()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._platform_accepted = True
+        worker.run_once = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+        worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+
+        async def report_heartbeat(state: str, **_: object) -> bool:
+            if state == "error":
+                worker._platform_accepted = False
+                stop.set()
+            return worker._platform_accepted
+
+        worker._report_heartbeat = report_heartbeat  # type: ignore[assignment]
+        states: list[tuple[str, bool]] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **kwargs: states.append(
+                (state, bool(kwargs.get("platform_accepted")))
+            ),
+        )
+
+        await asyncio.wait_for(worker.run_forever(stop), timeout=1)
+
+        assert ("ready", True) in states
+        assert ("working", False) in states
 
     async def test_onchain_observation_reports_real_block_age_inputs(self) -> None:
         chain = MagicMock()
