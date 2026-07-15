@@ -1252,6 +1252,7 @@ class ValidatorWorker:
     ) -> None:
         """Submit weights immediately and then once per effective epoch."""
         chain_floor = await self._chain_min_epoch_seconds()
+        has_run_weight_epoch = False
         while not stop.is_set():
             if drain_requested is not None and drain_requested.is_set():
                 # The scoring loop is the sole drain-acknowledgement owner: it
@@ -1259,7 +1260,7 @@ class ValidatorWorker:
                 # ``drained``. The weight loop only remains quiescent here.
                 while drain_requested.is_set() and not stop.is_set():
                     await self._sleep_or_stop(stop, 0.05)
-                if not stop.is_set():
+                if not stop.is_set() and has_run_weight_epoch:
                     # A drain interrupts the cadence sleep. Start a fresh
                     # bounded epoch after resume instead of immediately
                     # resubmitting weights and risking the chain rate limit.
@@ -1287,6 +1288,7 @@ class ValidatorWorker:
                 logger.exception("weight epoch failed; retrying next epoch")
             finally:
                 self._weights_active = False
+                has_run_weight_epoch = True
             last_update, observed_block = await self._observe_onchain_weight_state()
             self._telemetry.record_sweep(
                 SweepStats(
