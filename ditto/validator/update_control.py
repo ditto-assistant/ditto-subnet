@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # This is deliberately independent of the heartbeat and benchmark protocols.
 # Increment it for any release that cannot safely replace a running validator
 # from the previous epoch (wire/config/consensus/sidecar boundary changes).
-VALIDATOR_COMPATIBILITY_EPOCH = 1
+VALIDATOR_COMPATIBILITY_EPOCH = 2
 VALIDATOR_UPDATE_PROTOCOL = 1
 VALIDATOR_UPDATE_STATE_PATH = Path("/tmp/ditto-validator-update-state.json")
 VALIDATOR_BOOTSTRAP_STATE_DIR = Path("/var/lib/ditto-validator-update")

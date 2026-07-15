@@ -2,7 +2,7 @@
 
 The incentive mechanism (``docs/VALIDATOR.md``): the reigning
 all-time-high holder is the **champion** and takes ~all emissions; a challenger
-only dethrones it by beating its score by a **relative margin** (default 5%);
+only dethrones it by beating its score by a **relative margin** (default 2%);
 ties and sub-margin gains keep the incumbent, so **first-to-submit wins** and a
 downloaded copy — which at best ties — never earns. A small **participation
 tail** (default 10% over the next few miners) keeps the subnet populated without

@@ -160,11 +160,11 @@ def test_only_validator_is_an_explicit_auto_update_target() -> None:
     assert validator["image"].endswith("ditto-subnet-validator:local}")
     assert validator["pull_policy"] == "build"
     assert validator["build"]["context"] == "."
-    assert validator["build"]["args"]["VALIDATOR_COMPATIBILITY_EPOCH"] == "1"
+    assert validator["build"]["args"]["VALIDATOR_COMPATIBILITY_EPOCH"] == "2"
     assert int(validator["build"]["args"]["VALIDATOR_HEARTBEAT_PROTOCOL"]) == (
         HEARTBEAT_PROTOCOL_VERSION
     )
-    assert validator["environment"]["VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH"] == "1"
+    assert validator["environment"]["VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH"] == "2"
     assert validator["stop_grace_period"] == "80m"
     assert validator["environment"]["VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS"] == "4500"
 
@@ -186,7 +186,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     dockerfile = DOCKERFILE_PATH.read_text()
     workflow = RELEASE_WORKFLOW_PATH.read_text()
 
-    assert "ARG VALIDATOR_COMPATIBILITY_EPOCH=1" in dockerfile
+    assert "ARG VALIDATOR_COMPATIBILITY_EPOCH=2" in dockerfile
     assert (
         f"ARG VALIDATOR_HEARTBEAT_PROTOCOL={HEARTBEAT_PROTOCOL_VERSION}" in dockerfile
     )
@@ -201,7 +201,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     )
     assert 'io.heyditto.validator.compose-schema="1"' in dockerfile
 
-    assert 'COMPATIBILITY_EPOCH: "1"' in workflow
+    assert 'COMPATIBILITY_EPOCH: "2"' in workflow
     assert "ditto-subnet-validator" in workflow
     assert '--tag "$IMAGE:compat-$COMPATIBILITY_EPOCH"' in workflow
     assert ":sha-${{ needs.release.outputs.commit_sha }}" in workflow

@@ -24,13 +24,10 @@ from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
 # code. Changing one is a coordinated network upgrade (roll every validator
 # together), never a per-operator setting.
 #
-# Margin: the dethrone margin must exceed the between-seed composite noise so a
-# verbatim copy cannot win a lucky seed. v2 targets between-seed σ ≤ 0.01 and sets
-# the margin to ≥ 3σ/composite (at composite ~0.6, 3·0.01/0.6 = 5%). The offline
-# calibrator (dittobench-api cmd/benchcal) reports a hermetic σ ≈ 0.017 as a
-# weak-harness upper bound; the champion-region σ must reconfirm ≤ 0.01 on the
-# hosted multi-seed run before mainnet.
-KOTH_MARGIN = 0.05  # relative dethrone margin (5%)
+# Margin: the flat dethrone gate protects the incumbent from negligible gains,
+# while the statistical band below separately protects against measurement noise.
+# Keep this frozen across validators because it changes the deterministic KOTH fold.
+KOTH_MARGIN = 0.02  # relative dethrone margin (2%)
 KOTH_TAIL_SIZE = 4  # runners-up after the champion that split the tail
 KOTH_CHAMPION_SHARE = 0.9  # champion weight share (90% champion / 10% tail)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
@@ -116,7 +113,7 @@ class ValidatorConfig:
     koth_margin: float
     """Relative margin a challenger must beat the incumbent by to dethrone it.
 
-    ``0.05`` = 5%: a challenger becomes champion only if its composite exceeds the
+    ``0.02`` = 2%: a challenger becomes champion only if its composite exceeds the
     incumbent's by more than this. Ties + sub-margin gains keep the incumbent
     (first-seen wins), which is what makes a copy unprofitable."""
 

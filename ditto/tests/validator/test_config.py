@@ -26,7 +26,7 @@ class TestKothConfig:
         cfg = parse_validator_config_from_env()
         # Consensus-critical mechanism values are frozen in code (the KOTH_*
         # constants), not env, so every validator folds identically.
-        assert cfg.koth_margin == 0.05
+        assert cfg.koth_margin == 0.02
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
@@ -54,7 +54,7 @@ class TestKothConfig:
         ):
             monkeypatch.setenv(var, "999")
         cfg = parse_validator_config_from_env()
-        assert cfg.koth_margin == 0.05
+        assert cfg.koth_margin == 0.02
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
@@ -171,10 +171,10 @@ class TestRequiredConfig:
 class TestCompatibilityEpoch:
     def test_matching_epoch_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH", "1")
+        monkeypatch.setenv("VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH", "2")
         parse_validator_config_from_env()
 
-    @pytest.mark.parametrize("value", ["0", "2", "invalid", ""])
+    @pytest.mark.parametrize("value", ["0", "1", "invalid", ""])
     def test_mismatch_fails_closed(
         self, monkeypatch: pytest.MonkeyPatch, value: str
     ) -> None:

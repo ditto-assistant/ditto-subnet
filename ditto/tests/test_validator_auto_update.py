@@ -19,14 +19,14 @@ ROOT = Path(__file__).parents[2]
 UPDATER = ROOT / "scripts/validator-auto-update.sh"
 COMPOSE_WRAPPER = ROOT / "scripts/validator-compose.sh"
 IMAGE_REPOSITORY = "ghcr.io/ditto-assistant/ditto-subnet-validator"
-CHANNEL = f"{IMAGE_REPOSITORY}:compat-1"
+CHANNEL = f"{IMAGE_REPOSITORY}:compat-2"
 DIGEST = f"{IMAGE_REPOSITORY}@sha256:" + "2" * 64
 OLD_DIGEST = f"{IMAGE_REPOSITORY}@sha256:" + "1" * 64
 FAILED_DIGEST = f"{IMAGE_REPOSITORY}@sha256:" + "3" * 64
 SOURCE = "https://github.com/ditto-assistant/ditto-subnet"
 
 
-def _labels(version: str, revision: str, *, epoch: str = "1") -> dict[str, str]:
+def _labels(version: str, revision: str, *, epoch: str = "2") -> dict[str, str]:
     return {
         "io.heyditto.validator-service": "true",
         "io.heyditto.validator.compatibility-epoch": epoch,
@@ -79,7 +79,7 @@ def _initial_state() -> dict[str, Any]:
                 "io.heyditto.validator.auto-update-target": "true",
             },
             "runtime_state": {
-                "compatibility_epoch": 1,
+                "compatibility_epoch": 2,
                 "heartbeat_protocol": 4,
                 "platform_accepted": True,
                 "state": "working",
@@ -631,7 +631,7 @@ def test_incompatible_candidate_fails_before_drain(
     for image in (CHANNEL, DIGEST):
         state["images"][image]["labels"][
             "io.heyditto.validator.compatibility-epoch"
-        ] = "2"
+        ] = "1"
     state_path.write_text(json.dumps(state))
 
     result = _run(env, "run")

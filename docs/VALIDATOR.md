@@ -273,12 +273,12 @@ score submission, and race the same-lease resume and monotonic progress rules.
 The release workflow publishes only the validator worker to
 `ghcr.io/ditto-assistant/ditto-subnet-validator`. It never publishes or updates
 Pylon, `dittobench-api`, the model relay, Ollama, or `sandbox-docker`. Releases
-has semantic-version and source-SHA tags for audit and discovery. `compat-1` is
+has semantic-version and source-SHA tags for audit and discovery. `compat-2` is
 the moving discovery tag; the updater resolves it to a registry digest before
 draining anything, and that digest is the immutable deployment boundary.
 The multi-architecture source-SHA manifest is built and pushed once, both amd64
 and arm64 artifacts are smoke-tested from that registry digest, and only that
-exact passing manifest is promoted to the semantic-version and `compat-1` tags.
+exact passing manifest is promoted to the semantic-version and `compat-2` tags.
 
 Each candidate must carry the expected source, exact release version and
 40-character revision, validator marker, heartbeat protocol, update protocol,
@@ -312,10 +312,10 @@ Preflight the public image. On an existing local-build stack, coordinate a
 maintenance window with no live ticket, then replace only the validator worker:
 
 ```sh
-docker pull ghcr.io/ditto-assistant/ditto-subnet-validator:compat-1
+docker pull ghcr.io/ditto-assistant/ditto-subnet-validator:compat-2
 IMAGE=ghcr.io/ditto-assistant/ditto-subnet-validator
 DIGEST="$(docker image inspect --format '{{ range .RepoDigests }}{{ println . }}{{ end }}' \
-  "$IMAGE:compat-1" | awk -v prefix="$IMAGE@" 'index($0, prefix) == 1 { print; exit }')"
+  "$IMAGE:compat-2" | awk -v prefix="$IMAGE@" 'index($0, prefix) == 1 { print; exit }')"
 test -n "$DIGEST"
 DITTO_SUBNET_IMAGE="$DIGEST" \
   ./scripts/validator-compose.sh up -d --no-deps --no-build --pull never \
@@ -329,10 +329,10 @@ For a fresh host, start and verify the five non-validator services before the
 digest-pinned validator; `--no-deps` is not a fresh-install command:
 
 ```sh
-docker pull ghcr.io/ditto-assistant/ditto-subnet-validator:compat-1
+docker pull ghcr.io/ditto-assistant/ditto-subnet-validator:compat-2
 IMAGE=ghcr.io/ditto-assistant/ditto-subnet-validator
 DIGEST="$(docker image inspect --format '{{ range .RepoDigests }}{{ println . }}{{ end }}' \
-  "$IMAGE:compat-1" | awk -v prefix="$IMAGE@" 'index($0, prefix) == 1 { print; exit }')"
+  "$IMAGE:compat-2" | awk -v prefix="$IMAGE@" 'index($0, prefix) == 1 { print; exit }')"
 test -n "$DIGEST"
 ./scripts/validator-compose.sh up -d --build --wait --wait-timeout 180 \
   pylon sandbox-docker model-relay ollama dittobench-api
