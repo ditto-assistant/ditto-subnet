@@ -165,6 +165,7 @@ class TestUploadAgent:
                 200,
                 json={
                     "agent_id": "11111111-1111-1111-1111-111111111111",
+                    "version": 2,
                     "status": "uploaded",
                 },
             )
@@ -189,6 +190,7 @@ class TestUploadAgent:
             assert f'name="{field}"' in body_str, f"missing field {field!r} in body"
 
         assert str(result.agent_id) == "11111111-1111-1111-1111-111111111111"
+        assert result.version == 2
 
     def test_non_200_after_payment_raises_upload_agent_rejected(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -262,6 +264,7 @@ class TestAgentByHotkey:
                     "agent_id": "11111111-1111-1111-1111-111111111111",
                     "miner_hotkey": self.HOTKEY,
                     "name": "alpha",
+                    "version": 2,
                     "status": "uploaded",
                     "sha256": "ab" * 32,
                     "created_at": "2026-06-15T12:00:00Z",
@@ -274,6 +277,7 @@ class TestAgentByHotkey:
 
         assert captured["query"] == {"miner_hotkey": self.HOTKEY}
         assert result.miner_hotkey == self.HOTKEY
+        assert result.version == 2
         assert result.screening_reason == "Remove the bundled credential and resubmit"
 
     def test_404_with_1201_raises_hotkey_not_found(self) -> None:

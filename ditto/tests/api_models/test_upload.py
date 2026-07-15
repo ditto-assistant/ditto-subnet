@@ -89,13 +89,17 @@ class TestUploadCheckResponse:
 class TestUploadAgentResponse:
     def test_happy_path(self):
         agent_id = "11111111-1111-1111-1111-111111111111"
-        r = UploadAgentResponse(agent_id=agent_id, status=AgentStatus.UPLOADED)
+        r = UploadAgentResponse(
+            agent_id=agent_id, version=1, status=AgentStatus.UPLOADED
+        )
         assert str(r.agent_id) == agent_id
+        assert r.version == 1
         assert r.status == AgentStatus.UPLOADED
 
     def test_status_serializes_to_string(self):
         r = UploadAgentResponse(
             agent_id="11111111-1111-1111-1111-111111111111",
+            version=2,
             status=AgentStatus.UPLOADED,
         )
         body = r.model_dump(mode="json")
@@ -105,6 +109,7 @@ class TestUploadAgentResponse:
         with pytest.raises(ValidationError):
             UploadAgentResponse(
                 agent_id="11111111-1111-1111-1111-111111111111",
+                version=1,
                 status="invented-status",  # type: ignore[arg-type]
             )
 
@@ -112,5 +117,6 @@ class TestUploadAgentResponse:
         with pytest.raises(ValidationError):
             UploadAgentResponse(
                 agent_id="not-a-uuid",  # type: ignore[arg-type]
+                version=1,
                 status=AgentStatus.UPLOADED,
             )

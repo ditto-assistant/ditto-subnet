@@ -44,6 +44,7 @@ from ditto.miner_cli.errors import (
 )
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
+from ditto.miner_cli.preferences import load_agent_name, save_agent_name
 from ditto.miner_cli.signing import sign_upload_payload
 from ditto.miner_cli.tar_validator import run_preflight
 from ditto.miner_cli.wallet import load_wallet
@@ -84,8 +85,12 @@ def add_subparser(
     )
     parser.add_argument(
         "--name",
-        required=True,
-        help="Display name for the agent (1-64 chars). Stored in agents.name.",
+        default=os.environ.get("DITTO_AGENT_NAME"),
+        help=(
+            "Stable agent name (1-64 chars). Reuse it for v2, v3, and later "
+            "uploads. After success it becomes this hotkey's local default; "
+            "pass --name again to change it. Env: DITTO_AGENT_NAME."
+        ),
     )
     parser.add_argument(
         "--wallet.name",
@@ -135,6 +140,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         return _run_upload(
             args,
+            network_name=network.name,
             network_api_url=network.api_url,
             subtensor_network=network.subtensor_network,
             chain_endpoint=getattr(args, "chain_endpoint", None) or None,
@@ -159,6 +165,7 @@ def run(args: argparse.Namespace) -> int:
 def _run_upload(
     args: argparse.Namespace,
     *,
+    network_name: str,
     network_api_url: str,
     subtensor_network: str,
     chain_endpoint: str | None = None,
@@ -167,6 +174,25 @@ def _run_upload(
     handle, live_wallet = load_wallet(
         coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
     )
+
+    agent_name = args.name
+    if agent_name is None:
+        agent_name = load_agent_name(network=network_name, hotkey=handle.hotkey_ss58)
+        if agent_name is not None:
+            print(
+                f"using saved agent name: {agent_name} (override with --name)",
+                file=sys.stderr,
+            )
+        elif sys.stdin.isatty():
+            agent_name = input("Agent name (reuse this for future versions): ").strip()
+        else:
+            raise MinerCliError(
+                "agent name required for the first upload; pass --name. "
+                "Ditto will remember it for this hotkey after success."
+            )
+    agent_name = agent_name.strip()
+    if not 1 <= len(agent_name) <= 64:
+        raise MinerCliError("agent name must be 1-64 characters")
 
     # Step 2: pre-flight (raises TarStructureError on missing file)
     print(f"running pre-flight on {args.tar_path}...", file=sys.stderr)
@@ -248,7 +274,7 @@ def _run_upload(
                     agent_tar_filename=args.tar_path.name,
                     hotkey=handle.hotkey_ss58,
                     sha256=preflight.sha256,
-                    name=args.name,
+                    name=agent_name,
                     signature=signature_hex,
                     payment=receipt,
                 )
@@ -271,8 +297,17 @@ def _run_upload(
 
     # Step 10: print agent_id to stdout, hint to stderr
     print(result.agent_id)
+    saved_name = save_agent_name(
+        network=network_name, hotkey=handle.hotkey_ss58, name=agent_name
+    )
     print(
-        f"\nupload succeeded. poll status with:\n  ditto status {result.agent_id}",
+        f"\nupload succeeded: {agent_name} · submission v{result.version}\n"
+        + (
+            "saved as this hotkey's local default; override with --name\n"
+            if saved_name
+            else "warning: could not save the local agent-name default\n"
+        )
+        + f"poll status with:\n  ditto status {result.agent_id}",
         file=sys.stderr,
     )
     return 0

@@ -84,6 +84,14 @@ class UploadAgentResponse(BaseModel):
     this to track screening + evaluation status via the retrieval
     endpoints."""
 
+    version: Annotated[
+        int,
+        Field(
+            ge=1,
+            description="1-based submission version for this hotkey and agent name.",
+        ),
+    ]
+
     status: AgentStatus
     """Initial lifecycle state. Always ``uploaded`` immediately after a
     successful upload; the platform-operated screening service advances it

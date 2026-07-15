@@ -23,6 +23,16 @@ class AgentResponse(BaseModel):
     agent_id: Annotated[UUID, Field(description="Server-generated agent identifier.")]
     miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
     name: Annotated[str, Field(description="Miner-chosen agent name.")]
+    version: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=1,
+            description=(
+                "Submission version within this named agent; null for legacy uploads."
+            ),
+        ),
+    ] = None
     status: Annotated[
         AgentStatus,
         Field(description="Lifecycle state per the submission state machine."),
@@ -46,6 +56,7 @@ class AgentResponse(BaseModel):
                 "agent_id": "550e8400-e29b-41d4-a716-446655440000",
                 "miner_hotkey": "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
                 "name": "alpha-agent",
+                "version": 1,
                 "status": "uploaded",
                 "sha256": "deadbeef" * 8,
                 "created_at": "2026-06-08T12:00:00Z",

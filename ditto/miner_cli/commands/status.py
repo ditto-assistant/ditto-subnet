@@ -169,6 +169,7 @@ def _status_by_hotkey(
                     "agent_id": str(agent.agent_id),
                     "miner_hotkey": agent.miner_hotkey,
                     "name": agent.name,
+                    "version": agent.version,
                     "status": agent.status.value,
                     "sha256": agent.sha256,
                     "created_at": agent.created_at.isoformat(),
@@ -180,6 +181,14 @@ def _status_by_hotkey(
         print(f"Agent:   {agent.agent_id}")
         print(f"Hotkey:  {agent.miner_hotkey}")
         print(f"Name:    {agent.name}")
+        print(
+            "Version: "
+            + (
+                f"Submission v{agent.version}"
+                if agent.version is not None
+                else "Legacy"
+            )
+        )
         print(f"Status:  {agent.status.value}")
         print(f"sha256:  {agent.sha256}")
         print(f"Created: {agent.created_at.isoformat()}")

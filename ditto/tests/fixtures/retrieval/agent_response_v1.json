@@ -2,6 +2,7 @@
   "agent_id": "550e8400-e29b-41d4-a716-446655440000",
   "miner_hotkey": "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
   "name": "alpha-agent",
+  "version": 1,
   "status": "uploaded",
   "sha256": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
   "created_at": "2026-06-08T12:00:00Z"
