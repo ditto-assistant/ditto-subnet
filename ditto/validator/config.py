@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
+from ipaddress import ip_address
+from urllib.parse import urlsplit
 
 from ditto.validator.errors import ValidatorConfigError
 
@@ -34,6 +36,21 @@ KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
 MINER_EMISSION_SHARE = 0.2  # release 20% of miner emission; burn the other 80%
 FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
+
+
+def _is_local_subtensor_network(network: str) -> bool:
+    """Return whether a Bittensor network alias or endpoint is local-only."""
+    normalized = network.strip().lower()
+    if normalized in {"local", "localhost", "127.0.0.1", "::1"}:
+        return True
+
+    hostname = urlsplit(normalized).hostname
+    if hostname == "localhost":
+        return True
+    try:
+        return ip_address(hostname or "").is_loopback
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -242,11 +259,13 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
     )
     subtensor_network = os.environ.get("SUBTENSOR_NETWORK", "finney")
-    # Finney SN118 has a fixed owner hotkey at UID 0. Localnet setup uses its
-    # validator as the subnet owner, so self-targeting preserves the same burn
-    # path without making the production target operator-configurable.
+    # Finney SN118 has a fixed owner hotkey at UID 0. Production validators may
+    # use a named network or a custom non-loopback endpoint, so only explicit
+    # local aliases/endpoints self-target the local owner validator.
     burn_hotkey = (
-        FINNEY_BURN_HOTKEY if subtensor_network == "finney" else validator_hotkey
+        validator_hotkey
+        if _is_local_subtensor_network(subtensor_network)
+        else FINNEY_BURN_HOTKEY
     )
 
     # All KOTH + ATH mechanism values are frozen (the KOTH_* module constants),

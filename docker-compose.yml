@@ -23,6 +23,11 @@ services:
       PYLON_METRICS_TOKEN: ${PYLON_METRICS_TOKEN:-}
     security_opt:
       - no-new-privileges:true
+    # Pylon runs as root, but operator hotkeys are normally mode 0600 and may
+    # be owned by a non-root host user. Restore only the capability needed to
+    # traverse/read the read-only wallet mount after dropping all capabilities.
+    cap_add:
+      - DAC_READ_SEARCH
     cap_drop:
       - ALL
     volumes:

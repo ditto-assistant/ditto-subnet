@@ -109,7 +109,8 @@ def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
 
     assert validator["cap_drop"] == ["ALL"]
     assert validator["cap_add"] == ["DAC_READ_SEARCH"]
-    assert "cap_add" not in services["pylon"]
+    assert services["pylon"]["cap_drop"] == ["ALL"]
+    assert services["pylon"]["cap_add"] == ["DAC_READ_SEARCH"]
 
     assert len(validator["volumes"]) == 1
     wallet_mount = validator["volumes"][0]

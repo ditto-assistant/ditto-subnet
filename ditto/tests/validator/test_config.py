@@ -70,6 +70,27 @@ class TestKothConfig:
         cfg = parse_validator_config_from_env()
         assert cfg.burn_hotkey == _HOTKEY
 
+    @pytest.mark.parametrize(
+        "network",
+        ["wss://archive.chain.opentensor.ai:443", "wss://finney.example.com/ws"],
+    )
+    def test_custom_finney_endpoint_burns_to_fixed_owner(
+        self, monkeypatch: pytest.MonkeyPatch, network: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("SUBTENSOR_NETWORK", network)
+        assert parse_validator_config_from_env().burn_hotkey == FINNEY_BURN_HOTKEY
+
+    @pytest.mark.parametrize(
+        "network", ["localhost", "127.0.0.1", "ws://127.0.0.1:9944", "ws://[::1]:9944"]
+    )
+    def test_local_endpoint_burns_to_local_owner_validator(
+        self, monkeypatch: pytest.MonkeyPatch, network: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("SUBTENSOR_NETWORK", network)
+        assert parse_validator_config_from_env().burn_hotkey == _HOTKEY
+
 
 class TestMinStakeConfig:
     def test_default_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
