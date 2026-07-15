@@ -2,6 +2,18 @@
 
 <!-- version list -->
 
+## v0.8.0 (2026-07-15)
+
+### Features
+
+- Add safe validator auto-updates ([#130](https://github.com/ditto-assistant/ditto-subnet/pull/130),
+  [`13235ff`](https://github.com/ditto-assistant/ditto-subnet/commit/13235fff55e813242d92e16360cfeea05dc5e0c7))
+
+- Expose agent submission versions
+  ([#140](https://github.com/ditto-assistant/ditto-subnet/pull/140),
+  [`215a451`](https://github.com/ditto-assistant/ditto-subnet/commit/215a4514bb205109e2fdf04d40b5f8ee95eb0f53))
+
+
 ## v0.7.5 (2026-07-15)
 
 ### Bug Fixes
