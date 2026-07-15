@@ -24,7 +24,26 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --group dev
+        env:
+          DITTO_SCREENER_PROTOCOL_READ_KEY: ${{ secrets.DITTO_SCREENER_PROTOCOL_READ_KEY }}
+        run: |
+          : "${DITTO_SCREENER_PROTOCOL_READ_KEY:?missing read-only screener protocol deploy key}"
+          key_file="$(mktemp)"
+          cleanup() {
+            rm -f "$key_file"
+            git config --global --unset-all \
+              url."git@github.com:ditto-assistant/ditto-screener.git".insteadOf || true
+          }
+          trap cleanup EXIT
+
+          printf '%s\n' "$DITTO_SCREENER_PROTOCOL_READ_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          git config --global \
+            url."git@github.com:ditto-assistant/ditto-screener.git".insteadOf \
+            "https://github.com/ditto-assistant/ditto-screener.git"
+
+          GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            uv sync --group dev
 
       - name: ruff format check
         run: uv run ruff format --check .
