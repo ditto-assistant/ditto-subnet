@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.7.1 (2026-07-15)
+
+### Bug Fixes
+
+- Preflight validator embedding route before leasing
+  ([#132](https://github.com/ditto-assistant/ditto-subnet/pull/132),
+  [`aae4bae`](https://github.com/ditto-assistant/ditto-subnet/commit/aae4baee5c432de1c27b48ce283b144097272d8c))
+
+
 ## v0.7.0 (2026-07-14)
 
 ### Features
