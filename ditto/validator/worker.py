@@ -684,8 +684,10 @@ class ValidatorWorker:
 
         Evaluates the agent on each seed, then submits a SINGLE signed score: the
         median-composite run (a real run, so its signed composite/seed/run_id are
-        genuine), enriched with ``confirmation_composites`` = the sorted per-seed
-        composites and a ``composite_stderr`` pooled over those seeds
+        genuine), enriched with ``confirmation_composites`` + ``confirmation_seeds``
+        = the per-seed composites and their CRN seeds, aligned 1:1 and seed-sorted
+        so the fold can pair a later challenger on shared seeds, plus a
+        ``composite_stderr`` pooled over those seeds
         (:func:`_pooled_confirmation_stderr`) so the fold's z-band sees the
         between-seed reproducibility, not one run's within-dataset error. The KOTH
         fold then dethrones on the median over seeds
@@ -714,13 +716,19 @@ class ValidatorWorker:
         ordered = sorted(reports, key=lambda r: (r.composite, r.seed))
         representative = ordered[len(ordered) // 2]
         if len(reports) >= 2:
-            composites = sorted(r.composite for r in reports)
+            # Seed-aligned pairs, sorted by seed for a deterministic wire order,
+            # so a later PAIRED dethrone (weights._paired_dethrone) can intersect
+            # challenger vs champion on their shared seeds.
+            pairs = sorted((r.seed, r.composite) for r in reports)
+            seeds = [s for s, _ in pairs]
+            composites = [c for _, c in pairs]
             # Report the pooled between-seed SE, not the median run's one-dataset
             # error: the K seeds are already run, so the fold's z-band should see
             # the reproducibility they measure (band tightens ~sqrt(K)).
             representative = representative.model_copy(
                 update={
                     "confirmation_composites": composites,
+                    "confirmation_seeds": seeds,
                     "composite_stderr": _pooled_confirmation_stderr(
                         composites, representative.composite_stderr
                     ),

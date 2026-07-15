@@ -141,6 +141,20 @@
         ],
         "default": null
       },
+      "confirmation_seeds": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "first_seen": {
         "format": "date-time",
         "type": "string"
@@ -249,6 +263,20 @@
               {
                 "items": {
                   "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_seeds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
                 },
                 "type": "array"
               },
@@ -489,6 +517,20 @@
         ],
         "default": null
       },
+      "confirmation_seeds": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "details": {
         "anyOf": [
           {
@@ -679,6 +721,20 @@
               {
                 "items": {
                   "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_seeds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
                 },
                 "type": "array"
               },

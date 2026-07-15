@@ -20,7 +20,9 @@ from ditto.validator.weights import (
     _beats,
     _effective_composite,
     _entry_confirmations,
+    _entry_seed_composites,
     _entry_stderr,
+    _paired_dethrone,
     compute_weights,
 )
 
@@ -33,11 +35,13 @@ def _e(
     *,
     stderr: float | None = None,
     confirmations: list[float] | None = None,
+    seeds: list[int] | None = None,
     minutes: int = 0,
 ) -> Any:
     """A duck-typed ledger entry. ``stderr=None`` models a platform that does not
     surface ``composite_stderr`` (the field is simply absent); likewise
-    ``confirmations=None`` models an absent ``confirmation_composites``."""
+    ``confirmations=None`` / ``seeds=None`` model an absent
+    ``confirmation_composites`` / ``confirmation_seeds``."""
     ns = SimpleNamespace(
         miner_hotkey=miner,
         agent_id=uuid4(),
@@ -49,6 +53,8 @@ def _e(
         ns.composite_stderr = stderr
     if confirmations is not None:
         ns.confirmation_composites = confirmations
+    if seeds is not None:
+        ns.confirmation_seeds = seeds
     return ns
 
 
@@ -232,3 +238,100 @@ class TestComputeWeightsWithConfirmations:
         ]
         w = compute_weights(entries, margin=0.05, tail_size=0, champion_share=1.0)
         assert w == {"chal": pytest.approx(1.0)}
+
+
+class TestEntrySeedComposites:
+    def test_none_without_seeds(self) -> None:
+        # confirmations present but no aligned seeds -> not pairable.
+        assert _entry_seed_composites(_e("a", 0.8, confirmations=[0.8, 0.82])) is None
+
+    def test_maps_seed_to_composite(self) -> None:
+        e = _e("a", 0.8, confirmations=[0.90, 0.70, 0.80], seeds=[10, 20, 30])
+        assert _entry_seed_composites(e) == {10: 0.90, 20: 0.70, 30: 0.80}
+
+    def test_length_mismatch_is_absent(self) -> None:
+        e = _e("a", 0.8, confirmations=[0.90, 0.70, 0.80], seeds=[10, 20])
+        assert _entry_seed_composites(e) is None
+
+    def test_duplicate_or_negative_seed_is_absent(self) -> None:
+        dup = _e("a", 0.8, confirmations=[0.9, 0.7, 0.8], seeds=[10, 10, 30])
+        neg = _e("a", 0.8, confirmations=[0.9, 0.7, 0.8], seeds=[10, -1, 30])
+        assert _entry_seed_composites(dup) is None
+        assert _entry_seed_composites(neg) is None
+
+
+class TestPairedDethrone:
+    def test_none_when_no_shared_seeds(self) -> None:
+        chal = _e("chal", 0.9, confirmations=[0.9, 0.92], seeds=[1, 2])
+        champ = _e("champ", 0.8, confirmations=[0.8, 0.81], seeds=[3, 4])
+        assert _paired_dethrone(chal, champ, 1.64) is None
+
+    def test_none_when_z_not_positive(self) -> None:
+        chal = _e("chal", 0.9, confirmations=[0.9, 0.92], seeds=[1, 2])
+        champ = _e("champ", 0.8, confirmations=[0.8, 0.81], seeds=[1, 2])
+        assert _paired_dethrone(chal, champ, 0.0) is None
+
+    def test_pairs_over_common_seeds_only(self) -> None:
+        # Seed 9 is challenger-only, seed 8 champion-only; pairing uses {1, 2}.
+        chal = _e("chal", 0.9, confirmations=[0.90, 0.94, 0.50], seeds=[1, 2, 9])
+        champ = _e("champ", 0.8, confirmations=[0.80, 0.82, 0.50], seeds=[1, 2, 8])
+        out = _paired_dethrone(chal, champ, 1.64)
+        assert out is not None
+        mean_diff, champ_ref, se_diff = out
+        # diffs over {1,2} = [0.10, 0.12]; mean 0.11; champ_ref mean(0.80,0.82)=0.81
+        assert mean_diff == pytest.approx(0.11)
+        assert champ_ref == pytest.approx(0.81)
+        # SEM of [0.10, 0.12]: sample var 0.0002, se = sqrt(0.0002 / 2) = 0.01.
+        assert se_diff == pytest.approx(0.01)
+
+
+class TestBeatsPaired:
+    def test_tight_paired_lead_dethrones_where_unpaired_holds(self) -> None:
+        # Both carry stderr 0.03 AND aligned seeds, with a steady +0.05 per-seed
+        # lead. PAIRED: se_diff ~ 0, so the band is the flat 2% floor (0.016) and
+        # the 0.05 lead clears it. UNPAIRED (seeds stripped): the independent-sum
+        # band 1.64*sqrt(0.03^2 + 0.03^2) = 0.070 holds the same 0.05 lead. Same
+        # data, opposite verdict -- that is exactly the CRN pairing win.
+        champ = _e(
+            "champ",
+            0.80,
+            stderr=0.03,
+            confirmations=[0.80, 0.79, 0.81],
+            seeds=[1, 2, 3],
+            minutes=0,
+        )
+        chal = _e(
+            "chal",
+            0.85,
+            stderr=0.03,
+            confirmations=[0.85, 0.84, 0.86],
+            seeds=[1, 2, 3],
+            minutes=1,
+        )
+        assert _beats(chal, champ, margin=0.02, dethrone_z=1.64) is True
+        chal_unpaired = _e(
+            "chal",
+            0.85,
+            stderr=0.03,
+            confirmations=[0.85, 0.84, 0.86],
+            minutes=1,
+        )
+        assert _beats(chal_unpaired, champ, margin=0.02, dethrone_z=1.64) is False
+
+    def test_noisy_paired_lead_is_held_by_the_band(self) -> None:
+        # Same ~0.05 mean lead but the per-seed differences swing (se_diff large),
+        # so the paired z-band holds the incumbent.
+        champ = _e(
+            "champ", 0.80, confirmations=[0.80, 0.79, 0.81], seeds=[1, 2, 3], minutes=0
+        )
+        chal = _e(
+            "chal", 0.85, confirmations=[0.95, 0.70, 0.90], seeds=[1, 2, 3], minutes=1
+        )
+        assert _beats(chal, champ, margin=0.02, dethrone_z=1.64) is False
+
+    def test_falls_back_to_unpaired_without_seeds(self) -> None:
+        # No seeds on either side -> unpaired median/independent-sum path, unchanged.
+        champ = _e("champ", 0.80, stderr=0.03, minutes=0)
+        chal = _e("chal", 0.90, stderr=0.03, minutes=1)
+        # independent band 1.64*sqrt(2)*0.03 = 0.070 < lead 0.10 -> dethrones.
+        assert _beats(chal, champ, margin=0.02, dethrone_z=1.64) is True

@@ -821,7 +821,10 @@ class TestConfirmAndSubmit:
         # carries the sorted per-seed composites for the fold's median.
         assert report.composite == 0.80
         assert report.seed == 30
-        assert report.confirmation_composites == [0.70, 0.80, 0.90]
+        # Seed-aligned and seed-sorted: seeds [10, 20, 30] -> composites in that
+        # seed order, so a later paired dethrone can intersect on shared seeds.
+        assert report.confirmation_seeds == [10, 20, 30]
+        assert report.confirmation_composites == [0.90, 0.70, 0.80]
         # composite_stderr is pooled over the seeds: the per-seed reports carry
         # no single-run stderr, so it is the between-seed SEM
         # stdev([.7,.8,.9]) / sqrt(3) = 0.1 / sqrt(3).
@@ -904,6 +907,7 @@ class TestPooledConfirmationStderr:
     def test_between_seed_sem_dominates_when_seeds_disagree(self) -> None:
         # Wide between-seed spread beats the sampling floor: the band widens.
         got = worker_mod._pooled_confirmation_stderr([0.6, 0.8, 1.0], 0.03)
+        assert got is not None
         between = (0.2**2 + 0.0 + 0.2**2) / 2  # sample var, ddof=1
         assert got == pytest.approx((between**0.5) / 3**0.5)
         assert got > 0.03 / 3**0.5
