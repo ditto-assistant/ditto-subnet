@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.7.2 (2026-07-15)
+
+### Bug Fixes
+
+- Use curl for sandbox embedding healthcheck
+  ([#133](https://github.com/ditto-assistant/ditto-subnet/pull/133),
+  [`eab7ca8`](https://github.com/ditto-assistant/ditto-subnet/commit/eab7ca85238cccfb1bd40e6594a4d8726b6b0661))
+
+- **release**: Authenticate private dependency build
+  ([#135](https://github.com/ditto-assistant/ditto-subnet/pull/135),
+  [`c937ae4`](https://github.com/ditto-assistant/ditto-subnet/commit/c937ae43e95df6b8a2d1c029b543611a88797770))
+
+### Chores
+
+- **ci**: Authenticate private dependency install
+  ([#134](https://github.com/ditto-assistant/ditto-subnet/pull/134),
+  [`dd00bf8`](https://github.com/ditto-assistant/ditto-subnet/commit/dd00bf89254790860fc0ee3d168fe684d1b625a9))
+
+
 ## v0.7.1 (2026-07-15)
 
 ### Bug Fixes
