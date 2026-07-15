@@ -1829,7 +1829,14 @@ class TestConfirmAndSubmit:
         # carries the sorted per-seed composites for the fold's median.
         assert report.composite == 0.80
         assert report.seed == 30
-        assert report.confirmation_composites == [0.70, 0.80, 0.90]
+        # Seed-aligned and seed-sorted: seeds [10, 20, 30] -> composites in that
+        # seed order, so a later paired dethrone can intersect on shared seeds.
+        assert report.confirmation_seeds == [10, 20, 30]
+        assert report.confirmation_composites == [0.90, 0.70, 0.80]
+        # composite_stderr is pooled over the seeds: the per-seed reports carry
+        # no single-run stderr, so it is the between-seed SEM
+        # stdev([.7,.8,.9]) / sqrt(3) = 0.1 / sqrt(3).
+        assert report.composite_stderr == pytest.approx(0.1 / 3**0.5)
         assert out is report
 
     async def test_single_surviving_seed_has_no_confirmations(self) -> None:
@@ -1887,3 +1894,35 @@ class TestConfirmAndSubmit:
         )
         assert out is None
         platform.submit_score.assert_not_awaited()
+
+
+class TestPooledConfirmationStderr:
+    def test_none_below_two_seeds(self) -> None:
+        assert worker_mod._pooled_confirmation_stderr([], None) is None
+        assert worker_mod._pooled_confirmation_stderr([0.8], 0.03) is None
+
+    def test_between_seed_sem_when_no_single_run_stderr(self) -> None:
+        # stdev([0.7, 0.8, 0.9]) = 0.1, SEM = 0.1 / sqrt(3).
+        got = worker_mod._pooled_confirmation_stderr([0.7, 0.8, 0.9], None)
+        assert got == pytest.approx(0.1 / 3**0.5)
+
+    def test_sampling_floor_dominates_when_seeds_agree(self) -> None:
+        # Seeds agree exactly (between-seed SEM = 0), so the pooled value falls
+        # back to the single-run floor stderr / sqrt(K) instead of collapsing.
+        got = worker_mod._pooled_confirmation_stderr([0.8, 0.8, 0.8], 0.03)
+        assert got == pytest.approx(0.03 / 3**0.5)
+
+    def test_between_seed_sem_dominates_when_seeds_disagree(self) -> None:
+        # Wide between-seed spread beats the sampling floor: the band widens.
+        got = worker_mod._pooled_confirmation_stderr([0.6, 0.8, 1.0], 0.03)
+        assert got is not None
+        between = (0.2**2 + 0.0 + 0.2**2) / 2  # sample var, ddof=1
+        assert got == pytest.approx((between**0.5) / 3**0.5)
+        assert got > 0.03 / 3**0.5
+
+    def test_shrinks_by_root_k_vs_one_run(self) -> None:
+        # Three agreeing seeds pool the one-run stderr down by ~sqrt(3): the
+        # exact free win that lets the flat margin drop under the z-band floor.
+        one_run = 0.0293
+        got = worker_mod._pooled_confirmation_stderr([0.88, 0.88, 0.88], one_run)
+        assert got == pytest.approx(one_run / 3**0.5, rel=1e-6)

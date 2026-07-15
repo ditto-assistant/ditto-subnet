@@ -2,7 +2,7 @@
 
 The incentive mechanism (``docs/VALIDATOR.md``): the reigning
 all-time-high holder is the **champion** and takes ~all emissions; a challenger
-only dethrones it by beating its score by a **relative margin** (default 5%);
+only dethrones it by beating its score by a **relative margin** (default 2%);
 ties and sub-margin gains keep the incumbent, so **first-to-submit wins** and a
 downloaded copy — which at best ties — never earns. A small **participation
 tail** (default 10% over the next few miners) keeps the subnet populated without
@@ -239,27 +239,97 @@ def _entry_stderr(entry: LedgerEntry) -> float | None:
     return None
 
 
+def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
+    """The entry's per-seed confirmation composites keyed by their CRN seed, or
+    None when the ledger does not carry an aligned ``confirmation_seeds`` +
+    ``confirmation_composites`` pair (prod hardening P5). Read via getattr so the
+    wire model can stay untouched — inert until the platform surfaces
+    ``confirmation_seeds``, byte-identical to today. Requires equal-length lists
+    of at least two validated composites (:func:`_entry_confirmations`) and
+    non-negative int seeds with no duplicate; anything else is treated as absent
+    (a consensus-safe guard so two validators never pair off a differently-parsed
+    map)."""
+    comps = _entry_confirmations(entry)
+    if comps is None:
+        return None
+    seeds = getattr(entry, "confirmation_seeds", None)
+    if not isinstance(seeds, (list, tuple)) or len(seeds) != len(comps):
+        return None
+    out: dict[int, float] = {}
+    for s, c in zip(seeds, comps, strict=True):
+        if isinstance(s, bool) or not isinstance(s, int) or s < 0 or s in out:
+            return None
+        out[s] = c
+    return out
+
+
+def _paired_dethrone(
+    challenger: LedgerEntry, champion: LedgerEntry, dethrone_z: float
+) -> tuple[float, float, float] | None:
+    """Paired dethrone statistic over the two entries' SHARED CRN seeds (P5), or
+    None when they do not share at least two confirmation seeds (or ``dethrone_z
+    <= 0``). Returns ``(mean_diff, champ_ref, se_diff)``:
+
+        mean_diff = mean over shared seeds of (challenger − champion)
+        champ_ref = mean of the champion's composite over those seeds
+        se_diff   = SEM of the per-seed differences
+
+    Because the confirmation sweep scores both agents on the SAME common seeds,
+    the per-seed composites are paired: differencing them on each shared seed
+    cancels that seed's dataset difficulty, so ``se_diff`` is strictly smaller
+    than the independent-sum band ``sqrt(se_c² + se_champ²)`` whenever the two
+    agents' scores are positively correlated across seeds (the norm under CRN) —
+    a tighter band at the SAME confidence, without more seeds. The variance term
+    also absorbs a lucky single-seed outlier (it inflates both mean_diff and
+    se_diff), so the paired mean is safe here where P4 needed the median. Pure
+    and deterministic: sorted shared seeds, explicit float arithmetic."""
+    if dethrone_z <= 0.0:
+        return None
+    chall_map = _entry_seed_composites(challenger)
+    champ_map = _entry_seed_composites(champion)
+    if chall_map is None or champ_map is None:
+        return None
+    common = sorted(set(chall_map) & set(champ_map))
+    if len(common) < 2:
+        return None
+    diffs = [chall_map[s] - champ_map[s] for s in common]
+    n = len(diffs)
+    mean_diff = sum(diffs) / n
+    champ_ref = sum(champ_map[s] for s in common) / n
+    var = sum((d - mean_diff) ** 2 for d in diffs) / (n - 1)
+    se_diff = math.sqrt(var / n)
+    return mean_diff, champ_ref, se_diff
+
+
 def _beats(
     challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
 ) -> bool:
-    """Whether ``challenger`` dethrones ``champion``. The lead must exceed
-    the **indifference band** = max(flat relative margin, statistical band):
+    """Whether ``challenger`` dethrones ``champion``. The lead must exceed the
+    **indifference band** = max(flat relative margin, statistical band).
+
+    When both entries carry aligned per-seed confirmation composites over at
+    least two SHARED CRN seeds (P5) and ``dethrone_z > 0``, the statistical term
+    is a **paired** z-test (:func:`_paired_dethrone`): the lead is the mean
+    per-seed difference and the band is ``dethrone_z * se_diff``, where se_diff is
+    the SEM of the paired differences. Pairing cancels shared dataset difficulty,
+    so the band is tighter than the unpaired form at the same confidence.
+
+    Otherwise the **unpaired** rule applies (byte-identical to before):
 
         band = max( margin * champion.composite,
                     dethrone_z * sqrt(se_challenger² + se_champion²) )
 
-    The statistical term is a two-sample z-test on the composite difference; it
-    applies only when BOTH entries carry a ``composite_stderr`` and
-    ``dethrone_z > 0``. With no stderr (or z=0) the band is exactly the flat
-    relative margin, so ``challenger.composite > champion.composite*(1+margin)`` —
-    identical to the pre-v3 rule. Pure and deterministic (consensus-safe).
+    a two-sample z-test that engages only when BOTH entries carry a
+    ``composite_stderr`` and ``dethrone_z > 0``; with no stderr (or z=0) the band
+    is exactly the flat relative margin. Both sides use
+    :func:`_effective_composite` (the MEDIAN over confirmation seeds when present,
+    else the raw composite). Pure and deterministic (consensus-safe)."""
+    paired = _paired_dethrone(challenger, champion, dethrone_z)
+    if paired is not None:
+        mean_diff, champ_ref, se_diff = paired
+        band = max(champ_ref * margin, dethrone_z * se_diff)
+        return mean_diff > band
 
-    Both sides use :func:`_effective_composite` (P4): when the ledger surfaces
-    per-seed confirmation composites the MEDIAN over the common CRN seeds is
-    compared, so a dethrone requires a lead that replicates across seeds. With no
-    confirmations the raw composites compare, byte-identical to the pre-P4 rule.
-    The flat-margin band keys off the champion's effective composite for the same
-    reason."""
     chall = _effective_composite(challenger)
     champ = _effective_composite(champion)
     band = champ * margin

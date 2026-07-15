@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import inspect
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -129,6 +130,37 @@ def _retry_delay_seconds(attempt: int, error: Exception) -> float:
         else _WEIGHT_SET_RETRY_SECONDS
     )
     return base * 2 ** (attempt - 1)
+
+
+def _pooled_confirmation_stderr(
+    composites: Sequence[float], single_run_stderr: float | None
+) -> float | None:
+    """Standard error of a K-seed confirmation composite, pooling the seeds the
+    re-score already runs.
+
+    The KOTH z-band (:func:`ditto.validator.weights._beats`) gates a dethrone on
+    ``composite_stderr``. A single run reports only its within-dataset sampling
+    error and discards the between-seed spread the K confirmation seeds actually
+    measure, so a re-score that runs K seeds still hands the fold a one-run band.
+    This returns the LARGER of
+
+      * the between-seed SEM ``stdev(composites) / sqrt(K)`` — the empirical
+        reproducibility of the composite across the K common CRN seeds, and
+      * a sampling floor ``single_run_stderr / sqrt(K)`` — the precision K pooled
+        n-case runs give even when the seeds happen to agree,
+
+    so the band tightens by ~``sqrt(K)`` in the good case but never collapses when
+    a small K draws lucky-agreeing composites (which would let a verbatim copy
+    dethrone on measurement noise). ``None`` for K < 2 (no between-seed estimate;
+    the caller keeps the single run's stderr). Pure and deterministic."""
+    k = len(composites)
+    if k < 2:
+        return None
+    mean = sum(composites) / k
+    var = sum((c - mean) ** 2 for c in composites) / (k - 1)
+    between = math.sqrt(var / k)
+    floor = single_run_stderr / math.sqrt(k) if single_run_stderr else 0.0
+    return max(between, floor)
 
 
 @dataclass(frozen=True)
@@ -1149,8 +1181,13 @@ class ValidatorWorker:
 
         Evaluates the agent on each seed, then submits a SINGLE signed score: the
         median-composite run (a real run, so its signed composite/seed/run_id are
-        genuine), enriched with ``confirmation_composites`` = the sorted per-seed
-        composites. The KOTH fold then dethrones on the median over seeds
+        genuine), enriched with ``confirmation_composites`` + ``confirmation_seeds``
+        = the per-seed composites and their CRN seeds, aligned 1:1 and seed-sorted
+        so the fold can pair a later challenger on shared seeds, plus a
+        ``composite_stderr`` pooled over those seeds
+        (:func:`_pooled_confirmation_stderr`) so the fold's z-band sees the
+        between-seed reproducibility, not one run's within-dataset error. The KOTH
+        fold then dethrones on the median over seeds
         (:func:`ditto.validator.weights._effective_composite`), so a crown flip
         must replicate across seeds and not ride one lucky common-seed draw, with
         no per-seed rows on the platform. Seeds that fail to score are skipped;
@@ -1176,8 +1213,23 @@ class ValidatorWorker:
         ordered = sorted(reports, key=lambda r: (r.composite, r.seed))
         representative = ordered[len(ordered) // 2]
         if len(reports) >= 2:
+            # Seed-aligned pairs, sorted by seed for a deterministic wire order,
+            # so a later PAIRED dethrone (weights._paired_dethrone) can intersect
+            # challenger vs champion on their shared seeds.
+            pairs = sorted((r.seed, r.composite) for r in reports)
+            seeds = [s for s, _ in pairs]
+            composites = [c for _, c in pairs]
+            # Report the pooled between-seed SE, not the median run's one-dataset
+            # error: the K seeds are already run, so the fold's z-band should see
+            # the reproducibility they measure (band tightens ~sqrt(K)).
             representative = representative.model_copy(
-                update={"confirmation_composites": sorted(r.composite for r in reports)}
+                update={
+                    "confirmation_composites": composites,
+                    "confirmation_seeds": seeds,
+                    "composite_stderr": _pooled_confirmation_stderr(
+                        composites, representative.composite_stderr
+                    ),
+                }
             )
         return await self._submit_report(agent_id, miner_hotkey, representative)
 

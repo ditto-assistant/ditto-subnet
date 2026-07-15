@@ -133,7 +133,7 @@ result.
   equally to the composite; bounded efficiency, consistency, and integrity
   checks can reduce it.
 - Each miner competes with its highest eligible score. A challenger dethrones
-  the incumbent only after clearing the greater of the 5% relative margin and
+  the incumbent only after clearing the greater of the 2% relative margin and
   the configured statistical error band.
 - The champion receives 90% of competitive weight; the next four distinct
   miners split 10%. The competitive vector receives 20% of available miner
