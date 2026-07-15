@@ -3,39 +3,28 @@ from pathlib import Path
 import yaml
 
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
+CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
 
 
-def test_release_build_authenticates_only_the_private_screener_dependency() -> None:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    steps = workflow["jobs"]["release"]["steps"]
-    setup = next(
-        step
-        for step in steps
-        if step.get("name") == "Configure private dependency access"
-    )
+def test_public_screener_dependency_needs_no_private_authentication() -> None:
+    release_workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    release_steps = release_workflow["jobs"]["release"]["steps"]
     release = next(
         step
-        for step in steps
+        for step in release_steps
         if step.get("name") == "Version, tag, and create the GitHub release"
     )
-    cleanup = next(
-        step for step in steps if step.get("name") == "Remove private dependency key"
+    ci_workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text())
+    install = next(
+        step
+        for step in ci_workflow["jobs"]["lint-and-test"]["steps"]
+        if step.get("name") == "Install dependencies"
     )
 
-    assert setup["env"]["DITTO_SCREENER_PROTOCOL_READ_KEY"] == (
-        "${{ secrets.DITTO_SCREENER_PROTOCOL_READ_KEY }}"
-    )
-    assert "$RUNNER_TEMP/ditto-screener-read-key" in setup["run"]
-    assert release["env"]["GIT_CONFIG_COUNT"] == "1"
-    assert release["env"]["GIT_CONFIG_KEY_0"] == (
-        "url.git@github.com:ditto-assistant/ditto-screener.git.insteadOf"
-    )
-    assert release["env"]["GIT_CONFIG_VALUE_0"] == (
-        "https://github.com/ditto-assistant/ditto-screener.git"
-    )
-    assert (
-        "/github/runner_temp/ditto-screener-read-key"
-        in release["env"]["GIT_SSH_COMMAND"]
-    )
-    assert cleanup["if"] == "always()"
-    assert cleanup["run"] == 'rm -f "$RUNNER_TEMP/ditto-screener-read-key"'
+    assert install == {"name": "Install dependencies", "run": "uv sync --group dev"}
+    assert "env" not in release
+    for workflow_path in (CI_WORKFLOW_PATH, RELEASE_WORKFLOW_PATH):
+        text = workflow_path.read_text()
+        assert "DITTO_SCREENER_PROTOCOL_READ_KEY" not in text
+        assert "GIT_SSH_COMMAND" not in text
+        assert "insteadOf" not in text

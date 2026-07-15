@@ -47,29 +47,9 @@ jobs:
             git push origin v0.1.0
           fi
 
-      - name: Configure private dependency access
-        env:
-          DITTO_SCREENER_PROTOCOL_READ_KEY: ${{ secrets.DITTO_SCREENER_PROTOCOL_READ_KEY }}
-        run: |
-          : "${DITTO_SCREENER_PROTOCOL_READ_KEY:?missing read-only screener protocol deploy key}"
-          key_file="$RUNNER_TEMP/ditto-screener-read-key"
-          printf '%s\n' "$DITTO_SCREENER_PROTOCOL_READ_KEY" > "$key_file"
-          chmod 600 "$key_file"
-
       - name: Version, tag, and create the GitHub release
         uses: python-semantic-release/python-semantic-release@8f4d8c4e3e4fcd2b8df16444b148aa49920cc4d3
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: url.git@github.com:ditto-assistant/ditto-screener.git.insteadOf
-          GIT_CONFIG_VALUE_0: https://github.com/ditto-assistant/ditto-screener.git
-          GIT_SSH_COMMAND: >-
-            ssh -i /github/runner_temp/ditto-screener-read-key
-            -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
         with:
           github_token: ${{ secrets.RELEASE_TOKEN }}
           git_committer_name: github-actions
           git_committer_email: actions@users.noreply.github.com
-
-      - name: Remove private dependency key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/ditto-screener-read-key"
