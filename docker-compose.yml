@@ -149,10 +149,20 @@ services:
       retries: 12
 
   ditto-subnet:
+    # Local builds remain the default operator path. The opt-in updater passes
+    # an immutable GHCR digest explicitly and overrides this build policy.
+    image: ${DITTO_SUBNET_IMAGE:-ditto-subnet-validator:local}
+    pull_policy: build
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VALIDATOR_COMPATIBILITY_EPOCH: "1"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "4"
     restart: unless-stopped
+    stop_grace_period: 80m
+    labels:
+      io.heyditto.validator.auto-update-target: "true"
     environment:
       NETUID: "118"
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
@@ -174,6 +184,9 @@ services:
       VALIDATOR_QUEUE_LIMIT: "50"
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
+      VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "1"
+      VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
+      VALIDATOR_BOOTSTRAP_TOKEN: ${VALIDATOR_BOOTSTRAP_TOKEN:-manual}
       VALIDATOR_HTTP_TIMEOUT_SECONDS: "30"
       VALIDATOR_MIN_STAKE_TAO: "0"
       VALIDATOR_DITTOBENCH_MOCK: "false"
@@ -207,6 +220,13 @@ services:
     cap_drop:
       - ALL
     volumes:
+      # The root filesystem stays read-only. The updater gives every forced
+      # candidate/rollback recreation a new token, so only that container's
+      # successful USR2 acknowledgement survives a Docker/host restart.
+      - type: volume
+        source: validator-update-bootstrap
+        target: /var/lib/ditto-validator-update
+        read_only: false
       - type: bind
         source: ~/.bittensor/wallets/${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}
         target: /root/.bittensor/wallets/${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}
@@ -218,3 +238,4 @@ volumes:
   pylon-data:
   sandbox-docker-rootful-data:
   ollama-data:
+  validator-update-bootstrap:

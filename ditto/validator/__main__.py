@@ -26,21 +26,63 @@ from ditto.validator.telemetry import (
     build_telemetry,
     parse_telemetry_config_from_env,
 )
+from ditto.validator.update_control import (
+    bootstrap_should_start_drained,
+    mark_bootstrap_resumed,
+    write_update_state,
+)
 from ditto.validator.worker import ValidatorWorker
 
 logger = logging.getLogger(__name__)
 
 
 def _install_signal_handlers(
-    loop: asyncio.AbstractEventLoop, stop: asyncio.Event
+    loop: asyncio.AbstractEventLoop,
+    stop: asyncio.Event,
+    drain_requested: asyncio.Event,
+    *,
+    persist_bootstrap_resume: bool,
 ) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         # add_signal_handler is unavailable on non-Unix loops.
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
+    # The repo-owned updater uses USR1/USR2 only after verifying the running
+    # image's update-protocol label. USR1 stops new work; USR2 cancels a timed-
+    # out drain without restarting or losing the active lease.
+    with contextlib.suppress(NotImplementedError, AttributeError):
+        loop.add_signal_handler(signal.SIGUSR1, drain_requested.set)
+
+        def resume() -> None:
+            if persist_bootstrap_resume and not mark_bootstrap_resumed():
+                return
+            drain_requested.clear()
+
+        loop.add_signal_handler(signal.SIGUSR2, resume)
 
 
 async def _amain() -> int:
+    stop = asyncio.Event()
+    drain_requested = asyncio.Event()
+    bootstrap_enabled = os.environ.get(
+        "VALIDATOR_START_DRAINED", "false"
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if bootstrap_should_start_drained(bootstrap_enabled):
+        drain_requested.set()
+    _install_signal_handlers(
+        asyncio.get_running_loop(),
+        stop,
+        drain_requested,
+        persist_bootstrap_resume=bootstrap_enabled,
+    )
+    # Install USR1/USR2 before publishing any updater-visible state. Otherwise
+    # a check racing slow config or wallet loading could hit Unix's default
+    # SIGUSR1 action and terminate PID 1.
+    write_update_state("starting")
     config = parse_validator_config_from_env()
     keypair = load_validator_keypair(config)
     logger.info(
@@ -50,9 +92,6 @@ async def _amain() -> int:
         config.run_size,
         config.dittobench_api_url,
     )
-
-    stop = asyncio.Event()
-    _install_signal_handlers(asyncio.get_running_loop(), stop)
 
     # Optional public telemetry (wandb). Off by default; a disabled instance is
     # a cheap no-op. Built once and shared by whichever weight mode runs.
@@ -90,8 +129,9 @@ async def _amain() -> int:
                     system_metrics=SystemMetricsCollector(),
                 )
                 _apply_ditto_logging()  # re-assert: bittensor has initialised
-                await worker.run_forever(stop)
+                await worker.run_forever(stop, drain_requested=drain_requested)
     finally:
+        write_update_state("stopping")
         telemetry.close()
     logger.info("validator worker stopped")
     return 0

@@ -260,8 +260,9 @@ class TestRunOnce:
             keypair=keypair,
         )
 
-        n = await worker.run_once()
-        assert n == 1
+        outcome = await worker.run_once()
+        assert outcome.queue_depth == 1
+        assert outcome.weights_ran
         heartbeats = [
             call.args[0] for call in platform.submit_heartbeat.await_args_list
         ]
@@ -313,6 +314,194 @@ class TestRunOnce:
             {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
         )
 
+    async def test_pre_requested_drain_claims_no_work(self) -> None:
+        platform = _platform_with_ledger(jobs=[_job("5Miner" + "x" * 42)], ledger=[])
+        drain = asyncio.Event()
+        drain.set()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(drain_requested=drain)
+        assert outcome.queue_depth == 0
+        assert not outcome.weights_ran
+
+        platform.request_job.assert_not_awaited()
+        platform.get_ledger.assert_not_awaited()
+        worker._weight_setter.put_weights.assert_not_called()
+
+    async def test_drain_during_ticket_submits_it_and_claims_no_second(self) -> None:
+        first = _job("5MinerA" + "x" * 41)
+        second = _job("5MinerB" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[first, second], ledger=[])
+        drain = asyncio.Event()
+
+        async def score_and_request_drain(**_: object) -> ScoreReport:
+            drain.set()
+            return _report("run", 0.9)
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=score_and_request_drain)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(put_weights=AsyncMock()),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(drain_requested=drain)
+        assert outcome.queue_depth == 1
+        assert not outcome.weights_ran
+
+        assert platform.request_job.await_count == 1
+        platform.submit_score.assert_awaited_once()
+        platform.get_ledger.assert_not_awaited()
+        worker._weight_setter.put_weights.assert_not_awaited()
+
+    async def test_drain_ack_waits_for_same_lease_monotonic_submission(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        drain = asyncio.Event()
+        submit_started = asyncio.Event()
+        allow_submit = asyncio.Event()
+        events: list[tuple[str, str]] = []
+
+        async def score_and_request_drain(**_: object) -> ScoreReport:
+            drain.set()
+            return _report("run", 0.9)
+
+        async def blocked_submit(
+            *_args: object, **_kwargs: object
+        ) -> SubmitScoreResponse:
+            events.append(("submit", "started"))
+            submit_started.set()
+            await allow_submit.wait()
+            events.append(("submit", "finished"))
+            return SubmitScoreResponse(
+                agent_id=job.agent_id,
+                status=AgentStatus.SCORED,
+                accepted=True,
+            )
+
+        platform.submit_score = AsyncMock(side_effect=blocked_submit)
+        config = _config()
+        config.sweep_seconds = 120
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        chain.put_weights = AsyncMock()
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(
+                score_tarball=AsyncMock(side_effect=score_and_request_drain)
+            ),
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        def capture_state(state: str, **_: object) -> None:
+            events.append(("state", state))
+
+        monkeypatch.setattr(worker_mod, "write_update_state", capture_state)
+        stop = asyncio.Event()
+        task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
+
+        await asyncio.wait_for(submit_started.wait(), timeout=1)
+        assert ("state", "drained") not in events
+        assert platform.request_job.await_count == 1
+
+        running = [
+            call.args[0]
+            for call in platform.submit_heartbeat.await_args_list
+            if call.args[0].state == "running_benchmark"
+        ]
+        progresses = [heartbeat.benchmark_progress for heartbeat in running]
+        assert [progress.stage for progress in progresses if progress is not None] == [
+            "preparing",
+            "finalizing",
+            "submitting_result",
+        ]
+        assert all(
+            progress.ticket_deadline == job.deadline
+            for progress in progresses
+            if progress is not None
+        )
+
+        allow_submit.set()
+        for _ in range(100):
+            if ("state", "drained") in events:
+                break
+            await asyncio.sleep(0.001)
+        assert ("state", "drained") in events
+        assert events.index(("submit", "finished")) < events.index(("state", "drained"))
+        platform.submit_score.assert_awaited_once()
+        assert platform.request_job.await_count == 1
+
+        drain.clear()
+        for _ in range(100):
+            resumed = ("state", "ready") in events[
+                events.index(("state", "drained")) + 1 :
+            ]
+            if resumed and chain.put_weights.await_count:
+                break
+            await asyncio.sleep(0.001)
+        assert chain.put_weights.await_count == 1
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+        assert ("state", "ready") in events[events.index(("state", "drained")) + 1 :]
+
+    async def test_quiescent_bootstrap_authenticates_before_claiming_work(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        config = _config()
+        config.sweep_seconds = 0.001
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        states: list[tuple[str, bool]] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **kwargs: states.append(
+                (state, bool(kwargs.get("platform_accepted")))
+            ),
+        )
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+        task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
+
+        for _ in range(100):
+            if ("drained", True) in states:
+                break
+            await asyncio.sleep(0.001)
+        assert ("drained", True) in states
+        platform.submit_heartbeat.assert_awaited()
+        platform.request_job.assert_not_awaited()
+
+        drain.clear()
+        for _ in range(100):
+            if platform.request_job.await_count:
+                break
+            await asyncio.sleep(0.001)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+        platform.request_job.assert_awaited_once()
+
     async def test_heartbeat_failure_does_not_block_scoring(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
         platform.submit_heartbeat.side_effect = PlatformError("platform old")
@@ -324,7 +513,7 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once(set_weights=False) == 0
+        assert (await worker.run_once(set_weights=False)).queue_depth == 0
         platform.request_job.assert_awaited_once()
 
     async def test_failed_preflight_claims_no_ticket_but_still_sets_weights(
@@ -345,7 +534,9 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once() == 0
+        outcome = await worker.run_once()
+        assert outcome.queue_depth == 0
+        assert outcome.weights_ran is True
 
         platform.request_job.assert_not_awaited()
         platform.get_artifact.assert_not_awaited()
@@ -369,9 +560,13 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once(set_weights=False) == 0
+        first = await worker.run_once(set_weights=False)
+        assert first.queue_depth == 0
+        assert first.weights_ran is False
         platform.request_job.assert_not_awaited()
-        assert await worker.run_once(set_weights=False) == 1
+        second = await worker.run_once(set_weights=False)
+        assert second.queue_depth == 1
+        assert second.weights_ran is False
         platform.submit_score.assert_awaited_once()
 
     async def test_midrun_infrastructure_failure_ends_sweep_without_next_claim(
@@ -393,7 +588,9 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once() == 1
+        outcome = await worker.run_once()
+        assert outcome.queue_depth == 1
+        assert outcome.weights_ran is True
 
         assert platform.request_job.await_count == 1
         platform.submit_score.assert_not_awaited()
@@ -418,6 +615,28 @@ class TestRunOnce:
             )
 
         platform.submit_score.assert_not_awaited()
+
+    async def test_platform_acceptance_is_revoked_by_rejection_or_failure(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker._report_heartbeat("idle") is True
+        assert worker._platform_accepted is True
+        platform.submit_heartbeat.return_value = ValidatorHeartbeatResponse(
+            accepted=False, seen_at=datetime.now(UTC)
+        )
+        assert await worker._report_heartbeat("idle") is False
+        assert worker._platform_accepted is False
+
+        platform.submit_heartbeat.side_effect = PlatformError("offline")
+        assert await worker._report_heartbeat("idle") is False
+        assert worker._platform_accepted is False
 
     async def test_long_benchmark_refreshes_running_heartbeat(
         self, monkeypatch: pytest.MonkeyPatch
@@ -857,7 +1076,7 @@ class TestRunOnce:
         )
         n = await worker.run_once()
 
-        assert n == 1  # the item was pulled...
+        assert n.queue_depth == 1  # the item was pulled...
         dittobench.score_tarball.assert_not_awaited()  # ...but never scored
         platform.submit_score.assert_not_awaited()
         chain.put_weights.assert_awaited_once_with(
@@ -894,7 +1113,7 @@ class TestRunOnce:
         )
         n = await worker.run_once()
 
-        assert n == 1  # counted against the sweep cap...
+        assert n.queue_depth == 1  # counted against the sweep cap...
         platform.get_artifact.assert_not_awaited()  # ...but refused unscored
         dittobench.score_tarball.assert_not_awaited()
         platform.submit_score.assert_not_awaited()
@@ -958,7 +1177,7 @@ class TestRunOnce:
         )
         n = await worker.run_once()
 
-        assert n == 1  # counted against the sweep cap...
+        assert n.queue_depth == 1  # counted against the sweep cap...
         platform.get_artifact.assert_not_awaited()  # ...but not even fetched
         dittobench.score_tarball.assert_not_awaited()
         platform.submit_score.assert_not_awaited()
@@ -979,7 +1198,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
 
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with(
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
@@ -996,7 +1215,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
 
     async def test_job_poll_failure_still_submits_safe_idle_weights(self) -> None:
@@ -1013,7 +1232,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
 
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
 
     async def test_job_poll_failure_preserves_accepted_score_weights(self) -> None:
@@ -1031,7 +1250,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
 
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with(
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
@@ -1081,7 +1300,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.has_validator_permit.assert_awaited_once()
         chain.put_weights.assert_not_awaited()
 
@@ -1099,7 +1318,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with(
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
@@ -1120,7 +1339,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once()
 
     async def test_stake_below_minimum_skips_weight_submission(self) -> None:
@@ -1142,7 +1361,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.get_stake_tao.assert_awaited_once()
         chain.put_weights.assert_not_awaited()
 
@@ -1163,7 +1382,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once_with(
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
@@ -1186,7 +1405,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_awaited_once()
 
     async def test_min_stake_disabled_never_reads_stake(self) -> None:
@@ -1206,7 +1425,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.get_stake_tao.assert_not_awaited()
         chain.put_weights.assert_awaited_once()
 
@@ -1231,7 +1450,7 @@ class TestRunOnce:
             keypair=keypair,
         )
         n = await worker.run_once(set_weights=False)
-        assert n == 1
+        assert n.queue_depth == 1
         assert platform.submit_score.await_count == 1
         platform.get_ledger.assert_awaited()  # read for the stale-champion re-score
         chain.put_weights.assert_not_awaited()
@@ -1267,7 +1486,7 @@ class TestRunOnce:
         )
 
         n = await worker.run_once()
-        assert n == 2
+        assert n.queue_depth == 2
         # The lone eligible miner receives the released 20%; 80% stays burned.
         chain.put_weights.assert_awaited_once_with(
             {"5MinerG" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
@@ -1288,7 +1507,7 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(),
         )
-        assert await worker.run_once() == 0
+        assert (await worker.run_once()).queue_depth == 0
         chain.put_weights.assert_not_awaited()
 
     async def test_put_weights_retries_transient_failure(
@@ -1453,6 +1672,93 @@ class TestIndependentWeightLoop:
         assert stats.onchain_last_update_block == 100
         assert stats.onchain_observed_block == 110
         assert stats.scoring_sweep is False
+
+    async def test_drain_ack_waits_for_active_weight_update(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        weight_started = asyncio.Event()
+        release_weight = asyncio.Event()
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        config = _config()
+        config.sweep_seconds = 0.001
+        worker = ValidatorWorker(
+            config=config,
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker.run_once = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+
+        async def blocked_weight_update() -> worker_mod._WeightOutcome:
+            weight_started.set()
+            await release_weight.wait()
+            return worker_mod._WeightOutcome(submitted=True)
+
+        worker._update_weights = blocked_weight_update  # type: ignore[method-assign]
+        worker._observe_onchain_weight_state = AsyncMock(return_value=(1, 2))  # type: ignore[method-assign]
+        worker._report_heartbeat = AsyncMock()  # type: ignore[method-assign]
+        states: list[str] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **_kwargs: states.append(state),
+        )
+
+        task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
+        await asyncio.wait_for(weight_started.wait(), timeout=1)
+        drain.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert "drained" not in states
+
+        release_weight.set()
+        for _ in range(100):
+            if "drained" in states:
+                break
+            await asyncio.sleep(0.001)
+        assert "drained" in states
+        drain.clear()
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    async def test_failed_sweep_rewrites_stale_platform_acceptance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stop = asyncio.Event()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._platform_accepted = True
+        worker.run_once = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+        worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+
+        async def report_heartbeat(state: str, **_: object) -> bool:
+            if state == "error":
+                worker._platform_accepted = False
+                stop.set()
+            return worker._platform_accepted
+
+        worker._report_heartbeat = report_heartbeat  # type: ignore[assignment]
+        states: list[tuple[str, bool]] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **kwargs: states.append(
+                (state, bool(kwargs.get("platform_accepted")))
+            ),
+        )
+
+        await asyncio.wait_for(worker.run_forever(stop), timeout=1)
+
+        assert ("ready", True) in states
+        assert ("working", False) in states
 
     async def test_onchain_observation_reports_real_block_age_inputs(self) -> None:
         chain = MagicMock()

@@ -166,3 +166,19 @@ class TestRequiredConfig:
         monkeypatch.setenv("VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS", value)
         with pytest.raises(ValidatorConfigError):
             parse_validator_config_from_env()
+
+
+class TestCompatibilityEpoch:
+    def test_matching_epoch_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH", "1")
+        parse_validator_config_from_env()
+
+    @pytest.mark.parametrize("value", ["0", "2", "invalid", ""])
+    def test_mismatch_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH", value)
+        with pytest.raises(ValidatorConfigError, match="compatibility epoch mismatch"):
+            parse_validator_config_from_env()

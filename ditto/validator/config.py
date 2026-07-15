@@ -16,6 +16,7 @@ from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from ditto.validator.errors import ValidatorConfigError
+from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
 
 # --- Frozen consensus constants (KOTH + ATH gate) ---
 # NOT env-tunable: every validator must fold the public ledger with byte-identical
@@ -209,6 +210,15 @@ def _parse_float(name: str, default: str) -> float:
         raise ValidatorConfigError(f"{name} must be a number, got {raw!r}") from e
 
 
+def check_validator_compatibility_config(expected_epoch: str) -> None:
+    """Fail closed when deployment and image compatibility epochs differ."""
+    if expected_epoch != str(VALIDATOR_COMPATIBILITY_EPOCH):
+        raise ValidatorConfigError(
+            "validator compatibility epoch mismatch: image is "
+            f"{VALIDATOR_COMPATIBILITY_EPOCH}, deployment expects {expected_epoch}"
+        )
+
+
 def parse_validator_config_from_env() -> ValidatorConfig:
     """Build a :class:`ValidatorConfig` from ``VALIDATOR_*`` / ``PYLON_*`` env.
 
@@ -216,6 +226,12 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         ValidatorConfigError: When a required value is missing, no signing
             source is configured, or ``run_size`` is invalid.
     """
+    expected_compatibility_epoch = os.environ.get(
+        "VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH",
+        str(VALIDATOR_COMPATIBILITY_EPOCH),
+    )
+    check_validator_compatibility_config(expected_compatibility_epoch)
+
     run_size = os.environ.get("VALIDATOR_RUN_SIZE", "full")
     if run_size not in {"small", "medium", "full"}:
         raise ValidatorConfigError(
