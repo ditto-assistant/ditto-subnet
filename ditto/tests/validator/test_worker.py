@@ -1400,6 +1400,77 @@ class TestChainCadenceFloor:
         assert await self._worker(chain)._chain_min_epoch_seconds() == 0.0
 
 
+class TestIndependentWeightLoop:
+    async def test_weights_run_while_scoring_sweep_is_still_busy(self) -> None:
+        scoring_started = asyncio.Event()
+        release_scoring = asyncio.Event()
+        stop = asyncio.Event()
+        telemetry = MagicMock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+            telemetry=telemetry,
+        )
+
+        async def _busy_scoring(*, set_weights: bool) -> int:
+            assert set_weights is False
+            scoring_started.set()
+            await release_scoring.wait()
+            return 1
+
+        worker.run_once = AsyncMock(side_effect=_busy_scoring)  # type: ignore[method-assign]
+        worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+        worker._update_weights = AsyncMock(  # type: ignore[method-assign]
+            return_value=worker_mod._WeightOutcome(
+                weights={_BURN_HOTKEY: 1.0},
+                submitted=True,
+            )
+        )
+        worker._observe_onchain_weight_state = AsyncMock(  # type: ignore[method-assign]
+            return_value=(100, 110)
+        )
+        worker._report_heartbeat = AsyncMock()  # type: ignore[method-assign]
+
+        task = asyncio.create_task(worker.run_forever(stop))
+        await asyncio.wait_for(scoring_started.wait(), timeout=1.0)
+        # The weight update completes even though the scoring sweep remains
+        # deliberately blocked.
+        for _ in range(20):
+            if worker._update_weights.await_count:
+                break
+            await asyncio.sleep(0)
+        assert worker._update_weights.await_count == 1
+        release_scoring.set()
+        stop.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+        stats = telemetry.record_sweep.call_args.args[0]
+        assert stats.weights_due is True
+        assert stats.weights_submitted is True
+        assert stats.onchain_last_update_block == 100
+        assert stats.onchain_observed_block == 110
+        assert stats.scoring_sweep is False
+
+    async def test_onchain_observation_reports_real_block_age_inputs(self) -> None:
+        chain = MagicMock()
+        chain.get_last_update_block = AsyncMock(return_value=123)
+        head = MagicMock()
+        head.number = 150
+        chain.get_latest_block = AsyncMock(return_value=head)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        assert await worker._observe_onchain_weight_state() == (123, 150)
+
+
 class TestConfirmAndSubmit:
     """P4: the re-score confirmation over K common seeds submits exactly ONE
     signed score (the median-composite run) carrying every per-seed composite."""

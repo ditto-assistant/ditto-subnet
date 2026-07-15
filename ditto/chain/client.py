@@ -203,6 +203,27 @@ class ChainClient:
                 return n.stake
         return None
 
+    async def get_last_update_block(self, hotkey: str, netuid: int) -> int | None:
+        """Return the neuron's latest on-chain weight-update block.
+
+        This is deliberately separate from :meth:`put_weights`: Pylon accepts
+        and schedules a commit-reveal request before the resulting update is
+        observable on-chain. Callers use this read as evidence, not as part of
+        the submission's success path.
+        """
+        pylon = self._ensure_pylon()
+        try:
+            response = await pylon.v1.open_access.get_recent_neurons(netuid)
+        except Exception as e:
+            raise _translate_pylon_error(
+                e, f"get_last_update_block(hotkey={hotkey}, netuid={netuid})"
+            ) from e
+        neuron = response.neurons.get(hotkey)
+        if neuron is None:
+            return None
+        value = getattr(neuron, "last_update", None)
+        return int(value) if value is not None else None
+
     # --- Subnet hyperparameter reads (Pylon gap) ---
 
     async def get_tempo(self, netuid: int) -> int | None:

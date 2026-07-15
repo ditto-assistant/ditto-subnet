@@ -97,6 +97,9 @@ class SweepStats:
     weights_submitted: bool = False
     weights_due: bool = False
     burn_hotkey: str | None = None
+    onchain_last_update_block: int | None = None
+    onchain_observed_block: int | None = None
+    scoring_sweep: bool = True
 
 
 def per_category_means(report: ScoreReport) -> dict[str, float]:
@@ -156,7 +159,7 @@ class ValidatorTelemetry:
         self._wandb: Any = None
         self._run: Any = None
         self._step = 0
-        self._last_weight_submission_at: float | None = None
+        self._last_pylon_acceptance_at: float | None = None
         if config.enabled:
             self._init_run()
 
@@ -207,12 +210,16 @@ class ValidatorTelemetry:
 
     def _log_sweep(self, stats: SweepStats) -> None:
         wandb = self._wandb
-        payload: dict[str, Any] = {
-            "sweep/duration_s": stats.sweep_duration_s,
-            "sweep/queue_depth": stats.queue_depth,
-            "sweep/scored_count": len(stats.scored),
-            "sweep/failed_count": stats.failed_count,
-        }
+        payload: dict[str, Any] = {}
+        if stats.scoring_sweep:
+            payload.update(
+                {
+                    "sweep/duration_s": stats.sweep_duration_s,
+                    "sweep/queue_depth": stats.queue_depth,
+                    "sweep/scored_count": len(stats.scored),
+                    "sweep/failed_count": stats.failed_count,
+                }
+            )
 
         now = time.time()
         if stats.weights_due:
@@ -228,19 +235,22 @@ class ValidatorTelemetry:
             )
             safe_idle = bool(stats.weights) and not miner_weights and burn_share > 0.0
             if stats.weights_submitted:
-                self._last_weight_submission_at = now
+                self._last_pylon_acceptance_at = now
             payload.update(
                 {
                     # These describe the latest *due* weight attempt. Omitting
                     # them on ordinary scoring sweeps keeps W&B from replacing a
                     # real hourly success with a misleading zero every two minutes.
-                    "weights/submitted": int(stats.weights_submitted),
+                    # Pylon accepts and durably schedules the request; with
+                    # commit-reveal enabled this is not yet proof that the
+                    # weight vector is visible on-chain.
+                    "weights/pylon_accepted": int(stats.weights_submitted),
                     "weights/status": (
-                        "safe_idle"
+                        "pylon_accepted_safe_idle"
                         if stats.weights_submitted and safe_idle
-                        else "miner_weights"
+                        else "pylon_accepted_miner_weights"
                         if stats.weights_submitted
-                        else "failed"
+                        else "pylon_rejected"
                     ),
                     "weights/idle_burn": int(stats.weights_submitted and safe_idle),
                     "weights/miner_count": len(miner_weights),
@@ -251,55 +261,72 @@ class ValidatorTelemetry:
                     ),
                 }
             )
-        if self._last_weight_submission_at is not None:
-            payload["weights/last_success_unix"] = self._last_weight_submission_at
-            payload["weights/last_success_age_seconds"] = max(
-                0.0, now - self._last_weight_submission_at
+            if stats.onchain_last_update_block is not None:
+                payload["weights/onchain_last_update_block"] = (
+                    stats.onchain_last_update_block
+                )
+            if stats.onchain_observed_block is not None:
+                payload["weights/onchain_observed_block"] = stats.onchain_observed_block
+            if (
+                stats.onchain_last_update_block is not None
+                and stats.onchain_observed_block is not None
+            ):
+                payload["weights/onchain_age_blocks"] = max(
+                    0,
+                    stats.onchain_observed_block - stats.onchain_last_update_block,
+                )
+        if self._last_pylon_acceptance_at is not None:
+            payload["weights/last_pylon_acceptance_unix"] = (
+                self._last_pylon_acceptance_at
+            )
+            payload["weights/last_pylon_acceptance_age_seconds"] = max(
+                0.0, now - self._last_pylon_acceptance_at
             )
 
-        scores_tbl = wandb.Table(
-            columns=[
-                "miner",
-                "agent",
-                "composite",
-                "tool_mean",
-                "memory_mean",
-                "n",
-                "median_ms",
-                "seed",
-                "run_id",
-                "bench_version",
-                "injection_attempts",
-                "paraphrase_fallbacks",
-                "observed_tool_cases",
-                "capped_tool_cases",
-                "isolation_cases",
-            ]
-        )
-        cat_tbl = wandb.Table(columns=["miner", "agent", "category", "mean"])
-        for s in stats.scored:
-            scores_tbl.add_data(
-                s.miner_hotkey,
-                s.agent_id,
-                s.composite,
-                s.tool_mean,
-                s.memory_mean,
-                s.n,
-                s.median_ms,
-                s.seed,
-                s.run_id,
-                s.bench_version,
-                s.injection_attempts,
-                s.paraphrase_fallbacks,
-                s.observed_tool_cases,
-                s.capped_tool_cases,
-                s.isolation_cases,
+        if stats.scoring_sweep:
+            scores_tbl = wandb.Table(
+                columns=[
+                    "miner",
+                    "agent",
+                    "composite",
+                    "tool_mean",
+                    "memory_mean",
+                    "n",
+                    "median_ms",
+                    "seed",
+                    "run_id",
+                    "bench_version",
+                    "injection_attempts",
+                    "paraphrase_fallbacks",
+                    "observed_tool_cases",
+                    "capped_tool_cases",
+                    "isolation_cases",
+                ]
             )
-            for category, mean in sorted(s.per_category.items()):
-                cat_tbl.add_data(s.miner_hotkey, s.agent_id, category, mean)
+            cat_tbl = wandb.Table(columns=["miner", "agent", "category", "mean"])
+            for s in stats.scored:
+                scores_tbl.add_data(
+                    s.miner_hotkey,
+                    s.agent_id,
+                    s.composite,
+                    s.tool_mean,
+                    s.memory_mean,
+                    s.n,
+                    s.median_ms,
+                    s.seed,
+                    s.run_id,
+                    s.bench_version,
+                    s.injection_attempts,
+                    s.paraphrase_fallbacks,
+                    s.observed_tool_cases,
+                    s.capped_tool_cases,
+                    s.isolation_cases,
+                )
+                for category, mean in sorted(s.per_category.items()):
+                    cat_tbl.add_data(s.miner_hotkey, s.agent_id, category, mean)
 
-        payload["scores"] = scores_tbl
-        payload["category_means"] = cat_tbl
+            payload["scores"] = scores_tbl
+            payload["category_means"] = cat_tbl
         if stats.weights_due:
             champion = (
                 max(miner_weights, key=lambda hotkey: miner_weights[hotkey])

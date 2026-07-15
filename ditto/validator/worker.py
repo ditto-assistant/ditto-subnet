@@ -268,9 +268,15 @@ class ValidatorWorker:
             await self._rescore_stale_champions()
 
         outcome = _WeightOutcome()
+        onchain_last_update_block: int | None = None
+        onchain_observed_block: int | None = None
         if set_weights:
             await self._report_heartbeat("updating_weights")
             outcome = await self._update_weights()
+            (
+                onchain_last_update_block,
+                onchain_observed_block,
+            ) = await self._observe_onchain_weight_state()
         self._telemetry.record_sweep(
             SweepStats(
                 sweep_duration_s=time.monotonic() - started,
@@ -282,6 +288,8 @@ class ValidatorWorker:
                 weights_submitted=outcome.submitted,
                 weights_due=set_weights,
                 burn_hotkey=self._config.burn_hotkey,
+                onchain_last_update_block=onchain_last_update_block,
+                onchain_observed_block=onchain_observed_block,
             )
         )
         await self._report_heartbeat("idle")
@@ -824,6 +832,37 @@ class ValidatorWorker:
                 await asyncio.sleep(delay)
         return False
 
+    async def _observe_onchain_weight_state(self) -> tuple[int | None, int | None]:
+        """Best-effort evidence for the latest weight update visible on-chain.
+
+        Pylon's ``put_weights`` endpoint acknowledges a durable asynchronous
+        request. Under commit-reveal that acknowledgement can precede the
+        on-chain update by a full reveal window, so W&B must report both facts
+        independently. A failed evidence read never blocks the weight loop.
+        """
+        read_update = getattr(self._weight_setter, "get_last_update_block", None)
+        read_head = getattr(self._weight_setter, "get_latest_block", None)
+        if read_update is None or read_head is None:
+            return None, None
+        try:
+            last_update = read_update(
+                self._config.validator_hotkey,
+                self._config.netuid,
+            )
+            if inspect.isawaitable(last_update):
+                last_update = await last_update
+            head = read_head()
+            if inspect.isawaitable(head):
+                head = await head
+            observed_block = getattr(head, "number", None)
+            return (
+                int(last_update) if last_update is not None else None,
+                int(observed_block) if observed_block is not None else None,
+            )
+        except Exception as e:  # noqa: BLE001 - evidence must not wedge weights
+            logger.warning("on-chain weight evidence read failed: %s", e)
+            return None, None
+
     async def _score_job(self, job: JobResponse) -> ScoreReport:
         """Score one issued ticket against its platform-pinned dataset.
 
@@ -1091,41 +1130,75 @@ class ValidatorWorker:
         return await self._submit_report(agent_id, miner_hotkey, representative)
 
     async def run_forever(self, stop: asyncio.Event) -> None:
-        """Score every ``sweep_seconds``; set weights every effective epoch.
+        """Run independent scoring and weight loops until ``stop`` is set.
 
-        Scoring cadence is decoupled from the weight-set cadence: the queue is
-        drained promptly (a submission is scored within ~one sweep) while
-        weights are pushed no more often than the effective epoch interval —
-        the configured ``epoch_seconds`` stretched to the subnet's on-chain
-        ``weights_rate_limit`` window (re-read once per epoch) — so the loop
-        doesn't fight the chain's rate limiter. The first sweep sets weights so
-        a fresh start doesn't wait a full epoch. Runs until ``stop`` is set
-        (SIGTERM drain).
+        A scoring sweep can spend hours on its bounded batch of full benchmark
+        runs. Weight cadence therefore cannot be a flag checked before that
+        sweep and acted on afterward: doing so starves chain updates whenever
+        the queue is busy. The dedicated weight task starts immediately and
+        then follows the greater of the configured and on-chain intervals.
         """
-        last_weight_set: float | None = None
+        weight_task = asyncio.create_task(
+            self._run_weights_forever(stop),
+            name="validator-weights",
+        )
+        try:
+            while not stop.is_set():
+                try:
+                    n = await self.run_once(set_weights=False)
+                    logger.info("scoring sweep complete: %d agent(s)", n)
+                except Exception:  # noqa: BLE001 - a sweep must never kill the loop
+                    logger.exception("scoring sweep failed; retrying next sweep")
+                    await self._report_heartbeat("error")
+                await self._sleep_or_stop(stop, self._config.sweep_seconds)
+        finally:
+            weight_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await weight_task
+
+    async def _run_weights_forever(self, stop: asyncio.Event) -> None:
+        """Submit weights immediately and then once per effective epoch."""
         chain_floor = await self._chain_min_epoch_seconds()
         while not stop.is_set():
-            epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
-            due = (
-                last_weight_set is None
-                or time.monotonic() - last_weight_set >= epoch_seconds
-            )
+            started = time.monotonic()
+            outcome = _WeightOutcome()
             try:
-                n = await self.run_once(set_weights=due)
-                if due:
-                    last_weight_set = time.monotonic()
-                    # Once per epoch is a cheap read and tracks a live
-                    # hyperparameter change within one weight-set window.
-                    chain_floor = await self._chain_min_epoch_seconds()
+                # Do not overwrite an active benchmark heartbeat with the
+                # short weight state; benchmark progress remains the useful
+                # public current-work signal.
+                if self._active_agent_id is None:
+                    await self._report_heartbeat("updating_weights")
+                outcome = await self._update_weights()
                 logger.info(
-                    "sweep complete: %d agent(s)%s",
-                    n,
-                    " (weights set)" if due else "",
+                    "weight epoch complete: pylon_accepted=%s miner(s)=%d",
+                    outcome.submitted,
+                    len(outcome.weights),
                 )
-            except Exception:  # noqa: BLE001 - a sweep must never kill the loop
-                logger.exception("sweep failed; retrying next sweep")
-                await self._report_heartbeat("error")
-            await self._sleep_or_stop(stop, self._config.sweep_seconds)
+            except Exception:  # noqa: BLE001 - weights retry next epoch
+                logger.exception("weight epoch failed; retrying next epoch")
+            last_update, observed_block = await self._observe_onchain_weight_state()
+            self._telemetry.record_sweep(
+                SweepStats(
+                    sweep_duration_s=time.monotonic() - started,
+                    queue_depth=0,
+                    failed_count=0 if outcome.submitted else 1,
+                    leaderboard=outcome.leaderboard,
+                    weights=outcome.weights,
+                    weights_submitted=outcome.submitted,
+                    weights_due=True,
+                    burn_hotkey=self._config.burn_hotkey,
+                    onchain_last_update_block=last_update,
+                    onchain_observed_block=observed_block,
+                    scoring_sweep=False,
+                )
+            )
+            if self._active_agent_id is None:
+                await self._report_heartbeat("idle")
+            # Re-read the live floor once per epoch so a hyperparameter change
+            # is reflected without coupling this task to the scoring loop.
+            chain_floor = await self._chain_min_epoch_seconds()
+            epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
+            await self._sleep_or_stop(stop, epoch_seconds)
 
     async def _chain_min_epoch_seconds(self) -> float:
         """The chain-enforced floor (seconds) on the weight-set cadence.
