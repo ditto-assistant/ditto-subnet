@@ -112,6 +112,7 @@ class TestStatusByHotkey:
             agent_id=uuid4(),
             miner_hotkey=HOTKEY,
             name="alpha",
+            version=2,
             status=AgentStatus.UPLOADED,
             sha256="ab" * 32,
             created_at=datetime(2026, 6, 16, 12, 0, tzinfo=UTC),
@@ -134,6 +135,8 @@ class TestStatusByHotkey:
         out = capsys.readouterr().out
         assert exit_code == 0
         assert HOTKEY in out
+        assert "Name:    alpha" in out
+        assert "Version: Submission v2" in out
         assert "Reason:  Remove the bundled credential and resubmit" in out
         client.get_agent_by_hotkey.assert_called_once_with(miner_hotkey=HOTKEY)
 
@@ -183,6 +186,7 @@ class TestStatusByHotkey:
             agent_id=agent_id,
             miner_hotkey=HOTKEY,
             name="alpha",
+            version=2,
             status=AgentStatus.UPLOADED,
             sha256="ab" * 32,
             created_at=datetime(2026, 6, 16, 12, 0, tzinfo=UTC),
@@ -207,6 +211,7 @@ class TestStatusByHotkey:
             "agent_id",
             "miner_hotkey",
             "name",
+            "version",
             "status",
             "sha256",
             "created_at",
@@ -215,6 +220,7 @@ class TestStatusByHotkey:
         assert payload["agent_id"] == str(agent_id)
         assert payload["miner_hotkey"] == HOTKEY
         assert payload["status"] == "uploaded"
+        assert payload["version"] == 2
         assert (
             payload["screening_reason"] == "Remove the bundled credential and resubmit"
         )

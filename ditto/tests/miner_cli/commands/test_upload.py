@@ -68,7 +68,10 @@ def _patch_api_client(client_mock: MagicMock) -> MagicMock:
 @pytest.fixture(autouse=True)
 def _stub_payment_signer_preflight():  # type: ignore[no-untyped-def]
     """Keep orchestration tests offline unless they exercise this gate."""
-    with patch("ditto.miner_cli.commands.upload.preflight_payment_signer"):
+    with (
+        patch("ditto.miner_cli.commands.upload.preflight_payment_signer"),
+        patch("ditto.miner_cli.commands.upload.save_agent_name", return_value=True),
+    ):
         yield
 
 
@@ -117,7 +120,7 @@ def _payment_receipt() -> PaymentReceipt:
 
 
 def _upload_response() -> UploadAgentResponse:
-    return UploadAgentResponse(agent_id=uuid4(), status=AgentStatus.UPLOADED)
+    return UploadAgentResponse(agent_id=uuid4(), version=2, status=AgentStatus.UPLOADED)
 
 
 class TestUploadHappyPath:
@@ -155,7 +158,8 @@ class TestUploadHappyPath:
         ):
             rc = run(make_args(good_tar))
 
-        out = capsys.readouterr().out
+        captured = capsys.readouterr()
+        out = captured.out
         assert rc == 0
         # Wallet loaded with the names from args.
         load_w.assert_called_once_with(coldkey_name="miner", hotkey_name="default")
@@ -169,6 +173,49 @@ class TestUploadHappyPath:
             client.post_upload_agent.return_value
         )
         assert str(client.post_upload_agent.return_value.agent_id) in out
+        assert "alpha · submission v2" in captured.err
+        assert "saved as this hotkey's local default" in captured.err
+
+    def test_reuses_saved_name_when_name_flag_is_omitted(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.return_value = _upload_response()
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_agent_name",
+                return_value="remembered-agent",
+            ) as load_name,
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            assert run(make_args(good_tar, name=None)) == 0
+
+        load_name.assert_called_once_with(network="local", hotkey=HOTKEY)
+        assert client.post_upload_agent.call_args.kwargs["name"] == "remembered-agent"
+        assert "using saved agent name: remembered-agent" in capsys.readouterr().err
 
 
 def _peek_uuid_from_stdout(response):  # type: ignore[no-untyped-def]

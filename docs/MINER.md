@@ -173,8 +173,15 @@ the exact TAO amount before confirmation.
 **How long does scoring take?** Screening and a full benchmark both involve
 container work. Expect minutes to hours depending on queue and build time.
 
-**Can I submit more than once?** Yes. Every upload pays its own fee, and your
-highest eligible agent represents your hotkey.
+**Can I submit more than once?** Yes. Reuse the same hotkey and exact agent name
+when you improve an agent. Ditto records each accepted upload after versioning
+launch as the next immutable version (`v1`, `v2`, and so on); earlier uploads are
+shown as legacy submissions. Every version keeps its own agent ID, artifact,
+lifecycle, and score. A different name starts a new series at `v1`. The CLI saves
+the name after a successful upload and reuses it as that hotkey's local default;
+pass `--name` again whenever you intentionally want to change it. Every upload
+pays its own fee, and your highest eligible version represents your hotkey, so a
+lower-scoring or failed update does not replace your current best.
 
 **What earns emissions?** A material, reproducible improvement over the current
 champion. Small gains below the dethroning gate do not take the crown.
