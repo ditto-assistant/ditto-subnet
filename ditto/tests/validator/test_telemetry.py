@@ -188,15 +188,24 @@ class TestWeightStatusTelemetry:
                 weights_submitted=True,
                 weights_due=True,
                 burn_hotkey=_VALIDATOR,
+                onchain_last_update_block=990,
+                onchain_observed_block=1000,
+                scoring_sweep=False,
             )
         )
 
         due = logged[-1]
-        assert due["weights/status"] == "safe_idle"
-        assert due["weights/submitted"] == 1
+        assert due["weights/status"] == "pylon_accepted_safe_idle"
+        assert due["weights/pylon_accepted"] == 1
         assert due["weights/idle_burn"] == 1
         assert due["weights/miner_count"] == 0
         assert due["weights/burn_share"] == 1.0
+        assert due["weights/onchain_last_update_block"] == 990
+        assert due["weights/onchain_observed_block"] == 1000
+        assert due["weights/onchain_age_blocks"] == 10
+        assert "sweep/duration_s" not in due
+        assert "scores" not in due
+        assert "category_means" not in due
         weights_table = due["weights"]
         assert isinstance(weights_table, self._Table)
         assert weights_table.rows == [(_VALIDATOR, 1.0, "burn")]
@@ -207,11 +216,11 @@ class TestWeightStatusTelemetry:
         )
 
         ordinary = logged[-1]
-        assert "weights/submitted" not in ordinary
+        assert "weights/pylon_accepted" not in ordinary
         assert "weights/status" not in ordinary
         assert "weights" not in ordinary
         assert "leaderboard" not in ordinary
-        assert ordinary["weights/last_success_age_seconds"] == 120.0
+        assert ordinary["weights/last_pylon_acceptance_age_seconds"] == 120.0
 
     def test_due_failure_is_not_reported_as_idle(
         self, monkeypatch: pytest.MonkeyPatch
@@ -231,10 +240,10 @@ class TestWeightStatusTelemetry:
             )
         )
 
-        assert logged[-1]["weights/status"] == "failed"
-        assert logged[-1]["weights/submitted"] == 0
+        assert logged[-1]["weights/status"] == "pylon_rejected"
+        assert logged[-1]["weights/pylon_accepted"] == 0
         assert logged[-1]["weights/idle_burn"] == 0
-        assert "weights/last_success_age_seconds" not in logged[-1]
+        assert "weights/last_pylon_acceptance_age_seconds" not in logged[-1]
 
 
 class TestNoOpWhenDisabled:

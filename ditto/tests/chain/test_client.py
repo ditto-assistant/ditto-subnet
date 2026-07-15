@@ -40,6 +40,7 @@ def make_pylon_neuron(**overrides: Any) -> MagicMock:
         "axon_info": {"ip": "1.2.3.4"},
         "active": True,
         "validator_permit": True,
+        "last_update": 1234,
     }
     defaults.update(overrides)
     return MagicMock(**defaults)
@@ -218,6 +219,26 @@ class TestGetRecentNeurons:
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainTimeoutError):
                 await client.get_recent_neurons(118)
+
+
+class TestGetLastUpdateBlock:
+    async def test_returns_onchain_block_for_hotkey(
+        self, install_pylon_module: AsyncMock
+    ) -> None:
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response({"5HK1": make_pylon_neuron(last_update=8624290)})
+        )
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_last_update_block("5HK1", 118) == 8624290
+
+    async def test_returns_none_when_hotkey_is_absent(
+        self, install_pylon_module: AsyncMock
+    ) -> None:
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response({})
+        )
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_last_update_block("5MISSING", 118) is None
 
 
 class TestIsRegistered:

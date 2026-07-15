@@ -121,7 +121,7 @@ curl -fsS https://platform-api.heyditto.ai/health
 A healthy idle validator logs:
 
 ```text
-sweep complete: 0 agent(s)
+scoring sweep complete: 0 agent(s)
 ```
 
 Zero agents is normal when no submission is queued. During mining, successful
@@ -202,8 +202,9 @@ emission; the other 80% is routed to SN118's owner-associated burn hotkey and
 burned by Subtensor. With no eligible miners, 100% is burned. These consensus
 values are frozen in code, not configurable through env.
 
-The worker sends its vector to its co-located Pylon identity. Pylon performs UID
-resolution, normalization, commit-reveal handling, retries, and the final
+The worker sends its vector to its co-located Pylon identity on an independent
+timer, so a long scoring queue cannot delay the on-chain cadence. Pylon performs
+UID resolution, normalization, commit-reveal handling, retries, and the final
 `put_weights` extrinsic. One `PYLON_TOKEN` protects both the worker's permit
 check and identity writes.
 
@@ -211,6 +212,12 @@ check and identity writes.
 
 Add the shared `WANDB_API_KEY` provided by Ditto to `.env` (never commit it), or
 set `WANDB_MODE=disabled` to opt out of aggregate telemetry.
+
+W&B reports Pylon request acceptance separately from on-chain evidence. The
+`weights/pylon_accepted` metric means the durable asynchronous request was
+accepted; it is not finality. `weights/onchain_last_update_block` and
+`weights/onchain_age_blocks` show the latest update actually observed on
+Finney, including normal commit-reveal delay.
 
 The worker also posts a signed public heartbeat with its software identity,
 current phase/work id, and an optional coarse system-health sample. CPU, memory,
