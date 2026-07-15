@@ -129,6 +129,21 @@ runs add `scored agent ... composite=...` lines. When an epoch is due, the
 worker logs either a submitted weight count or that the ledger has no positive
 scores.
 
+Before each two-minute scoring sweep claims its first platform ticket, the
+worker sends a real `embeddinggemma` request through
+`http://sandbox-docker:11434/api/embed`. This is the same `socat` listener that
+inner miner harnesses reach as `http://host.docker.internal:11434/api/embed`, so
+the five-second probe covers the forwarder, Ollama API, loaded model, and a
+non-empty embedding response. The `sandbox-docker` healthcheck probes that same
+listener in addition to `docker info`.
+
+If this preflight is unavailable or times out, the validator claims no ticket
+for that sweep and continues the independent weight-setting path. If the route
+fails after a benchmark starts, the failure is validator infrastructure rather
+than a miner result: the sweep stops, the existing lease expires and reopens on
+the platform, and the normal two-minute cadence prevents an immediate retry.
+The validator also refuses to submit a score after its exact lease deadline.
+
 Production acceptance is:
 
 - the platform health response reports `db: ok` and `chain: ok`;

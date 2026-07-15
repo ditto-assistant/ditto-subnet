@@ -58,6 +58,12 @@ class ValidatorConfig:
     For local end-to-end plumbing tests where no dittobench-api is available.
     Enabled via ``VALIDATOR_DITTOBENCH_MOCK``."""
 
+    embed_preflight_url: str
+    """Ollama ``/api/embed`` URL through the harness-facing TCP forwarder."""
+
+    embed_preflight_timeout_seconds: float
+    """Hard timeout for the functional embedding probe before ticket claim."""
+
     # --- Identity / chain ---
     validator_hotkey: str
     """This validator's SS58 hotkey (must match the loaded signing keypair)."""
@@ -210,6 +216,20 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     dittobench_api_url = os.environ.get("VALIDATOR_DITTOBENCH_API_URL", "")
     if not dittobench_mock:
         _require("VALIDATOR_DITTOBENCH_API_URL", dittobench_api_url)
+    embed_preflight_url = os.environ.get("VALIDATOR_EMBED_PREFLIGHT_URL", "")
+    if not dittobench_mock:
+        _require("VALIDATOR_EMBED_PREFLIGHT_URL", embed_preflight_url)
+    embed_preflight_timeout_seconds = _parse_float(
+        "VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS", "5"
+    )
+    if (
+        not math.isfinite(embed_preflight_timeout_seconds)
+        or embed_preflight_timeout_seconds <= 0
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS must be a finite number > 0, "
+            f"got {embed_preflight_timeout_seconds}"
+        )
 
     # One Pylon token guards both the open-access reads and the identity write, so
     # the worker uses it for the permit self-check and for put_weights.
@@ -245,6 +265,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         dittobench_api_url=dittobench_api_url,
         run_size=run_size,
         dittobench_mock=dittobench_mock,
+        embed_preflight_url=embed_preflight_url,
+        embed_preflight_timeout_seconds=embed_preflight_timeout_seconds,
         validator_hotkey=validator_hotkey,
         wallet_name=os.environ.get("VALIDATOR_WALLET_NAME") or None,
         wallet_hotkey=os.environ.get("VALIDATOR_WALLET_HOTKEY") or None,

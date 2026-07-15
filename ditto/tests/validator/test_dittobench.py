@@ -15,7 +15,7 @@ from ditto.validator.dittobench import (
     DittobenchProgressSnapshot,
     safe_progress_snapshot,
 )
-from ditto.validator.errors import DittobenchError
+from ditto.validator.errors import DittobenchError, ValidatorInfrastructureError
 
 
 @pytest.mark.parametrize(
@@ -165,6 +165,89 @@ def _poll_config() -> SimpleNamespace:
         dittobench_timeout_seconds=1.0,
         dittobench_poll_seconds=0.0,
     )
+
+
+def _preflight_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        dittobench_mock=False,
+        embed_preflight_url="http://sandbox-docker:11434/api/embed",
+        embed_preflight_timeout_seconds=5.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_embedding_preflight_accepts_nonempty_vector() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        assert json.loads(request.content) == {
+            "model": "embeddinggemma",
+            "input": "validator preflight",
+        }
+        return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await DittobenchClient(cast(Any, _preflight_config()), http).preflight()
+
+    assert seen == ["http://sandbox-docker:11434/api/embed"]
+
+
+@pytest.mark.asyncio
+async def test_embedding_preflight_unavailable_is_retryable_infrastructure() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="forwarder unavailable")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError, match=r"rejected \(503\)"):
+            await DittobenchClient(cast(Any, _preflight_config()), http).preflight()
+
+
+@pytest.mark.asyncio
+async def test_embedding_preflight_timeout_is_retryable_infrastructure() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow embedding route", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError, match="timed out"):
+            await DittobenchClient(cast(Any, _preflight_config()), http).preflight()
+
+
+@pytest.mark.asyncio
+async def test_embedding_preflight_recovers_on_next_sweep_probe() -> None:
+    responses = [
+        httpx.Response(503, text="forwarder unavailable"),
+        httpx.Response(200, json={"embeddings": [[0.1]]}),
+    ]
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _preflight_config()), http)
+        with pytest.raises(ValidatorInfrastructureError):
+            await client.preflight()
+        await client.preflight()
+
+
+@pytest.mark.asyncio
+async def test_ollama_run_failure_is_retryable_infrastructure() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": (
+                    "seeding secondary isolation graph failed: /seed returned "
+                    "500: embedding error: ollama embed request to "
+                    "http://host.docker.internal:11434/api/embed failed"
+                ),
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError, match="embedding"):
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll("run-1")
 
 
 @pytest.mark.asyncio

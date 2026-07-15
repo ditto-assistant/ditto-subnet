@@ -24,7 +24,11 @@ from ditto.api_models.validator import (
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
 from ditto.validator.dittobench import DittobenchProgressSnapshot
-from ditto.validator.errors import DittobenchError, PlatformError
+from ditto.validator.errors import (
+    DittobenchError,
+    PlatformError,
+    ValidatorInfrastructureError,
+)
 from ditto.validator.onchain_seed import derive_seed
 from ditto.validator.weights import apply_miner_emission_cap, compute_weights
 from ditto.validator.worker import ValidatorWorker
@@ -322,6 +326,98 @@ class TestRunOnce:
 
         assert await worker.run_once(set_weights=False) == 0
         platform.request_job.assert_awaited_once()
+
+    async def test_failed_preflight_claims_no_ticket_but_still_sets_weights(
+        self,
+    ) -> None:
+        ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock(
+            side_effect=ValidatorInfrastructureError("forwarder unavailable")
+        )
+        chain = MagicMock(put_weights=AsyncMock())
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker.run_once() == 0
+
+        platform.request_job.assert_not_awaited()
+        platform.get_artifact.assert_not_awaited()
+        chain.put_weights.assert_awaited_once_with(
+            {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
+        )
+
+    async def test_preflight_recovery_claims_on_next_normal_sweep(self) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock(
+            side_effect=[ValidatorInfrastructureError("ollama unavailable"), None]
+        )
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker.run_once(set_weights=False) == 0
+        platform.request_job.assert_not_awaited()
+        assert await worker.run_once(set_weights=False) == 1
+        platform.submit_score.assert_awaited_once()
+
+    async def test_midrun_infrastructure_failure_ends_sweep_without_next_claim(
+        self,
+    ) -> None:
+        jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=ValidatorInfrastructureError("ollama forwarder lost")
+        )
+        chain = MagicMock(put_weights=AsyncMock())
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker.run_once() == 1
+
+        assert platform.request_job.await_count == 1
+        platform.submit_score.assert_not_awaited()
+        chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
+
+    async def test_expired_ticket_report_is_not_submitted(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        with pytest.raises(PlatformError, match="expired before score submission"):
+            await worker._submit_report(
+                uuid4(),
+                "5MinerA" + "x" * 41,
+                _report("late-run", 0.9),
+                ticket_deadline=datetime.now(UTC) - timedelta(seconds=1),
+            )
+
+        platform.submit_score.assert_not_awaited()
 
     async def test_long_benchmark_refreshes_running_heartbeat(
         self, monkeypatch: pytest.MonkeyPatch

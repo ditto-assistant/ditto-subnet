@@ -15,6 +15,15 @@ class DittobenchError(ValidatorError):
     """Raised when a dittobench-api run fails or times out."""
 
 
+class ValidatorInfrastructureError(DittobenchError):
+    """Retryable failure in validator-owned scoring infrastructure.
+
+    Unlike an ordinary benchmark failure, this says nothing about the miner's
+    artifact. The current scoring sweep must stop and let any issued lease
+    expire so the submission remains eligible for another validator attempt.
+    """
+
+
 class PlatformError(ValidatorError):
     """Raised when a platform ``/validator/*`` call fails."""
 

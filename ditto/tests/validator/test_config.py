@@ -37,6 +37,7 @@ class TestKothConfig:
         assert cfg.sweep_seconds == 120
         assert cfg.epoch_seconds == 3600
         assert cfg.dittobench_timeout_seconds == 4500
+        assert cfg.embed_preflight_timeout_seconds == 5
 
     def test_env_cannot_override_frozen_knobs(
         self, monkeypatch: pytest.MonkeyPatch
@@ -123,5 +124,24 @@ class TestRequiredConfig:
         _base_env(monkeypatch)
         monkeypatch.delenv("VALIDATOR_DITTOBENCH_MOCK", raising=False)
         monkeypatch.delenv("VALIDATOR_DITTOBENCH_API_URL", raising=False)
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
+
+    def test_embed_preflight_url_required_without_mock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_DITTOBENCH_MOCK", raising=False)
+        monkeypatch.setenv("VALIDATOR_DITTOBENCH_API_URL", "http://scorer")
+        monkeypatch.delenv("VALIDATOR_EMBED_PREFLIGHT_URL", raising=False)
+        with pytest.raises(ValidatorConfigError):
+            parse_validator_config_from_env()
+
+    @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "bad"])
+    def test_embed_preflight_timeout_must_be_positive_finite(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS", value)
         with pytest.raises(ValidatorConfigError):
             parse_validator_config_from_env()
