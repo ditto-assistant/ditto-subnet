@@ -43,10 +43,18 @@ services:
     volumes:
       - sandbox-docker-rootful-data:/var/lib/docker
     healthcheck:
-      test: ["CMD", "docker", "info"]
-      interval: 5s
-      timeout: 5s
-      retries: 24
+      # Docker readiness alone does not prove the harness embedding route. This
+      # hits the same socat listener inner containers reach through
+      # host.docker.internal:11434 and exercises Ollama's loaded model.
+      test:
+        - CMD-SHELL
+        - >-
+          body='{"model":"embeddinggemma","input":"health"}';
+          response="$$(printf 'POST /api/embed HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "$${#body}" "$$body" | nc -w 10 127.0.0.1 11434)";
+          docker info >/dev/null 2>&1 && printf '%s' "$$response" | head -n 1 | grep -q ' 200 '
+      interval: 10s
+      timeout: 15s
+      retries: 30
 
   # The embedding model the harness scores memory recall against. Runs on the
   # private Compose network. The sandbox-docker forwarder makes it available to
@@ -142,6 +150,10 @@ services:
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
       VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
       VALIDATOR_DITTOBENCH_API_URL: http://sandbox-docker:8000
+      # Same sandbox-docker:11434 listener reached from inner miner harnesses as
+      # host.docker.internal:11434. The worker probes it before claiming a lease.
+      VALIDATOR_EMBED_PREFLIGHT_URL: http://sandbox-docker:11434/api/embed
+      VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS: "5"
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
       VALIDATOR_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
       VALIDATOR_WALLET_HOTKEY: ${VALIDATOR_WALLET_HOTKEY}

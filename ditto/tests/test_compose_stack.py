@@ -23,6 +23,28 @@ def test_ollama_is_pinned_with_functional_embedding_healthcheck() -> None:
     assert " 200 " in probe
 
 
+def test_sandbox_health_and_validator_preflight_use_forwarded_embedding_route() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    sandbox = compose["services"]["sandbox-docker"]
+    validator = compose["services"]["ditto-subnet"]
+
+    probe = " ".join(sandbox["healthcheck"]["test"])
+    assert "127.0.0.1 11434" in probe
+    assert "/api/embed" in probe
+    assert "embeddinggemma" in probe
+    assert validator["environment"]["VALIDATOR_EMBED_PREFLIGHT_URL"] == (
+        "http://sandbox-docker:11434/api/embed"
+    )
+    entrypoint = (
+        COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
+    ).read_text()
+    assert "TCP-LISTEN:11434" in entrypoint
+    assert "TCP:ollama:11434" in entrypoint
+    assert validator["environment"]["VALIDATOR_DITTOBENCH_API_URL"] == (
+        "http://sandbox-docker:8000"
+    )
+
+
 def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     raw_compose = COMPOSE_PATH.read_text()
     context_prefix = "${DITTOBENCH_BUILD_CONTEXT:-"

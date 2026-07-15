@@ -34,6 +34,7 @@ from ditto.validator.crn import confirmation_seeds
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
+    ValidatorInfrastructureError,
     WeightSubmissionError,
 )
 from ditto.validator.onchain_seed import seed_matches
@@ -206,10 +207,13 @@ class ValidatorWorker:
         scored: list[ScoredAgentStat] = []
         failed = 0
         queue_depth = 0
+        scoring_available = await self._scoring_preflight()
+        if not scoring_available:
+            failed = 1
         # k=3 pull: request tickets until the platform says 204 (no work for us)
         # or this sweep's cap is hit. Each ticket pins the dataset all three
         # validators score, so scores stay comparable for the median.
-        while queue_depth < self._config.queue_limit:
+        while scoring_available and queue_depth < self._config.queue_limit:
             try:
                 job = await self._platform.request_job()
             except PlatformError as e:
@@ -242,11 +246,26 @@ class ValidatorWorker:
                 if not isinstance(details, dict):
                     details = {}
                 scored.append(scored_agent_stat(job.miner_hotkey, report, details))
+            except ValidatorInfrastructureError as e:
+                # The ticket remains leased until its existing deadline, then
+                # the platform reopens the miner submission. Stop this sweep so
+                # we neither blame the artifact nor immediately claim more work
+                # against the same broken dependency.
+                logger.warning(
+                    "validator scoring infrastructure failed for agent %s; "
+                    "leaving ticket to expire and ending scoring sweep: %s",
+                    job.agent_id,
+                    e,
+                )
+                failed += 1
+                scoring_available = False
+                break
             except (DittobenchError, PlatformError) as e:
                 logger.warning("scoring agent %s failed: %s", job.agent_id, e)
                 failed += 1
                 continue
-        await self._rescore_stale_champions()
+        if scoring_available:
+            await self._rescore_stale_champions()
 
         outcome = _WeightOutcome()
         if set_weights:
@@ -267,6 +286,24 @@ class ValidatorWorker:
         )
         await self._report_heartbeat("idle")
         return queue_depth
+
+    async def _scoring_preflight(self) -> bool:
+        """Functionally probe scorer dependencies before requesting a lease."""
+        preflight = getattr(self._dittobench, "preflight", None)
+        if preflight is None:
+            return True
+        try:
+            result = preflight()
+            if inspect.isawaitable(result):
+                await result
+            return True
+        except ValidatorInfrastructureError as e:
+            logger.warning(
+                "validator scoring preflight failed; no ticket will be claimed "
+                "this sweep: %s",
+                e,
+            )
+            return False
 
     async def _report_heartbeat(
         self,
@@ -906,6 +943,15 @@ class ValidatorWorker:
         seed)`` of this exact run. The ticket deadline is the lease identity, so
         a late result cannot be replayed after reissue. Advisory
         ``confirmation_composites`` rides unsigned (like ``composite_stderr``)."""
+        if (
+            ticket_deadline is not None
+            and ticket_deadline.tzinfo is not None
+            and ticket_deadline <= datetime.now(UTC)
+        ):
+            raise PlatformError(
+                f"ticket for agent {agent_id} expired before score submission; "
+                "leaving it to reopen"
+            )
         signature = sign_score(
             self._keypair,
             validator_hotkey=self._config.validator_hotkey,

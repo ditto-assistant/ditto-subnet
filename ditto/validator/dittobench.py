@@ -26,7 +26,7 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgressStage,
 )
 from ditto.api_models.validator import ScoreReport
-from ditto.validator.errors import DittobenchError
+from ditto.validator.errors import DittobenchError, ValidatorInfrastructureError
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -48,6 +48,16 @@ _PROGRESS_STAGE_BY_STATUS: dict[str, BenchmarkProgressStage] = {
     "failed": "failed_retrying",
 }
 _STABLE_COUNT_STATUSES = {"running", "scoring", "done"}
+
+
+def _is_embedding_infrastructure_failure(error: str) -> bool:
+    """Identify scorer failures from the validator-owned Ollama route."""
+    normalized = error.lower()
+    return (
+        "host.docker.internal:11434" in normalized
+        or "ollama embed request" in normalized
+        or ("ollama" in normalized and "embedding" in normalized)
+    )
 
 
 @dataclass(frozen=True)
@@ -106,6 +116,51 @@ class DittobenchClient:
         # signed/DB ScoreReport contract — captured here only so the validator can
         # surface it in aggregate W&B telemetry.
         self.last_details: dict[str, object] = {}
+
+    async def preflight(self) -> None:
+        """Verify the functional embedding route before claiming a ticket.
+
+        The configured URL is the sandbox-docker forwarder's port 11434, the
+        same listener reached as ``host.docker.internal:11434`` by inner miner
+        harnesses. A real embedding request checks the forwarder, Ollama, and
+        the loaded model rather than merely checking container liveness.
+        """
+        if self._config.dittobench_mock:
+            return
+        try:
+            response = await self._client.post(
+                self._config.embed_preflight_url,
+                json={"model": "embeddinggemma", "input": "validator preflight"},
+                timeout=self._config.embed_preflight_timeout_seconds,
+            )
+        except httpx.TimeoutException as e:
+            raise ValidatorInfrastructureError(
+                "embedding preflight timed out through the harness forwarder"
+            ) from e
+        except httpx.HTTPError as e:
+            raise ValidatorInfrastructureError(
+                f"embedding preflight could not reach the harness forwarder: {e}"
+            ) from e
+        if response.status_code != 200:
+            raise ValidatorInfrastructureError(
+                "embedding preflight through the harness forwarder rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            embeddings = response.json().get("embeddings")
+        except (ValueError, AttributeError) as e:
+            raise ValidatorInfrastructureError(
+                "embedding preflight returned an invalid response"
+            ) from e
+        if (
+            not isinstance(embeddings, list)
+            or not embeddings
+            or not isinstance(embeddings[0], list)
+            or not embeddings[0]
+        ):
+            raise ValidatorInfrastructureError(
+                "embedding preflight returned no embedding vector"
+            )
 
     async def score_tarball(
         self,
@@ -238,9 +293,13 @@ class DittobenchClient:
                     )
                     return self._parse_report(data)
                 if status == _FAILED:
-                    raise DittobenchError(
-                        f"run {run_id} failed: {data.get('error', 'unknown')}"
-                    )
+                    error = str(data.get("error", "unknown"))
+                    if _is_embedding_infrastructure_failure(error):
+                        raise ValidatorInfrastructureError(
+                            f"run {run_id} lost validator embedding infrastructure: "
+                            f"{error}"
+                        )
+                    raise DittobenchError(f"run {run_id} failed: {error}")
                 await asyncio.sleep(self._config.dittobench_poll_seconds)
                 waited += self._config.dittobench_poll_seconds
         except httpx.HTTPError as e:
