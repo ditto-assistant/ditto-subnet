@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.7.5 (2026-07-15)
+
+### Bug Fixes
+
+- Restore Pylon hotkey access and production burn targeting
+  ([#139](https://github.com/ditto-assistant/ditto-subnet/pull/139),
+  [`c43c0cb`](https://github.com/ditto-assistant/ditto-subnet/commit/c43c0cbc8d7c352feb023abbb93b5e0460ae0526))
+
+
 ## v0.7.4 (2026-07-15)
 
 ### Bug Fixes
