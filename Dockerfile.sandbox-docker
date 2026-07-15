@@ -1,6 +1,6 @@
 FROM docker.io/library/docker:29-dind@sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515
 
-RUN apk add --no-cache socat
+RUN apk add --no-cache curl socat
 COPY scripts/sandbox-docker-entrypoint.sh /usr/local/bin/sandbox-docker-entrypoint
 
 ENTRYPOINT ["sandbox-docker-entrypoint"]
