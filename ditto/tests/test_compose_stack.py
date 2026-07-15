@@ -216,6 +216,12 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     )
     assert workflow.count("docker/build-push-action@") == 1
     assert 'exact="$IMAGE@$manifest_digest"' in workflow
+    assert (
+        'raw_manifest="$(docker buildx imagetools inspect --raw "$exact")"' in workflow
+    )
+    assert 'child_exact="$IMAGE@$child_digest"' in workflow
+    assert 'docker pull "$child_exact"' in workflow
+    assert 'docker pull --platform "$platform" "$exact"' not in workflow
     assert "for platform in linux/amd64 linux/arm64" in workflow
     assert "Promote only the tested manifest" in workflow
 

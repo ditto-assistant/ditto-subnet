@@ -137,14 +137,33 @@ jobs:
           )"
           [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           exact="$IMAGE@$manifest_digest"
+          raw_manifest="$(docker buildx imagetools inspect --raw "$exact")"
           for platform in linux/amd64 linux/arm64; do
+            os="${platform%/*}"
+            architecture="${platform#*/}"
+            child_digest="$(
+              jq -er \
+                --arg os "$os" \
+                --arg architecture "$architecture" \
+                '[.manifests[]
+                  | select(
+                      .platform.os == $os
+                      and .platform.architecture == $architecture
+                    )]
+                 | if length == 1
+                   then .[0].digest
+                   else error("expected exactly one matching platform manifest")
+                   end' <<<"$raw_manifest"
+            )"
+            [[ "$child_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            child_exact="$IMAGE@$child_digest"
             suffix="${platform#linux/}"
             bootstrap_volume="ditto-validator-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${suffix}"
-            docker pull --platform "$platform" "$exact"
-            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$exact")" = "$COMPATIBILITY_EPOCH"
-            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$exact")" = "4"
-            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
-            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
+            docker pull "$child_exact"
+            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$child_exact")" = "$COMPATIBILITY_EPOCH"
+            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$child_exact")" = "4"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$child_exact")" = "$VERSION"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$child_exact")" = "$REVISION"
             docker volume create "$bootstrap_volume"
             trap 'docker volume rm -f "$bootstrap_volume" >/dev/null' EXIT
             docker run --rm --platform "$platform" --read-only --tmpfs /tmp \
@@ -152,21 +171,21 @@ jobs:
               --mount "type=volume,source=$bootstrap_volume,target=/var/lib/ditto-validator-update" \
               --env UV_CACHE_DIR=/tmp/uv-cache \
               --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
-              --entrypoint uv "$exact" run --no-sync python -c \
+              --entrypoint uv "$child_exact" run --no-sync python -c \
               'from ditto.validator.update_control import bootstrap_should_start_drained as s, mark_bootstrap_resumed as m; assert s(True); assert m(); assert not s(True)'
             docker run --rm --platform "$platform" --read-only --tmpfs /tmp \
               --cap-drop ALL --cap-add DAC_READ_SEARCH \
               --mount "type=volume,source=$bootstrap_volume,target=/var/lib/ditto-validator-update" \
               --env UV_CACHE_DIR=/tmp/uv-cache \
               --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
-              --entrypoint uv "$exact" run --no-sync python -c \
+              --entrypoint uv "$child_exact" run --no-sync python -c \
               'from ditto.validator.update_control import bootstrap_should_start_drained as s; assert not s(True)'
             docker run --rm --platform "$platform" --read-only --tmpfs /tmp \
               --cap-drop ALL --cap-add DAC_READ_SEARCH \
               --mount "type=volume,source=$bootstrap_volume,target=/var/lib/ditto-validator-update" \
               --env UV_CACHE_DIR=/tmp/uv-cache \
               --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke-next \
-              --entrypoint uv "$exact" run --no-sync python -c \
+              --entrypoint uv "$child_exact" run --no-sync python -c \
               'from ditto.validator.update_control import bootstrap_should_start_drained as s; assert s(True)'
             docker volume rm -f "$bootstrap_volume" >/dev/null
             trap - EXIT
