@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.9.0 (2026-07-15)
+
+### Features
+
+- Reduce KOTH margin to 2% and make the dethrone band noise-aware
+  ([#142](https://github.com/ditto-assistant/ditto-subnet/pull/142),
+  [`f4be7ac`](https://github.com/ditto-assistant/ditto-subnet/commit/f4be7acecb213c08c3d1561d2b631d2aad835900))
+
+
 ## v0.8.0 (2026-07-15)
 
 ### Features
