@@ -48,6 +48,19 @@ def test_bootstrap_resume_marker_survives_process_restart(tmp_path: Path) -> Non
     assert stat.S_IMODE(marker.stat().st_mode) == 0o600
 
 
+def test_bootstrap_resume_marker_prunes_prior_deployment_tokens(
+    tmp_path: Path,
+) -> None:
+    previous = tmp_path / "previous.resumed"
+    current = tmp_path / "current.resumed"
+    previous.write_text("resumed\n")
+
+    assert mark_bootstrap_resumed(marker_path=current)
+
+    assert current.read_text() == "resumed\n"
+    assert not previous.exists()
+
+
 async def test_run_forever_acknowledges_only_quiescent_drain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

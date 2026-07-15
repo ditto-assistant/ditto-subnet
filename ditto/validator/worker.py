@@ -386,10 +386,13 @@ class ValidatorWorker:
                 signature=signature,
             )
             response = await self._platform.submit_heartbeat(request)
-            if response.accepted:
-                self._platform_accepted = True
+            # Update safety requires fresh platform acceptance. A later
+            # rejection must revoke an earlier success instead of leaving the
+            # updater-visible state permanently sticky.
+            self._platform_accepted = response.accepted
             return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
+            self._platform_accepted = False
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
             return False
 

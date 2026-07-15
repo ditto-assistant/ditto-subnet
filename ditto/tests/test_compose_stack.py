@@ -12,6 +12,7 @@ COMPOSE_WRAPPER_PATH = Path(__file__).parents[2] / "scripts/validator-compose.sh
 SANDBOX_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile.sandbox-docker"
 DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
+INSTALLER_PATH = Path(__file__).parents[2] / "scripts/install-validator-auto-update.sh"
 
 
 def test_ollama_is_pinned_with_functional_embedding_healthcheck() -> None:
@@ -101,8 +102,23 @@ def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
     assert validator["cap_add"] == ["DAC_READ_SEARCH"]
     assert "cap_add" not in services["pylon"]
 
-    assert len(validator["volumes"]) == 1
-    wallet_mount = validator["volumes"][0]
+    assert len(validator["volumes"]) == 2
+    bootstrap_mount = next(
+        mount
+        for mount in validator["volumes"]
+        if mount["target"] == "/var/lib/ditto-validator-update"
+    )
+    assert bootstrap_mount == {
+        "type": "volume",
+        "source": "validator-update-bootstrap",
+        "target": "/var/lib/ditto-validator-update",
+        "read_only": False,
+    }
+    assert "validator-update-bootstrap" in compose["volumes"]
+
+    wallet_mount = next(
+        mount for mount in validator["volumes"] if mount["type"] == "bind"
+    )
     assert wallet_mount["type"] == "bind"
     assert wallet_mount["read_only"] is True
     assert wallet_mount["bind"]["create_host_path"] is False
@@ -172,8 +188,33 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
 
     assert 'COMPATIBILITY_EPOCH: "1"' in workflow
     assert "ditto-subnet-validator" in workflow
-    assert ":compat-${{ env.COMPATIBILITY_EPOCH }}" in workflow
+    assert '--tag "$IMAGE:compat-$COMPATIBILITY_EPOCH"' in workflow
     assert ":sha-${{ needs.release.outputs.commit_sha }}" in workflow
     assert "packages: write" in workflow
     assert "secrets.GITHUB_TOKEN" in workflow
     assert ":latest" not in workflow
+    assert "--read-only --tmpfs /tmp \\" in workflow
+    assert "--cap-drop ALL --cap-add DAC_READ_SEARCH" in workflow
+    assert "target=/var/lib/ditto-validator-update" in workflow
+    assert (
+        "docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130" in workflow
+    )
+    assert workflow.count("docker/build-push-action@") == 1
+    assert 'exact="$IMAGE@$manifest_digest"' in workflow
+    assert "for platform in linux/amd64 linux/arm64" in workflow
+    assert "Promote only the tested manifest" in workflow
+
+
+def test_systemd_unit_pins_runtime_settings_to_its_timeout_budget() -> None:
+    installer = INSTALLER_PATH.read_text()
+
+    for setting in (
+        "VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS",
+        "VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS",
+        "VALIDATOR_AUTO_UPDATE_CHECK_SECONDS",
+    ):
+        assert f"Environment={setting}=" in installer
+        assert (f"{setting}= " + "\\") in installer
+    assert "Environment=DITTO_SUBNET_ENV_FILE=" in installer
+    assert "TimeoutStartSec=${start_timeout_seconds}s" in installer
+    assert "TimeoutStopSec=${stop_timeout_seconds}s" in installer

@@ -528,7 +528,9 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once() == 0
+        outcome = await worker.run_once()
+        assert outcome.queue_depth == 0
+        assert outcome.weights_ran is True
 
         platform.request_job.assert_not_awaited()
         platform.get_artifact.assert_not_awaited()
@@ -552,9 +554,13 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once(set_weights=False) == 0
+        first = await worker.run_once(set_weights=False)
+        assert first.queue_depth == 0
+        assert first.weights_ran is False
         platform.request_job.assert_not_awaited()
-        assert await worker.run_once(set_weights=False) == 1
+        second = await worker.run_once(set_weights=False)
+        assert second.queue_depth == 1
+        assert second.weights_ran is False
         platform.submit_score.assert_awaited_once()
 
     async def test_midrun_infrastructure_failure_ends_sweep_without_next_claim(
@@ -576,7 +582,9 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        assert await worker.run_once() == 1
+        outcome = await worker.run_once()
+        assert outcome.queue_depth == 1
+        assert outcome.weights_ran is True
 
         assert platform.request_job.await_count == 1
         platform.submit_score.assert_not_awaited()
@@ -601,6 +609,28 @@ class TestRunOnce:
             )
 
         platform.submit_score.assert_not_awaited()
+
+    async def test_platform_acceptance_is_revoked_by_rejection_or_failure(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker._report_heartbeat("idle") is True
+        assert worker._platform_accepted is True
+        platform.submit_heartbeat.return_value = ValidatorHeartbeatResponse(
+            accepted=False, seen_at=datetime.now(UTC)
+        )
+        assert await worker._report_heartbeat("idle") is False
+        assert worker._platform_accepted is False
+
+        platform.submit_heartbeat.side_effect = PlatformError("offline")
+        assert await worker._report_heartbeat("idle") is False
+        assert worker._platform_accepted is False
 
     async def test_long_benchmark_refreshes_running_heartbeat(
         self, monkeypatch: pytest.MonkeyPatch

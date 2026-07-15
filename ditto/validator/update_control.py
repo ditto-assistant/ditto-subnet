@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -19,7 +20,17 @@ logger = logging.getLogger(__name__)
 VALIDATOR_COMPATIBILITY_EPOCH = 1
 VALIDATOR_UPDATE_PROTOCOL = 1
 VALIDATOR_UPDATE_STATE_PATH = Path("/tmp/ditto-validator-update-state.json")
-VALIDATOR_BOOTSTRAP_RESUMED_PATH = Path("/app/.ditto-validator-bootstrap-resumed")
+VALIDATOR_BOOTSTRAP_STATE_DIR = Path("/var/lib/ditto-validator-update")
+
+
+def _bootstrap_resumed_path() -> Path:
+    """Return a path scoped to one updater-created container deployment."""
+    token = os.environ.get("VALIDATOR_BOOTSTRAP_TOKEN", "manual")
+    token_digest = hashlib.sha256(token.encode()).hexdigest()
+    return VALIDATOR_BOOTSTRAP_STATE_DIR / f"{token_digest}.resumed"
+
+
+VALIDATOR_BOOTSTRAP_RESUMED_PATH = _bootstrap_resumed_path()
 
 ValidatorUpdateState = Literal["starting", "ready", "working", "drained", "stopping"]
 
@@ -29,7 +40,7 @@ def bootstrap_should_start_drained(
     *,
     marker_path: Path = VALIDATOR_BOOTSTRAP_RESUMED_PATH,
 ) -> bool:
-    """Apply updater bootstrap only once for a container's writable layer."""
+    """Apply updater bootstrap once for one updater-generated deployment token."""
     return enabled and not marker_path.exists()
 
 
@@ -38,8 +49,14 @@ def mark_bootstrap_resumed(
 ) -> bool:
     """Persist USR2 before allowing work so a later restart cannot re-drain."""
     try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
         marker_path.write_text("resumed\n")
         marker_path.chmod(0o600)
+        # The shared Compose volume is deployment-scoped by a unique token.
+        # Older tokens can be removed after this resume becomes durable.
+        for previous_marker in marker_path.parent.glob("*.resumed"):
+            if previous_marker != marker_path:
+                previous_marker.unlink(missing_ok=True)
         return True
     except OSError as error:
         logger.error("could not persist validator bootstrap resume: %s", error)

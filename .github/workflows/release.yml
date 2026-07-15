@@ -96,26 +96,11 @@ jobs:
           uv run pytest
           uv run pytest -m integration ditto/tests/test_validator_auto_update.py
 
+      - name: Set up QEMU for both release platforms
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Build and smoke-test the release image
-        env:
-          VERSION: ${{ needs.release.outputs.version }}
-          REVISION: ${{ needs.release.outputs.commit_sha }}
-        run: |
-          docker buildx build --load --platform linux/amd64 \
-            --build-arg "DITTO_VERSION=$VERSION" \
-            --build-arg "DITTO_REVISION=$REVISION" \
-            --build-arg "VALIDATOR_COMPATIBILITY_EPOCH=$COMPATIBILITY_EPOCH" \
-            --build-arg "VALIDATOR_HEARTBEAT_PROTOCOL=4" \
-            --tag ditto-validator-release-smoke:local .
-          docker run --rm --entrypoint uv ditto-validator-release-smoke:local \
-            run --no-sync python -c \
-            'from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH as e; assert e == 1'
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' ditto-validator-release-smoke:local)" = "$COMPATIBILITY_EPOCH"
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' ditto-validator-release-smoke:local)" = "4"
-          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' ditto-validator-release-smoke:local)" = "$REVISION"
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -124,7 +109,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish immutable and compatibility-scoped tags
+      - name: Build and publish the immutable source manifest once
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -137,6 +122,71 @@ jobs:
             VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
             VALIDATOR_HEARTBEAT_PROTOCOL=4
           tags: |
-            ${{ env.IMAGE }}:${{ needs.release.outputs.tag }}
             ${{ env.IMAGE }}:sha-${{ needs.release.outputs.commit_sha }}
-            ${{ env.IMAGE }}:compat-${{ env.COMPATIBILITY_EPOCH }}
+
+      - name: Smoke-test both registry artifacts by exact manifest digest
+        id: registry-smoke
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          candidate="$IMAGE:sha-$REVISION"
+          manifest_digest="$(
+            docker buildx imagetools inspect "$candidate" \
+              --format '{{json .Manifest}}' | jq -r .digest
+          )"
+          [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          exact="$IMAGE@$manifest_digest"
+          for platform in linux/amd64 linux/arm64; do
+            suffix="${platform#linux/}"
+            bootstrap_volume="ditto-validator-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${suffix}"
+            docker pull --platform "$platform" "$exact"
+            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$exact")" = "$COMPATIBILITY_EPOCH"
+            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$exact")" = "4"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
+            docker volume create "$bootstrap_volume"
+            trap 'docker volume rm -f "$bootstrap_volume" >/dev/null' EXIT
+            docker run --rm --platform "$platform" --read-only --tmpfs /tmp \
+              --cap-drop ALL --cap-add DAC_READ_SEARCH \
+              --mount "type=volume,source=$bootstrap_volume,target=/var/lib/ditto-validator-update" \
+              --env UV_CACHE_DIR=/tmp/uv-cache \
+              --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
+              --entrypoint uv "$exact" run --no-sync python -c \
+              'from ditto.validator.update_control import bootstrap_should_start_drained as s, mark_bootstrap_resumed as m; assert s(True); assert m(); assert not s(True)'
+            docker run --rm --platform "$platform" --read-only --tmpfs /tmp \
+              --cap-drop ALL --cap-add DAC_READ_SEARCH \
+              --mount "type=volume,source=$bootstrap_volume,target=/var/lib/ditto-validator-update" \
+              --env UV_CACHE_DIR=/tmp/uv-cache \
+              --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
+              --entrypoint uv "$exact" run --no-sync python -c \
+              'from ditto.validator.update_control import bootstrap_should_start_drained as s; assert not s(True)'
+            docker run --rm --platform "$platform" --read-only --tmpfs /tmp \
+              --cap-drop ALL --cap-add DAC_READ_SEARCH \
+              --mount "type=volume,source=$bootstrap_volume,target=/var/lib/ditto-validator-update" \
+              --env UV_CACHE_DIR=/tmp/uv-cache \
+              --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke-next \
+              --entrypoint uv "$exact" run --no-sync python -c \
+              'from ditto.validator.update_control import bootstrap_should_start_drained as s; assert s(True)'
+            docker volume rm -f "$bootstrap_volume" >/dev/null
+            trap - EXIT
+          done
+          printf 'digest=%s\n' "$manifest_digest" >>"$GITHUB_OUTPUT"
+
+      - name: Promote only the tested manifest
+        env:
+          MANIFEST_DIGEST: ${{ steps.registry-smoke.outputs.digest }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          source="$IMAGE@$MANIFEST_DIGEST"
+          docker buildx imagetools create \
+            --tag "$IMAGE:$RELEASE_TAG" \
+            --tag "$IMAGE:compat-$COMPATIBILITY_EPOCH" \
+            "$source"
+          for tag in "$RELEASE_TAG" "compat-$COMPATIBILITY_EPOCH"; do
+            promoted="$(
+              docker buildx imagetools inspect "$IMAGE:$tag" \
+                --format '{{json .Manifest}}' | jq -r .digest
+            )"
+            test "$promoted" = "$MANIFEST_DIGEST"
+          done
