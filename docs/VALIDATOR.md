@@ -510,10 +510,12 @@ burned by Subtensor. With no eligible miners, 100% is burned. These consensus
 values are frozen in code, not configurable through env.
 
 The worker sends its vector to its co-located Pylon identity on an independent
-timer, so a long scoring queue cannot delay the on-chain cadence. Pylon performs
-UID resolution, normalization, commit-reveal handling, retries, and the final
-`put_weights` extrinsic. One `PYLON_TOKEN` protects both the worker's permit
-check and identity writes.
+timer, so a long scoring queue cannot delay the on-chain cadence. The timer
+honors the larger of the configured interval, chain rate limit, and subnet tempo,
+and waits for the validator's previous on-chain update window after a restart.
+Pylon performs UID resolution, normalization, commit-reveal handling, retries,
+and the final `put_weights` extrinsic. One `PYLON_TOKEN` protects both the
+worker's permit check and identity writes.
 
 ## Optional observability
 

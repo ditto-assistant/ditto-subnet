@@ -1302,7 +1302,7 @@ class ValidatorWorker:
         *,
         drain_requested: asyncio.Event | None = None,
     ) -> None:
-        """Submit weights immediately and then once per effective epoch."""
+        """Submit weights in a chain-safe window, independently of scoring."""
         chain_floor = await self._chain_min_epoch_seconds()
         has_run_weight_epoch = False
         while not stop.is_set():
@@ -1320,6 +1320,19 @@ class ValidatorWorker:
                     await self._sleep_or_stop_or_drain(
                         stop, epoch_seconds, drain_requested
                     )
+                continue
+            epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
+            window_delay = await self._seconds_until_weight_window(epoch_seconds)
+            if window_delay > 0:
+                logger.info(
+                    "weight update is not chain-due; waiting %.0fs before submission",
+                    window_delay,
+                )
+                await self._sleep_or_stop_or_drain(stop, window_delay, drain_requested)
+                # Re-read both chain state and drain/stop state after the wait.
+                # A commit by another process (or a resumed Pylon task) may have
+                # advanced LastUpdate while this worker slept.
+                chain_floor = await self._chain_min_epoch_seconds()
                 continue
             started = time.monotonic()
             outcome = _WeightOutcome()
@@ -1423,31 +1436,62 @@ class ValidatorWorker:
     async def _chain_min_epoch_seconds(self) -> float:
         """The chain-enforced floor (seconds) on the weight-set cadence.
 
-        Reads the subnet's ``weights_rate_limit`` (and ``tempo``, for the log
-        line) through the active weight sink and converts blocks to seconds.
+        Reads the subnet's ``weights_rate_limit`` and ``tempo`` through the
+        active weight sink and converts the larger block window to seconds.
+        Commit-reveal tasks are tempo-bounded: using only the nominal rate
+        limit can enqueue a request that Pylon accepts over HTTP but later
+        exhausts its retries with ``CommittingWeightsTooFast``.
+
         Replaces the hand-set ``VALIDATOR_EPOCH_SECONDS``-only proxy: the loop
         uses ``max(epoch_seconds, this floor)``. **Fail-open:** an unavailable
-        or failing read returns ``0.0`` so the configured cadence still drives
-        the loop.
+        rate-limit read returns ``0.0`` so the configured cadence still drives
+        the loop. A missing tempo retains the rate-limit floor.
         """
         rate_limit = await self._read_chain_blocks("get_weights_rate_limit")
         if rate_limit is None:
             return 0.0
         tempo = await self._read_chain_blocks("get_tempo")
-        floor = float(rate_limit) * _BLOCK_SECONDS
+        cadence_blocks = max(rate_limit, tempo or 0)
+        floor = float(cadence_blocks) * _BLOCK_SECONDS
         log = logger.warning if floor > self._config.epoch_seconds else logger.info
         log(
             "chain cadence for netuid %s: weights_rate_limit=%d block(s) "
-            "(~%.0fs) tempo=%s block(s); configured epoch_seconds=%d -> "
+            "tempo=%s block(s); chain floor=%d block(s) (~%.0fs); "
+            "configured epoch_seconds=%d -> "
             "effective %.0fs",
             self._config.netuid,
             rate_limit,
-            floor,
             tempo if tempo is not None else "?",
+            cadence_blocks,
+            floor,
             self._config.epoch_seconds,
             max(float(self._config.epoch_seconds), floor),
         )
         return floor
+
+    async def _seconds_until_weight_window(self, epoch_seconds: float) -> float:
+        """Return a best-effort delay until another commit can be attempted.
+
+        Pylon acknowledges ``put_weights`` before its background task reaches
+        Subtensor. On process restart, blindly submitting immediately can race
+        the previous successful commit and create a task that only fails later.
+        ``LastUpdate`` plus the observed head lets the worker wait out the
+        configured/chain cadence first. Evidence reads remain fail-open so a
+        temporary Pylon read outage cannot permanently wedge weight liveness.
+        """
+        last_update, observed_block = await self._observe_onchain_weight_state()
+        if last_update is None or observed_block is None:
+            return 0.0
+        elapsed_blocks = observed_block - last_update
+        if elapsed_blocks < 0:
+            return 0.0
+        required_blocks = math.ceil(epoch_seconds / _BLOCK_SECONDS)
+        remaining_blocks = required_blocks - elapsed_blocks
+        if remaining_blocks <= 0:
+            return 0.0
+        # One extra block protects against Pylon's cached head being just behind
+        # the node used for the subsequent commit attempt.
+        return float(remaining_blocks + 1) * _BLOCK_SECONDS
 
     async def _read_chain_blocks(self, method_name: str) -> int | None:
         """Call an optional block-count read on the weight sink, fail-open."""

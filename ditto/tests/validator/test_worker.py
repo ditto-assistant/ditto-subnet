@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
@@ -395,6 +396,8 @@ class TestRunOnce:
         config.sweep_seconds = 120
         chain = MagicMock()
         chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        chain.get_last_update_block = AsyncMock(return_value=None)
+        chain.get_latest_block = AsyncMock()
         chain.put_weights = AsyncMock()
         worker = ValidatorWorker(
             config=config,
@@ -1590,11 +1593,44 @@ class TestChainCadenceFloor:
             keypair=MagicMock(),
         )
 
-    async def test_floor_is_rate_limit_blocks_times_block_time(self) -> None:
+    async def test_floor_uses_full_commit_reveal_tempo(self) -> None:
         chain = MagicMock()
         chain.get_weights_rate_limit = AsyncMock(return_value=100)
         chain.get_tempo = AsyncMock(return_value=360)
+        assert await self._worker(chain)._chain_min_epoch_seconds() == 4320.0
+
+    async def test_missing_tempo_keeps_rate_limit_floor(self) -> None:
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=100)
+        chain.get_tempo = AsyncMock(return_value=None)
         assert await self._worker(chain)._chain_min_epoch_seconds() == 1200.0
+
+    async def test_startup_waits_until_last_update_is_tempo_old(self) -> None:
+        chain = MagicMock()
+        chain.get_last_update_block = AsyncMock(return_value=1_000)
+        chain.get_latest_block = AsyncMock(return_value=SimpleNamespace(number=1_300))
+        worker = self._worker(chain)
+
+        # A 360-block cadence has 60 blocks left; add one safety block.
+        assert await worker._seconds_until_weight_window(4320.0) == 732.0
+
+    async def test_due_or_unobservable_window_never_blocks_liveness(self) -> None:
+        due_chain = MagicMock()
+        due_chain.get_last_update_block = AsyncMock(return_value=1_000)
+        due_chain.get_latest_block = AsyncMock(
+            return_value=SimpleNamespace(number=1_360)
+        )
+        assert await self._worker(due_chain)._seconds_until_weight_window(4320.0) == 0.0
+
+        unavailable_chain = MagicMock()
+        unavailable_chain.get_last_update_block = AsyncMock(
+            side_effect=ChainError("pylon down")
+        )
+        unavailable_chain.get_latest_block = AsyncMock()
+        assert (
+            await self._worker(unavailable_chain)._seconds_until_weight_window(4320.0)
+            == 0.0
+        )
 
     async def test_missing_read_method_falls_back_to_config(self) -> None:
         # A sink without the hyperparameter reads (older setter) keeps the
@@ -1642,6 +1678,7 @@ class TestIndependentWeightLoop:
 
         worker.run_once = AsyncMock(side_effect=_busy_scoring)  # type: ignore[method-assign]
         worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+        worker._seconds_until_weight_window = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
         worker._update_weights = AsyncMock(  # type: ignore[method-assign]
             return_value=worker_mod._WeightOutcome(
                 weights={_BURN_HOTKEY: 1.0},
@@ -1691,6 +1728,7 @@ class TestIndependentWeightLoop:
         )
         worker.run_once = AsyncMock(return_value=0)  # type: ignore[method-assign]
         worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+        worker._seconds_until_weight_window = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
 
         async def blocked_weight_update() -> worker_mod._WeightOutcome:
             weight_started.set()
@@ -1738,6 +1776,7 @@ class TestIndependentWeightLoop:
         worker._platform_accepted = True
         worker.run_once = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
         worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+        worker._seconds_until_weight_window = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
 
         async def report_heartbeat(state: str, **_: object) -> bool:
             if state == "error":
