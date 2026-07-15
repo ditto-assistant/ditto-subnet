@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.7.3 (2026-07-15)
+
+### Bug Fixes
+
+- Decouple weight updates from scoring sweeps
+  ([#137](https://github.com/ditto-assistant/ditto-subnet/pull/137),
+  [`30fd379`](https://github.com/ditto-assistant/ditto-subnet/commit/30fd379e4fe29d6842efe5e58201a97194578d55))
+
+### Chores
+
+- Remove private screener dependency authentication
+  ([#136](https://github.com/ditto-assistant/ditto-subnet/pull/136),
+  [`8a821f7`](https://github.com/ditto-assistant/ditto-subnet/commit/8a821f72d3d280d35022383996d43a9c1577ecaa))
+
+
 ## v0.7.2 (2026-07-15)
 
 ### Bug Fixes
