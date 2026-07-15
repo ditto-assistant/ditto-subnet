@@ -375,6 +375,20 @@ class ScoreReport(BaseModel):
             ),
         ),
     ] = None
+    confirmation_seeds: Annotated[
+        list[int] | None,
+        Field(
+            default=None,
+            description=(
+                "The K common CRN seeds aligned 1:1 (same order) with "
+                "``confirmation_composites`` for a version-bump re-score, so the "
+                "KOTH fold can PAIR a challenger against the champion on their "
+                "shared seeds and use the lower paired-difference variance for the "
+                "dethrone band. Advisory: not covered by the signature and never "
+                "affects the score. Null for a normal single-seed run."
+            ),
+        ),
+    ] = None
     generated_at: Annotated[
         datetime, Field(description="When the report was produced (UTC).")
     ]
@@ -543,6 +557,20 @@ class LedgerEntry(BaseModel):
                 "comparison uses their MEDIAN instead of the single-run composite, "
                 "so a crown flip must replicate across seeds. Additive-optional: "
                 "absent means the fold uses the raw composite."
+            ),
+        ),
+    ] = None
+    confirmation_seeds: Annotated[
+        list[int] | None,
+        Field(
+            default=None,
+            description=(
+                "The K common CRN seeds aligned 1:1 with "
+                "``confirmation_composites`` for this agent's version-bump "
+                "re-score, when the platform surfaces them. Lets the KOTH fold "
+                "pair a challenger against the champion on shared seeds (lower "
+                "paired-difference variance) instead of the independent-sum band. "
+                "Additive-optional: absent means the fold uses the unpaired band."
             ),
         ),
     ] = None
