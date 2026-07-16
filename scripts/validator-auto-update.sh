@@ -17,7 +17,9 @@ IMAGE_REPOSITORY="ghcr.io/ditto-assistant/ditto-subnet-validator"
 CANDIDATE_CHANNEL="$IMAGE_REPOSITORY:compat-2"
 EXPECTED_SOURCE="https://github.com/ditto-assistant/ditto-subnet"
 EXPECTED_COMPATIBILITY_EPOCH="2"
-EXPECTED_HEARTBEAT_PROTOCOL="4"
+# Heartbeat protocol may advance within a compatibility epoch. The updater
+# binds each runtime state to its image's declared protocol instead of pinning
+# a single updater-side value.
 EXPECTED_UPDATE_PROTOCOL="1"
 EXPECTED_COMPOSE_SCHEMA="1"
 RUNTIME_STATE_PATH="/tmp/ditto-validator-update-state.json"
@@ -118,6 +120,13 @@ docker_container_label() {
   printf '%s' "$value"
 }
 
+image_heartbeat_protocol() {
+  local image="$1" value
+  value="$(docker_image_label "$image" io.heyditto.validator.heartbeat-protocol)"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s' "$value"
+}
+
 validate_release_image() {
   local image="$1" label value
   for label in \
@@ -134,7 +143,7 @@ validate_release_image() {
   done
   [ "$(docker_image_label "$image" io.heyditto.validator-service)" = "true" ] || return 1
   [ "$(docker_image_label "$image" io.heyditto.validator.compatibility-epoch)" = "$EXPECTED_COMPATIBILITY_EPOCH" ] || return 1
-  [ "$(docker_image_label "$image" io.heyditto.validator.heartbeat-protocol)" = "$EXPECTED_HEARTBEAT_PROTOCOL" ] || return 1
+  image_heartbeat_protocol "$image" >/dev/null || return 1
   [ "$(docker_image_label "$image" io.heyditto.validator.update-protocol)" = "$EXPECTED_UPDATE_PROTOCOL" ] || return 1
   [ "$(docker_image_label "$image" io.heyditto.validator.compose-schema)" = "$EXPECTED_COMPOSE_SCHEMA" ] || return 1
   [ "$(docker_image_label "$image" org.opencontainers.image.source)" = "$EXPECTED_SOURCE" ] || return 1
@@ -182,7 +191,7 @@ recover_quiescent_target() {
   [ -n "$container" ] || return 0
   assert_scoped_container "$container"
   state="$(runtime_state "$container")"
-  if state_is_drained "$state"; then
+  if container_state_is_drained "$container" "$state"; then
     log "recovering a quiescent validator left by an interrupted update"
     DRAINED_CONTAINER="$container"
     if resume_and_verify "$container" "$ready_timeout" "$check_seconds"; then
@@ -203,27 +212,47 @@ runtime_state() {
 }
 
 state_is_ready() {
-  local state="$1"
+  local state="$1" heartbeat_protocol="$2"
   [[ "$state" == *\"compatibility_epoch\":$EXPECTED_COMPATIBILITY_EPOCH* ]] &&
-    [[ "$state" == *\"heartbeat_protocol\":$EXPECTED_HEARTBEAT_PROTOCOL* ]] &&
+    [[ "$state" == *\"heartbeat_protocol\":$heartbeat_protocol* ]] &&
     [[ "$state" == *'"platform_accepted":true'* ]] &&
     [[ "$state" == *\"update_protocol\":$EXPECTED_UPDATE_PROTOCOL* ]] &&
     { [[ "$state" == *'"state":"ready"'* ]] || [[ "$state" == *'"state":"working"'* ]]; }
 }
 
 state_is_drained() {
-  local state="$1"
+  local state="$1" heartbeat_protocol="$2"
   [[ "$state" == *\"compatibility_epoch\":$EXPECTED_COMPATIBILITY_EPOCH* ]] &&
-  [[ "$state" == *\"heartbeat_protocol\":$EXPECTED_HEARTBEAT_PROTOCOL* ]] &&
+    [[ "$state" == *\"heartbeat_protocol\":$heartbeat_protocol* ]] &&
     [[ "$state" == *'"platform_accepted":true'* ]] &&
     [[ "$state" == *\"update_protocol\":$EXPECTED_UPDATE_PROTOCOL* ]] &&
     [[ "$state" == *'"state":"drained"'* ]]
 }
 
+container_heartbeat_protocol() {
+  local container="$1" image
+  image="$(docker inspect --format '{{ .Image }}' "$container" 2>/dev/null || true)"
+  [ -n "$image" ] || return 1
+  image_heartbeat_protocol "$image"
+}
+
+container_state_is_ready() {
+  local container="$1" state="$2" heartbeat_protocol
+  heartbeat_protocol="$(container_heartbeat_protocol "$container")" || return 1
+  state_is_ready "$state" "$heartbeat_protocol"
+}
+
+container_state_is_drained() {
+  local container="$1" state="$2" heartbeat_protocol
+  heartbeat_protocol="$(container_heartbeat_protocol "$container")" || return 1
+  state_is_drained "$state" "$heartbeat_protocol"
+}
+
 resume_and_verify() {
   local container="$1" timeout="$2" check_seconds="$3" deadline state running
-  local initial_state any_signal_delivered=false
+  local initial_state any_signal_delivered=false heartbeat_protocol
   RESUME_SIGNAL_DELIVERED=false
+  heartbeat_protocol="$(container_heartbeat_protocol "$container")" || return 1
   initial_state="$(runtime_state "$container")"
   deadline=$((SECONDS + timeout))
   while ((SECONDS < deadline)); do
@@ -243,8 +272,9 @@ resume_and_verify() {
       any_signal_delivered=true
     fi
     state="$(runtime_state "$container")"
-    if state_is_ready "$state" && \
-      { [ "$any_signal_delivered" = "true" ] || state_is_drained "$initial_state"; }; then
+    if state_is_ready "$state" "$heartbeat_protocol" && \
+      { [ "$any_signal_delivered" = "true" ] || \
+        state_is_drained "$initial_state" "$heartbeat_protocol"; }; then
       # A transition from drained to ready is positive proof that USR2 took
       # effect even if the Docker CLI lost the daemon response and exited
       # nonzero. Never recreate after that observed transition.
@@ -256,7 +286,7 @@ resume_and_verify() {
   state="$(runtime_state "$container")"
   running="$(docker inspect --format '{{ .State.Running }}' "$container" 2>/dev/null || true)"
   if [ "$any_signal_delivered" = "false" ] && [ "$running" = "true" ] && \
-    state_is_drained "$state"; then
+    state_is_drained "$state" "$heartbeat_protocol"; then
     # The container remained explicitly quiescent for the full bounded window;
     # this is the only positive proof that failed Docker calls did not resume it.
     RESUME_SIGNAL_DELIVERED=false
@@ -272,7 +302,9 @@ resume_and_verify() {
 }
 
 request_bounded_drain() {
-  local container="$1" timeout="$2" check_seconds="$3" deadline state
+  local container="$1" timeout="$2" check_seconds="$3" deadline state heartbeat_protocol
+  heartbeat_protocol="$(container_heartbeat_protocol "$container")" || \
+    die "running validator image has an invalid heartbeat protocol label"
   log "requesting a cooperative drain (timeout ${timeout}s)"
   # Track from signal delivery, not only from drain acknowledgement. TERM or a
   # power loss while the benchmark is still working must still cancel USR1.
@@ -283,7 +315,7 @@ request_bounded_drain() {
   deadline=$((SECONDS + timeout))
   while ((SECONDS < deadline)); do
     state="$(runtime_state "$container")"
-    if state_is_drained "$state"; then
+    if state_is_drained "$state" "$heartbeat_protocol"; then
       log "validator acknowledged drained state"
       DRAINED_CONTAINER="$container"
       return 0
@@ -315,7 +347,8 @@ deploy_only_validator() {
 
 wait_until_quiescent_ready() {
   local expected_image_id="$1" timeout="$2" check_seconds="$3"
-  local deadline container running actual_image state
+  local deadline container running actual_image state heartbeat_protocol
+  heartbeat_protocol="$(image_heartbeat_protocol "$expected_image_id")" || return 1
   deadline=$((SECONDS + timeout))
   while ((SECONDS < deadline)); do
     container="$(target_container 2>/dev/null || true)"
@@ -323,7 +356,8 @@ wait_until_quiescent_ready() {
       running="$(docker inspect --format '{{ .State.Running }}' "$container" 2>/dev/null || true)"
       actual_image="$(docker inspect --format '{{ .Image }}' "$container" 2>/dev/null || true)"
       state="$(runtime_state "$container")"
-      if [ "$running" = "true" ] && [ "$actual_image" = "$expected_image_id" ] && state_is_drained "$state"; then
+      if [ "$running" = "true" ] && [ "$actual_image" = "$expected_image_id" ] && \
+        state_is_drained "$state" "$heartbeat_protocol"; then
         return 0
       fi
     fi
@@ -396,7 +430,7 @@ adopt_running_image() {
   [ "$actual_image_id" = "$expected_image_id" ] || \
     die "running validator does not match the requested immutable digest"
   state="$(runtime_state "$container")"
-  state_is_ready "$state" || \
+  container_state_is_ready "$container" "$state" || \
     die "running validator is not operational and freshly platform-accepted"
   record_managed_image "$image"
   log "adopted managed validator image $image"
@@ -438,8 +472,8 @@ resume_existing_recorded_image() {
   [ "$running" = "true" ] || return 1
   state="$(runtime_state "$container")"
   if [ "$actual" = "$image_id" ]; then
-    state_is_ready "$state" && return 0
-    if state_is_drained "$state"; then
+    container_state_is_ready "$container" "$state" && return 0
+    if container_state_is_drained "$container" "$state"; then
       if resume_and_verify "$container" "$timeout" "$interval"; then
         return 0
       else
@@ -453,7 +487,7 @@ resume_existing_recorded_image() {
   fi
   # A different running image is replaceable only when it explicitly proves
   # quiescence. This covers candidate_ready and rollback_pending recovery.
-  state_is_drained "$state" && return 1
+  container_state_is_drained "$container" "$state" && return 1
   return 77
 }
 
@@ -606,7 +640,7 @@ perform_replacement() {
   local candidate_ref="$1" allow_downgrade="$2" drain_timeout="$3" ready_timeout="$4" check_seconds="$5"
   local container current_state current_image_id current_version candidate_image_id candidate_version
   local candidate_revision rollback_ref short_id suppress_candidate=true
-  local managed_ref managed_image_id resume_status
+  local managed_ref managed_image_id resume_status current_heartbeat candidate_heartbeat
 
   if [ "$allow_downgrade" = "true" ]; then
     suppress_candidate=false
@@ -617,7 +651,7 @@ perform_replacement() {
   assert_scoped_container "$container"
 
   current_state="$(runtime_state "$container")"
-  if state_is_drained "$current_state"; then
+  if container_state_is_drained "$container" "$current_state"; then
     log "recovering a previously committed quiescent validator before checking updates"
     DRAINED_CONTAINER="$container"
     if resume_and_verify "$container" "$ready_timeout" "$check_seconds"; then
@@ -632,7 +666,7 @@ perform_replacement() {
     fi
     current_state="$(runtime_state "$container")"
   fi
-  if ! state_is_ready "$current_state"; then
+  if ! container_state_is_ready "$container" "$current_state"; then
     log "validator has not published an operational, platform-accepted state; deferring update"
     return 0
   fi
@@ -646,6 +680,8 @@ perform_replacement() {
     die "running validator is a local/legacy build without trusted update metadata; manually migrate once with the registry image before enabling automatic updates"
   fi
   validate_release_image "$candidate_ref" || die "candidate image metadata is missing or incompatible"
+  current_heartbeat="$(image_heartbeat_protocol "$current_image_id")"
+  candidate_heartbeat="$(image_heartbeat_protocol "$candidate_ref")"
 
   current_version="$(docker_image_label "$current_image_id" org.opencontainers.image.version)"
   candidate_image_id="$(docker image inspect --format '{{ .Id }}' "$candidate_ref")"
@@ -661,6 +697,10 @@ perform_replacement() {
   fi
   if [ "$allow_downgrade" != "true" ] && ! semver_greater "$candidate_version" "$current_version"; then
     die "candidate $candidate_version is not newer than running $current_version; refusing mutable-tag replacement or downgrade"
+  fi
+  if [ "$allow_downgrade" != "true" ] && \
+    ((10#$candidate_heartbeat < 10#$current_heartbeat)); then
+    die "candidate heartbeat protocol $candidate_heartbeat is older than running protocol $current_heartbeat; supervised migration required"
   fi
 
   short_id="${current_image_id#sha256:}"
@@ -1022,7 +1062,7 @@ reconcile_sidecars() {
   [ "$actual_id" = "$managed_id" ] || \
     die "running validator does not match persisted managed-image state"
   current_state="$(runtime_state "$container")"
-  state_is_ready "$current_state" || \
+  container_state_is_ready "$container" "$current_state" || \
     die "validator is not operational and freshly platform-accepted"
 
   if ! request_bounded_drain "$container" "$drain_timeout" "$check_seconds"; then

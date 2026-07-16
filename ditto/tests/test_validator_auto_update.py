@@ -26,11 +26,17 @@ FAILED_DIGEST = f"{IMAGE_REPOSITORY}@sha256:" + "3" * 64
 SOURCE = "https://github.com/ditto-assistant/ditto-subnet"
 
 
-def _labels(version: str, revision: str, *, epoch: str = "2") -> dict[str, str]:
+def _labels(
+    version: str,
+    revision: str,
+    *,
+    epoch: str = "2",
+    heartbeat_protocol: str = "4",
+) -> dict[str, str]:
     return {
         "io.heyditto.validator-service": "true",
         "io.heyditto.validator.compatibility-epoch": epoch,
-        "io.heyditto.validator.heartbeat-protocol": "4",
+        "io.heyditto.validator.heartbeat-protocol": heartbeat_protocol,
         "io.heyditto.validator.update-protocol": "1",
         "io.heyditto.validator.compose-schema": "1",
         "org.opencontainers.image.source": SOURCE,
@@ -69,6 +75,7 @@ def _initial_state() -> dict[str, Any]:
         "resume_effect_then_error_image": None,
         "fail_sidecar_reconcile": False,
         "sidecar_reconciles": 0,
+        "runtime_heartbeat_protocol_overrides": {},
         "images": {old["id"]: old, OLD_DIGEST: old, CHANNEL: new, DIGEST: new},
         "container": {
             "id": "validator-1",
@@ -222,6 +229,18 @@ elif args[:1] == ["up"]:
     state["container"]["image"] = item["id"]
     state["container"]["running"] = True
     failed = state["fail_candidate"] and item["id"] == "sha256:" + "2" * 64
+    runtime_heartbeat = state["runtime_heartbeat_protocol_overrides"].get(
+        item["id"], item["labels"]["io.heyditto.validator.heartbeat-protocol"]
+    )
+    state["container"]["runtime_state"]["compatibility_epoch"] = int(
+        item["labels"]["io.heyditto.validator.compatibility-epoch"]
+    )
+    state["container"]["runtime_state"]["heartbeat_protocol"] = int(
+        runtime_heartbeat
+    )
+    state["container"]["runtime_state"]["update_protocol"] = int(
+        item["labels"]["io.heyditto.validator.update-protocol"]
+    )
     state["container"]["runtime_state"]["state"] = "drained"
     state["container"]["runtime_state"]["platform_accepted"] = not failed
 elif args == ["managed-reconcile"]:
@@ -641,7 +660,7 @@ def test_incompatible_candidate_fails_before_drain(
     assert not any(call[0] in {"kill", "stop"} for call in state["calls"])
 
 
-def test_heartbeat_protocol_mismatch_fails_before_drain(
+def test_heartbeat_protocol_upgrade_replaces_and_resumes_candidate(
     updater_env: tuple[dict[str, str], Path, Path],
 ) -> None:
     env, state_path, _ = updater_env
@@ -654,7 +673,74 @@ def test_heartbeat_protocol_mismatch_fails_before_drain(
 
     result = _run(env, "run")
 
+    assert result.returncode == 0, result.stderr
+    final = _read_state(state_path)
+    assert final["container"]["image"] == "sha256:" + "2" * 64
+    assert final["container"]["runtime_state"]["heartbeat_protocol"] == 5
+    assert final["container"]["runtime_state"]["state"] == "working"
+
+
+def test_invalid_heartbeat_protocol_fails_before_drain(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    state = _read_state(state_path)
+    for image in (CHANNEL, DIGEST):
+        state["images"][image]["labels"]["io.heyditto.validator.heartbeat-protocol"] = (
+            "invalid"
+        )
+    state_path.write_text(json.dumps(state))
+
+    result = _run(env, "run")
+
     assert result.returncode == 1
+    assert not any(
+        call[0] in {"kill", "stop"} for call in _read_state(state_path)["calls"]
+    )
+
+
+def test_candidate_runtime_heartbeat_mismatch_rolls_back(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    state = _read_state(state_path)
+    candidate_id = "sha256:" + "2" * 64
+    for image in (CHANNEL, DIGEST):
+        state["images"][image]["labels"]["io.heyditto.validator.heartbeat-protocol"] = (
+            "5"
+        )
+    state["runtime_heartbeat_protocol_overrides"][candidate_id] = "4"
+    state_path.write_text(json.dumps(state))
+
+    result = _run(env, "run")
+
+    assert result.returncode == 1
+    assert "candidate failed readiness" in result.stderr
+    final = _read_state(state_path)
+    assert final["container"]["image"] == "sha256:" + "1" * 64
+    assert final["container"]["runtime_state"]["heartbeat_protocol"] == 4
+    assert final["container"]["runtime_state"]["state"] == "working"
+
+
+def test_heartbeat_protocol_downgrade_requires_supervised_migration(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    state = _read_state(state_path)
+    current_id = "sha256:" + "1" * 64
+    state["images"][current_id]["labels"][
+        "io.heyditto.validator.heartbeat-protocol"
+    ] = "5"
+    state["images"][OLD_DIGEST]["labels"][
+        "io.heyditto.validator.heartbeat-protocol"
+    ] = "5"
+    state["container"]["runtime_state"]["heartbeat_protocol"] = 5
+    state_path.write_text(json.dumps(state))
+
+    result = _run(env, "run")
+
+    assert result.returncode == 1
+    assert "heartbeat protocol 4 is older" in result.stderr
     assert not any(
         call[0] in {"kill", "stop"} for call in _read_state(state_path)["calls"]
     )
