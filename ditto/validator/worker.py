@@ -587,10 +587,14 @@ class ValidatorWorker:
         """Recompute weights from the durable ledger and submit them.
 
         Reads the platform's best-score-per-miner ledger and folds it into the
-        KOTH+ATH weight vector. On a ledger-read failure it leaves the current
-        on-chain weights untouched (rather than zeroing everyone) and lets the
-        next epoch retry. Returns what happened (leaderboard + weights + whether
-        submitted) for telemetry.
+        KOTH+ATH weight vector. Only miners present in the current metagraph enter
+        that fold: Pylon also drops missing hotkeys during UID translation, but
+        filtering first prevents a deregistered miner from retaining the crown or
+        a tail slot and distorting the vector that remains. Platform submissions
+        and scores stay durable, so the same hotkey becomes eligible again after
+        re-registration. On a ledger or metagraph read failure it leaves the
+        current on-chain weights untouched and lets the next epoch retry. Returns
+        what happened (leaderboard + weights + whether submitted) for telemetry.
         """
         try:
             ledger = await self._platform.get_ledger()
@@ -608,13 +612,17 @@ class ValidatorWorker:
                 getattr(ledger, "age_seconds", "?"),
             )
 
+        eligible_entries = await self._registered_ledger_entries(ledger.entries)
+        if eligible_entries is None:
+            return _WeightOutcome()
+
         # Re-scoring stale champions (§9 version-bump) is the scorer's job now,
         # run in the scoring sweep (see _rescore_stale_champions); the fold reads
         # whatever the scorer has already persisted. compute_weights ignores
         # stale versions defensively regardless.
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
         miner_weights = compute_weights(
-            ledger.entries,
+            eligible_entries,
             margin=self._config.koth_margin,
             tail_size=self._config.koth_tail_size,
             champion_share=self._config.koth_champion_share,
@@ -639,6 +647,44 @@ class ValidatorWorker:
         return _WeightOutcome(
             leaderboard=leaderboard, weights=weights, submitted=submitted
         )
+
+    async def _registered_ledger_entries(
+        self, entries: Sequence[Any]
+    ) -> list[Any] | None:
+        """Return ledger entries whose miner hotkeys have a current subnet UID.
+
+        Production workers always have a :class:`ChainClient`; the non-awaitable
+        fallback keeps lightweight injected test setters compatible. A real chain
+        read failure is fail-closed for this epoch because folding the unfiltered
+        ledger can let an absent hotkey hold the KOTH crown before Pylon silently
+        drops it during hotkey-to-UID translation.
+        """
+        if self._chain is None:
+            return list(entries)
+        read = getattr(self._chain, "get_recent_neurons", None)
+        if not callable(read):
+            return list(entries)
+        result = read(self._config.netuid)
+        if not inspect.isawaitable(result):
+            return list(entries)
+        try:
+            neurons = await result
+        except ChainError as e:
+            logger.warning(
+                "metagraph fetch failed; weights unchanged this epoch: %s", e
+            )
+            return None
+
+        registered = {neuron.hotkey for neuron in neurons}
+        filtered = [e for e in entries if e.miner_hotkey in registered]
+        missing = sorted({e.miner_hotkey for e in entries} - registered)
+        if missing:
+            logger.info(
+                "excluding %d deregistered miner hotkey(s) from weight fold: %s",
+                len(missing),
+                ", ".join(missing),
+            )
+        return filtered
 
     async def _rescore_stale_champions(
         self,

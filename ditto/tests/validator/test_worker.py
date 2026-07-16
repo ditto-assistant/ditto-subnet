@@ -126,6 +126,61 @@ class TestComputeWeights:
         assert len(w) == 3
 
 
+class TestRegistrationEligibility:
+    async def test_deregistered_champion_cannot_hold_crown_or_tail_slot(self) -> None:
+        absent = _entry("5Absent" + "x" * 40, 0.99, first_seen=_T0)
+        present = _entry(
+            "5Present" + "x" * 39,
+            0.80,
+            first_seen=_T0 + timedelta(minutes=1),
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[absent, present])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[SimpleNamespace(hotkey=present.miner_hotkey)]
+        )
+        chain.has_validator_permit = AsyncMock(return_value=True)
+        chain.get_stake_tao = AsyncMock(return_value=1.0)
+        chain.get_commit_reveal_enabled = AsyncMock(return_value=False)
+        chain.put_weights = AsyncMock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        outcome = await worker._update_weights()
+
+        assert outcome.leaderboard == [
+            (absent.miner_hotkey, 0.99),
+            (present.miner_hotkey, 0.80),
+        ]
+        chain.put_weights.assert_awaited_once_with(
+            {present.miner_hotkey: pytest.approx(0.2), _BURN_HOTKEY: pytest.approx(0.8)}
+        )
+
+    async def test_metagraph_failure_leaves_weights_unchanged(self) -> None:
+        entry = _entry("5Miner" + "x" * 41, 0.9)
+        platform = _platform_with_ledger(jobs=[], ledger=[entry])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(side_effect=ChainError("chain down"))
+        chain.put_weights = AsyncMock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        outcome = await worker._update_weights()
+
+        assert outcome == worker_mod._WeightOutcome()
+        chain.put_weights.assert_not_awaited()
+
+
 class TestMinerEmissionCap:
     def test_empty_ledger_burns_everything(self) -> None:
         assert apply_miner_emission_cap(

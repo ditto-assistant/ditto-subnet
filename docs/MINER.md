@@ -185,3 +185,21 @@ lower-scoring or failed update does not replace your current best.
 
 **What earns emissions?** A material, reproducible improvement over the current
 champion. Small gains below the dethroning gate do not take the crown.
+
+**What if my hotkey is deregistered after I submit?** Ditto cannot prevent or
+reverse Subtensor registration changes or chain eviction. Your immutable
+submission, fee record, screening history, accepted validator scores, and any
+pending evaluation remain stored; validators may finish the evaluation. The
+result stays visible for transparency, but an absent hotkey has no SN118 UID and
+is excluded from the active weight fold, leaderboard crown/tail slots, and
+emissions. Registering the same hotkey again restores eligibility automatically
+on a later validator epoch without another upload or fee. A different hotkey is
+a different miner identity: it must make its own signed, paid submission and does
+not inherit the old hotkey's scores.
+
+The existing record remains bound to the hotkey that signed the artifact and to
+the coldkey ownership recorded at the payment block. Someone who merely obtains
+the archive cannot rename or transfer that record; a cross-hotkey re-upload must
+pay again and is subject to duplicate review and the original submission's
+first-seen priority. Protect the hotkey secret itself: possession of that key is
+possession of the identity.
