@@ -27,7 +27,7 @@ from ditto.api_models.validator import (
     ValidatorHeartbeatResponse,
 )
 from ditto.validator.errors import PlatformError
-from ditto.validator.signing import sign_job_request
+from ditto.validator.signing import sign_artifact_request, sign_job_request
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -124,10 +124,24 @@ class PlatformClient:
         return LedgerResponse.model_validate(resp.json())
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
-        """Get a presigned tarball download URL for ``agent_id``."""
+        """Get a presigned tarball URL with fresh proof of hotkey ownership."""
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/artifact"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Artifact-Nonce": str(nonce),
+            "X-Validator-Artifact-Requested-At": requested_at.isoformat(),
+            "X-Validator-Artifact-Signature": sign_artifact_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
         try:
-            resp = await self._client.get(url, headers=self._headers)
+            resp = await self._client.get(url, headers=proof_headers)
         except httpx.HTTPError as e:
             raise PlatformError(f"artifact fetch failed: {e}") from e
         if resp.status_code != 200:

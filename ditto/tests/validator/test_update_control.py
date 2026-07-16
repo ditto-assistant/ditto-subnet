@@ -27,7 +27,7 @@ def test_update_state_is_atomic_bounded_and_private(tmp_path: Path) -> None:
     payload = json.loads(path.read_text())
     assert payload == {
         "compatibility_epoch": 2,
-        "heartbeat_protocol": 4,
+        "heartbeat_protocol": 5,
         "pid": payload["pid"],
         "platform_accepted": False,
         "state": "drained",
