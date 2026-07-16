@@ -134,6 +134,36 @@ def sign_job_request(
     return signature.hex()
 
 
+def artifact_signing_message(
+    *, validator_hotkey: str, agent_id: UUID, nonce: UUID, requested_at: datetime
+) -> bytes:
+    """Build canonical bytes proving ownership for one artifact request."""
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return (
+        f"validator-artifact:v1:{validator_hotkey}:{agent_id}:{nonce}:{requested}"
+    ).encode()
+
+
+def sign_artifact_request(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Return the sr25519 signature for a fresh artifact request."""
+    signature: bytes = keypair.sign(
+        artifact_signing_message(
+            validator_hotkey=validator_hotkey,
+            agent_id=agent_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
 def heartbeat_signing_message(
     *,
     validator_hotkey: str,

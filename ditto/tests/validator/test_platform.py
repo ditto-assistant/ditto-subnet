@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import bittensor
 import httpx
@@ -15,7 +16,7 @@ import pytest
 from ditto.api_models.validator import JobRequest, ValidatorHeartbeatRequest
 from ditto.validator.errors import PlatformError
 from ditto.validator.platform import PlatformClient
-from ditto.validator.signing import job_signing_message
+from ditto.validator.signing import artifact_signing_message, job_signing_message
 
 
 async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
@@ -39,6 +40,49 @@ async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
         assert await platform.request_job() is None
+
+
+async def test_artifact_request_is_fresh_agent_bound_and_signed() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonce = UUID(request.headers["X-Validator-Artifact-Nonce"])
+        requested_at = datetime.fromisoformat(
+            request.headers["X-Validator-Artifact-Requested-At"]
+        )
+        message = artifact_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            agent_id=agent_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+        assert keypair.verify(
+            message,
+            bytes.fromhex(request.headers["X-Validator-Artifact-Signature"]),
+        )
+        return httpx.Response(
+            200,
+            json={
+                "agent_id": str(agent_id),
+                "sha256": "ab" * 32,
+                "download_url": "https://storage.test/artifact",
+                "expires_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).get_artifact(agent_id)
+
+    assert response.agent_id == agent_id
 
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"

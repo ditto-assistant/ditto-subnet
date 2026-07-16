@@ -14,6 +14,7 @@ import bittensor
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.validator.signing import (
+    artifact_signing_message,
     heartbeat_signing_message,
     job_signing_message,
     score_signing_message,
@@ -137,6 +138,29 @@ def test_job_claim_signature_binds_hotkey_nonce_and_timestamp() -> None:
         requested_at=requested_at,
     )
     assert not keypair.verify(replay_as_other_nonce, bytes.fromhex(signature))
+
+
+def test_artifact_signature_binds_agent_nonce_and_timestamp() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    nonce = UUID("7f4d1800-4cf1-4a24-8fd5-2e4cd59942ae")
+    requested_at = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+    message = artifact_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    signature = keypair.sign(message)
+
+    assert keypair.verify(message, signature)
+    other_agent = artifact_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=UUID("123e4567-e89b-12d3-a456-426614174000"),
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert not keypair.verify(other_agent, signature)
 
 
 def test_heartbeat_signature_binds_build_state_and_timestamp() -> None:

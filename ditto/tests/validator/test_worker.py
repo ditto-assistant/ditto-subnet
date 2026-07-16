@@ -278,7 +278,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 4
+        assert heartbeat.protocol_version == 5
         assert len(heartbeat.code_digest) == 64
         running = [
             heartbeat
