@@ -409,6 +409,19 @@ managed_image_ref() {
   printf '%s' "$image"
 }
 
+resolve_managed_image_id() {
+  local image="$1" image_id
+  image_id="$(docker image inspect --format '{{ .Id }}' "$image" 2>/dev/null || true)"
+  if [ -z "$image_id" ] && is_registry_digest "$image"; then
+    log "restoring the persisted managed-image digest reference"
+    docker pull "$image" >/dev/null || \
+      die "persisted managed validator image is unavailable"
+    image_id="$(docker image inspect --format '{{ .Id }}' "$image" 2>/dev/null || true)"
+  fi
+  [ -n "$image_id" ] || die "persisted managed validator image is unavailable"
+  printf '%s' "$image_id"
+}
+
 adopt_running_image() {
   local image="$1" expected_image_id container actual_image_id state
   if is_true "$(setting VALIDATOR_AUTO_UPDATE false)"; then
@@ -673,8 +686,8 @@ perform_replacement() {
 
   current_image_id="$(docker inspect --format '{{ .Image }}' "$container")"
   managed_ref="$(managed_image_ref)"
-  managed_image_id="$(docker image inspect --format '{{ .Id }}' "$managed_ref" 2>/dev/null || true)"
-  [ -n "$managed_image_id" ] && [ "$managed_image_id" = "$current_image_id" ] || \
+  managed_image_id="$(resolve_managed_image_id "$managed_ref")"
+  [ "$managed_image_id" = "$current_image_id" ] || \
     die "running validator does not match persisted managed-image state"
   if ! validate_release_image "$current_image_id"; then
     die "running validator is a local/legacy build without trusted update metadata; manually migrate once with the registry image before enabling automatic updates"
@@ -1053,8 +1066,7 @@ reconcile_sidecars() {
     die "set VALIDATOR_AUTO_UPDATE=false and stop the timer before sidecar reconciliation"
   fi
   managed_ref="$(managed_image_ref)"
-  managed_id="$(docker image inspect --format '{{ .Id }}' "$managed_ref" 2>/dev/null || true)"
-  [ -n "$managed_id" ] || die "persisted managed validator image is unavailable"
+  managed_id="$(resolve_managed_image_id "$managed_ref")"
   container="$(target_container)"
   [ -n "$container" ] || die "ditto-subnet is not running"
   assert_scoped_container "$container"
