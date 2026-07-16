@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.9.3 (2026-07-16)
+
+### Bug Fixes
+
+- Allow heartbeat protocol upgrades
+  ([#150](https://github.com/ditto-assistant/ditto-subnet/pull/150),
+  [`22af669`](https://github.com/ditto-assistant/ditto-subnet/commit/22af669c35ba04689648c97056bba3a0e1b6f0b6))
+
+- Exclude deregistered miners from weight fold
+  ([#146](https://github.com/ditto-assistant/ditto-subnet/pull/146),
+  [`1bc4ce9`](https://github.com/ditto-assistant/ditto-subnet/commit/1bc4ce9466625badbd98387eaf053f9d88cf9e33))
+
+
 ## v0.9.2 (2026-07-16)
 
 ### Bug Fixes
