@@ -164,6 +164,32 @@ def sign_artifact_request(
     return signature.hex()
 
 
+def ledger_signing_message(
+    *, validator_hotkey: str, nonce: UUID, requested_at: datetime
+) -> bytes:
+    """Build canonical bytes proving ownership for one ledger request."""
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return f"validator-ledger:v1:{validator_hotkey}:{nonce}:{requested}".encode()
+
+
+def sign_ledger_request(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Return the sr25519 signature for a fresh ledger request."""
+    signature: bytes = keypair.sign(
+        ledger_signing_message(
+            validator_hotkey=validator_hotkey,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
 def heartbeat_signing_message(
     *,
     validator_hotkey: str,

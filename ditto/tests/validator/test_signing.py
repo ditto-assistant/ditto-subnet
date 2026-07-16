@@ -17,6 +17,7 @@ from ditto.validator.signing import (
     artifact_signing_message,
     heartbeat_signing_message,
     job_signing_message,
+    ledger_signing_message,
     score_signing_message,
     sign_heartbeat,
     sign_job_request,
@@ -161,6 +162,26 @@ def test_artifact_signature_binds_agent_nonce_and_timestamp() -> None:
         requested_at=requested_at,
     )
     assert not keypair.verify(other_agent, signature)
+
+
+def test_ledger_signature_binds_nonce_and_timestamp() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    nonce = UUID("7f4d1800-4cf1-4a24-8fd5-2e4cd59942ae")
+    requested_at = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+    message = ledger_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    signature = keypair.sign(message)
+
+    assert keypair.verify(message, signature)
+    replay_as_other_nonce = ledger_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        nonce=UUID("e879178e-baf4-41f0-9467-9da18b65ac17"),
+        requested_at=requested_at,
+    )
+    assert not keypair.verify(replay_as_other_nonce, signature)
 
 
 def test_heartbeat_signature_binds_build_state_and_timestamp() -> None:

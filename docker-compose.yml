@@ -158,7 +158,7 @@ services:
       dockerfile: Dockerfile
       args:
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "5"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "6"
     restart: unless-stopped
     stop_grace_period: 80m
     labels:

@@ -120,7 +120,7 @@ jobs:
             DITTO_VERSION=${{ needs.release.outputs.version }}
             DITTO_REVISION=${{ needs.release.outputs.commit_sha }}
             VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
-            VALIDATOR_HEARTBEAT_PROTOCOL=5
+            VALIDATOR_HEARTBEAT_PROTOCOL=6
           tags: |
             ${{ env.IMAGE }}:sha-${{ needs.release.outputs.commit_sha }}
 
@@ -161,7 +161,7 @@ jobs:
             bootstrap_volume="ditto-validator-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${suffix}"
             docker pull "$child_exact"
             test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$child_exact")" = "$COMPATIBILITY_EPOCH"
-            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$child_exact")" = "5"
+            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$child_exact")" = "6"
             test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$child_exact")" = "$VERSION"
             test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$child_exact")" = "$REVISION"
             docker volume create "$bootstrap_volume"
