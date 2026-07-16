@@ -185,3 +185,13 @@ lower-scoring or failed update does not replace your current best.
 
 **What earns emissions?** A material, reproducible improvement over the current
 champion. Small gains below the dethroning gate do not take the crown.
+
+**What happens if my hotkey is deregistered after I submit?** Ditto keeps your
+submission, screening history, payment record, accepted scores, and any pending
+evaluation. Validators may finish scoring it, but a hotkey that is absent from
+the SN118 metagraph cannot receive weight or emissions and is excluded from the
+current weight fold. Registering the same hotkey on SN118 restores eligibility
+automatically. A different hotkey is a separate miner identity: it does not
+inherit the first hotkey's submission, score, fee, or ownership, and submitting
+under it requires a new signed, paid upload. Ditto cannot prevent Subtensor from
+deregistering or evicting a neuron.
