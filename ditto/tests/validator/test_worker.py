@@ -1206,6 +1206,83 @@ class TestRunOnce:
             {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
         )
 
+    async def test_deregistered_champion_is_filtered_before_koth_fold(self) -> None:
+        absent = "5Absent" + "x" * 40
+        registered = "5Registered" + "x" * 36
+        ledger = [_entry(absent, 0.90), _entry(registered, 0.80)]
+        platform = _platform_with_ledger(jobs=[], ledger=ledger)
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[SimpleNamespace(hotkey=registered)]
+        )
+        chain.put_weights = AsyncMock()
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+        chain.put_weights.assert_awaited_once_with({registered: 0.2, _BURN_HOTKEY: 0.8})
+
+    async def test_chain_registration_read_failure_leaves_weights_unchanged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        miner = "5Miner" + "x" * 42
+        platform = _platform_with_ledger(jobs=[], ledger=[_entry(miner, 0.90)])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(side_effect=ChainError("pylon down"))
+        chain.put_weights = AsyncMock()
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        with caplog.at_level("WARNING"):
+            await worker.run_once()
+        chain.put_weights.assert_not_awaited()
+        assert "weights unchanged" in caplog.text
+
+    async def test_only_same_hotkey_reregistration_restores_eligibility(self) -> None:
+        original = "5Original" + "x" * 39
+        replacement = "5Replacement" + "x" * 36
+        platform = _platform_with_ledger(jobs=[], ledger=[_entry(original, 0.90)])
+        platform.request_job = AsyncMock(side_effect=[None, None])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            side_effect=[
+                [SimpleNamespace(hotkey=replacement)],
+                [SimpleNamespace(hotkey=original), SimpleNamespace(hotkey=replacement)],
+            ]
+        )
+        chain.put_weights = AsyncMock()
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+        await worker.run_once()
+        assert chain.put_weights.await_args_list[0].args == ({_BURN_HOTKEY: 1.0},)
+        assert chain.put_weights.await_args_list[1].args == (
+            {original: 0.2, _BURN_HOTKEY: 0.8},
+        )
+        assert all(
+            replacement not in call.args[0]
+            for call in chain.put_weights.await_args_list
+        )
+
     async def test_empty_ledger_burns_all_miner_emission(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
         chain = MagicMock()

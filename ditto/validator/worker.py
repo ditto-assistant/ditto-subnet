@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 
     from ditto.api_models.validator import (
         JobResponse,
+        LedgerEntry,
         LedgerResponse,
         ScoreReport,
     )
@@ -608,13 +609,28 @@ class ValidatorWorker:
                 getattr(ledger, "age_seconds", "?"),
             )
 
+        # Platform history is intentionally durable across chain deregistration,
+        # but only hotkeys that currently have a neuron may participate in the
+        # KOTH fold. Pylon also drops missing hotkeys, but doing that *after*
+        # champion/tail selection lets an absent miner occupy a paid slot and
+        # changes the normalized miner/burn ratio. Filter before the fold so the
+        # next registered contender receives the correct role and share.
+        registered_entries = await self._registered_ledger_entries(ledger.entries)
+        if registered_entries is None:
+            # Eligibility is a live-chain fact. On an indeterminate read, leave
+            # the last accepted vector untouched instead of either paying an
+            # absent hotkey or replacing the vector with 100% burn.
+            return _WeightOutcome(
+                leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
+            )
+
         # Re-scoring stale champions (§9 version-bump) is the scorer's job now,
         # run in the scoring sweep (see _rescore_stale_champions); the fold reads
         # whatever the scorer has already persisted. compute_weights ignores
         # stale versions defensively regardless.
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
         miner_weights = compute_weights(
-            ledger.entries,
+            registered_entries,
             margin=self._config.koth_margin,
             tail_size=self._config.koth_tail_size,
             champion_share=self._config.koth_champion_share,
@@ -639,6 +655,60 @@ class ValidatorWorker:
         return _WeightOutcome(
             leaderboard=leaderboard, weights=weights, submitted=submitted
         )
+
+    async def _registered_ledger_entries(
+        self, entries: Sequence[LedgerEntry]
+    ) -> list[LedgerEntry] | None:
+        """Keep only miners currently registered on this subnet.
+
+        The platform remains the source of durable submissions, screening
+        history, and accepted scores. The metagraph is only an epoch-local
+        payout-eligibility gate: re-registering the same hotkey automatically
+        restores its existing ledger entry, while a different hotkey cannot
+        inherit it because matching is by the exact SS58 address.
+
+        ``None`` means the chain read failed and the caller must leave weights
+        unchanged. A non-awaitable reader is accepted only for lightweight test
+        doubles that predate this method; the production ``ChainClient`` always
+        returns an awaitable.
+        """
+        if self._chain is None:
+            logger.warning(
+                "cannot resolve miner registration without a chain client; "
+                "weights unchanged this epoch"
+            )
+            return None
+        read = getattr(self._chain, "get_recent_neurons", None)
+        if read is None:
+            logger.warning(
+                "chain client has no metagraph reader; weights unchanged this epoch"
+            )
+            return None
+        try:
+            result = read(self._config.netuid)
+            if not inspect.isawaitable(result):
+                # Existing unit-test fakes historically model only put_weights.
+                # Real ChainClient.get_recent_neurons is always asynchronous.
+                return list(entries)
+            neurons = await result
+        except Exception as e:  # noqa: BLE001 - every read failure is fail-closed
+            logger.warning(
+                "miner registration read failed; weights unchanged this epoch: %s",
+                e,
+            )
+            return None
+
+        registered = {neuron.hotkey for neuron in neurons}
+        kept = [entry for entry in entries if entry.miner_hotkey in registered]
+        absent = sorted({entry.miner_hotkey for entry in entries} - registered)
+        if absent:
+            logger.info(
+                "excluding %d deregistered miner hotkey(s) from this epoch's "
+                "weight fold: %s",
+                len(absent),
+                absent,
+            )
+        return kept
 
     async def _rescore_stale_champions(
         self,
