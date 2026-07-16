@@ -77,6 +77,7 @@ def _initial_state() -> dict[str, Any]:
         "sidecar_reconciles": 0,
         "runtime_heartbeat_protocol_overrides": {},
         "images": {old["id"]: old, OLD_DIGEST: old, CHANNEL: new, DIGEST: new},
+        "registry_images": {OLD_DIGEST: old, DIGEST: new},
         "container": {
             "id": "validator-1",
             "image": old["id"],
@@ -122,6 +123,9 @@ def image(ref):
     raise SystemExit(1)
 
 if args[:1] == ["pull"]:
+    ref = args[1]
+    if ref not in state["images"] and ref in state.get("registry_images", {}):
+        state["images"][ref] = state["registry_images"][ref]
     save()
 elif args[:2] == ["image", "inspect"]:
     fmt = args[args.index("--format") + 1]
@@ -457,6 +461,22 @@ def test_enabled_mode_requires_persisted_managed_image_before_docker_mutation(
     state = _read_state(state_path)
     assert state["calls"] == []
     assert state["compose_calls"] == []
+
+
+def test_missing_local_digest_alias_is_restored_before_identity_check(
+    updater_env: tuple[dict[str, str], Path, Path],
+) -> None:
+    env, state_path, _ = updater_env
+    state = _read_state(state_path)
+    del state["images"][OLD_DIGEST]
+    state_path.write_text(json.dumps(state))
+
+    result = _run(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    state = _read_state(state_path)
+    assert ["pull", OLD_DIGEST] in state["calls"]
+    assert state["container"]["image"] == "sha256:" + "2" * 64
 
 
 def test_managed_compose_config_uses_the_persisted_immutable_image(
