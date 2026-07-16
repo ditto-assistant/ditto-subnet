@@ -15,8 +15,24 @@ die() {
   exit 1
 }
 
+require_absolute_path() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    /*) ;;
+    *) die "$name must be an absolute path" ;;
+  esac
+  case "$value" in
+    *$'\n'* | *$'\r'*) die "$name must not contain a newline" ;;
+  esac
+}
+
 command -v docker >/dev/null 2>&1 || die "Docker is not installed"
 command -v git >/dev/null 2>&1 || die "git is not installed"
+
+wallets_dir="${DITTO_BITTENSOR_WALLETS_DIR:-$HOME/.bittensor/wallets}"
+require_absolute_path DITTO_BITTENSOR_WALLETS_DIR "$wallets_dir"
+export DITTO_BITTENSOR_WALLETS_DIR="$wallets_dir"
 
 if [ "$#" -eq 0 ]; then
   die "usage: $0 <docker compose arguments>"
@@ -129,13 +145,35 @@ if ! git -C "$checkout" cat-file -e "$checksum^{commit}" 2>/dev/null; then
 fi
 
 if [ -n "$(
-  git -C "$checkout" status \
+  git -c core.fileMode=false -C "$checkout" status \
     --porcelain=v1 --untracked-files=all --ignored=matching
 )" ]; then
   die "cached dittobench-api checkout has local changes: $checkout"
 fi
 
 git -C "$checkout" checkout --quiet --detach "$checksum"
+
+# Git's immutable tree is authoritative for executable modes. Some migrations,
+# archive restores, and filesystems preserve contents but drop +x, which can
+# make a later Docker build fail even though the cached checkout has the right
+# commit. Repair mode-only drift, then fail closed if any other drift remains.
+while IFS=' ' read -r -d '' tracked_mode tracked_path; do
+  case "$tracked_mode" in
+    100755) chmod 0755 "$checkout/$tracked_path" ;;
+    100644) chmod 0644 "$checkout/$tracked_path" ;;
+  esac
+done < <(
+  git -C "$checkout" ls-tree -r -z \
+    --format='%(objectmode) %(path)' "$checksum"
+)
+
+if [ -n "$(
+  git -c core.fileMode=true -C "$checkout" status \
+    --porcelain=v1 --untracked-files=all --ignored=matching
+)" ]; then
+  die "cached dittobench-api checkout could not be normalized: $checkout"
+fi
+
 head_checksum="$(git -C "$checkout" rev-parse HEAD)"
 if [ "$head_checksum" != "$checksum" ]; then
   die "cached dittobench-api checkout is $head_checksum, expected $checksum"

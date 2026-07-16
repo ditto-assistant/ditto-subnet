@@ -292,7 +292,12 @@ elif args == ["info"] or args == ["buildx", "version"]:
 elif args[:1] == ["compose"]:
     with open(os.environ["FAKE_COMPOSE_CAPTURE"], "w") as handle:
         json.dump(
-            {"args": args, "image": os.environ.get("DITTO_SUBNET_IMAGE")}, handle
+            {
+                "args": args,
+                "image": os.environ.get("DITTO_SUBNET_IMAGE"),
+                "wallets_dir": os.environ.get("DITTO_BITTENSOR_WALLETS_DIR"),
+            },
+            handle,
         )
 else:
     raise SystemExit("unhandled wrapper docker command: " + repr(args))
@@ -308,6 +313,12 @@ if "remote" in args and "get-url" in args:
     print("https://github.com/ditto-assistant/dittobench-api.git")
 elif "rev-parse" in args:
     print(os.environ["FAKE_DITTOBENCH_CHECKSUM"])
+elif "ls-tree" in args:
+    records = [b"100644 Dockerfile"]
+    executable = os.environ.get("FAKE_EXECUTABLE_PATH")
+    if executable:
+        records.append(b"100755 " + executable.encode())
+    sys.stdout.buffer.write(b"\0".join(records) + b"\0")
 elif "status" in args or "cat-file" in args or "checkout" in args:
     pass
 else:
@@ -414,6 +425,7 @@ def _wrapper_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
         "DITTO_VALIDATOR_UPDATE_STATE_DIR": str(state_dir),
         "FAKE_COMPOSE_CAPTURE": str(capture),
         "FAKE_DITTOBENCH_CHECKSUM": checksum,
+        "HOME": str(tmp_path / "operator-home"),
     }
     return env, capture, state_dir
 
@@ -463,7 +475,35 @@ def test_managed_compose_config_uses_the_persisted_immutable_image(
     )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(capture.read_text())["image"] == DIGEST
+    captured = json.loads(capture.read_text())
+    assert captured["image"] == DIGEST
+    assert captured["wallets_dir"] == str(tmp_path / "operator-home/.bittensor/wallets")
+
+
+def test_compose_wrapper_repairs_git_tracked_executable_modes(
+    tmp_path: Path,
+) -> None:
+    env, _, state_dir = _wrapper_env(tmp_path)
+    (state_dir / "managed-image.env").write_text(f"DITTO_SUBNET_IMAGE={DIGEST}\n")
+    checksum = env["FAKE_DITTOBENCH_CHECKSUM"]
+    executable = (
+        Path(env["DITTO_SUBNET_BUILD_CACHE"]) / "dittobench-api" / checksum / "run.sh"
+    )
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o644)
+    env["FAKE_EXECUTABLE_PATH"] = "run.sh"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "config", "--quiet"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert executable.stat().st_mode & stat.S_IXUSR
 
 
 def test_managed_compose_blocks_broad_mutation_and_image_override(

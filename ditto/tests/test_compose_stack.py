@@ -137,12 +137,26 @@ def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
     assert wallet_mount["type"] == "bind"
     assert wallet_mount["read_only"] is True
     assert wallet_mount["bind"]["create_host_path"] is False
-    assert wallet_mount["source"].endswith(
-        "/wallets/${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}"
+    assert wallet_mount["source"] == (
+        "${DITTO_BITTENSOR_WALLETS_DIR:-~/.bittensor/wallets}/"
+        "${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}"
     )
     assert wallet_mount["target"].endswith(
         "/wallets/${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}"
     )
+
+    pylon_wallet_mount = next(
+        mount
+        for mount in services["pylon"]["volumes"]
+        if mount["target"] == "/root/.bittensor/wallets"
+    )
+    assert pylon_wallet_mount == {
+        "type": "bind",
+        "source": "${DITTO_BITTENSOR_WALLETS_DIR:-~/.bittensor/wallets}",
+        "target": "/root/.bittensor/wallets",
+        "read_only": True,
+        "bind": {"create_host_path": False},
+    }
 
 
 def test_only_validator_is_an_explicit_auto_update_target() -> None:
@@ -237,6 +251,14 @@ def test_systemd_unit_pins_runtime_settings_to_its_timeout_budget() -> None:
         assert f"Environment={setting}=" in installer
         assert (f"{setting}= " + "\\") in installer
     assert "Environment=DITTO_SUBNET_ENV_FILE=" in installer
+    assert 'Environment="HOME=$service_home"' in installer
+    assert 'Environment="DOCKER_CONFIG=$docker_config"' in installer
+    assert 'Environment="XDG_CONFIG_HOME=$xdg_config_home"' in installer
+    assert 'Environment="DITTO_BITTENSOR_WALLETS_DIR=$wallets_dir"' in installer
+    assert "infer_running_wallets_dir" in installer
+    assert "io.heyditto.validator.auto-update-target=true" in installer
+    assert "*$'\\n'* | *$'\\r'* | *'\"'* | *\\\\* | *'%'*)" in installer
+    assert "*'\\\\'*" not in installer
     assert "TimeoutStartSec=${start_timeout_seconds}s" in installer
     assert "TimeoutStopSec=${stop_timeout_seconds}s" in installer
 

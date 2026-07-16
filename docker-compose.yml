@@ -31,7 +31,12 @@ services:
     cap_drop:
       - ALL
     volumes:
-      - ~/.bittensor/wallets/:/root/.bittensor/wallets:ro
+      - type: bind
+        source: ${DITTO_BITTENSOR_WALLETS_DIR:-~/.bittensor/wallets}
+        target: /root/.bittensor/wallets
+        read_only: true
+        bind:
+          create_host_path: false
       - pylon-data:/data
 
   # The scorer receives an isolated nested Docker daemon. The validator host's
@@ -228,7 +233,7 @@ services:
         target: /var/lib/ditto-validator-update
         read_only: false
       - type: bind
-        source: ~/.bittensor/wallets/${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}
+        source: ${DITTO_BITTENSOR_WALLETS_DIR:-~/.bittensor/wallets}/${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}
         target: /root/.bittensor/wallets/${VALIDATOR_WALLET_NAME}/hotkeys/${VALIDATOR_WALLET_HOTKEY}
         read_only: true
         bind:

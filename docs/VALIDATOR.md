@@ -216,6 +216,17 @@ sudo systemctl status ditto-validator-auto-update.timer
 ./scripts/validator-auto-update.sh status
 ```
 
+The installer persists the operator's home, Docker configuration, and wallet
+directory in the systemd unit. It also preserves the wallet source mounted by
+an already-running validator. If wallets were moved or the validator is not
+running during installation, pass their absolute host directory explicitly:
+
+```sh
+sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
+  DITTO_BITTENSOR_WALLETS_DIR=/path/to/.bittensor/wallets \
+  ./scripts/install-validator-auto-update.sh
+```
+
 The timer checks `compat-2`, resolves it to an immutable digest, and validates
 the candidate before asking the worker to drain. An active benchmark is allowed
 to finish through signed result submission. If the drain deadline expires, the
