@@ -27,7 +27,11 @@ from ditto.api_models.validator import (
     ValidatorHeartbeatResponse,
 )
 from ditto.validator.errors import PlatformError
-from ditto.validator.signing import sign_artifact_request, sign_job_request
+from ditto.validator.signing import (
+    sign_artifact_request,
+    sign_job_request,
+    sign_ledger_request,
+)
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -113,8 +117,21 @@ class PlatformClient:
         leaves the ``evaluating`` queue.
         """
         url = f"{self._base}{_SCORING_PREFIX}/scores"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
         try:
-            resp = await self._client.get(url, headers=self._headers)
+            resp = await self._client.get(url, headers=proof_headers)
         except httpx.HTTPError as e:
             raise PlatformError(f"ledger fetch failed: {e}") from e
         if resp.status_code != 200:

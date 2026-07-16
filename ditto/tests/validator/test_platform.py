@@ -16,7 +16,11 @@ import pytest
 from ditto.api_models.validator import JobRequest, ValidatorHeartbeatRequest
 from ditto.validator.errors import PlatformError
 from ditto.validator.platform import PlatformClient
-from ditto.validator.signing import artifact_signing_message, job_signing_message
+from ditto.validator.signing import (
+    artifact_signing_message,
+    job_signing_message,
+    ledger_signing_message,
+)
 
 
 async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
@@ -83,6 +87,48 @@ async def test_artifact_request_is_fresh_agent_bound_and_signed() -> None:
         ).get_artifact(agent_id)
 
     assert response.agent_id == agent_id
+
+
+async def test_ledger_request_is_fresh_and_signed() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonce = UUID(request.headers["X-Validator-Ledger-Nonce"])
+        requested_at = datetime.fromisoformat(
+            request.headers["X-Validator-Ledger-Requested-At"]
+        )
+        message = ledger_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+        assert keypair.verify(
+            message,
+            bytes.fromhex(request.headers["X-Validator-Ledger-Signature"]),
+        )
+        return httpx.Response(
+            200,
+            json={
+                "entries": [],
+                "count": 0,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "stale": False,
+                "age_seconds": 0,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).get_ledger()
+
+    assert response.entries == []
 
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
