@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.9.2 (2026-07-16)
+
+### Bug Fixes
+
+- Sign validator artifact requests
+  ([#148](https://github.com/ditto-assistant/ditto-subnet/pull/148),
+  [`5550547`](https://github.com/ditto-assistant/ditto-subnet/commit/5550547f5c8e8073b765683d8aaa44bc107a23e6))
+
+### Chores
+
+- **docs**: Condense validator getting-started guide
+  ([#141](https://github.com/ditto-assistant/ditto-subnet/pull/141),
+  [`961fc4d`](https://github.com/ditto-assistant/ditto-subnet/commit/961fc4d3207ab74f42d87b2c98d1d9eeb2a40988))
+
+
 ## v0.9.1 (2026-07-15)
 
 ### Bug Fixes
