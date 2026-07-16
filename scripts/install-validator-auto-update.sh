@@ -19,7 +19,7 @@ require_systemd_path() {
     *) die "$name must be an absolute path" ;;
   esac
   case "$value" in
-    *$'\n'* | *$'\r'* | *'"'* | *'\\'* | *'%'*)
+    *$'\n'* | *$'\r'* | *'"'* | *\\* | *'%'*)
       die "$name contains characters that cannot be persisted safely"
       ;;
   esac

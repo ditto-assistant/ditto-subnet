@@ -257,6 +257,8 @@ def test_systemd_unit_pins_runtime_settings_to_its_timeout_budget() -> None:
     assert 'Environment="DITTO_BITTENSOR_WALLETS_DIR=$wallets_dir"' in installer
     assert "infer_running_wallets_dir" in installer
     assert "io.heyditto.validator.auto-update-target=true" in installer
+    assert "*$'\\n'* | *$'\\r'* | *'\"'* | *\\\\* | *'%'*)" in installer
+    assert "*'\\\\'*" not in installer
     assert "TimeoutStartSec=${start_timeout_seconds}s" in installer
     assert "TimeoutStopSec=${stop_timeout_seconds}s" in installer
 
