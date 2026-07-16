@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.9.5 (2026-07-16)
+
+### Bug Fixes
+
+- Harden validator updater host context
+  ([#151](https://github.com/ditto-assistant/ditto-subnet/pull/151),
+  [`e4df9b6`](https://github.com/ditto-assistant/ditto-subnet/commit/e4df9b6206d04236839f2b82f55a456a3ed2f5bb))
+
+
 ## v0.9.4 (2026-07-16)
 
 ### Bug Fixes
