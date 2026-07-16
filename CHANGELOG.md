@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.9.6 (2026-07-16)
+
+### Bug Fixes
+
+- Restore updater digest aliases ([#153](https://github.com/ditto-assistant/ditto-subnet/pull/153),
+  [`6c19207`](https://github.com/ditto-assistant/ditto-subnet/commit/6c19207c40927fa7d0648eea6445bd28d208245f))
+
+
 ## v0.9.5 (2026-07-16)
 
 ### Bug Fixes
