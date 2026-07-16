@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.9.4 (2026-07-16)
+
+### Bug Fixes
+
+- Sign validator ledger requests ([#149](https://github.com/ditto-assistant/ditto-subnet/pull/149),
+  [`97719eb`](https://github.com/ditto-assistant/ditto-subnet/commit/97719ebf4476e3a1abf1d9d9b52b0593b8c13fb0))
+
+
 ## v0.9.3 (2026-07-16)
 
 ### Bug Fixes
