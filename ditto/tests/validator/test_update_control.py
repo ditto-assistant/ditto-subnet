@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ditto.validator import worker as worker_mod
+from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 from ditto.validator.update_control import (
     bootstrap_should_start_drained,
     mark_bootstrap_resumed,
@@ -27,7 +28,7 @@ def test_update_state_is_atomic_bounded_and_private(tmp_path: Path) -> None:
     payload = json.loads(path.read_text())
     assert payload == {
         "compatibility_epoch": 2,
-        "heartbeat_protocol": 6,
+        "heartbeat_protocol": HEARTBEAT_PROTOCOL_VERSION,
         "pid": payload["pid"],
         "platform_accepted": False,
         "state": "drained",

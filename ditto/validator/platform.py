@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import httpx
+from pydantic import ValidationError
 
 from ditto.api_models.validator import (
     ArtifactResponse,
@@ -165,7 +166,13 @@ class PlatformClient:
             raise PlatformError(
                 f"artifact rejected ({resp.status_code}): {resp.text[:200]}"
             )
-        return ArtifactResponse.model_validate(resp.json())
+        try:
+            return ArtifactResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            # A malformed artifact is scoped to one ticket. Normalize model/JSON
+            # failures to the worker's typed platform boundary so the ticket is
+            # skipped without abandoning the remainder of the scoring sweep.
+            raise PlatformError("artifact response was invalid") from e
 
     async def submit_score(
         self,

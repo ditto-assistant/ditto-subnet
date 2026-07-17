@@ -268,9 +268,14 @@ def test_source_compose_cannot_claim_managed_release_identity() -> None:
     ]["environment"]
 
     assert validator_environment["VALIDATOR_STACK_MODE"] == "source"
-    assert not any(
-        key.startswith("VALIDATOR_STACK_") and key != "VALIDATOR_STACK_MODE"
-        for key in validator_environment
+    assert "VALIDATOR_STACK_RELEASE_DESCRIPTOR_DIGEST" not in validator_environment
+    assert "VALIDATOR_STACK_VERSION" not in validator_environment
+    assert "VALIDATOR_STACK_REVISION" not in validator_environment
+    assert validator_environment["VALIDATOR_STACK_COMPONENT_DITTOBENCH_API"].startswith(
+        "source:"
+    )
+    assert validator_environment["VALIDATOR_STACK_COMPONENT_MODEL_RELAY"].startswith(
+        "source:"
     )
 
 

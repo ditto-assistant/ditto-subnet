@@ -28,6 +28,11 @@ from ditto.api_models.system_health import (
     SystemMetrics,
     system_metrics_signing_token,
 )
+from ditto.api_models.validator_capabilities import (
+    ValidatorCapabilities,
+    ValidatorStackIdentity,
+    validator_identity_signing_token,
+)
 from ditto.validator.errors import ValidatorConfigError
 
 if TYPE_CHECKING:
@@ -200,9 +205,23 @@ def heartbeat_signing_message(
     active_agent_id: UUID | None = None,
     system_metrics: SystemMetrics | None = None,
     benchmark_progress: BenchmarkProgress | None = None,
+    capabilities: ValidatorCapabilities | None = None,
+    stack: ValidatorStackIdentity | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
+    if protocol_version >= 7:
+        if capabilities is None or stack is None:
+            raise ValueError("heartbeat protocol v7 requires capabilities and stack")
+        identity_token = validator_identity_signing_token(capabilities, stack)
+        return (
+            "ditto-validator-heartbeat:v7:"
+            f"{validator_hotkey}:{software_version}:{protocol_version}:"
+            f"{code_digest}:{state}:{active_agent_id or ''}:"
+            f"{system_metrics_signing_token(system_metrics)}:"
+            f"{benchmark_progress_signing_token(benchmark_progress)}:"
+            f"{identity_token}:{timestamp}"
+        ).encode()
     if protocol_version >= 4:
         return (
             "ditto-validator-heartbeat:v4:"
@@ -242,6 +261,8 @@ def sign_heartbeat(
     active_agent_id: UUID | None = None,
     system_metrics: SystemMetrics | None = None,
     benchmark_progress: BenchmarkProgress | None = None,
+    capabilities: ValidatorCapabilities | None = None,
+    stack: ValidatorStackIdentity | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -254,6 +275,8 @@ def sign_heartbeat(
         active_agent_id=active_agent_id,
         system_metrics=system_metrics,
         benchmark_progress=benchmark_progress,
+        capabilities=capabilities,
+        stack=stack,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

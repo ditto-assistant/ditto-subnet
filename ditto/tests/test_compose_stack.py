@@ -80,6 +80,14 @@ def test_scorer_capability_probe_needs_no_operator_secret() -> None:
     )
 
 
+def test_scorer_allows_only_verified_screened_image_downloads() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    environment = compose["services"]["dittobench-api"]["environment"]
+
+    assert environment["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
+    assert "DITTOBENCH_ALLOW_PRIVATE_HARNESS" not in environment
+
+
 def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
@@ -91,7 +99,48 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     assert "docker system prune --all --force --filter 'until=24h'" in entrypoint
     assert "docker volume prune --all --force" in entrypoint
     assert "sleep 21600" in entrypoint
+
+
+def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    env = compose["services"]["dittobench-api"]["environment"]
+    assert env["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
+    assert env["DITTOBENCH_REQUIRE_SCREENED_IMAGE"] == (
+        "${DITTOBENCH_REQUIRE_SCREENED_IMAGE:-0}"
+    )
+    assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
+    assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
+
+    entrypoint = (
+        COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
+    ).read_text()
+    assert "com.docker.network.bridge.name=ditto-sandbox0" in entrypoint
+    assert "network_driver" in entrypoint
+    assert "[ \"$network_driver\" != 'bridge' ]" in entrypoint
+    assert "bridge_name" in entrypoint
+    assert "[ \"$bridge_name\" != 'ditto-sandbox0' ]" in entrypoint
+    assert "refusing unverified sandbox reuse" in entrypoint
+    assert "DITTO-SANDBOX-EGRESS" in entrypoint
+    assert '-d "$gateway" -p tcp --dport 11434 -j ACCEPT' in entrypoint
+    assert '-d "$gateway" -p tcp --dport 11435 -j ACCEPT' in entrypoint
+    assert "ditto-sandbox-deny" in entrypoint
+    assert "-j DROP" in entrypoint
     assert "/var/run/docker.sock" not in COMPOSE_PATH.read_text()
+
+
+def test_screened_image_rollout_mode_is_shared_with_capability_heartbeat() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    scorer = compose["services"]["dittobench-api"]["environment"]
+    validator = compose["services"]["ditto-subnet"]["environment"]
+
+    rollout = "${DITTOBENCH_REQUIRE_SCREENED_IMAGE:-0}"
+    assert scorer["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
+    assert scorer["DITTOBENCH_REQUIRE_SCREENED_IMAGE"] == rollout
+    assert validator["VALIDATOR_SCREENED_IMAGES"] == "1"
+    assert validator["VALIDATOR_REQUIRE_SCREENED_IMAGE"] == rollout
+    assert validator["NETUID"] == "118"
+    assert validator["VALIDATOR_STACK_MODE"] == "source"
+    assert validator["VALIDATOR_EXECUTOR_ISOLATION"] == "privileged_dind"
 
 
 def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
@@ -114,12 +163,30 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert len(checksum) == 40
     assert checksum == checksum.lower()
     assert all(character in "0123456789abcdef" for character in checksum)
+    # dittobench-api PR #34 was squash-merged at this exact main commit. The
+    # pre-merge PR head is not a valid production BuildKit checksum.
+    assert checksum == "119429b28b83cd6cb33528abdf690ddef9f950c0"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]
     assert compose["services"]["model-relay"]["build"]["context"] == expected
     assert compose["services"]["dittobench-api"]["build"]["context"] == expected
-    assert 'git -C "$checkout" fetch' in COMPOSE_WRAPPER_PATH.read_text()
+    validator_environment = compose["services"]["ditto-subnet"]["environment"]
+    assert validator_environment["VALIDATOR_STACK_COMPONENT_DITTOBENCH_API"] == (
+        f"source:{checksum}"
+    )
+    assert validator_environment["VALIDATOR_STACK_COMPONENT_MODEL_RELAY"] == (
+        f"source:{checksum}"
+    )
+    assert raw_compose.count(checksum) == 3
+    wrapper = COMPOSE_WRAPPER_PATH.read_text()
+    assert 'git -C "$checkout" fetch' in wrapper
+    assert 'context_override="${DITTOBENCH_BUILD_CONTEXT:-}"' in wrapper
+    assert 'merge-base --is-ancestor "$checksum" FETCH_HEAD' in wrapper
+    assert 'verified_marker="$checkout.ref-verified"' in wrapper
+    assert "DITTOBENCH_ALLOW_UNMERGED_SMOKE:-false" in wrapper
+    assert "SUBTENSOR_NETWORK:-finney" in wrapper
+    assert "materialize_context=false" in wrapper
 
 
 def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
@@ -189,6 +256,9 @@ def test_only_validator_is_an_explicit_auto_update_target() -> None:
     assert validator["image"].endswith("ditto-subnet-validator:local}")
     assert validator["pull_policy"] == "build"
     assert validator["build"]["context"] == "."
+    assert validator["build"]["args"]["DITTO_REVISION"] == (
+        "${DITTO_SOURCE_REVISION:-local}"
+    )
     assert validator["build"]["args"]["VALIDATOR_COMPATIBILITY_EPOCH"] == "2"
     assert int(validator["build"]["args"]["VALIDATOR_HEARTBEAT_PROTOCOL"]) == (
         HEARTBEAT_PROTOCOL_VERSION
@@ -196,6 +266,10 @@ def test_only_validator_is_an_explicit_auto_update_target() -> None:
     assert validator["environment"]["VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH"] == "2"
     assert validator["stop_grace_period"] == "80m"
     assert validator["environment"]["VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS"] == "4500"
+    wrapper = COMPOSE_WRAPPER_PATH.read_text()
+    assert 'git -C "$ROOT_DIR" rev-parse HEAD' in wrapper
+    assert 'export DITTO_SOURCE_REVISION="$source_revision"' in wrapper
+    assert 'export DITTO_SOURCE_IDENTITY="local-source:$source_revision"' in wrapper
 
     # These services are deliberately outside updater scope and retain their
     # existing deployment boundaries/pins.

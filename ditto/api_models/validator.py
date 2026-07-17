@@ -34,6 +34,10 @@ from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
     _SS58_PATTERN,
 )
+from ditto.api_models.validator_capabilities import (
+    ValidatorCapabilities,
+    ValidatorStackIdentity,
+)
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
@@ -175,6 +179,16 @@ class ValidatorHeartbeatRequest(BaseModel):
             description="Optional privacy-safe benchmark progress under protocol v4.",
         ),
     ] = None
+    capabilities: Annotated[
+        ValidatorCapabilities | None,
+        Field(default=None, description="Signed execution capabilities under v7."),
+    ] = None
+    stack: Annotated[
+        ValidatorStackIdentity | None,
+        Field(
+            default=None, description="Signed six-component stack identity under v7."
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -196,6 +210,20 @@ class ValidatorHeartbeatRequest(BaseModel):
             raise ValueError(
                 "benchmark progress requires running_benchmark and active_agent_id"
             )
+        return self
+
+    @model_validator(mode="after")
+    def capabilities_require_v7(self) -> ValidatorHeartbeatRequest:
+        identity_present = self.capabilities is not None or self.stack is not None
+        if self.protocol_version >= 7:
+            if self.capabilities is None or self.stack is None:
+                raise ValueError(
+                    "heartbeat protocol v7 requires capabilities and stack"
+                )
+            if self.capabilities.full_stack_managed != (self.stack.mode == "managed"):
+                raise ValueError("managed capability must match stack mode")
+        elif identity_present:
+            raise ValueError("capabilities and stack require heartbeat protocol v7")
         return self
 
 
@@ -224,6 +252,36 @@ class ArtifactResponse(BaseModel):
     expires_at: Annotated[
         datetime, Field(description="When ``download_url`` stops being valid (UTC).")
     ]
+    screened_image_url: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            description="Pre-signed Docker image archive URL when screening built one.",
+        ),
+    ] = None
+    screened_image_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = (
+        None
+    )
+    screened_image_size_bytes: Annotated[int | None, Field(gt=0)] = None
+    screened_image_id: Annotated[
+        str | None, Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    ] = None
+    screened_image_ref: Annotated[str | None, Field(min_length=1)] = None
+
+    @model_validator(mode="after")
+    def screened_image_fields_are_atomic(self) -> ArtifactResponse:
+        fields = (
+            self.screened_image_url,
+            self.screened_image_sha256,
+            self.screened_image_size_bytes,
+            self.screened_image_id,
+            self.screened_image_ref,
+        )
+        if any(value is not None for value in fields) and any(
+            value is None for value in fields
+        ):
+            raise ValueError("screened image metadata must be complete")
+        return self
 
     model_config = ConfigDict(
         json_schema_extra={

@@ -25,15 +25,52 @@ The root Docker Compose stack starts six services:
 | Service | Purpose |
 | --- | --- |
 | `ditto-subnet` | Leases work, signs scores, and computes weights. |
-| `dittobench-api` | Scores submissions. |
-| `sandbox-docker` | Builds and runs submissions in an isolated Docker daemon. |
+| `dittobench-api` | Loads screened images and scores submissions. |
+| `sandbox-docker` | Loads and runs screened images; builds only legacy records. |
 | `model-relay` | Reaches the locked Chutes model without exposing its key. |
 | `ollama` | Serves the embedding model used for memory scoring. |
 | `pylon` | Submits weights with the validator wallet. |
 
 The platform owns the queue and score ledger. Pylon keeps in-flight weight
 state in a named volume. Screening happens on the platform before work reaches
-validators.
+validators. Passing screens include a content- and image-ID-pinned Docker image
+archive, so validators avoid recompiling the Rust crate. The source tarball is
+still downloaded for structural anti-copy evidence, and records created before
+this handoff retain the build fallback.
+
+The staged default is **prefer screened image**:
+`DITTOBENCH_ALLOW_SCREENED_IMAGES=1` and
+`DITTOBENCH_REQUIRE_SCREENED_IMAGE=0`. The scorer loads a verified image when
+one is present and otherwise retains the existing source build. After platform
+coverage and mixed-fleet telemetry are healthy, operators can set
+`DITTOBENCH_REQUIRE_SCREENED_IMAGE=1` to enter screened-only mode.
+
+The scorer enables only its screened-image download path. Its broader private
+harness URL bypass remains disabled in production, so validator-controlled
+arbitrary private or loopback artifact URLs are not accepted.
+
+Heartbeat protocol v7 signs the effective screened-image/fallback mode,
+executor isolation, managed-stack state, and identities for `ditto-subnet` plus
+all five sidecars. The platform uses this for compatible ticket routing during
+gradual rollout. It is not remote host attestation; the immutable descriptor
+and component digests prove release selection, while host compromise remains a
+separate executor-boundary risk.
+
+The scorer source is pinned to an exact commit on `dittobench-api` `main`.
+During a coordinated scorer rollout, merge the scorer change first and then
+update the `docker-compose.yml` checksum to its actual post-merge `main` SHA.
+For a supervised smoke before updating the committed pin, pass the same
+immutable main ref and checksum explicitly:
+
+```sh
+DITTOBENCH_BUILD_CONTEXT='https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=<40-character-post-merge-main-sha>' \
+  ./scripts/validator-compose.sh build model-relay dittobench-api
+```
+
+Before its first build, the wrapper verifies the checksum is in `main` history;
+an unmerged PR head cannot masquerade as a `main` pin. That evidence is cached
+beside the immutable checkout, so later restarts and read-only Compose commands
+do not depend on GitHub availability and the pin may safely lag a newer `main`.
 
 ## Requirements
 
@@ -340,3 +377,8 @@ make lint typecheck test
 ```
 
 The worker entry point is `uv run python -m ditto.validator`.
+
+The committed production context pins the scorer's reviewed post-merge `main`
+commit. The wrapper verifies that immutable checksum is still a `main`
+ancestor before any fresh remote build. The explicit unmerged-smoke override is
+reserved for local contributor testing and must never be used on Finney.

@@ -95,11 +95,37 @@ fi
 docker info >/dev/null 2>&1 || die "Docker Engine is not reachable"
 docker buildx version >/dev/null 2>&1 || die "Docker Buildx is not installed"
 
-pinned_contexts="$(
-  grep -Eo \
-    'https://github\.com/ditto-assistant/dittobench-api\.git\?ref=[^&[:space:]]+&checksum=[0-9a-f]{40}' \
-    "$COMPOSE_FILE" || true
-)"
+# Read-only/lifecycle commands do not consume a build context. Keep them usable
+# with already-built images and during a GitHub outage; ancestry is verified
+# only before a command that can materialize a scorer image.
+materialize_context=false
+for argument in "$@"; do
+  case "$argument" in
+    up | build | create | run | --build) materialize_context=true ;;
+  esac
+done
+if [ "$materialize_context" != "true" ]; then
+  exec docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" "$@"
+fi
+
+source_revision="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null)" || \
+  die "could not resolve ditto-subnet source revision"
+if [[ ! "$source_revision" =~ ^[0-9a-f]{40}$ ]]; then
+  die "ditto-subnet source revision must be a full Git SHA"
+fi
+export DITTO_SOURCE_REVISION="$source_revision"
+export DITTO_SOURCE_IDENTITY="local-source:$source_revision"
+
+context_override="${DITTOBENCH_BUILD_CONTEXT:-}"
+if [ -n "$context_override" ]; then
+  pinned_contexts="$context_override"
+else
+  pinned_contexts="$(
+    grep -Eo \
+      'https://github\.com/ditto-assistant/dittobench-api\.git\?ref=[^&[:space:]]+&checksum=[0-9a-f]{40}' \
+      "$COMPOSE_FILE" || true
+  )"
+fi
 if [ -z "$pinned_contexts" ] || [ "$(printf '%s\n' "$pinned_contexts" | sort -u | wc -l | tr -d ' ')" -ne 1 ]; then
   die "docker-compose.yml must contain exactly one structured Git context pin"
 fi
@@ -109,6 +135,19 @@ repository="${pinned_contexts%%\?*}"
 ref_and_checksum="${pinned_contexts#*\?ref=}"
 ref="${ref_and_checksum%%&checksum=*}"
 checksum="${pinned_contexts##*checksum=}"
+[ "$repository" = "https://github.com/ditto-assistant/dittobench-api.git" ] || \
+  die "dittobench-api context must use the official repository"
+local_smoke=false
+if [ "$ref" != "refs/heads/main" ]; then
+  if [ "${DITTOBENCH_ALLOW_UNMERGED_SMOKE:-false}" != "true" ] || \
+    [ "${SUBTENSOR_NETWORK:-finney}" != "local" ]; then
+    die "unmerged dittobench-api refs require local network smoke opt-in"
+  fi
+  case "$ref" in
+    refs/heads/*) local_smoke=true ;;
+    *) die "local dittobench-api smoke ref must be a branch" ;;
+  esac
+fi
 case "$checksum" in
   *[!0-9a-f]* | '') die "invalid dittobench-api checksum in docker-compose.yml" ;;
 esac
@@ -118,6 +157,8 @@ fi
 
 cache_home="${DITTO_SUBNET_BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/ditto-subnet}"
 checkout="$cache_home/dittobench-api/$checksum"
+verified_marker="$checkout.ref-verified"
+verification_record="$ref $checksum"
 
 if [ -e "$checkout" ] && [ ! -d "$checkout/.git" ]; then
   die "cache path exists but is not a Git checkout: $checkout"
@@ -142,6 +183,24 @@ if ! git -C "$checkout" cat-file -e "$checksum^{commit}" 2>/dev/null; then
   if [ "$resolved" != "$checksum" ]; then
     die "dittobench-api fetch resolved to $resolved, expected $checksum"
   fi
+fi
+
+# A checksum may intentionally lag main, but it must have landed there. Verify
+# ancestry once, then cache that evidence beside the immutable SHA checkout so
+# routine restarts remain independent of GitHub availability.
+if [ ! -f "$verified_marker" ] || \
+  [ "$(cat "$verified_marker")" != "$verification_record" ]; then
+  printf 'verifying pinned dittobench-api commit is on %s\n' "$ref" >&2
+  git -C "$checkout" fetch --quiet origin "$ref" || \
+    die "could not fetch dittobench-api $ref for ancestry verification"
+  resolved_ref="$(git -C "$checkout" rev-parse FETCH_HEAD)"
+  if [ "$local_smoke" = "true" ] && [ "$resolved_ref" != "$checksum" ]; then
+    die "local smoke checksum $checksum is not the current $ref commit"
+  elif [ "$local_smoke" != "true" ] && \
+    ! git -C "$checkout" merge-base --is-ancestor "$checksum" FETCH_HEAD; then
+    die "dittobench-api checksum $checksum is not in $ref history"
+  fi
+  printf '%s\n' "$verification_record" > "$verified_marker"
 fi
 
 if [ -n "$(

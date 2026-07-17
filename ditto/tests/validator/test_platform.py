@@ -89,6 +89,46 @@ async def test_artifact_request_is_fresh_agent_bound_and_signed() -> None:
     assert response.agent_id == agent_id
 
 
+@pytest.mark.parametrize(
+    "invalid_image_fields",
+    [
+        {"screened_image_url": "https://storage.test/image.tar"},
+        {
+            "screened_image_url": "",
+            "screened_image_sha256": "12" * 32,
+            "screened_image_size_bytes": 123,
+            "screened_image_id": "sha256:" + "34" * 32,
+            "screened_image_ref": "ditto-screen/agent:latest",
+        },
+    ],
+)
+async def test_invalid_artifact_image_contract_is_a_typed_platform_error(
+    invalid_image_fields: dict[str, object],
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "agent_id": str(agent_id),
+                "sha256": "ab" * 32,
+                "download_url": "https://storage.test/artifact",
+                "expires_at": datetime.now(UTC).isoformat(),
+                **invalid_image_fields,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformError, match="artifact response was invalid"):
+            await PlatformClient(config, http, keypair).get_artifact(agent_id)  # type: ignore[arg-type]
+
+
 async def test_ledger_request_is_fresh_and_signed() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
 

@@ -12,6 +12,66 @@
         "format": "date-time",
         "type": "string"
       },
+      "screened_image_id": {
+        "anyOf": [
+          {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screened_image_ref": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screened_image_sha256": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screened_image_size_bytes": {
+        "anyOf": [
+          {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screened_image_url": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "sha256": {
         "type": "string"
       }
@@ -1008,6 +1068,171 @@
           "docker"
         ],
         "type": "object"
+      },
+      "ValidatorCapabilities": {
+        "additionalProperties": false,
+        "properties": {
+          "executor_isolation": {
+            "enum": [
+              "unknown",
+              "privileged_dind",
+              "rootless_host",
+              "ephemeral_vm"
+            ],
+            "type": "string"
+          },
+          "full_stack_managed": {
+            "type": "boolean"
+          },
+          "require_screened_image": {
+            "type": "boolean"
+          },
+          "sandbox_egress_restricted": {
+            "type": "boolean"
+          },
+          "screened_images": {
+            "type": "boolean"
+          },
+          "source_build_fallback": {
+            "type": "boolean"
+          },
+          "stack_updater": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "screened_images",
+          "require_screened_image",
+          "source_build_fallback",
+          "full_stack_managed",
+          "stack_updater",
+          "sandbox_egress_restricted",
+          "executor_isolation"
+        ],
+        "type": "object"
+      },
+      "ValidatorComponentIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "image_digest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "provenance": {
+            "enum": [
+              "signed_descriptor",
+              "committed_pin",
+              "local_unverified"
+            ],
+            "type": "string"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "ValidatorStackComponents": {
+        "additionalProperties": false,
+        "properties": {
+          "ditto_subnet": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          },
+          "dittobench_api": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          },
+          "model_relay": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          },
+          "ollama": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          },
+          "pylon": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          },
+          "sandbox_docker": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          }
+        },
+        "required": [
+          "ditto_subnet",
+          "dittobench_api",
+          "sandbox_docker",
+          "model_relay",
+          "pylon",
+          "ollama"
+        ],
+        "type": "object"
+      },
+      "ValidatorStackIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "components": {
+            "$ref": "#/$defs/ValidatorStackComponents"
+          },
+          "compose_schema": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "source",
+              "managed"
+            ],
+            "type": "string"
+          },
+          "release_descriptor_digest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "mode",
+          "compose_schema",
+          "components"
+        ],
+        "type": "object"
       }
     },
     "additionalProperties": false,
@@ -1035,6 +1260,17 @@
         ],
         "default": null
       },
+      "capabilities": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ValidatorCapabilities"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "code_digest": {
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
@@ -1051,6 +1287,17 @@
       "software_version": {
         "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$",
         "type": "string"
+      },
+      "stack": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ValidatorStackIdentity"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "state": {
         "enum": [

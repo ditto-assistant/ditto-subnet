@@ -171,6 +171,11 @@ class DittobenchClient:
         dataset_sha256: str | None = None,
         run_size: str | None = None,
         progress_callback: ProgressCallback | None = None,
+        screened_image_url: str | None = None,
+        screened_image_sha256: str | None = None,
+        screened_image_size_bytes: int | None = None,
+        screened_image_id: str | None = None,
+        screened_image_ref: str | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
@@ -198,6 +203,11 @@ class DittobenchClient:
             seed=seed,
             dataset_sha256=dataset_sha256,
             run_size=run_size,
+            screened_image_url=screened_image_url,
+            screened_image_sha256=screened_image_sha256,
+            screened_image_size_bytes=screened_image_size_bytes,
+            screened_image_id=screened_image_id,
+            screened_image_ref=screened_image_ref,
         )
         return await self._poll(run_id, progress_callback=progress_callback)
 
@@ -226,6 +236,11 @@ class DittobenchClient:
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
+        screened_image_url: str | None = None,
+        screened_image_sha256: str | None = None,
+        screened_image_size_bytes: int | None = None,
+        screened_image_id: str | None = None,
+        screened_image_ref: str | None = None,
     ) -> str:
         body: dict[str, object] = {
             "tarball_url": tarball_url,
@@ -233,6 +248,34 @@ class DittobenchClient:
         }
         if tarball_sha256:
             body["tarball_sha256"] = tarball_sha256
+        screened_image_fields = (
+            screened_image_url,
+            screened_image_sha256,
+            screened_image_size_bytes,
+            screened_image_id,
+            screened_image_ref,
+        )
+        if any(value is not None for value in screened_image_fields):
+            if any(value is None for value in screened_image_fields):
+                raise DittobenchError("screened image metadata must be complete")
+            if not all(
+                (
+                    screened_image_url,
+                    screened_image_sha256,
+                    screened_image_id,
+                    screened_image_ref,
+                )
+            ):
+                raise DittobenchError("screened image identity fields cannot be empty")
+            body.update(
+                {
+                    "screened_image_url": screened_image_url,
+                    "screened_image_sha256": screened_image_sha256,
+                    "screened_image_size_bytes": screened_image_size_bytes,
+                    "screened_image_id": screened_image_id,
+                    "screened_image_ref": screened_image_ref,
+                }
+            )
         if seed is not None:
             body["seed"] = seed
         # Canonical validator path: pin the dataset so the engine fails on a
@@ -255,7 +298,11 @@ class DittobenchClient:
         run_id = data.get("run_id")
         if not run_id:
             raise DittobenchError("submit response missing run_id")
-        logger.info("dittobench run %s started for tarball", run_id)
+        logger.info(
+            "dittobench run %s started for %s",
+            run_id,
+            "screened image" if screened_image_url else "tarball build",
+        )
         return str(run_id)
 
     async def _poll(

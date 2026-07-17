@@ -34,7 +34,8 @@ _NETWORK_HELP = (
     "bittensor SDK identifiers: 'finney' is mainnet, 'test' is "
     "testnet, 'local' is localnet. Flag "
     "aliases: --subtensor.network / --network. Env: "
-    "DITTO_NETWORK. Defaults to finney."
+    "DITTO_NETWORK. DITTO_LOCAL_API_URL overrides only the local API. "
+    "Defaults to finney."
 )
 _CHAIN_ENDPOINT_HELP = (
     "Override the chain target URL for the selected network. "
