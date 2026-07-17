@@ -57,6 +57,68 @@ def test_message_is_canonical_format() -> None:
     )
 
 
+def test_transcript_digest_extends_canonical_format() -> None:
+    # Offline reproducibility (v3 finding 3): a declared transcript digest is
+    # appended to the canonical payload; absence keeps the legacy format so old
+    # reports remain verifiable.
+    digest = "cd" * 32
+    base = score_signing_message(
+        validator_hotkey=_HOTKEY,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="run_1",
+        composite=0.82,
+        seed=8675309,
+    )
+    extended = score_signing_message(
+        validator_hotkey=_HOTKEY,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="run_1",
+        composite=0.82,
+        seed=8675309,
+        transcript_sha256=digest,
+    )
+    assert extended == base + f":{digest}".encode()
+    assert (
+        score_signing_message(
+            validator_hotkey=_HOTKEY,
+            agent_id=_AGENT,
+            ticket_deadline=_DEADLINE,
+            run_id="run_1",
+            composite=0.82,
+            seed=8675309,
+            transcript_sha256=None,
+        )
+        == base
+    )
+
+
+def test_swapped_transcript_digest_breaks_signature() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    sig_hex = sign_score(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="run_1",
+        composite=0.50,
+        seed=42,
+        transcript_sha256="cd" * 32,
+    )
+    swapped = score_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="run_1",
+        composite=0.50,
+        seed=42,
+        transcript_sha256="ef" * 32,
+    )
+    verifier = bittensor.Keypair(ss58_address=keypair.ss58_address)
+    assert not verifier.verify(swapped, bytes.fromhex(sig_hex))
+
+
 def test_sign_verifies_with_real_keypair() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     sig_hex = sign_score(

@@ -12,6 +12,7 @@ wire contract is identical by design), so it round-trips straight back into
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import time
@@ -124,6 +125,12 @@ class DittobenchClient:
         # signed/DB ScoreReport contract — captured here only so the validator can
         # surface it in aggregate W&B telemetry.
         self.last_details: dict[str, object] = {}
+        # Canonical transcript artifact of the most recent scored run (the
+        # graded per-case inputs), digest-verified against the run's declared
+        # transcript_sha256. Held so the worker can publish it to the platform
+        # after submitting the signed score (offline reproducibility). None when
+        # the engine published no transcript or verification failed.
+        self.last_transcript: bytes | None = None
 
     async def scorer_benchmark_capability(
         self, stack: ValidatorStackIdentity
@@ -288,6 +295,7 @@ class DittobenchClient:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         if self._config.dittobench_mock:
             self.last_details = {}
+            self.last_transcript = None
             return self._mock_report()
         run_id = await self._submit(
             tarball_url=tarball_url,
@@ -467,6 +475,20 @@ class DittobenchClient:
                             "benchmark version mismatch: ticket=2 "
                             f"job={job_version!r} report={reported_version!r}"
                         )
+                    # Offline reproducibility: fetch the run's transcript
+                    # artifact and bind its digest into the report details, so
+                    # the score signature covers it and the worker can publish
+                    # the bytes. Never gates scoring: a missing or corrupt
+                    # transcript logs and the score submits without one.
+                    digest = await self._fetch_transcript(
+                        run_id, data.get("transcript_sha256")
+                    )
+                    if digest is not None and isinstance(rep, dict):
+                        details = rep.get("details")
+                        if not isinstance(details, dict):
+                            details = {}
+                        details["transcript_sha256"] = digest
+                        rep["details"] = details
                     self.last_details = (
                         rep["details"]
                         if isinstance(rep, dict)
@@ -501,6 +523,42 @@ class DittobenchClient:
             f"run {run_id} did not finish within "
             f"{self._config.dittobench_timeout_seconds}s"
         )
+
+    async def _fetch_transcript(self, run_id: str, declared: object) -> str | None:
+        """Fetch + digest-verify the run's transcript; stash it on the client.
+
+        Returns the verified digest, or ``None`` (with ``last_transcript``
+        cleared) when the run declared no transcript, the fetch failed, or the
+        bytes do not hash to the declared digest. Never raises: the score does
+        not depend on the artifact.
+        """
+        self.last_transcript = None
+        if not isinstance(declared, str) or not declared:
+            return None
+        url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}/transcript"
+        try:
+            resp = await self._client.get(url)
+        except httpx.HTTPError as e:
+            logger.warning("run %s transcript fetch failed: %s", run_id, e)
+            return None
+        if resp.status_code != 200:
+            logger.warning(
+                "run %s transcript fetch rejected (%d)", run_id, resp.status_code
+            )
+            return None
+        body = resp.content
+        digest = hashlib.sha256(body).hexdigest()
+        if digest != declared:
+            logger.warning(
+                "run %s transcript digest mismatch (declared %s, got %s); "
+                "dropping the artifact",
+                run_id,
+                declared,
+                digest,
+            )
+            return None
+        self.last_transcript = body
+        return digest
 
     async def _cancel(self, run_id: str) -> None:
         """Best-effort cancellation so a timed-out run cannot keep the sandbox.

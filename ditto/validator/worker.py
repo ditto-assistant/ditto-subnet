@@ -1180,6 +1180,16 @@ class ValidatorWorker:
                 f"ticket for agent {agent_id} expired before score submission; "
                 "leaving it to reopen"
             )
+        # Offline reproducibility: a transcript digest in the report details is
+        # bound into the signature, so the artifact published below cannot be
+        # swapped after the fact. Reports without one keep the legacy payload.
+        transcript_sha256 = (
+            report.details.get("transcript_sha256")
+            if isinstance(report.details, dict)
+            else None
+        )
+        if not isinstance(transcript_sha256, str) or not transcript_sha256:
+            transcript_sha256 = None
         signature = sign_score(
             self._keypair,
             validator_hotkey=self._config.validator_hotkey,
@@ -1189,6 +1199,7 @@ class ValidatorWorker:
             composite=report.composite,
             seed=report.seed,
             bench_version=report.bench_version,
+            transcript_sha256=transcript_sha256,
         )
         await self._platform.submit_score(
             agent_id,
@@ -1203,7 +1214,44 @@ class ValidatorWorker:
             report.composite,
             report.seed,
         )
+        await self._publish_transcript(agent_id, report, transcript_sha256)
         return report
+
+    async def _publish_transcript(
+        self, agent_id: UUID, report: ScoreReport, transcript_sha256: str | None
+    ) -> None:
+        """Best-effort publication of the signed score's transcript artifact.
+
+        The digest is already inside the accepted, signed score; the platform
+        verifies the bytes hash to it before storing them content-addressed.
+        Failure logs and never unwinds the score — the artifact can be
+        re-published, the score cannot be lost."""
+        if transcript_sha256 is None:
+            return
+        transcript = getattr(self._dittobench, "last_transcript", None)
+        if not isinstance(transcript, bytes) or not transcript:
+            logger.warning(
+                "agent %s declared transcript %s but no bytes are held; "
+                "skipping publication",
+                agent_id,
+                transcript_sha256,
+            )
+            return
+        try:
+            await self._platform.submit_transcript(
+                agent_id, run_id=report.run_id, body=transcript
+            )
+            logger.info(
+                "published transcript for agent %s (run=%s sha256=%s bytes=%d)",
+                agent_id,
+                report.run_id,
+                transcript_sha256,
+                len(transcript),
+            )
+        except PlatformError as e:
+            logger.warning(
+                "transcript publication failed for agent %s: %s", agent_id, e
+            )
 
     async def _evaluate_and_submit(
         self,

@@ -72,22 +72,32 @@ def score_signing_message(
     composite: float,
     seed: int,
     bench_version: int | None = None,
+    transcript_sha256: str | None = None,
 ) -> bytes:
     """Build the canonical bytes a score signature is computed over.
 
     ``{validator_hotkey}:{agent_id}:{ticket_deadline}:{run_id}:``
-    ``{composite!r}:{seed}``. The exact ticket deadline is the lease identity;
-    platform reconstructs this exact string from the request to verify, so both
-    sides MUST format it identically — in particular ``composite`` uses Python's
-    shortest round-trip float repr, which the JSON transport preserves.
+    ``{composite!r}:{seed}`` — with ``:{transcript_sha256}`` appended when the
+    report declares a transcript digest (``details["transcript_sha256"]``), so
+    the published transcript artifact cannot be swapped without breaking the
+    signature. The platform derives presence from the same report field, so a
+    report without a transcript keeps the previous format. The exact ticket
+    deadline is the lease identity; platform reconstructs this exact string
+    from the request to verify, so both sides MUST format it identically — in
+    particular ``composite`` uses Python's shortest round-trip float repr,
+    which the JSON transport preserves.
     """
     lease = (
         ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
         if ticket_deadline is not None
         else ""
     )
-    legacy = f"{validator_hotkey}:{agent_id}:{lease}:{run_id}:{composite!r}:{seed}"
-    return (legacy if bench_version is None else f"{legacy}:{bench_version}").encode()
+    message = f"{validator_hotkey}:{agent_id}:{lease}:{run_id}:{composite!r}:{seed}"
+    if bench_version is not None:
+        message += f":{bench_version}"
+    if transcript_sha256:
+        message += f":{transcript_sha256}"
+    return message.encode()
 
 
 def sign_score(
@@ -100,6 +110,7 @@ def sign_score(
     composite: float,
     seed: int,
     bench_version: int | None = None,
+    transcript_sha256: str | None = None,
 ) -> str:
     """Return the hex sr25519 signature over the canonical score payload."""
     message = score_signing_message(
@@ -110,6 +121,7 @@ def sign_score(
         composite=composite,
         seed=seed,
         bench_version=bench_version,
+        transcript_sha256=transcript_sha256,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

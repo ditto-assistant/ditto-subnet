@@ -362,6 +362,64 @@ class CaseScore(BaseModel):
     notes: Annotated[
         list[str], Field(default_factory=list, description="Scorer annotations.")
     ]
+    # bench_version 3 audit fields. Declared so ingest retains them — pydantic's
+    # default ``extra="ignore"`` silently discarded them before, stripping audit
+    # context (v3 review finding 16). None affects the composite; they mirror
+    # ``dittobench-datagen/protocol`` ``CaseScore`` and the platform copy
+    # (guarded by the wire round-trip test + the validator contract golden).
+    result_usage: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            default=0.0,
+            description=(
+                "Result-usage half of an observed tool case: did the final "
+                "answer incorporate the value only the executed tool served."
+            ),
+        ),
+    ] = 0.0
+    twin_group: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Metamorphic twin-group id tying rephrasings of one fact, for "
+                "consistency audits."
+            ),
+        ),
+    ] = ""
+    confidence: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Harness self-reported confidence echoed for Brier calibration "
+                "(None = not reported; distinct from 0.0)."
+            ),
+        ),
+    ] = None
+    observed: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "True when the graded trajectory is the validator-observed one "
+                "(mock tool endpoint), i.e. ``called`` is authoritative."
+            ),
+        ),
+    ] = False
+    injection: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "True when the grader flagged injection compliance on this case."
+            ),
+        ),
+    ] = False
 
     @field_validator("called", "expected", "notes", mode="before")
     @classmethod
@@ -369,6 +427,28 @@ class CaseScore(BaseModel):
         # The Go scorer omits or nulls these on cases that have none (memory
         # cases carry no expected tools); coerce null/absent to an empty list.
         return v if v is not None else []
+
+
+class CategoryStat(BaseModel):
+    """Per-category aggregate inside a :class:`ScoreReport`.
+
+    Mirrors the DittoBench ``CategoryStat`` wire shape (``pkg/protocol``).
+    Advisory audit context only; the composite never depends on it.
+    """
+
+    category: Annotated[str, Field(description="Case category, e.g. ``web_search``.")]
+    count: Annotated[int, Field(ge=0, description="Cases scored in the category.")]
+    mean: Annotated[
+        float, Field(ge=0.0, le=1.0, description="Mean case score in [0,1].")
+    ]
+    std_err: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            default=0.0,
+            description="Standard error of the category mean (0 when omitted).",
+        ),
+    ] = 0.0
 
 
 class CodeFingerprint(BaseModel):
@@ -485,6 +565,17 @@ class ScoreReport(BaseModel):
         list[CaseScore],
         Field(default_factory=list, description="Optional per-case breakdown."),
     ]
+    per_category: Annotated[
+        list[CategoryStat] | None,
+        Field(
+            default=None,
+            description=(
+                "Optional per-category aggregates (bench_version 3 audit "
+                "context). Advisory: not covered by the signature and never "
+                "affects the score."
+            ),
+        ),
+    ] = None
     structural_fingerprint: Annotated[
         CodeFingerprint | None,
         Field(

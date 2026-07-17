@@ -2140,3 +2140,95 @@ class TestPooledConfirmationStderr:
         one_run = 0.0293
         got = worker_mod._pooled_confirmation_stderr([0.88, 0.88, 0.88], one_run)
         assert got == pytest.approx(one_run / 3**0.5, rel=1e-6)
+
+
+class TestTranscriptPublication:
+    """Offline reproducibility (v3 finding 3): the worker binds a declared
+    transcript digest into the score signature and publishes the held bytes
+    after the score is accepted — best-effort, never unwinding the score."""
+
+    _DIGEST = "cd" * 32
+
+    def _report_with_transcript(self) -> ScoreReport:
+        report = _report("run_t", 0.9)
+        return report.model_copy(
+            update={"details": {"transcript_sha256": self._DIGEST}}
+        )
+
+    async def test_submit_signs_digest_and_publishes_transcript(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_transcript = AsyncMock()
+        dittobench = MagicMock()
+        dittobench.last_transcript = b'{"cases":[]}'
+        signed_messages: list[bytes] = []
+
+        def _capture_sign(message: bytes) -> bytes:
+            signed_messages.append(message)
+            return b"\x01" * 64
+
+        keypair = MagicMock(sign=MagicMock(side_effect=_capture_sign))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=keypair,
+        )
+
+        await worker._submit_report(
+            uuid4(), "5MinerA" + "x" * 41, self._report_with_transcript()
+        )
+
+        assert len(signed_messages) == 1
+        assert signed_messages[0].endswith(f":{self._DIGEST}".encode())
+        platform.submit_score.assert_awaited_once()
+        platform.submit_transcript.assert_awaited_once()
+        kwargs = platform.submit_transcript.await_args.kwargs
+        assert kwargs["run_id"] == "run_t"
+        assert kwargs["body"] == b'{"cases":[]}'
+
+    async def test_transcript_publication_failure_never_unwinds_score(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_transcript = AsyncMock(
+            side_effect=PlatformError("digest mismatch")
+        )
+        dittobench = MagicMock()
+        dittobench.last_transcript = b'{"cases":[]}'
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        report = await worker._submit_report(
+            uuid4(), "5MinerA" + "x" * 41, self._report_with_transcript()
+        )
+        assert report.composite == 0.9
+        platform.submit_score.assert_awaited_once()
+
+    async def test_report_without_transcript_keeps_legacy_signing(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_transcript = AsyncMock()
+        signed_messages: list[bytes] = []
+
+        def _capture_sign(message: bytes) -> bytes:
+            signed_messages.append(message)
+            return b"\x01" * 64
+
+        keypair = MagicMock(sign=MagicMock(side_effect=_capture_sign))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(last_transcript=None),
+            chain=MagicMock(),
+            keypair=keypair,
+        )
+
+        await worker._submit_report(uuid4(), "5MinerA" + "x" * 41, _report("run", 0.9))
+
+        assert len(signed_messages) == 1
+        assert b"transcript" not in signed_messages[0]
+        assert not signed_messages[0].endswith(f":{self._DIGEST}".encode())
+        platform.submit_transcript.assert_not_awaited()
