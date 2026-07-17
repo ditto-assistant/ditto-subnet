@@ -362,6 +362,14 @@ endpoint. If no call is observed, the run fails and the ticket reopens; a
 zeroed report is never signed. This protects miners from an endpoint that is
 advertised but unreachable from the harness container.
 
+The scoring sweep also runs CRN confirmations when the ledger calls for them:
+after a bench-version bump it re-scores the stale champion and tail on common
+seeds, and when a challenger sits inside the dethrone indifference band it
+re-scores the contested set on shared seeds so the crown decision is paired
+rather than seed-lucky. Expect occasional bursts of extra benchmark runs (three
+per contested agent) with a `contested dethrone:` log line; they stop once the
+contested pair shares confirmation seeds.
+
 After the platform accepts a signed score, the worker uploads the run's
 transcript — the graded per-case inputs, whose SHA-256 is bound into the score
 signature — and the platform publishes it content-addressed in the public

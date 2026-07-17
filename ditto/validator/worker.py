@@ -55,6 +55,7 @@ from ditto.validator.weights import (
     agents_needing_rescore,
     apply_miner_emission_cap,
     compute_weights,
+    contested_confirmation_set,
 )
 
 if TYPE_CHECKING:
@@ -750,7 +751,12 @@ class ValidatorWorker:
         except PlatformError as e:
             logger.warning("ledger fetch for re-score failed; skipping: %s", e)
             return
-        await self._rescore_stale_champion_and_tail(
+        ledger = await self._rescore_stale_champion_and_tail(
+            ledger,
+            stop_requested=stop_requested,
+            drain_requested=drain_requested,
+        )
+        await self._confirm_contested_dethrone(
             ledger,
             stop_requested=stop_requested,
             drain_requested=drain_requested,
@@ -829,6 +835,64 @@ class ValidatorWorker:
                 exc,
             )
             return ledger
+
+    async def _confirm_contested_dethrone(
+        self,
+        ledger: LedgerResponse,
+        *,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
+        """Settle a within-band crown contest on the set's common CRN seeds.
+
+        When a current-version challenger's effective composite sits inside the
+        unpaired indifference band of the champion, the crown decision is
+        inside seed-luck range: the champion's confirmation composites are a
+        frozen draw and the challenger holds one commit-reveal seed, so
+        neither side's dataset difficulty cancels. Re-score the whole
+        contested set (champion + in-band challengers,
+        :func:`ditto.validator.weights.contested_confirmation_set`) on the
+        set's deterministic common seeds so the fold's next read decides on
+        the PAIRED statistic (weights._paired_dethrone), which cancels
+        per-seed difficulty. Clear wins and clear losses never trigger this,
+        and a fully settled set (every challenger already sharing seeds with
+        the champion) never re-triggers, so confirmations only run when a
+        contest is genuinely undecidable on the data at hand. One member
+        failing to re-score is logged and its ledger score stands.
+        """
+        contested = contested_confirmation_set(
+            ledger.entries,
+            current_version=self._current_bench_version,
+            margin=self._config.koth_margin,
+            dethrone_z=self._config.koth_dethrone_z,
+        )
+        if not contested:
+            return
+        seeds = confirmation_seeds(
+            (str(e.agent_id) for e in contested),
+            version=self._current_bench_version,
+            count=self._config.koth_confirmation_seeds,
+        )
+        logger.info(
+            "contested dethrone: %d agent(s) inside the indifference band; "
+            "confirming champion %s + challenger(s) %s on common CRN seeds %s",
+            len(contested) - 1,
+            contested[0].agent_id,
+            [str(e.agent_id) for e in contested[1:]],
+            seeds,
+        )
+        for e in contested:
+            if self._new_work_blocked(stop_requested, drain_requested):
+                return
+            submitted = await self._confirm_and_submit(
+                e.agent_id, e.sha256, e.miner_hotkey, seeds=seeds
+            )
+            if submitted is None:
+                logger.warning(
+                    "contested-dethrone confirmation of agent %s produced no "
+                    "score; leaving its ledger score",
+                    e.agent_id,
+                )
 
     async def _validator_permitted(self) -> bool:
         """Best-effort self-check that our hotkey may set weights this epoch.

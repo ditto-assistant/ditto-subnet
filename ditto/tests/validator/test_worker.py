@@ -2232,3 +2232,88 @@ class TestTranscriptPublication:
         assert b"transcript" not in signed_messages[0]
         assert not signed_messages[0].endswith(f":{self._DIGEST}".encode())
         platform.submit_transcript.assert_not_awaited()
+
+
+class TestContestedDethroneConfirmation:
+    """Near-band crown contests re-score the whole contested set on common CRN
+    seeds so the fold decides on the paired statistic instead of seed luck."""
+
+    def _seeded_report(self, seed: int, composite: float) -> ScoreReport:
+        r = _report(f"run-{seed}", composite)
+        return r.model_copy(update={"seed": seed})
+
+    def _worker(self, dittobench: MagicMock, platform: MagicMock) -> ValidatorWorker:
+        cfg = _config()
+        cfg.koth_confirmation_seeds = 3
+        return ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+    async def test_in_band_contest_confirms_both_on_common_seeds(self) -> None:
+        # Deficit 0.005 sits inside the flat band (koth_margin 1% of 0.80).
+        champ = _entry("5A" + "a" * 44, 0.80)
+        chall = _entry("5B" + "b" * 44, 0.795, first_seen=_T0 + timedelta(minutes=1))
+
+        async def _score(**kw: Any) -> ScoreReport:
+            return self._seeded_report(kw["seed"], 0.8)
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=_score)
+        dittobench.last_details = {}
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        w = self._worker(dittobench, platform)
+
+        await w._confirm_contested_dethrone(
+            LedgerResponse(entries=[champ, chall], count=2)
+        )
+
+        # Both agents run all three common seeds; one signed score each.
+        assert dittobench.score_tarball.await_count == 6
+        assert platform.submit_score.await_count == 2
+        reports = [c.kwargs["report"] for c in platform.submit_score.await_args_list]
+        assert reports[0].confirmation_seeds == reports[1].confirmation_seeds
+        assert len(reports[0].confirmation_seeds) == 3
+
+    async def test_settled_contest_runs_nothing(self) -> None:
+        # Medians 0.80 vs 0.795: still inside the band, but the pair already
+        # shares three confirmation seeds, so the paired statistic decides it.
+        shared = {
+            "confirmation_composites": [0.79, 0.80, 0.81],
+            "confirmation_seeds": [7, 8, 9],
+        }
+        champ = _entry("5A" + "a" * 44, 0.80).model_copy(update=shared)
+        chall = _entry(
+            "5B" + "b" * 44, 0.795, first_seen=_T0 + timedelta(minutes=1)
+        ).model_copy(update={**shared, "confirmation_composites": [0.78, 0.795, 0.80]})
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock()
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        w = self._worker(dittobench, platform)
+
+        await w._confirm_contested_dethrone(
+            LedgerResponse(entries=[champ, chall], count=2)
+        )
+
+        dittobench.score_tarball.assert_not_awaited()
+        platform.submit_score.assert_not_awaited()
+
+    async def test_clear_lead_runs_nothing(self) -> None:
+        champ = _entry("5A" + "a" * 44, 0.80)
+        laggard = _entry("5B" + "b" * 44, 0.60, first_seen=_T0 + timedelta(minutes=1))
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock()
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        w = self._worker(dittobench, platform)
+
+        await w._confirm_contested_dethrone(
+            LedgerResponse(entries=[champ, laggard], count=2)
+        )
+
+        dittobench.score_tarball.assert_not_awaited()
+        platform.submit_score.assert_not_awaited()

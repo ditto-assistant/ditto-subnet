@@ -142,7 +142,10 @@ result.
   checks can reduce it.
 - Each miner competes with its highest eligible score. A challenger dethrones
   the incumbent only after clearing the greater of the 2% relative margin and
-  the configured statistical error band.
+  the configured statistical error band. A near-miss is not decided by dataset
+  luck: when a challenger lands inside that band, validators re-score both
+  agents on the same three shared seeds and the crown moves (or holds) on the
+  paired result.
 - The champion receives 90% of competitive weight; the next four distinct
   miners split 10%. The competitive vector receives 20% of available miner
   emission and the remaining 80% is burned. With no eligible miners, 100% is
