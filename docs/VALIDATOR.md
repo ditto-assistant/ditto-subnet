@@ -244,6 +244,16 @@ validator remains drained. Repair the sidecars, verify them, then run
 - **No work is scored:** zero queued agents is normal. Otherwise inspect the
   validator, sandbox, scorer, relay, and Ollama health before restarting
   anything.
+- **Runs fail with `tool_endpoint advertised but unreachable`:** honest
+  submissions also fail this way when the scorer's tool endpoint is
+  unreachable from inside `sandbox-docker` (broken `host.docker.internal`
+  routing). One failure can be a non-compliant harness; recurring failures
+  across different agents mean your sandbox networking is broken — fix it
+  before the reopened tickets expire. No zeroed score is signed either way.
+- **Logs show `transcript publication failed` or `transcript fetch failed`:**
+  the score already stands; nothing is lost from the ledger. Check
+  `dittobench-api` health and platform reachability so future runs publish
+  their transcripts.
 - **Updater reports a transaction:** keep the timer disabled, verify the
   validator and all sidecars, then use `recover`. It may resume lease intake.
 - **Host rebooted:** verify Docker is enabled and active, then check Compose and
@@ -345,6 +355,18 @@ from the public finalized ledger, and Pylon handles UID resolution,
 commit-reveal, retries, and the on-chain extrinsic on an independent cadence.
 Weight scheduling honors the configured interval, chain rate limit, subnet
 tempo, and the validator's previous on-chain update after a restart.
+
+Every scored run starts with a reachability preflight: the scorer sends one
+probe case and requires the harness to route a tool call through the mock tool
+endpoint. If no call is observed, the run fails and the ticket reopens; a
+zeroed report is never signed. This protects miners from an endpoint that is
+advertised but unreachable from the harness container.
+
+After the platform accepts a signed score, the worker uploads the run's
+transcript — the graded per-case inputs, whose SHA-256 is bound into the score
+signature — and the platform publishes it content-addressed in the public
+bucket. Transcript fetch or upload failures only log; they never gate, delay,
+or unwind a score.
 
 ## Optional observability
 
