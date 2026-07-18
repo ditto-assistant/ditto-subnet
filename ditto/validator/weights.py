@@ -411,6 +411,17 @@ def _unpaired_band(
     return band
 
 
+def _entry_has_seeds(entry: LedgerEntry, seeds: Sequence[int]) -> bool:
+    """Whether ``entry`` already carries confirmation composites for every seed
+    in ``seeds`` — i.e. it has been confirmed on that exact seed set and does
+    not need re-scoring. Used to keep the champion from being re-scored on its
+    own anchored seeds once it already holds them."""
+    have = _entry_seed_composites(entry)
+    if have is None:
+        return False
+    return set(seeds).issubset(have.keys())
+
+
 def _shares_confirmation_seeds(a: LedgerEntry, b: LedgerEntry) -> bool:
     """Whether the paired dethrone statistic can already decide this pair:
     both entries carry per-seed confirmation composites over at least two
@@ -429,18 +440,18 @@ def contested_confirmation_set(
     margin: float,
     dethrone_z: float = 0.0,
 ) -> list[LedgerEntry]:
-    """The champion plus every current-version challenger whose crown decision
-    sits INSIDE the unpaired indifference band — the seed-luck zone — and
-    cannot yet be decided by the paired statistic. Empty when no contest needs
+    """The champion plus the current-version challengers whose crown decision
+    sits INSIDE the unpaired indifference band (the seed-luck zone) and cannot
+    yet be decided by the paired statistic. Empty when no contest needs
     confirmation.
 
     A dethrone resolved inside the band on unpaired data can ride dataset
     difficulty: the champion's confirmation composites are a frozen draw (they
     only refresh on a bench_version bump) while a new challenger holds one
-    commit-reveal seed, so neither side's luck cancels. Re-scoring the whole
-    contested set on the set's common CRN seeds gives :func:`_paired_dethrone`
-    the shared-seed data that cancels difficulty, and the crown then moves (or
-    holds) on the paired statistic instead of the draw.
+    commit-reveal seed, so neither side's luck cancels. Re-scoring both on a
+    common CRN seed set gives :func:`_paired_dethrone` the shared-seed data
+    that cancels difficulty, and the crown then moves (or holds) on the paired
+    statistic instead of the draw.
 
     Selection, all over the public ledger so every validator derives the same
     set (consensus-safe):
@@ -449,18 +460,19 @@ def contested_confirmation_set(
       positive-composite set);
     - challengers: every other current-version entry whose effective composite
       sits within the unpaired band of the champion on either side
-      (``|eff(challenger) − eff(champion)| <= band``). Clear wins and clear
-      losses never confirm. Stale entries are excluded — refreshing them is
-      :func:`agents_needing_rescore`'s job and runs first;
-    - a challenger already sharing >= 2 confirmation seeds with the champion is
-      settled by the paired statistic and never re-triggers, so a resolved
-      contest costs nothing on later sweeps.
+      (``|eff(challenger) − eff(champion)| <= band``) AND that does not yet
+      share >= 2 confirmation seeds with the champion. Clear wins, clear
+      losses, and already-settled pairs are excluded. Stale entries are
+      excluded too, since refreshing them is
+      :func:`agents_needing_rescore`'s job and runs first.
 
-    Returns the champion followed by the in-band challengers (deterministic
-    first-seen order), or ``[]`` when nothing is contested. The caller scores
-    the whole set on one common seed set so every member becomes pairwise
-    comparable at once — confirming pairs one at a time would rotate the
-    champion's seed set and re-open previously settled pairs.
+    Returns the champion followed by the unsettled in-band challengers
+    (deterministic first-seen order), or ``[]`` when no challenger needs
+    confirmation. The caller anchors the CRN seed set to the CHAMPION's agent
+    id alone, not the contested set, so a newly appearing challenger is scored
+    once on the champion's unchanged seeds while already-settled challengers
+    keep sharing them and are never re-scored: cost is O(1) per new
+    challenger, not O(cohort) per sweep.
     """
     scored = [e for e in entries if e.composite > 0.0]
     if len(scored) < 2:
@@ -475,9 +487,8 @@ def contested_confirmation_set(
         and _entry_version(e) >= current_version
         and abs(_effective_composite(e) - _effective_composite(champion))
         <= _unpaired_band(e, champion, margin, dethrone_z)
+        and not _shares_confirmation_seeds(e, champion)
     ]
     if not contested:
-        return []
-    if all(_shares_confirmation_seeds(e, champion) for e in contested):
         return []
     return [champion, *contested]

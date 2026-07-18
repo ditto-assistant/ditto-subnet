@@ -31,7 +31,11 @@ from ditto.validator.errors import (
     ValidatorInfrastructureError,
 )
 from ditto.validator.onchain_seed import derive_seed
-from ditto.validator.weights import apply_miner_emission_cap, compute_weights
+from ditto.validator.weights import (
+    DEFAULT_BENCH_VERSION,
+    apply_miner_emission_cap,
+    compute_weights,
+)
 from ditto.validator.worker import ValidatorWorker
 
 _VALIDATOR_HOTKEY = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
@@ -2276,7 +2280,53 @@ class TestContestedDethroneConfirmation:
         assert platform.submit_score.await_count == 2
         reports = [c.kwargs["report"] for c in platform.submit_score.await_args_list]
         assert reports[0].confirmation_seeds == reports[1].confirmation_seeds
-        assert len(reports[0].confirmation_seeds) == 3
+
+        # Seeds are anchored to the CHAMPION's agent id alone, not the cohort,
+        # so they are stable across sweeps as challengers come and go.
+        from ditto.validator.crn import confirmation_seeds
+
+        expected = confirmation_seeds(
+            [str(champ.agent_id)], version=w._current_bench_version, count=3
+        )
+        # The report seed-sorts its pairs; compare as sets.
+        assert set(reports[0].confirmation_seeds) == set(expected)
+
+    async def test_settled_champion_not_rescored_for_fresh_entrant(self) -> None:
+        # The champion already carries its anchored seeds; a fresh in-band
+        # entrant must be confirmed WITHOUT re-running the champion (the
+        # O(1)-per-entrant guard against confirmation amplification).
+        from ditto.validator.crn import confirmation_seeds
+
+        champ_id = _entry("5A" + "a" * 44, 0.80).agent_id
+        seeds = confirmation_seeds(
+            [str(champ_id)], version=DEFAULT_BENCH_VERSION, count=3
+        )
+        champ = _entry("5A" + "a" * 44, 0.80, agent_id=champ_id).model_copy(
+            update={
+                "confirmation_seeds": seeds,
+                "confirmation_composites": [0.80, 0.80, 0.80],
+            }
+        )
+        entrant = _entry("5C" + "c" * 44, 0.795, first_seen=_T0 + timedelta(minutes=2))
+
+        async def _score(**kw: Any) -> ScoreReport:
+            return self._seeded_report(kw["seed"], 0.79)
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=_score)
+        dittobench.last_details = {}
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        w = self._worker(dittobench, platform)
+
+        await w._confirm_contested_dethrone(
+            LedgerResponse(entries=[champ, entrant], count=2)
+        )
+
+        # Only the entrant runs (3 seeds, 1 submission); the champion is untouched.
+        assert dittobench.score_tarball.await_count == 3
+        assert platform.submit_score.await_count == 1
+        submitted_agent = platform.submit_score.await_args.args[0]
+        assert submitted_agent == entrant.agent_id
 
     async def test_settled_contest_runs_nothing(self) -> None:
         # Medians 0.80 vs 0.795: still inside the band, but the pair already

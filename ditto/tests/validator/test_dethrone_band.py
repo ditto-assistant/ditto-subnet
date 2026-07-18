@@ -384,7 +384,11 @@ class TestContestedConfirmationSet:
         )
         assert contested_confirmation_set([champ, chall], **self._KW) == []
 
-    def test_new_entrant_reopens_a_settled_set(self) -> None:
+    def test_new_entrant_does_not_reopen_a_settled_pair(self) -> None:
+        # A settled challenger already shares the champion's seeds; a fresh
+        # in-band entrant must be confirmed WITHOUT re-scoring the settled pair
+        # (champion-anchored seeds do not move when the cohort grows). This is
+        # the O(1)-per-entrant property that bounds confirmation cost.
         champ = _e(
             "5A" + "a" * 44, 0.80, confirmations=[0.79, 0.80, 0.81], seeds=[7, 8, 9]
         )
@@ -397,13 +401,21 @@ class TestContestedConfirmationSet:
         )
         entrant = _e("5C" + "c" * 44, 0.795, minutes=2)  # in band, no shared seeds
         got = contested_confirmation_set([champ, settled, entrant], **self._KW)
-        # The whole set confirms together: the common seed set is a function of
-        # the member ids, so the settled pair re-confirms alongside the entrant.
-        assert [e.agent_id for e in got] == [
-            champ.agent_id,
-            settled.agent_id,
-            entrant.agent_id,
+        # Only the champion (anchor) and the unsettled entrant; the settled
+        # challenger is excluded, so it is never re-scored.
+        assert [e.agent_id for e in got] == [champ.agent_id, entrant.agent_id]
+
+    def test_many_near_band_entrants_stay_linear(self) -> None:
+        # Griefing guard: N in-band challengers, none sharing seeds yet, select
+        # the champion once plus the N challengers — never an O(N^2) re-scoring
+        # cascade of already-processed members.
+        champ = _e("5A" + "a" * 44, 0.80)
+        challengers = [
+            _e(f"5{chr(66 + i)}" + "b" * 44, 0.795, minutes=i + 1) for i in range(6)
         ]
+        got = contested_confirmation_set([champ, *challengers], **self._KW)
+        assert got[0].agent_id == champ.agent_id
+        assert len(got) == 1 + len(challengers)
 
     def test_stale_challenger_is_the_version_sweeps_job(self) -> None:
         champ = _e("5A" + "a" * 44, 0.80)

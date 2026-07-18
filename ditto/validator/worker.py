@@ -52,6 +52,7 @@ from ditto.validator.telemetry import (
 from ditto.validator.update_control import write_update_state
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
+    _entry_has_seeds,
     agents_needing_rescore,
     apply_miner_emission_cap,
     compute_weights,
@@ -843,22 +844,27 @@ class ValidatorWorker:
         stop_requested: asyncio.Event | None = None,
         drain_requested: asyncio.Event | None = None,
     ) -> None:
-        """Settle a within-band crown contest on the set's common CRN seeds.
+        """Settle a within-band crown contest on the champion-anchored CRN seeds.
 
         When a current-version challenger's effective composite sits inside the
         unpaired indifference band of the champion, the crown decision is
         inside seed-luck range: the champion's confirmation composites are a
         frozen draw and the challenger holds one commit-reveal seed, so
-        neither side's dataset difficulty cancels. Re-score the whole
-        contested set (champion + in-band challengers,
-        :func:`ditto.validator.weights.contested_confirmation_set`) on the
-        set's deterministic common seeds so the fold's next read decides on
-        the PAIRED statistic (weights._paired_dethrone), which cancels
-        per-seed difficulty. Clear wins and clear losses never trigger this,
-        and a fully settled set (every challenger already sharing seeds with
-        the champion) never re-triggers, so confirmations only run when a
-        contest is genuinely undecidable on the data at hand. One member
-        failing to re-score is logged and its ledger score stands.
+        neither side's dataset difficulty cancels. Re-score the champion and
+        each unsettled in-band challenger
+        (:func:`ditto.validator.weights.contested_confirmation_set`) on a
+        common seed set derived from the CHAMPION's agent id alone, so the
+        fold's next read decides on the PAIRED statistic
+        (weights._paired_dethrone), which cancels per-seed difficulty.
+
+        Anchoring the seeds to the champion (not the contested cohort) is what
+        bounds the work: the seed set does not move when a new challenger
+        appears, so already-settled challengers keep sharing the champion's
+        seeds and are never re-scored, and the champion is re-scored only until
+        it carries those seeds once. A newly appearing challenger costs one
+        confirmation, not a re-run of the whole cohort. Clear wins and clear
+        losses never trigger this. One member failing to re-score is logged
+        and its ledger score stands.
         """
         contested = contested_confirmation_set(
             ledger.entries,
@@ -868,20 +874,29 @@ class ValidatorWorker:
         )
         if not contested:
             return
+        champion = contested[0]
+        challengers = contested[1:]
+        # Champion-anchored: a pure function of the champion's identity and the
+        # version, so it is stable across sweeps and identical fleet-wide.
         seeds = confirmation_seeds(
-            (str(e.agent_id) for e in contested),
+            [str(champion.agent_id)],
             version=self._current_bench_version,
             count=self._config.koth_confirmation_seeds,
         )
         logger.info(
-            "contested dethrone: %d agent(s) inside the indifference band; "
-            "confirming champion %s + challenger(s) %s on common CRN seeds %s",
-            len(contested) - 1,
-            contested[0].agent_id,
-            [str(e.agent_id) for e in contested[1:]],
+            "contested dethrone: %d challenger(s) inside champion %s's band; "
+            "confirming on champion-anchored CRN seeds %s",
+            len(challengers),
+            champion.agent_id,
             seeds,
         )
-        for e in contested:
+        # Score the champion once, only until its entry already carries the
+        # anchored seeds (a later sweep with a fresh challenger must not
+        # re-run the champion).
+        to_score = list(challengers)
+        if not _entry_has_seeds(champion, seeds):
+            to_score.insert(0, champion)
+        for e in to_score:
             if self._new_work_blocked(stop_requested, drain_requested):
                 return
             submitted = await self._confirm_and_submit(
