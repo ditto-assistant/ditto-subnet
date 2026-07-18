@@ -190,6 +190,10 @@ services:
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"
+      # Source/manual installs must never inherit managed-release identity from
+      # an operator shell or .env file. The immutable release renderer replaces
+      # this with authenticated descriptor values for managed stacks.
+      VALIDATOR_STACK_MODE: source
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
       VALIDATOR_BOOTSTRAP_TOKEN: ${VALIDATOR_BOOTSTRAP_TOKEN:-manual}
       VALIDATOR_HTTP_TIMEOUT_SECONDS: "30"

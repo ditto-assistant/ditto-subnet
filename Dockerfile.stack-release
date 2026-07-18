@@ -1,0 +1,19 @@
+FROM scratch
+
+ARG DITTO_VERSION
+ARG DITTO_REVISION
+ARG VALIDATOR_COMPATIBILITY_EPOCH=2
+ARG VALIDATOR_UPDATE_PROTOCOL=1
+ARG VALIDATOR_COMPOSE_SCHEMA=1
+
+LABEL org.opencontainers.image.source="https://github.com/ditto-assistant/ditto-subnet" \
+      org.opencontainers.image.version="$DITTO_VERSION" \
+      org.opencontainers.image.revision="$DITTO_REVISION" \
+      io.heyditto.validator.stack-release="true" \
+      io.heyditto.validator.compatibility-epoch="$VALIDATOR_COMPATIBILITY_EPOCH" \
+      io.heyditto.validator.update-protocol="$VALIDATOR_UPDATE_PROTOCOL" \
+      io.heyditto.validator.compose-schema="$VALIDATOR_COMPOSE_SCHEMA"
+
+COPY build/stack-release/ /release/
+
+CMD ["/release/manifest.env"]
