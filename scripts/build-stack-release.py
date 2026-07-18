@@ -104,6 +104,21 @@ def main() -> None:
         }
     )
 
+    scorer_environment = services["dittobench-api"].get("environment")
+    if not isinstance(scorer_environment, dict):
+        raise ValueError("dittobench-api environment must be a mapping")
+    # These values are authenticated indirectly by the descriptor: the same
+    # signed manifest binds the scorer image digest, source revision, and stack
+    # version. Render literals so an operator .env cannot make an old scorer
+    # claim a newer identity. Capability discovery needs no shared secret: the
+    # validator verifies these literals against the same signed descriptor.
+    scorer_environment.update(
+        {
+            "DITTOBENCH_SOFTWARE_VERSION": args.version,
+            "DITTOBENCH_SOURCE_SHA": args.dittobench_revision,
+        }
+    )
+
     remaining_builds = sorted(
         name for name, service in services.items() if "build" in service
     )

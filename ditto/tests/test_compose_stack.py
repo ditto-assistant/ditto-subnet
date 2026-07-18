@@ -65,6 +65,21 @@ def test_sandbox_health_and_validator_preflight_use_forwarded_embedding_route() 
     )
 
 
+def test_scorer_capability_probe_needs_no_operator_secret() -> None:
+    services = yaml.safe_load(COMPOSE_PATH.read_text())["services"]
+
+    assert (
+        services["ditto-subnet"]["environment"][
+            "VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS"
+        ]
+        == "3"
+    )
+    assert all(
+        "DITTOBENCH_CAPABILITIES_TOKEN" not in service.get("environment", {})
+        for service in services.values()
+    )
+
+
 def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
@@ -217,6 +232,10 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
 
     assert 'COMPATIBILITY_EPOCH: "2"' in workflow
     assert f'HEARTBEAT_PROTOCOL: "{HEARTBEAT_PROTOCOL_VERSION}"' in workflow
+    assert (
+        "io.heyditto.validator.heartbeat-protocol" in workflow
+        and '"$exact")" = "$HEARTBEAT_PROTOCOL"' in workflow
+    )
     assert "ditto-subnet-validator" in workflow
     assert "STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack" in workflow
     assert '--tag "$STACK_REPOSITORY:compat-$COMPATIBILITY_EPOCH"' in workflow

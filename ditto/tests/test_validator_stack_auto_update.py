@@ -146,6 +146,9 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         "VALIDATOR_STACK_COMPONENT_PYLON": manifest["PYLON_IMAGE"],
         "VALIDATOR_STACK_COMPONENT_OLLAMA": manifest["OLLAMA_IMAGE"],
     }
+    scorer_environment = compose["services"]["dittobench-api"]["environment"]
+    assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == "0.10.0"
+    assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == REVISION
 
     # A release must be usable without a Git checkout or a build daemon on the
     # validator host. No remote/local build contexts may survive rendering.
@@ -153,6 +156,48 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
     assert "build:" not in raw
     assert "DITTOBENCH_BUILD_CONTEXT" not in raw
     assert "github.com/ditto-assistant" not in raw
+    assert "DITTOBENCH_CAPABILITIES_TOKEN" not in raw
+
+
+def test_release_builder_rejects_scorer_without_environment(tmp_path: Path) -> None:
+    compose = yaml.safe_load(COMPOSE.read_text())
+    del compose["services"]["dittobench-api"]["environment"]
+    incomplete = tmp_path / "no-scorer-environment.yml"
+    incomplete.write_text(yaml.safe_dump(compose, sort_keys=False))
+    command = _build_command(tmp_path / "release")
+    command[command.index("--compose") + 1] = str(incomplete)
+
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "dittobench-api environment must be a mapping" in result.stderr
+    assert not (tmp_path / "release/manifest.env").exists()
+
+
+def test_release_builder_binds_scorer_runtime_identity_to_descriptor(
+    tmp_path: Path,
+) -> None:
+    dbench_revision = "b" * 40
+    output = _render_release(
+        tmp_path,
+        version="0.11.0",
+        **{"dittobench-revision": dbench_revision},
+    )
+    manifest = _manifest(output / "manifest.env")
+    compose = yaml.safe_load((output / "compose.yml").read_text())
+    scorer_environment = compose["services"]["dittobench-api"]["environment"]
+
+    assert manifest["STACK_VERSION"] == "0.11.0"
+    assert manifest["DITTOBENCH_REVISION"] == dbench_revision
+    assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == "0.11.0"
+    assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == dbench_revision
+    assert "DITTOBENCH_CAPABILITIES_TOKEN" not in manifest
 
 
 @pytest.mark.parametrize(

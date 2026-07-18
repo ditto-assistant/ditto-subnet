@@ -154,6 +154,18 @@ root-owned extracted descriptor against installed or in-flight transaction
 state. Operator `.env` values cannot override these claims, and the validator
 does not receive the Docker socket.
 
+The renderer also supplies `DITTOBENCH_SOFTWARE_VERSION` and
+`DITTOBENCH_SOURCE_SHA` to the scorer as descriptor-controlled literals. The
+validator accepts benchmark-v3 support only when the scorer capability
+response's runtime identity matches the signed stack identity. The endpoint
+reports only public release metadata and protocol numbers, so it needs no
+operator secret; a shared bearer token held by the scorer could not authenticate
+that scorer to the validator. An older scorer, an unreachable endpoint, a
+malformed response, or an identity mismatch remains conservatively benchmark
+v2. The scorer port is not published on the host, and neither service receives
+the host Docker socket. This keeps old/new scorer-validator combinations safe
+without an `.env` cutover.
+
 ## Operations
 
 `status` is read-only and network-free. It reports the installed descriptor,
