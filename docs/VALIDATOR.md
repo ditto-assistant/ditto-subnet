@@ -31,6 +31,12 @@ The root Docker Compose stack starts six services:
 | `ollama` | Serves the embedding model used for memory scoring. |
 | `pylon` | Submits weights with the validator wallet. |
 
+The scorer admits one full miner run at a time. Each untrusted miner container
+keeps the existing 2-CPU, 512-PID, capability, seccomp, and restricted-egress
+controls while receiving 3 GiB RAM and a 512 MiB writable `/tmp`; its root
+filesystem remains read-only. Do not increase scorer concurrency on the same
+host. Add validators on separate capacity instead.
+
 The platform owns the queue and score ledger. Pylon keeps in-flight weight
 state in a named volume. Screening happens on the platform before work reaches
 validators. Passing screens include a content- and image-ID-pinned Docker image
@@ -275,6 +281,12 @@ validator remains drained. Repair the sidecars, verify them, then run
   updater status. Do not add PM2 or another systemd service for the stack.
 - **Disk use grows:** inspect `sandbox-docker`. Its nested daemon prunes unused
   benchmark data; do not run broad cleanup against the host Docker daemon.
+- **Sandbox resource failure:** inspect the scorer's sanitized failure code and
+  Docker/cgroup counters. `sandbox_oom` and `sandbox_tmpfs_exhausted` are
+  validator-infrastructure classifications, not miner verdicts. The worker
+  stops claiming more work and leaves the ticket to expire safely. After the
+  resource issue is verified and corrected, use the audited platform/Backroom
+  single-agent validation retry; never bulk retry or alter accepted scores.
 
 ## Automatic full-stack updates (opt-in)
 

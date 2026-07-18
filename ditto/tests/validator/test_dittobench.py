@@ -533,6 +533,62 @@ async def test_ollama_run_failure_is_retryable_infrastructure() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["sandbox_oom", "sandbox_tmpfs_exhausted"])
+async def test_sandbox_resource_failure_is_retryable_infrastructure(
+    code: str,
+) -> None:
+    private_marker = "private-container-id-and-miner-output"
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": private_marker,
+                "failure": {
+                    "kind": "validator_infrastructure",
+                    "code": code,
+                    "retryable": True,
+                    "diagnostics": {
+                        "oom_killed": code == "sandbox_oom",
+                        "memory_peak_bytes": 3 << 30,
+                    },
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError, match=code) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=3
+            )
+    assert private_marker not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_unknown_sandbox_failure_code_is_not_retryable() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "miner runtime exited",
+                "failure": {
+                    "kind": "validator_infrastructure",
+                    "code": "arbitrary_code",
+                    "retryable": True,
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(DittobenchError, match="miner runtime exited"):
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=3
+            )
+
+
+@pytest.mark.asyncio
 async def test_poll_callback_receives_only_allowlisted_snapshot() -> None:
     seen: list[dict[str, object]] = []
 
