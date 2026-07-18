@@ -49,6 +49,11 @@ from ditto.validator.telemetry import (
     ValidatorTelemetry,
     scored_agent_stat,
 )
+from ditto.validator.transform_audit import (
+    AUDIT_MIN_ROBUSTNESS,
+    brittleness_signature,
+    transform_robustness,
+)
 from ditto.validator.update_control import write_update_state
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
@@ -135,6 +140,58 @@ def _retry_delay_seconds(attempt: int, error: Exception) -> float:
         else _WEIGHT_SET_RETRY_SECONDS
     )
     return base * 2 ** (attempt - 1)
+
+
+def _attach_transform_audit(
+    representative: ScoreReport, reports: Sequence[ScoreReport]
+) -> ScoreReport:
+    """Record the reproduce-under-transform verdict on the submitted report.
+
+    The platform only ever sees the ONE representative report, so it cannot take
+    a median over the K confirmation runs itself. The validator computes it here
+    and attaches it to ``details``, where the platform's finalize branch reads it
+    to decide whether to hold the agent for operator review.
+
+    Judging the median rather than any single run matters: one run on a
+    nondeterministic model is noisy, and quarantining on a single low sample
+    would cost honest miners. Same reasoning as the KOTH fold's median over
+    seeds.
+
+    The verdict rides ``details``, which is advisory and NOT covered by the
+    signature, and it deliberately never touches the composite. A failed audit
+    is a quarantine-then-review trigger, not a score change and not a ban: the
+    metric is the surface-brittleness / memorization signature, and it is not
+    evidence about a robust local solver, which recomputes correctly under the
+    transform too.
+    """
+    details_list = [r.details for r in reports]
+    values = [
+        value
+        for value, _pairs in (transform_robustness(d) for d in details_list)
+        if value is not None
+    ]
+    if not values:
+        return representative  # older scoring engine: nothing to record
+    failed = brittleness_signature(details_list)
+    values.sort()
+    mid = len(values) // 2
+    median = (
+        values[mid] if len(values) % 2 == 1 else (values[mid - 1] + values[mid]) / 2
+    )
+    if failed:
+        logger.warning(
+            "agent %s: transform-audit brittleness signature — median robustness "
+            "%.3f over %d run(s) is below the %.2f floor; flagging for review",
+            representative.run_id,
+            median,
+            len(values),
+            AUDIT_MIN_ROBUSTNESS,
+        )
+    details = dict(representative.details or {})
+    details["transform_robustness_median"] = median
+    details["transform_audit_runs"] = len(values)
+    details["transform_audit_failed"] = failed
+    return representative.model_copy(update={"details": details})
 
 
 def _pooled_confirmation_stderr(
@@ -1467,6 +1524,7 @@ class ValidatorWorker:
                     ),
                 }
             )
+        representative = _attach_transform_audit(representative, reports)
         return await self._submit_report(agent_id, miner_hotkey, representative)
 
     async def run_forever(
