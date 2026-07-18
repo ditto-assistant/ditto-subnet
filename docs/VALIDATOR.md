@@ -27,7 +27,7 @@ The root Docker Compose stack starts six services:
 | `ditto-subnet` | Leases work, signs scores, and computes weights. |
 | `dittobench-api` | Loads screened images and scores submissions. |
 | `sandbox-docker` | Loads and runs screened images; builds only legacy records. |
-| `model-relay` | Reaches the locked Chutes model without exposing its key. |
+| `model-relay` | Reaches the locked model on the selected provider (Chutes or OpenRouter) without exposing its key. |
 | `ollama` | Serves the embedding model used for memory scoring. |
 | `pylon` | Submits weights with the validator wallet. |
 
@@ -91,8 +91,13 @@ do not depend on GitHub availability and the pin may safely lag a newer `main`.
 - Git and `flock` from util-linux.
 - A local Bittensor wallet whose hotkey is registered on Finney SN118 and has a
   validator permit.
-- A Chutes API key for the locked `Qwen/Qwen3-32B-TEE` model.
-- Outbound access to Finney, Chutes, the Ditto platform, and GHCR.
+- An API key for the locked Qwen3-32B model on ONE certified provider: a
+  Chutes key (`Qwen/Qwen3-32B-TEE`, the default) or an OpenRouter key
+  (`qwen/qwen3-32b`, served by the certified Nebius deployment). Select with
+  `RELAY_PROVIDER`; the model, upstream, and routing per provider are locked
+  in relay code, so scoring is identical either way.
+- Outbound access to Finney, the selected model provider, the Ditto platform,
+  and GHCR.
 - Anonymous pull access to the public
   `ghcr.io/ditto-assistant/ditto-subnet-validator` package.
 
@@ -118,7 +123,9 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_NAME` | Coldkey directory under `~/.bittensor/wallets`. |
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
-| `RELAY_API_KEY` | Chutes API key used only by `model-relay`. |
+| `DITTOBENCH_CAPABILITIES_TOKEN` | Per-host random token authenticating the private validator-to-scorer capability probe. |
+| `RELAY_PROVIDER` | `chutes` (default) or `openrouter`; which certified upstream serves the locked model. |
+| `RELAY_API_KEY` | API key for the selected provider, used only by `model-relay`. |
 
 The example selects Finney, SN118, and the production platform. For local
 testing, change both the platform and chain settings and use a separate `.env`.
