@@ -9,10 +9,11 @@ reproducible by the other. Mirrors the pairing that
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from datetime import UTC, datetime
 
 import pytest
 
+from ditto.api_models.validator import ScoreReport
 from ditto.validator.transform_audit import (
     AUDIT_MIN_PAIRS,
     AUDIT_MIN_ROBUSTNESS,
@@ -21,6 +22,7 @@ from ditto.validator.transform_audit import (
     brittleness_signature,
     transform_robustness,
 )
+from ditto.validator.worker import _attach_transform_audit
 
 # (seed, case_id, selected, transform_id) straight from the Go implementation.
 GO_VECTORS = [
@@ -107,43 +109,49 @@ def test_honest_robustness_clears_the_floor() -> None:
     assert AUDIT_MIN_ROBUSTNESS < 1.0
 
 
+def _report(robustness: float | None, pairs: int = AUDIT_MIN_PAIRS) -> ScoreReport:
+    """A real ScoreReport so the helper is exercised against the wire model it
+    actually receives, not a stand-in that could drift from it."""
+    details: dict | None = None
+    if robustness is not None:
+        details = {"transform_robustness": robustness, "audit_case_count": pairs}
+    return ScoreReport(
+        run_id="run-1",
+        seed=1,
+        composite=0.5,
+        tool_mean=0.5,
+        memory_mean=0.5,
+        median_ms=10,
+        n=10,
+        generated_at=datetime(2026, 7, 18, tzinfo=UTC),
+        per_case=[],
+        structural_fingerprint=None,
+        details=details,
+    )
+
+
 def test_attach_transform_audit_records_the_median() -> None:
     """The platform sees only the representative report, so the validator must
     attach the median verdict over the K confirmation runs itself."""
-    from ditto.validator.worker import _attach_transform_audit
-
-    def report(robustness: float | None):
-        details = None
-        if robustness is not None:
-            details = {
-                "transform_robustness": robustness,
-                "audit_case_count": AUDIT_MIN_PAIRS,
-            }
-        return SimpleNamespace(
-            details=details,
-            run_id="run",
-            model_copy=lambda update: SimpleNamespace(
-                details=update["details"], run_id="run"
-            ),
-        )
-
-    rep = report(0.2)
-    out = _attach_transform_audit(rep, [report(0.1), report(0.2), report(0.9)])
+    out = _attach_transform_audit(
+        _report(0.2), [_report(0.1), _report(0.2), _report(0.9)]
+    )
+    assert out.details is not None
     assert out.details["transform_audit_failed"] is True
     assert out.details["transform_robustness_median"] == 0.2
     assert out.details["transform_audit_runs"] == 3
 
-    rep2 = report(1.0)
-    out2 = _attach_transform_audit(rep2, [report(1.0), report(1.0), report(0.2)])
+    out2 = _attach_transform_audit(
+        _report(1.0), [_report(1.0), _report(1.0), _report(0.2)]
+    )
+    assert out2.details is not None
     assert out2.details["transform_audit_failed"] is False
 
 
 def test_attach_transform_audit_noop_without_metric() -> None:
     """An older scoring engine reports nothing; leave the report untouched
     rather than recording a verdict that was never measured."""
-    from ditto.validator.worker import _attach_transform_audit
-
-    rep = SimpleNamespace(details={"existing": 1}, run_id="run")
-    out = _attach_transform_audit(rep, [SimpleNamespace(details=None)])
+    rep = _report(None)
+    out = _attach_transform_audit(rep, [_report(None)])
     assert out is rep
-    assert out.details == {"existing": 1}
+    assert out.details is None
