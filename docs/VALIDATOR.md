@@ -94,11 +94,16 @@ do not depend on GitHub availability and the pin may safely lag a newer `main`.
 - An API key for the locked Qwen3-32B model on ONE certified provider: a
   Chutes key (`Qwen/Qwen3-32B-TEE`, the default) or an OpenRouter key
   (`qwen/qwen3-32b`, served by the certified Nebius deployment). Select with
-  `RELAY_PROVIDER`; the model, upstream, and routing per provider are locked
-  in relay code, so scoring is identical either way. The fleet-wide
-  thinking-off mode is enforced on both providers too (hard template switch
-  on Chutes, trailing Qwen3 `/no_think` on OpenRouter, where the relay places
-  it after all sandbox content so it cannot be overridden).
+  `RELAY_PROVIDER`. The two are certified as comparable and validators are
+  meant to split across them: pinning the whole fleet to Chutes saturated
+  that endpoint and raised latency, so spreading scoring load across both
+  keeps throughput up. The model, upstream, and routing per provider are
+  locked in relay code, so scoring is identical either way, and a submission's
+  k=3 quorum may mix providers by design (every score reports the same model
+  id, so the median is over comparable numbers). The fleet-wide thinking-off
+  mode is enforced on both providers too (hard template switch on Chutes,
+  trailing Qwen3 `/no_think` on OpenRouter, where the relay places it after
+  all sandbox content so it cannot be overridden).
 - Outbound access to Finney, the selected model provider, the Ditto platform,
   and GHCR.
 - Anonymous pull access to the public
