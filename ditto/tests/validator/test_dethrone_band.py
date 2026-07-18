@@ -436,6 +436,30 @@ class TestContestedConfirmationSet:
         )
         assert got == []
 
+    def test_future_champion_is_not_confirmed_by_older_worker(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.80)
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)
+        champ.bench_version = 3
+        chall.bench_version = 2
+        assert (
+            contested_confirmation_set(
+                [champ, chall], current_version=2, margin=0.02, dethrone_z=0.0
+            )
+            == []
+        )
+
+    def test_future_challenger_is_not_confirmed_by_older_worker(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.80)
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)
+        champ.bench_version = 2
+        chall.bench_version = 3
+        assert (
+            contested_confirmation_set(
+                [champ, chall], current_version=2, margin=0.02, dethrone_z=0.0
+            )
+            == []
+        )
+
     def test_contest_uses_effective_composites(self) -> None:
         # The champion's raw composite (0.90, a lucky representative run) would
         # put the challenger far outside the band; its confirmation MEDIAN

@@ -9,20 +9,18 @@ reproducible by the other. Mirrors the pairing that
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 
-from ditto.api_models.validator import ScoreReport
 from ditto.validator.transform_audit import (
-    AUDIT_MIN_PAIRS,
-    AUDIT_MIN_ROBUSTNESS,
+    ALPHA,
+    MIN_DISCORDANT,
     audit_selected,
     audit_transform_id,
+    binomial_tail,
+    brittleness_pvalue,
     brittleness_signature,
-    transform_robustness,
+    pool_audit_pairs,
 )
-from ditto.validator.worker import _attach_transform_audit
 
 # (seed, case_id, selected, transform_id) straight from the Go implementation.
 GO_VECTORS = [
@@ -68,90 +66,74 @@ def test_selection_rate_is_near_the_public_rate() -> None:
     assert 1300 <= hits <= 1700, f"selection rate {hits / 10000:.4f} is far from 15%"
 
 
-def test_transform_robustness_reads_details() -> None:
-    value, pairs = transform_robustness(
-        {"transform_robustness": 0.5, "audit_case_count": 6}
-    )
-    assert value == 0.5
-    assert pairs == 6
+def pairs(both_correct=0, base_only=0, transform_only=0, both_wrong=0):
+    return {
+        "audit_pairs": {
+            "both_correct": both_correct,
+            "base_only": base_only,
+            "transform_only": transform_only,
+            "both_wrong": both_wrong,
+        }
+    }
 
 
-@pytest.mark.parametrize("details", [None, {}, {"audit_case_count": 6}])
-def test_absent_metric_is_not_a_failure(details) -> None:
-    """An older engine that reports nothing must not read as a failed audit."""
-    assert transform_robustness(details) == (None, 0)
+def test_binomial_tail_matches_known_values() -> None:
+    assert binomial_tail(0, 0) == 1.0
+    assert binomial_tail(6, 6) == pytest.approx(0.5**6)
+    assert binomial_tail(0, 6) == pytest.approx(1.0)
+    assert binomial_tail(3, 6) == pytest.approx(0.65625)
+
+
+def test_honest_symmetric_splits_are_not_brittleness() -> None:
+    """The measured honest model: 5 base-only vs 6 transform-only.
+
+    A nondeterministic model splits pairs in BOTH directions, which is the null
+    this test is built around. If this ever starts flagging, the audit is
+    punishing model noise.
+    """
+    assert brittleness_pvalue(5, 6) > 0.5
+    assert brittleness_signature([pairs(base_only=5, transform_only=6)]) is False
+
+
+def test_directional_splits_are_brittleness() -> None:
+    """The measured brittle harness: discordant pairs all one way."""
+    assert brittleness_pvalue(7, 0) <= ALPHA
+    assert brittleness_signature([pairs(base_only=7)]) is True
+
+
+def test_thin_evidence_is_never_a_verdict() -> None:
+    """Too few discordant pairs cannot reach ALPHA, so no verdict is attempted."""
+    assert brittleness_signature([pairs(base_only=MIN_DISCORDANT - 1)]) is False
+    # Even a perfect run of one-directional pairs below the floor stays silent.
+    assert brittleness_signature([pairs(base_only=5)]) is False
+
+
+def test_both_wrong_pairs_do_not_drive_the_verdict() -> None:
+    """Both-wrong is the large majority on a hard benchmark (81% measured) and
+    reflects accuracy, which the composite already scores."""
+    assert brittleness_signature([pairs(both_wrong=500)]) is False
+    assert brittleness_signature([pairs(both_correct=500)]) is False
+
+
+def test_counts_pool_across_runs() -> None:
+    """A single run yields too few pairs to decide; the evidence accumulates."""
+    runs = [pairs(base_only=3), pairs(base_only=3), pairs(base_only=2)]
+    pooled = pool_audit_pairs(runs)
+    assert pooled["base_only"] == 8
+    assert brittleness_signature(runs) is True
+    # The same eight events split across directions is not a signature.
+    assert brittleness_signature([pairs(base_only=4, transform_only=4)]) is False
+
+
+@pytest.mark.parametrize("details", [None, {}, {"audit_pairs": "nope"}])
+def test_absent_counts_are_not_a_failure(details) -> None:
+    """An older engine reporting nothing must not read as a failed audit."""
     assert brittleness_signature([details]) is False
 
 
-def test_brittleness_signature_uses_the_median() -> None:
-    """One low run is noise; the median across finalized reports is the signal."""
-    low = {"transform_robustness": 0.1, "audit_case_count": AUDIT_MIN_PAIRS}
-    high = {"transform_robustness": 1.0, "audit_case_count": AUDIT_MIN_PAIRS}
-    # A single low run among three does not trip the verdict.
-    assert brittleness_signature([low, high, high]) is False
-    # A majority does.
-    assert brittleness_signature([low, low, high]) is True
-
-
-def test_thin_evidence_is_not_judged() -> None:
-    """Too few audit pairs behind a value: a single split would swing the rate."""
-    thin = {
-        "transform_robustness": 0.0,
-        "audit_case_count": AUDIT_MIN_PAIRS - 1,
-    }
-    assert brittleness_signature([thin, thin, thin]) is False
-
-
-def test_honest_robustness_clears_the_floor() -> None:
-    """The floor must sit below what a consistent harness scores."""
-    honest = {"transform_robustness": 1.0, "audit_case_count": 8}
-    assert brittleness_signature([honest, honest, honest]) is False
-    assert AUDIT_MIN_ROBUSTNESS < 1.0
-
-
-def _report(robustness: float | None, pairs: int = AUDIT_MIN_PAIRS) -> ScoreReport:
-    """A real ScoreReport so the helper is exercised against the wire model it
-    actually receives, not a stand-in that could drift from it."""
-    details: dict | None = None
-    if robustness is not None:
-        details = {"transform_robustness": robustness, "audit_case_count": pairs}
-    return ScoreReport(
-        run_id="run-1",
-        seed=1,
-        composite=0.5,
-        tool_mean=0.5,
-        memory_mean=0.5,
-        median_ms=10,
-        n=10,
-        generated_at=datetime(2026, 7, 18, tzinfo=UTC),
-        per_case=[],
-        structural_fingerprint=None,
-        details=details,
-    )
-
-
-def test_attach_transform_audit_records_the_median() -> None:
-    """The platform sees only the representative report, so the validator must
-    attach the median verdict over the K confirmation runs itself."""
-    out = _attach_transform_audit(
-        _report(0.2), [_report(0.1), _report(0.2), _report(0.9)]
-    )
-    assert out.details is not None
-    assert out.details["transform_audit_failed"] is True
-    assert out.details["transform_robustness_median"] == 0.2
-    assert out.details["transform_audit_runs"] == 3
-
-    out2 = _attach_transform_audit(
-        _report(1.0), [_report(1.0), _report(1.0), _report(0.2)]
-    )
-    assert out2.details is not None
-    assert out2.details["transform_audit_failed"] is False
-
-
-def test_attach_transform_audit_noop_without_metric() -> None:
-    """An older scoring engine reports nothing; leave the report untouched
-    rather than recording a verdict that was never measured."""
-    rep = _report(None)
-    out = _attach_transform_audit(rep, [_report(None)])
-    assert out is rep
-    assert out.details is None
+def test_alpha_is_the_honest_false_positive_rate() -> None:
+    """The property that makes this defensible: under the null, the chance of
+    flagging an honest harness is at most ALPHA."""
+    assert 0 < ALPHA <= 0.01
+    # A fair coin producing MIN_DISCORDANT all-one-way results is rare enough.
+    assert binomial_tail(MIN_DISCORDANT, MIN_DISCORDANT) <= 0.02

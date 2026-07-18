@@ -77,8 +77,9 @@ def score_signing_message(
     """Build the canonical bytes a score signature is computed over.
 
     ``{validator_hotkey}:{agent_id}:{ticket_deadline}:{run_id}:``
-    ``{composite!r}:{seed}`` — with ``:{transcript_sha256}`` appended when the
-    report declares a transcript digest (``details["transcript_sha256"]``), so
+    ``{composite!r}:{seed}`` — then optional ``:{bench_version}``, followed by
+    optional ``:{transcript_sha256}`` when the report declares a transcript
+    digest (``details["transcript_sha256"]``), so
     the published transcript artifact cannot be swapped without breaking the
     signature. The platform derives presence from the same report field, so a
     report without a transcript keeps the previous format. The exact ticket

@@ -125,12 +125,17 @@ class DittobenchClient:
         # signed/DB ScoreReport contract — captured here only so the validator can
         # surface it in aggregate W&B telemetry.
         self.last_details: dict[str, object] = {}
-        # Canonical transcript artifact of the most recent scored run (the
-        # graded per-case inputs), digest-verified against the run's declared
-        # transcript_sha256. Held so the worker can publish it to the platform
-        # after submitting the signed score (offline reproducibility). None when
-        # the engine published no transcript or verification failed.
+        # Verified transcript bytes are keyed by immutable run id. Multi-seed
+        # confirmation may select a representative that was not evaluated last,
+        # so one mutable slot is insufficient. Keep a small insertion-ordered
+        # cache; publication consumes the selected entry.
+        self._transcripts: dict[str, bytes] = {}
+        # Backward-compatible diagnostic view of the most recent run.
         self.last_transcript: bytes | None = None
+
+    def take_transcript(self, run_id: str) -> bytes | None:
+        """Consume the verified transcript belonging to exactly ``run_id``."""
+        return self._transcripts.pop(run_id, None)
 
     async def scorer_benchmark_capability(
         self, stack: ValidatorStackIdentity
@@ -533,6 +538,7 @@ class DittobenchClient:
         not depend on the artifact.
         """
         self.last_transcript = None
+        self._transcripts.pop(run_id, None)
         if not isinstance(declared, str) or not declared:
             return None
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}/transcript"
@@ -558,6 +564,9 @@ class DittobenchClient:
             )
             return None
         self.last_transcript = body
+        self._transcripts[run_id] = body
+        while len(self._transcripts) > 16:
+            self._transcripts.pop(next(iter(self._transcripts)))
         return digest
 
     async def _cancel(self, run_id: str) -> None:

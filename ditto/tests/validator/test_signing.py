@@ -335,6 +335,31 @@ def test_score_signature_adds_benchmark_version_only_for_v3() -> None:
     assert message(3) == legacy + b":3"
 
 
+def test_score_signature_optional_suffix_order_golden() -> None:
+    """Platform and validator append benchmark version before transcript hash."""
+    digest = "cd" * 32
+    base = (f"{_HOTKEY}:{_AGENT}::run-1:0.9:42").encode()
+    cases = (
+        (None, None, base),
+        (3, None, base + b":3"),
+        (None, digest, base + f":{digest}".encode()),
+        (3, digest, base + f":3:{digest}".encode()),
+    )
+    for bench_version, transcript_sha256, expected in cases:
+        assert (
+            score_signing_message(
+                validator_hotkey=_HOTKEY,
+                agent_id=_AGENT,
+                run_id="run-1",
+                composite=0.9,
+                seed=42,
+                bench_version=bench_version,
+                transcript_sha256=transcript_sha256,
+            )
+            == expected
+        )
+
+
 def test_protocol_v3_heartbeat_signature_binds_system_metrics() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     metrics = SystemMetrics(

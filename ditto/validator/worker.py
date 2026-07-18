@@ -50,9 +50,10 @@ from ditto.validator.telemetry import (
     scored_agent_stat,
 )
 from ditto.validator.transform_audit import (
-    AUDIT_MIN_ROBUSTNESS,
+    ALPHA,
+    brittleness_pvalue,
     brittleness_signature,
-    transform_robustness,
+    pool_audit_pairs,
 )
 from ditto.validator.update_control import write_update_state
 from ditto.validator.weights import (
@@ -147,49 +148,47 @@ def _attach_transform_audit(
 ) -> ScoreReport:
     """Record the reproduce-under-transform verdict on the submitted report.
 
-    The platform only ever sees the ONE representative report, so it cannot take
-    a median over the K confirmation runs itself. The validator computes it here
-    and attaches it to ``details``, where the platform's finalize branch reads it
-    to decide whether to hold the agent for operator review.
+    The platform only ever sees the ONE representative report, so it cannot pool
+    the K confirmation runs itself. This sums the audit 2x2 counts across them
+    and attaches both the pooled counts and the resulting p-value.
 
-    Judging the median rather than any single run matters: one run on a
-    nondeterministic model is noisy, and quarantining on a single low sample
-    would cost honest miners. Same reasoning as the KOTH fold's median over
-    seeds.
+    Pooling is not a refinement, it is what makes a verdict possible at all: a
+    single full run yields only a handful of audit pairs and a couple of
+    discordant ones, which cannot reach ALPHA however the test is framed.
 
     The verdict rides ``details``, which is advisory and NOT covered by the
-    signature, and it deliberately never touches the composite. A failed audit
-    is a quarantine-then-review trigger, not a score change and not a ban: the
-    metric is the surface-brittleness / memorization signature, and it is not
-    evidence about a robust local solver, which recomputes correctly under the
-    transform too.
+    signature, and never touches the composite. A directional audit result is
+    the surface-brittleness signature; it is not evidence about a robust local
+    solver, which recomputes correctly under the transform too and was measured
+    passing the audit.
     """
-    details_list = [r.details for r in reports]
-    values = [
-        value
-        for value, _pairs in (transform_robustness(d) for d in details_list)
-        if value is not None
-    ]
-    if not values:
-        return representative  # older scoring engine: nothing to record
-    failed = brittleness_signature(details_list)
-    values.sort()
-    mid = len(values) // 2
-    median = (
-        values[mid] if len(values) % 2 == 1 else (values[mid - 1] + values[mid]) / 2
-    )
+    pooled = pool_audit_pairs([r.details for r in reports])
+    if (
+        pooled["both_correct"]
+        + pooled["base_only"]
+        + pooled["transform_only"]
+        + pooled["both_wrong"]
+        == 0
+    ):
+        return representative  # older scoring engine: nothing measured
+
+    failed = brittleness_signature([r.details for r in reports])
+    pvalue = brittleness_pvalue(pooled["base_only"], pooled["transform_only"])
     if failed:
         logger.warning(
-            "agent %s: transform-audit brittleness signature — median robustness "
-            "%.3f over %d run(s) is below the %.2f floor; flagging for review",
+            "agent %s: transform-audit brittleness signature — %d base-only vs "
+            "%d transform-only discordant pairs over %d run(s), p=%.4f <= %.3f",
             representative.run_id,
-            median,
-            len(values),
-            AUDIT_MIN_ROBUSTNESS,
+            pooled["base_only"],
+            pooled["transform_only"],
+            len(reports),
+            pvalue,
+            ALPHA,
         )
     details = dict(representative.details or {})
-    details["transform_robustness_median"] = median
-    details["transform_audit_runs"] = len(values)
+    details["audit_pairs_pooled"] = pooled
+    details["audit_pairs_runs"] = len(reports)
+    details["transform_audit_pvalue"] = pvalue
     details["transform_audit_failed"] = failed
     return representative.model_copy(update={"details": details})
 
@@ -1364,7 +1363,10 @@ class ValidatorWorker:
         re-published, the score cannot be lost."""
         if transcript_sha256 is None:
             return
-        transcript = getattr(self._dittobench, "last_transcript", None)
+        take_transcript = getattr(self._dittobench, "take_transcript", None)
+        transcript = (
+            take_transcript(report.run_id) if callable(take_transcript) else None
+        )
         if not isinstance(transcript, bytes) or not transcript:
             logger.warning(
                 "agent %s declared transcript %s but no bytes are held; "
@@ -1489,7 +1491,14 @@ class ValidatorWorker:
         reports: list[ScoreReport] = []
         for s in seeds:
             try:
-                reports.append(await self._evaluate(agent_id, expected_sha256, seed=s))
+                reports.append(
+                    await self._evaluate(
+                        agent_id,
+                        expected_sha256,
+                        seed=s,
+                        bench_version=self._current_bench_version,
+                    )
+                )
             except (PlatformError, DittobenchError) as exc:
                 logger.warning(
                     "re-score of stale agent %s (seed %d) failed; skipping seed: %s",

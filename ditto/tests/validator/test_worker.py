@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -2016,24 +2017,44 @@ class TestConfirmAndSubmit:
 
     async def test_submits_one_median_run_with_all_confirmations(self) -> None:
         agent_id = uuid4()
-        composites = {10: 0.90, 20: 0.70, 30: 0.80}  # median = 0.80 (seed 30)
+        # The median representative (seed 10) is deliberately not evaluated
+        # last, proving transcript publication is keyed by run id.
+        composites = {10: 0.80, 20: 0.90, 30: 0.70}
+        transcripts = {seed: f'{{"seed":{seed}}}'.encode() for seed in composites}
 
         async def _score(**kw: Any) -> ScoreReport:
-            return self._seeded_report(kw["seed"], composites[kw["seed"]])
+            seed = kw["seed"]
+            return self._seeded_report(seed, composites[seed]).model_copy(
+                update={
+                    "bench_version": 3,
+                    "details": {
+                        "bench_version": 3,
+                        "transcript_sha256": hashlib.sha256(
+                            transcripts[seed]
+                        ).hexdigest(),
+                    },
+                }
+            )
 
         dittobench = MagicMock()
         dittobench.score_tarball = AsyncMock(side_effect=_score)
+        dittobench.take_transcript = MagicMock(
+            side_effect=lambda run_id: transcripts[int(run_id.removeprefix("run-"))]
+        )
         dittobench.last_details = {"bench_version": 3}
         platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_transcript = AsyncMock()
         platform.get_artifact = AsyncMock(
             return_value=ArtifactResponse(
                 agent_id=agent_id,
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
+                bench_version=3,
             )
         )
         w = await self._worker(dittobench, platform)
+        w._current_bench_version = 3
 
         out = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -2046,15 +2067,19 @@ class TestConfirmAndSubmit:
         # The representative is a real run (the median composite/seed), and it
         # carries the sorted per-seed composites for the fold's median.
         assert report.composite == 0.80
-        assert report.seed == 30
+        assert report.seed == 10
         # Seed-aligned and seed-sorted: seeds [10, 20, 30] -> composites in that
         # seed order, so a later paired dethrone can intersect on shared seeds.
         assert report.confirmation_seeds == [10, 20, 30]
-        assert report.confirmation_composites == [0.90, 0.70, 0.80]
+        assert report.confirmation_composites == [0.80, 0.90, 0.70]
         # composite_stderr is pooled over the seeds: the per-seed reports carry
         # no single-run stderr, so it is the between-seed SEM
         # stdev([.7,.8,.9]) / sqrt(3) = 0.1 / sqrt(3).
         assert report.composite_stderr == pytest.approx(0.1 / 3**0.5)
+        dittobench.take_transcript.assert_called_once_with("run-10")
+        platform.submit_transcript.assert_awaited_once()
+        assert platform.submit_transcript.await_args.kwargs["run_id"] == "run-10"
+        assert platform.submit_transcript.await_args.kwargs["body"] == transcripts[10]
         assert out is report
 
     async def test_single_surviving_seed_has_no_confirmations(self) -> None:
@@ -2064,7 +2089,9 @@ class TestConfirmAndSubmit:
 
         async def _score(**kw: Any) -> ScoreReport:
             if kw["seed"] == 20:
-                return self._seeded_report(20, 0.75)
+                return self._seeded_report(20, 0.75).model_copy(
+                    update={"bench_version": 2, "details": {"bench_version": 2}}
+                )
             raise worker_mod.DittobenchError("boom")
 
         dittobench = MagicMock()
@@ -2077,9 +2104,11 @@ class TestConfirmAndSubmit:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
+                bench_version=2,
             )
         )
         w = await self._worker(dittobench, platform)
+        w._current_bench_version = 2
 
         report = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -2103,9 +2132,11 @@ class TestConfirmAndSubmit:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
+                bench_version=2,
             )
         )
         w = await self._worker(dittobench, platform)
+        w._current_bench_version = 2
 
         out = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -2156,14 +2187,20 @@ class TestTranscriptPublication:
     def _report_with_transcript(self) -> ScoreReport:
         report = _report("run_t", 0.9)
         return report.model_copy(
-            update={"details": {"transcript_sha256": self._DIGEST}}
+            update={
+                "bench_version": 3,
+                "details": {
+                    "bench_version": 3,
+                    "transcript_sha256": self._DIGEST,
+                },
+            }
         )
 
     async def test_submit_signs_digest_and_publishes_transcript(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
         platform.submit_transcript = AsyncMock()
         dittobench = MagicMock()
-        dittobench.last_transcript = b'{"cases":[]}'
+        dittobench.take_transcript = MagicMock(return_value=b'{"cases":[]}')
         signed_messages: list[bytes] = []
 
         def _capture_sign(message: bytes) -> bytes:
@@ -2184,7 +2221,8 @@ class TestTranscriptPublication:
         )
 
         assert len(signed_messages) == 1
-        assert signed_messages[0].endswith(f":{self._DIGEST}".encode())
+        assert signed_messages[0].endswith(f":3:{self._DIGEST}".encode())
+        dittobench.take_transcript.assert_called_once_with("run_t")
         platform.submit_score.assert_awaited_once()
         platform.submit_transcript.assert_awaited_once()
         kwargs = platform.submit_transcript.await_args.kwargs
@@ -2197,7 +2235,7 @@ class TestTranscriptPublication:
             side_effect=PlatformError("digest mismatch")
         )
         dittobench = MagicMock()
-        dittobench.last_transcript = b'{"cases":[]}'
+        dittobench.take_transcript = MagicMock(return_value=b'{"cases":[]}')
         worker = ValidatorWorker(
             config=_config(),
             platform=platform,
@@ -2225,7 +2263,7 @@ class TestTranscriptPublication:
         worker = ValidatorWorker(
             config=_config(),
             platform=platform,
-            dittobench=MagicMock(last_transcript=None),
+            dittobench=MagicMock(take_transcript=MagicMock(return_value=None)),
             chain=MagicMock(),
             keypair=keypair,
         )
@@ -2269,6 +2307,15 @@ class TestContestedDethroneConfirmation:
         dittobench.score_tarball = AsyncMock(side_effect=_score)
         dittobench.last_details = {}
         platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=champ.agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+                bench_version=DEFAULT_BENCH_VERSION,
+            )
+        )
         w = self._worker(dittobench, platform)
 
         await w._confirm_contested_dethrone(
@@ -2316,6 +2363,15 @@ class TestContestedDethroneConfirmation:
         dittobench.score_tarball = AsyncMock(side_effect=_score)
         dittobench.last_details = {}
         platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=entrant.agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+                bench_version=DEFAULT_BENCH_VERSION,
+            )
+        )
         w = self._worker(dittobench, platform)
 
         await w._confirm_contested_dethrone(

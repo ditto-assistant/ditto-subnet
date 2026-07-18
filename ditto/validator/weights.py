@@ -478,13 +478,13 @@ def contested_confirmation_set(
     if len(scored) < 2:
         return []
     champion = _champion(scored, margin, dethrone_z)
-    if _entry_version(champion) < current_version:
+    if _entry_version(champion) != current_version:
         return []
     contested = [
         e
         for e in sorted(scored, key=lambda e: (e.first_seen, e.agent_id))
         if e.agent_id != champion.agent_id
-        and _entry_version(e) >= current_version
+        and _entry_version(e) == current_version
         and abs(_effective_composite(e) - _effective_composite(champion))
         <= _unpaired_band(e, champion, margin, dethrone_z)
         and not _shares_confirmation_seeds(e, champion)
