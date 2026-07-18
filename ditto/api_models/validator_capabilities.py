@@ -16,6 +16,41 @@ ExecutorIsolation = Literal[
     "unknown", "privileged_dind", "rootless_host", "ephemeral_vm"
 ]
 StackMode = Literal["source", "managed"]
+ScorerBenchmarkStatus = Literal[
+    "fresh_verified", "legacy_v2", "unreachable", "identity_mismatch"
+]
+
+
+class ScorerBenchmarkCapability(BaseModel):
+    """Identity-bound benchmark support observed from the scorer sidecar."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    status: ScorerBenchmarkStatus
+    supported_bench_versions: tuple[Annotated[int, Field(ge=1)], ...]
+    observed_at: Annotated[int | None, Field(ge=0)] = None
+    software_version: Annotated[str | None, Field(pattern=_VERSION_PATTERN)] = None
+    source_revision: Annotated[str | None, Field(pattern=_REVISION_PATTERN)] = None
+
+    @model_validator(mode="after")
+    def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
+        versions = self.supported_bench_versions
+        if not versions or tuple(sorted(set(versions))) != versions:
+            raise ValueError("supported benchmark versions must be unique and sorted")
+        if self.status == "fresh_verified":
+            if (
+                self.observed_at is None
+                or self.software_version is None
+                or self.source_revision is None
+            ):
+                raise ValueError(
+                    "fresh verified scorer support requires observation and identity"
+                )
+        elif versions != (2,):
+            raise ValueError("unverified scorer states may advertise only benchmark v2")
+        if 3 in versions and self.status != "fresh_verified":
+            raise ValueError("benchmark v3 requires a fresh verified scorer identity")
+        return self
 
 
 class ValidatorCapabilities(BaseModel):
@@ -30,6 +65,7 @@ class ValidatorCapabilities(BaseModel):
     stack_updater: bool
     sandbox_egress_restricted: bool
     executor_isolation: ExecutorIsolation
+    scorer_benchmarks: ScorerBenchmarkCapability | None = None
 
     @model_validator(mode="after")
     def screened_image_flags_are_consistent(self) -> ValidatorCapabilities:
@@ -122,7 +158,9 @@ def validator_identity_signing_token(
     """Return one length-prefixed canonical JSON token for heartbeat v7."""
     payload = json.dumps(
         {
-            "capabilities": capabilities.model_dump(mode="json"),
+            "capabilities": capabilities.model_dump(mode="json", exclude_none=True),
+            # Preserve v7's original explicit-null stack encoding. Only the new
+            # optional capability is omitted when absent.
             "stack": stack.model_dump(mode="json"),
         },
         sort_keys=True,

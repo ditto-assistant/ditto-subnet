@@ -29,6 +29,7 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgressStage,
 )
 from ditto.api_models.validator import ValidatorHeartbeatRequest, ValidatorRuntimeState
+from ditto.api_models.validator_capabilities import ScorerBenchmarkCapability
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
 from ditto.validator.crn import confirmation_seeds
@@ -406,6 +407,19 @@ class ValidatorWorker:
                 else None
             )
             capabilities, stack = validator_capabilities_and_stack()
+            capability_probe = getattr(
+                self._dittobench, "scorer_benchmark_capability", None
+            )
+            scorer_benchmarks = ScorerBenchmarkCapability(
+                status="legacy_v2", supported_bench_versions=(2,)
+            )
+            if capability_probe is not None:
+                observed = capability_probe(stack)
+                if inspect.isawaitable(observed):
+                    scorer_benchmarks = await observed
+            capabilities = capabilities.model_copy(
+                update={"scorer_benchmarks": scorer_benchmarks}
+            )
             signature = sign_heartbeat(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
@@ -1049,6 +1063,7 @@ class ValidatorWorker:
             seed=job.seed,
             dataset_sha256=job.dataset_sha256,
             run_size=job.run_size,
+            bench_version=job.bench_version,
             ticket_deadline=job.deadline,
         )
 
@@ -1060,6 +1075,7 @@ class ValidatorWorker:
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
+        bench_version: int | None = None,
     ) -> ScoreReport:
         """Run an unticketed re-score with generic, agent-free heartbeats.
 
@@ -1080,6 +1096,7 @@ class ValidatorWorker:
                 seed=seed,
                 dataset_sha256=dataset_sha256,
                 run_size=run_size,
+                bench_version=bench_version,
             )
         finally:
             heartbeat_stop.set()
@@ -1094,6 +1111,7 @@ class ValidatorWorker:
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
+        bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
@@ -1108,12 +1126,18 @@ class ValidatorWorker:
                 f"sha256 mismatch for agent {agent_id}: "
                 f"expected={expected_sha256} artifact={artifact.sha256}"
             )
+        if artifact.bench_version != bench_version:
+            raise PlatformError(
+                f"benchmark version mismatch for agent {agent_id}: "
+                f"ticket={bench_version!r} artifact={artifact.bench_version!r}"
+            )
         report = await self._dittobench.score_tarball(
             tarball_url=artifact.download_url,
             tarball_sha256=artifact.sha256,
             seed=seed,
             dataset_sha256=dataset_sha256,
             run_size=run_size,
+            bench_version=bench_version,
             progress_callback=progress_callback,
             screened_image_url=artifact.screened_image_url,
             screened_image_sha256=artifact.screened_image_sha256,
@@ -1164,6 +1188,7 @@ class ValidatorWorker:
             run_id=report.run_id,
             composite=report.composite,
             seed=report.seed,
+            bench_version=report.bench_version,
         )
         await self._platform.submit_score(
             agent_id,
@@ -1189,6 +1214,7 @@ class ValidatorWorker:
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
+        bench_version: int | None = None,
         ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
@@ -1200,6 +1226,7 @@ class ValidatorWorker:
                 seed=seed,
                 dataset_sha256=dataset_sha256,
                 run_size=run_size,
+                bench_version=bench_version,
             )
             return await self._submit_report(agent_id, miner_hotkey, report)
 
@@ -1216,6 +1243,7 @@ class ValidatorWorker:
                 seed=seed,
                 dataset_sha256=dataset_sha256,
                 run_size=run_size,
+                bench_version=bench_version,
                 progress_callback=self._on_dittobench_progress,
             )
             await self._publish_benchmark_progress(

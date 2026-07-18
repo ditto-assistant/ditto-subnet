@@ -5,6 +5,18 @@
         "format": "uuid",
         "type": "string"
       },
+      "bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "download_url": {
         "type": "string"
       },
@@ -548,6 +560,18 @@
       }
     },
     "properties": {
+      "bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "composite": {
         "maximum": 1.0,
         "minimum": 0.0,
@@ -761,6 +785,18 @@
       },
       "ScoreReport": {
         "properties": {
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "composite": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -1031,6 +1067,68 @@
         ],
         "type": "object"
       },
+      "ScorerBenchmarkCapability": {
+        "additionalProperties": false,
+        "properties": {
+          "observed_at": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "software_version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "enum": [
+              "fresh_verified",
+              "legacy_v2",
+              "unreachable",
+              "identity_mismatch"
+            ],
+            "type": "string"
+          },
+          "supported_bench_versions": {
+            "items": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "supported_bench_versions"
+        ],
+        "type": "object"
+      },
       "SystemMetrics": {
         "additionalProperties": false,
         "properties": {
@@ -1089,6 +1187,17 @@
           },
           "sandbox_egress_restricted": {
             "type": "boolean"
+          },
+          "scorer_benchmarks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScorerBenchmarkCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "screened_images": {
             "type": "boolean"

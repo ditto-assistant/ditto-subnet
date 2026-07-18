@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from ditto.api_models.validator import ValidatorHeartbeatRequest
 from ditto.api_models.validator_capabilities import (
     ComponentProvenance,
+    ScorerBenchmarkCapability,
     ValidatorCapabilities,
     ValidatorComponentIdentity,
     ValidatorStackComponents,
@@ -128,6 +129,20 @@ def test_component_rejects_empty_or_unbounded_identity() -> None:
         ValidatorComponentIdentity(version="x" * 65, provenance="local_unverified")
 
 
+def test_scorer_benchmark_capability_fails_closed_without_verified_identity() -> None:
+    verified = ScorerBenchmarkCapability(
+        status="fresh_verified",
+        supported_bench_versions=(2, 3),
+        observed_at=1,
+        software_version="1.2.3",
+        source_revision=_REVISION,
+    )
+    assert verified.supported_bench_versions == (2, 3)
+    for status in ("legacy_v2", "unreachable", "identity_mismatch"):
+        with pytest.raises(ValidationError):
+            ScorerBenchmarkCapability(status=status, supported_bench_versions=(2, 3))
+
+
 def test_heartbeat_protocol_v7_requires_both_typed_identity_sections() -> None:
     payload = json.loads(_V7_VECTOR.read_text())["request"]
     payload["signature"] = "ab" * 64
@@ -142,3 +157,21 @@ def test_heartbeat_protocol_v7_requires_both_typed_identity_sections() -> None:
     legacy = payload | {"protocol_version": 6}
     with pytest.raises(ValidationError):
         ValidatorHeartbeatRequest.model_validate(legacy)
+
+    v8_without_scorer = payload | {"protocol_version": 8}
+    with pytest.raises(ValidationError):
+        ValidatorHeartbeatRequest.model_validate(v8_without_scorer)
+
+    v8 = json.loads(json.dumps(v8_without_scorer))
+    v8["capabilities"]["scorer_benchmarks"] = {
+        "status": "fresh_verified",
+        "supported_bench_versions": (2, 3),
+        "observed_at": 1,
+        "software_version": "1.2.3",
+        "source_revision": _REVISION,
+    }
+    assert ValidatorHeartbeatRequest.model_validate(v8).protocol_version == 8
+
+    v7_with_scorer = v8 | {"protocol_version": 7}
+    with pytest.raises(ValidationError):
+        ValidatorHeartbeatRequest.model_validate(v7_with_scorer)

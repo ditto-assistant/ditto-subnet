@@ -285,7 +285,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 7
+        assert heartbeat.protocol_version == 8
         assert heartbeat.capabilities is not None
         assert heartbeat.capabilities.screened_images is False
         assert heartbeat.capabilities.source_build_fallback is True
@@ -1067,6 +1067,55 @@ class TestRunOnce:
         assert kwargs["screened_image_ref"] == (
             "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
         )
+
+    async def test_v3_ticket_artifact_scorer_and_signature_are_version_bound(
+        self,
+    ) -> None:
+        job = _job("5MinerA" + "x" * 41).model_copy(update={"bench_version": 3})
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        artifact = platform.get_artifact.return_value.model_copy(
+            update={"bench_version": 3}
+        )
+        platform.get_artifact = AsyncMock(return_value=artifact)
+        report = _report("run-v3", 0.9).model_copy(update={"bench_version": 3})
+        dittobench = MagicMock(
+            score_tarball=AsyncMock(return_value=report),
+            last_details={"bench_version": 3},
+        )
+        keypair = MagicMock(sign=MagicMock(return_value=b"\x01" * 64))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=keypair,
+        )
+
+        await worker._score_job(job)
+
+        assert dittobench.score_tarball.await_args.kwargs["bench_version"] == 3
+        assert any(call.args[0].endswith(b":3") for call in keypair.sign.call_args_list)
+        assert platform.submit_score.await_args.kwargs["report"].bench_version == 3
+
+    async def test_ticket_artifact_benchmark_version_mismatch_is_terminal(self) -> None:
+        job = _job("5MinerA" + "x" * 41).model_copy(update={"bench_version": 3})
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        artifact = platform.get_artifact.return_value.model_copy(
+            update={"bench_version": 2}
+        )
+        platform.get_artifact = AsyncMock(return_value=artifact)
+        dittobench = MagicMock(score_tarball=AsyncMock())
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        with pytest.raises(PlatformError, match="benchmark version mismatch"):
+            await worker._score_job(job)
+        dittobench.score_tarball.assert_not_awaited()
 
     async def test_sha_mismatch_skips_agent(self) -> None:
         # If the queue item and artifact disagree on the digest, the agent is

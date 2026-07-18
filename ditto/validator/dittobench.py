@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +28,10 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgressStage,
 )
 from ditto.api_models.validator import ScoreReport
+from ditto.api_models.validator_capabilities import (
+    ScorerBenchmarkCapability,
+    ValidatorStackIdentity,
+)
 from ditto.validator.errors import DittobenchError, ValidatorInfrastructureError
 
 if TYPE_CHECKING:
@@ -48,6 +54,8 @@ _PROGRESS_STAGE_BY_STATUS: dict[str, BenchmarkProgressStage] = {
     "failed": "failed_retrying",
 }
 _STABLE_COUNT_STATUSES = {"running", "scoring", "done"}
+_SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
+_SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 
 
 def _is_embedding_infrastructure_failure(error: str) -> bool:
@@ -117,6 +125,87 @@ class DittobenchClient:
         # surface it in aggregate W&B telemetry.
         self.last_details: dict[str, object] = {}
 
+    async def scorer_benchmark_capability(
+        self, stack: ValidatorStackIdentity
+    ) -> ScorerBenchmarkCapability:
+        """Observe scorer support and bind any v3 claim to signed stack identity.
+
+        Legacy 404s, malformed replies, timeouts, and source mismatches all fail
+        closed to v2. A heartbeat must never infer v3 merely from the validator
+        package or Compose configuration.
+        """
+        legacy = ScorerBenchmarkCapability(
+            status="legacy_v2", supported_bench_versions=(2,)
+        )
+        if self._config.dittobench_mock:
+            return legacy
+        try:
+            response = await self._client.get(
+                f"{self._config.dittobench_api_url}/v1/capabilities",
+                timeout=getattr(
+                    self._config, "dittobench_capabilities_timeout_seconds", 3.0
+                ),
+            )
+        except httpx.HTTPError:
+            return ScorerBenchmarkCapability(
+                status="unreachable", supported_bench_versions=(2,)
+            )
+        if response.status_code == 404:
+            return legacy
+        if response.status_code != 200:
+            return ScorerBenchmarkCapability(
+                status="unreachable", supported_bench_versions=(2,)
+            )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            return ScorerBenchmarkCapability(
+                status="unreachable", supported_bench_versions=(2,)
+            )
+        software_version = payload.get("software_version")
+        source_revision = payload.get("source_revision")
+        versions = payload.get("supported_bench_versions")
+        if (
+            not isinstance(software_version, str)
+            or _SOFTWARE_VERSION.fullmatch(software_version) is None
+            or not isinstance(source_revision, str)
+            or _SOURCE_REVISION.fullmatch(source_revision) is None
+            or not isinstance(versions, list)
+            or not versions
+            or any(type(version) is not int for version in versions)
+        ):
+            return ScorerBenchmarkCapability(
+                status="unreachable", supported_bench_versions=(2,)
+            )
+        observed_versions = tuple(sorted(set(versions)))
+        if any(version not in (2, 3) for version in observed_versions):
+            return ScorerBenchmarkCapability(
+                status="unreachable", supported_bench_versions=(2,)
+            )
+        expected_revision = stack.components.dittobench_api.source_revision
+        if source_revision != expected_revision:
+            return ScorerBenchmarkCapability(
+                status="identity_mismatch",
+                supported_bench_versions=(2,),
+                observed_at=int(time.time()),
+                software_version=software_version,
+                source_revision=source_revision,
+            )
+        try:
+            return ScorerBenchmarkCapability(
+                status="fresh_verified",
+                supported_bench_versions=observed_versions,
+                observed_at=int(time.time()),
+                software_version=software_version,
+                source_revision=source_revision,
+            )
+        except ValueError:
+            return ScorerBenchmarkCapability(
+                status="unreachable", supported_bench_versions=(2,)
+            )
+
     async def preflight(self) -> None:
         """Verify the functional embedding route before claiming a ticket.
 
@@ -170,6 +259,7 @@ class DittobenchClient:
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
+        bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
         screened_image_url: str | None = None,
         screened_image_sha256: str | None = None,
@@ -194,6 +284,8 @@ class DittobenchClient:
         dataset). Without ``dataset_sha256`` it uses /v1/submit (practice /
         version-bump re-score, fresh-or-CRN seed).
         """
+        if bench_version not in (2, 3):
+            raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         if self._config.dittobench_mock:
             self.last_details = {}
             return self._mock_report()
@@ -203,13 +295,18 @@ class DittobenchClient:
             seed=seed,
             dataset_sha256=dataset_sha256,
             run_size=run_size,
+            bench_version=bench_version,
             screened_image_url=screened_image_url,
             screened_image_sha256=screened_image_sha256,
             screened_image_size_bytes=screened_image_size_bytes,
             screened_image_id=screened_image_id,
             screened_image_ref=screened_image_ref,
         )
-        return await self._poll(run_id, progress_callback=progress_callback)
+        return await self._poll(
+            run_id,
+            progress_callback=progress_callback,
+            expected_bench_version=bench_version,
+        )
 
     def _mock_report(self) -> ScoreReport:
         """Canned report for ``VALIDATOR_DITTOBENCH_MOCK`` (local plumbing tests)."""
@@ -236,12 +333,15 @@ class DittobenchClient:
         seed: int | None = None,
         dataset_sha256: str | None = None,
         run_size: str | None = None,
+        bench_version: int | None = None,
         screened_image_url: str | None = None,
         screened_image_sha256: str | None = None,
         screened_image_size_bytes: int | None = None,
         screened_image_id: str | None = None,
         screened_image_ref: str | None = None,
     ) -> str:
+        if bench_version not in (2, 3):
+            raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         body: dict[str, object] = {
             "tarball_url": tarball_url,
             "run_size": run_size or self._config.run_size,
@@ -280,7 +380,13 @@ class DittobenchClient:
             body["seed"] = seed
         # Canonical validator path: pin the dataset so the engine fails on a
         # regenerated-hash mismatch. Otherwise the practice/re-score path.
-        if dataset_sha256:
+        if bench_version == 3:
+            if not dataset_sha256:
+                raise DittobenchError("benchmark v3 requires a pinned dataset")
+            body["dataset_sha256"] = dataset_sha256
+            body["bench_version"] = bench_version
+            endpoint = "/v2/score"
+        elif dataset_sha256:
             body["dataset_sha256"] = dataset_sha256
             endpoint = "/v1/score"
         else:
@@ -306,8 +412,16 @@ class DittobenchClient:
         return str(run_id)
 
     async def _poll(
-        self, run_id: str, *, progress_callback: ProgressCallback | None = None
+        self,
+        run_id: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+        expected_bench_version: int | None = None,
     ) -> ScoreReport:
+        if expected_bench_version not in (2, 3):
+            raise DittobenchError(
+                f"unsupported benchmark version {expected_bench_version!r}"
+            )
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
         deadline = self._config.dittobench_timeout_seconds
         waited = 0.0
@@ -332,13 +446,41 @@ class DittobenchClient:
                 status = data.get("status")
                 if status == _DONE:
                     rep = data.get("report")
+                    details = rep.get("details") if isinstance(rep, dict) else None
+                    reported_version = (
+                        details.get("bench_version")
+                        if isinstance(details, dict)
+                        else None
+                    )
+                    job_version = data.get("bench_version")
+                    if expected_bench_version == 3 and (
+                        job_version != 3 or reported_version != 3
+                    ):
+                        raise DittobenchError(
+                            "benchmark version mismatch: ticket=3 "
+                            f"job={job_version!r} report={reported_version!r}"
+                        )
+                    if expected_bench_version == 2 and (
+                        job_version != 2 or reported_version != 2
+                    ):
+                        raise DittobenchError(
+                            "benchmark version mismatch: ticket=2 "
+                            f"job={job_version!r} report={reported_version!r}"
+                        )
                     self.last_details = (
                         rep["details"]
                         if isinstance(rep, dict)
                         and isinstance(rep.get("details"), dict)
                         else {}
                     )
-                    return self._parse_report(data)
+                    parsed = self._parse_report(data)
+                    # Only v3 changes the platform score-signature domain. Keep
+                    # v2 reports byte-compatible with old platforms/scorers.
+                    return (
+                        parsed.model_copy(update={"bench_version": 3})
+                        if expected_bench_version == 3
+                        else parsed
+                    )
                 if status == _FAILED:
                     error = str(data.get("error", "unknown"))
                     if _is_embedding_infrastructure_failure(error):
