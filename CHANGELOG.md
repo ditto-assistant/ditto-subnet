@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.14.2 (2026-07-19)
+
+### Bug Fixes
+
+- Pass protocol to native arm smoke
+  ([#167](https://github.com/ditto-assistant/ditto-subnet/pull/167),
+  [`08581ad`](https://github.com/ditto-assistant/ditto-subnet/commit/08581ad8b914876ba5cad747528504e233f20302))
+
+### Chores
+
+- Document safe stack updater migration
+  ([#163](https://github.com/ditto-assistant/ditto-subnet/pull/163),
+  [`0a902d9`](https://github.com/ditto-assistant/ditto-subnet/commit/0a902d9a84ddf431bb3f3b3b88a3f116c92a838c))
+
+
 ## v0.14.1 (2026-07-19)
 
 ### Bug Fixes
