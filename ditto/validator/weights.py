@@ -26,11 +26,12 @@ if TYPE_CHECKING:
 
     from ditto.api_models.validator import LedgerEntry
 
-# Benchmark scores are only comparable within one bench_version: a version bump
-# changes what the composite means, so folding a v2 champion against a v3
-# challenger would be nonsense. Entries whose bench_version
-# the platform does not (yet) surface are treated as this baseline — so on a
-# ledger with no version info the fold is unchanged (all one version).
+# ``bench_version`` is retained for telemetry and re-score scheduling. The
+# platform is the authority that selects exactly one score per agent: desired
+# version at quorum, otherwise the active-version fallback. The resulting ledger
+# may intentionally mix versions during a gradual rollout and every validator
+# must fold that full, identical pool. Entries from older platform releases that
+# omit the field remain a safe baseline for compatibility.
 DEFAULT_BENCH_VERSION = 1
 
 # A run must administer the *full* benchmark to earn emissions. The dittobench-api
@@ -119,10 +120,13 @@ def filter_eligible(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
 
 
 def filter_to_latest_version(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
-    """Keep only entries at the max bench_version present — the only scores the
-    weight fold may compare (§9 step 3). This is a **deterministic, consensus-safe**
-    filter: it keys off the versions present in the shared ledger, not off any
-    single validator's scorer version, so every validator folds the same subset."""
+    """Return only entries at the maximum version for diagnostic callers.
+
+    The weight fold deliberately does *not* use this helper: the platform ledger
+    is already authoritative per agent and can be mixed during rollout. Keeping
+    the helper supports version inventory and focused tests without inviting a
+    second selection policy into consensus.
+    """
     latest = max_bench_version(entries)
     return [e for e in entries if _entry_version(e) == latest]
 
@@ -149,12 +153,15 @@ def compute_weights(
     champion gets ``champion_share``; the next ``tail_size`` miners by composite
     split ``1 - champion_share`` equally.
 
-    Only entries at the **max bench_version present** are folded (§9 step 3):
-    scores under an older benchmark version are incomparable and dropped until a
-    re-score lifts them to the current version. Entries below the full-benchmark
-    case floor (:func:`filter_eligible`) are likewise dropped: a smoke/practice
-    run omits the hard memory categories and is trivially aced, so it must never
-    become champion or take a tail slot.
+    The platform has already selected one authoritative row per agent. During a
+    benchmark rollout this can be a hybrid pool: v3 after that agent reaches 3/3,
+    otherwise its v2 fallback. Folding the full pool is consensus-critical: old
+    validators ignore the additive ``bench_version`` field and already do this,
+    so upgraded validators must not discard fallback rows by taking a global
+    maximum version. Entries below the full-benchmark case floor
+    (:func:`filter_eligible`) are dropped: a smoke/practice run omits the hard
+    memory categories and is trivially aced, so it must never become champion or
+    take a tail slot.
 
     Non-positive composites are dropped (a zero-scoring miner earns nothing).
     Returns an empty dict when no miner scored above zero — the caller then skips
@@ -162,7 +169,7 @@ def compute_weights(
     returned vector, so only the ratios matter; when there is no tail the champion
     is the whole vector.
     """
-    eligible = filter_eligible(filter_to_latest_version(entries))
+    eligible = filter_eligible(entries)
     scored = [e for e in eligible if e.composite > 0.0]
     if not scored:
         return {}

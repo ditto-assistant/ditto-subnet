@@ -227,6 +227,18 @@
         "format": "uuid",
         "type": "string"
       },
+      "bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "composite": {
         "maximum": 1.0,
         "minimum": 0.0,
@@ -359,6 +371,18 @@
           "agent_id": {
             "format": "uuid",
             "type": "string"
+          },
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "composite": {
             "maximum": 1.0,
