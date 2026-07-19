@@ -72,10 +72,12 @@ def _stack() -> ValidatorStackIdentity:
     )
 
 
-def _fresh_scorer() -> ScorerBenchmarkCapability:
+def _fresh_scorer(
+    versions: tuple[int, ...] = (2, 3),
+) -> ScorerBenchmarkCapability:
     return ScorerBenchmarkCapability(
         status="fresh_verified",
-        supported_bench_versions=(2, 3),
+        supported_bench_versions=versions,
         observed_at=1_784_020_800,
         software_version="1.2.3",
         source_revision=_REV,
@@ -314,6 +316,8 @@ class TestScorerMapping:
         ("scorer", "expected"),
         [
             (_fresh_scorer(), "healthy"),
+            (_fresh_scorer((2, 3, 4)), "healthy"),
+            (_fresh_scorer((4,)), "healthy"),
             (
                 ScorerBenchmarkCapability(
                     status="legacy_v2", supported_bench_versions=(2,)
