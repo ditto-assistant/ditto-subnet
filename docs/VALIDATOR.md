@@ -310,6 +310,14 @@ finalized ledger, and Pylon handles UID resolution, commit-reveal, retries, and
 the on-chain extrinsic on an independent cadence that honors the chain rate
 limit and subnet tempo.
 
+During a benchmark-version rollout, the platform selects one authoritative row
+per agent: the desired-version median after 3/3, otherwise its active-version
+fallback. The ledger can therefore intentionally contain both v2 and v3 rows.
+Validators fold that full platform-selected pool; they must not apply a global
+"maximum benchmark version" filter, because older validators ignore the
+additive `bench_version` field and already fold the full pool. This preserves
+identical weights across asynchronous validator upgrades.
+
 ## Optional observability
 
 Add the shared `WANDB_API_KEY` supplied by Ditto to `.env`, or set

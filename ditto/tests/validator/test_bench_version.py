@@ -1,9 +1,10 @@
-"""Version-bump re-score sweep + version-aware weight fold.
+"""Version-bump re-score sweep + platform-authoritative hybrid weight fold.
 
 Benchmark scores are only comparable within one ``bench_version``: a version
-bump changes what the composite means. These tests cover the two subnet-side
-pieces: the fold ignores stale versions, and the worker re-evaluates the stale
-champion + tail before folding.
+bump changes what the composite means. The platform therefore selects one row
+per agent (v3 at quorum, otherwise v2) and validators fold the resulting hybrid
+pool without applying a second global version filter. The worker still uses
+versions to schedule stale champion + tail re-evaluations.
 """
 
 from __future__ import annotations
@@ -96,18 +97,31 @@ class TestVersionFilter:
         kept = filter_to_latest_version(entries)
         assert {e.miner_hotkey for e in kept} == {"new_a", "new_b"}
 
-    def test_fold_ignores_stale_versions(self) -> None:
-        # A high-scoring v2 champion must NOT out-weigh the v3 cohort: v2 and v3
-        # composites are incomparable, so only v3 is folded.
+    def test_fold_keeps_platform_authoritative_hybrid_pool(self) -> None:
+        # Each row is already the platform's authoritative per-agent selection.
+        # The v2 fallback remains until that agent reaches v3 quorum.
         entries = [
-            _e("stale_champ", 0.99, version=2, minutes=0),
+            _e("v2_fallback", 0.99, version=2, minutes=0),
             _e("v3_champ", 0.50, version=3, minutes=1),
             _e("v3_runner", 0.40, version=3, minutes=2),
         ]
         w = compute_weights(entries, **_KOTH)
-        assert "stale_champ" not in w
-        assert w["v3_champ"] == pytest.approx(0.9)
+        assert w["v2_fallback"] == pytest.approx(0.9)
+        assert "v3_champ" in w
         assert "v3_runner" in w
+
+    def test_additive_version_field_does_not_split_old_and_new_validators(self) -> None:
+        versioned = [
+            _e("fallback", 0.80, version=2, minutes=0),
+            _e("complete", 0.70, version=3, minutes=1),
+        ]
+        legacy = [
+            _e("fallback", 0.80, minutes=0),
+            _e("complete", 0.70, minutes=1),
+        ]
+        # Old clients discard the additive field; upgraded clients retain it.
+        # Both must fold the same platform-authoritative pool.
+        assert compute_weights(versioned, **_KOTH) == compute_weights(legacy, **_KOTH)
 
 
 class TestAgentsNeedingRescore:
