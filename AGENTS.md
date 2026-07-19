@@ -1,5 +1,12 @@
 # Repository guidance
 
+## Semantic-release commit types
+
+- Do not use `test:` as a commit or pull-request title prefix; it is not a valid
+  semantic-release type in this repository.
+- Test-only changes must use the `chore(tests):` scope, for example
+  `chore(tests): pin legacy confirmation regression`.
+
 ## Git-backed Docker build contexts
 
 - Never pin a Git build context with the legacy URL-fragment form
@@ -15,4 +22,3 @@
   ref alone.
 - Verify every changed remote Git context with a fresh or empty BuildKit
   builder. A successful build against a warm local cache is not sufficient.
-

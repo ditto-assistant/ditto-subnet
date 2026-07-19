@@ -257,11 +257,9 @@ class TestRunOnce:
     ) -> None:
         platform = _platform_with_ledger(
             jobs=[],
-            ledger=[
-                _entry("5MinerA" + "x" * 41, 0.9).model_copy(
-                    update={"bench_version": 2}
-                )
-            ],
+            # Production regression: a legacy row with no declared version
+            # normalizes to baseline v1 and used to trigger CRN confirmation.
+            ledger=[_entry("5MinerA" + "x" * 41, 0.9)],
         )
         worker = ValidatorWorker(
             config=_config(),
