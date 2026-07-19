@@ -320,6 +320,38 @@ digest, phase, and coarse health; the platform uses it to route compatible
 work. It does not send secrets, prompts, expected answers, model output, or
 host identity.
 
+### Per-component stack health
+
+Heartbeat protocol 9 adds a signed health entry for each of the six Compose
+components. Three ideas are reported separately and must not be conflated:
+
+- **Configured identity** — what Compose intends to run (the pinned image
+  digest / source revision already reported under `stack`). It proves intent,
+  not the running artifact.
+- **Observed identity** — what a live probe could independently verify (for
+  example the scorer's `/v1/capabilities` revision). When nothing can be
+  observed safely the field stays unset; the validator never copies the
+  configured pin into an observed field.
+- **Functional readiness** — whether the component answered a real request
+  just now (`ready`, plus `model_ready` for the embedding model / model
+  route), with its own `observed_at`, so a stale probe is distinguishable from
+  a stale heartbeat.
+
+Each component reports `healthy`, `degraded`, `unreachable`,
+`identity_mismatch`, or `unknown`. Probes run from the validator over the
+private Compose network — no Docker socket is mounted for telemetry — and are
+bounded so a wedged sidecar never stalls the heartbeat. Optional env:
+
+- `VALIDATOR_SANDBOX_DOCKER_PROBE_URL` / `VALIDATOR_MODEL_RELAY_PROBE_URL` —
+  internal readiness endpoints; unset components report `unknown`.
+- `VALIDATOR_PYLON_PROBE_URL` — defaults to `PYLON_URL`.
+- `VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS` (default 2) and
+  `VALIDATOR_STACK_HEALTH_CACHE_SECONDS` (default 60).
+
+Probe URLs are configuration only; the public payload carries health states,
+timestamps, booleans, and verified identities — never URLs, hostnames,
+container ids, or paths.
+
 ## Development
 
 The source-build path is a fallback when the reviewed GHCR compatibility

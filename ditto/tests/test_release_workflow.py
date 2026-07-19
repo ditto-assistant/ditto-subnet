@@ -3,6 +3,8 @@ from pathlib import Path
 
 import yaml
 
+from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
+
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
 PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
@@ -56,7 +58,9 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
     assert (
         jobs["smoke-validator-arm64"]["runs-on"] == "blacksmith-4vcpu-ubuntu-2404-arm"
     )
-    assert jobs["smoke-validator-arm64"]["env"]["HEARTBEAT_PROTOCOL"] == "8"
+    assert jobs["smoke-validator-arm64"]["env"]["HEARTBEAT_PROTOCOL"] == str(
+        HEARTBEAT_PROTOCOL_VERSION
+    )
     assert jobs["promote-stack-release"]["needs"] == [
         "release",
         "publish-stack-release",

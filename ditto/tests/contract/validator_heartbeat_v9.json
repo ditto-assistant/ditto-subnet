@@ -1,0 +1,239 @@
+{
+  "managed": {
+    "request": {
+      "active_agent_id": null,
+      "benchmark_progress": null,
+      "capabilities": {
+        "executor_isolation": "privileged_dind",
+        "full_stack_managed": true,
+        "require_screened_image": false,
+        "sandbox_egress_restricted": true,
+        "screened_images": true,
+        "source_build_fallback": true,
+        "stack_updater": true,
+        "scorer_benchmarks": {
+          "status": "fresh_verified",
+          "supported_bench_versions": [
+            2,
+            3
+          ],
+          "observed_at": 1784020800,
+          "software_version": "1.2.3",
+          "source_revision": "abababababababababababababababababababab"
+        }
+      },
+      "code_digest": "abababababababababababababababababababababababababababababababab",
+      "protocol_version": 9,
+      "software_version": "1.2.3",
+      "stack": {
+        "components": {
+          "ditto_subnet": {
+            "image_digest": "sha256:0101010101010101010101010101010101010101010101010101010101010101",
+            "provenance": "signed_descriptor",
+            "source_revision": "abababababababababababababababababababab",
+            "version": "1.2.3"
+          },
+          "dittobench_api": {
+            "image_digest": "sha256:0202020202020202020202020202020202020202020202020202020202020202",
+            "provenance": "signed_descriptor",
+            "source_revision": "abababababababababababababababababababab",
+            "version": null
+          },
+          "model_relay": {
+            "image_digest": "sha256:0404040404040404040404040404040404040404040404040404040404040404",
+            "provenance": "signed_descriptor",
+            "source_revision": "abababababababababababababababababababab",
+            "version": null
+          },
+          "ollama": {
+            "image_digest": "sha256:0606060606060606060606060606060606060606060606060606060606060606",
+            "provenance": "signed_descriptor",
+            "source_revision": null,
+            "version": null
+          },
+          "pylon": {
+            "image_digest": "sha256:0505050505050505050505050505050505050505050505050505050505050505",
+            "provenance": "signed_descriptor",
+            "source_revision": null,
+            "version": null
+          },
+          "sandbox_docker": {
+            "image_digest": "sha256:0303030303030303030303030303030303030303030303030303030303030303",
+            "provenance": "signed_descriptor",
+            "source_revision": "abababababababababababababababababababab",
+            "version": null
+          }
+        },
+        "compose_schema": 1,
+        "mode": "managed",
+        "release_descriptor_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "state": "idle",
+      "system_metrics": null,
+      "timestamp": 1784020800,
+      "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      "stack_health": {
+        "ditto_subnet": {
+          "health": "healthy",
+          "required": true,
+          "observed_at": 1784020800,
+          "ready": true,
+          "observed_identity": {
+            "version": "1.2.3"
+          }
+        },
+        "dittobench_api": {
+          "health": "healthy",
+          "required": true,
+          "observed_at": 1784020800,
+          "ready": true,
+          "observed_identity": {
+            "source_revision": "abababababababababababababababababababab",
+            "version": "1.2.3"
+          }
+        },
+        "sandbox_docker": {
+          "health": "healthy",
+          "required": true,
+          "observed_at": 1784020800,
+          "ready": true
+        },
+        "model_relay": {
+          "health": "identity_mismatch",
+          "required": true,
+          "observed_at": 1784020800,
+          "ready": true,
+          "model_ready": true,
+          "observed_identity": {
+            "source_revision": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+          }
+        },
+        "pylon": {
+          "health": "degraded",
+          "required": true,
+          "observed_at": 1784020740,
+          "ready": false
+        },
+        "ollama": {
+          "health": "unreachable",
+          "required": true,
+          "observed_at": 1784020740
+        }
+      }
+    },
+    "expected_message_utf8": "ditto-validator-heartbeat:v9:5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:1.2.3:9:abababababababababababababababababababababababababababababababab:idle::-:-:1784:{\"capabilities\":{\"executor_isolation\":\"privileged_dind\",\"full_stack_managed\":true,\"require_screened_image\":false,\"sandbox_egress_restricted\":true,\"scorer_benchmarks\":{\"observed_at\":1784020800,\"software_version\":\"1.2.3\",\"source_revision\":\"abababababababababababababababababababab\",\"status\":\"fresh_verified\",\"supported_bench_versions\":[2,3]},\"screened_images\":true,\"source_build_fallback\":true,\"stack_updater\":true},\"stack\":{\"components\":{\"ditto_subnet\":{\"image_digest\":\"sha256:0101010101010101010101010101010101010101010101010101010101010101\",\"provenance\":\"signed_descriptor\",\"source_revision\":\"abababababababababababababababababababab\",\"version\":\"1.2.3\"},\"dittobench_api\":{\"image_digest\":\"sha256:0202020202020202020202020202020202020202020202020202020202020202\",\"provenance\":\"signed_descriptor\",\"source_revision\":\"abababababababababababababababababababab\",\"version\":null},\"model_relay\":{\"image_digest\":\"sha256:0404040404040404040404040404040404040404040404040404040404040404\",\"provenance\":\"signed_descriptor\",\"source_revision\":\"abababababababababababababababababababab\",\"version\":null},\"ollama\":{\"image_digest\":\"sha256:0606060606060606060606060606060606060606060606060606060606060606\",\"provenance\":\"signed_descriptor\",\"source_revision\":null,\"version\":null},\"pylon\":{\"image_digest\":\"sha256:0505050505050505050505050505050505050505050505050505050505050505\",\"provenance\":\"signed_descriptor\",\"source_revision\":null,\"version\":null},\"sandbox_docker\":{\"image_digest\":\"sha256:0303030303030303030303030303030303030303030303030303030303030303\",\"provenance\":\"signed_descriptor\",\"source_revision\":\"abababababababababababababababababababab\",\"version\":null}},\"compose_schema\":1,\"mode\":\"managed\",\"release_descriptor_digest\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"}}:777:{\"ditto_subnet\":{\"health\":\"healthy\",\"observed_at\":1784020800,\"observed_identity\":{\"version\":\"1.2.3\"},\"ready\":true,\"required\":true},\"dittobench_api\":{\"health\":\"healthy\",\"observed_at\":1784020800,\"observed_identity\":{\"source_revision\":\"abababababababababababababababababababab\",\"version\":\"1.2.3\"},\"ready\":true,\"required\":true},\"model_relay\":{\"health\":\"identity_mismatch\",\"model_ready\":true,\"observed_at\":1784020800,\"observed_identity\":{\"source_revision\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"},\"ready\":true,\"required\":true},\"ollama\":{\"health\":\"unreachable\",\"observed_at\":1784020740,\"required\":true},\"pylon\":{\"health\":\"degraded\",\"observed_at\":1784020740,\"ready\":false,\"required\":true},\"sandbox_docker\":{\"health\":\"healthy\",\"observed_at\":1784020800,\"ready\":true,\"required\":true}}:1784020800",
+    "expected_message_sha256": "eb12d3aee9488dace8e03781cc2a6740a08cc2a0c319ac6fa76422563692a579"
+  },
+  "source": {
+    "request": {
+      "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      "software_version": "1.2.3",
+      "protocol_version": 9,
+      "code_digest": "abababababababababababababababababababababababababababababababab",
+      "state": "idle",
+      "active_agent_id": null,
+      "system_metrics": null,
+      "benchmark_progress": null,
+      "timestamp": 1784020800,
+      "capabilities": {
+        "screened_images": true,
+        "require_screened_image": false,
+        "source_build_fallback": true,
+        "full_stack_managed": false,
+        "stack_updater": false,
+        "sandbox_egress_restricted": true,
+        "executor_isolation": "privileged_dind",
+        "scorer_benchmarks": {
+          "status": "legacy_v2",
+          "supported_bench_versions": [
+            2
+          ]
+        }
+      },
+      "stack": {
+        "mode": "source",
+        "compose_schema": 1,
+        "release_descriptor_digest": null,
+        "components": {
+          "ditto_subnet": {
+            "image_digest": null,
+            "source_revision": "abababababababababababababababababababab",
+            "version": "1.2.3",
+            "provenance": "committed_pin"
+          },
+          "dittobench_api": {
+            "image_digest": null,
+            "source_revision": "abababababababababababababababababababab",
+            "version": "unknown",
+            "provenance": "committed_pin"
+          },
+          "sandbox_docker": {
+            "image_digest": null,
+            "source_revision": null,
+            "version": "unknown",
+            "provenance": "local_unverified"
+          },
+          "model_relay": {
+            "image_digest": null,
+            "source_revision": "abababababababababababababababababababab",
+            "version": "unknown",
+            "provenance": "committed_pin"
+          },
+          "pylon": {
+            "image_digest": "sha256:0505050505050505050505050505050505050505050505050505050505050505",
+            "source_revision": null,
+            "version": "unknown",
+            "provenance": "committed_pin"
+          },
+          "ollama": {
+            "image_digest": null,
+            "source_revision": null,
+            "version": "unknown",
+            "provenance": "local_unverified"
+          }
+        }
+      },
+      "stack_health": {
+        "ditto_subnet": {
+          "health": "healthy",
+          "required": true,
+          "observed_at": 1784020800,
+          "ready": true,
+          "observed_identity": {
+            "version": "1.2.3"
+          }
+        },
+        "dittobench_api": {
+          "health": "degraded",
+          "required": true,
+          "observed_at": 1784020800,
+          "ready": true
+        },
+        "sandbox_docker": {
+          "health": "unknown",
+          "required": true
+        },
+        "model_relay": {
+          "health": "unreachable",
+          "required": true,
+          "observed_at": 1784017200
+        },
+        "pylon": {
+          "health": "healthy",
+          "required": true,
+          "observed_at": 1784020800,
+          "ready": true
+        },
+        "ollama": {
+          "health": "healthy",
+          "required": true,
+          "observed_at": 1784020800,
+          "ready": true,
+          "model_ready": true
+        }
+      }
+    },
+    "expected_message_utf8": "ditto-validator-heartbeat:v9:5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:1.2.3:9:abababababababababababababababababababababababababababababababab:idle::-:-:1220:{\"capabilities\":{\"executor_isolation\":\"privileged_dind\",\"full_stack_managed\":false,\"require_screened_image\":false,\"sandbox_egress_restricted\":true,\"scorer_benchmarks\":{\"status\":\"legacy_v2\",\"supported_bench_versions\":[2]},\"screened_images\":true,\"source_build_fallback\":true,\"stack_updater\":false},\"stack\":{\"components\":{\"ditto_subnet\":{\"image_digest\":null,\"provenance\":\"committed_pin\",\"source_revision\":\"abababababababababababababababababababab\",\"version\":\"1.2.3\"},\"dittobench_api\":{\"image_digest\":null,\"provenance\":\"committed_pin\",\"source_revision\":\"abababababababababababababababababababab\",\"version\":\"unknown\"},\"model_relay\":{\"image_digest\":null,\"provenance\":\"committed_pin\",\"source_revision\":\"abababababababababababababababababababab\",\"version\":\"unknown\"},\"ollama\":{\"image_digest\":null,\"provenance\":\"local_unverified\",\"source_revision\":null,\"version\":\"unknown\"},\"pylon\":{\"image_digest\":\"sha256:0505050505050505050505050505050505050505050505050505050505050505\",\"provenance\":\"committed_pin\",\"source_revision\":null,\"version\":\"unknown\"},\"sandbox_docker\":{\"image_digest\":null,\"provenance\":\"local_unverified\",\"source_revision\":null,\"version\":\"unknown\"}},\"compose_schema\":1,\"mode\":\"source\",\"release_descriptor_digest\":null}}:544:{\"ditto_subnet\":{\"health\":\"healthy\",\"observed_at\":1784020800,\"observed_identity\":{\"version\":\"1.2.3\"},\"ready\":true,\"required\":true},\"dittobench_api\":{\"health\":\"degraded\",\"observed_at\":1784020800,\"ready\":true,\"required\":true},\"model_relay\":{\"health\":\"unreachable\",\"observed_at\":1784017200,\"required\":true},\"ollama\":{\"health\":\"healthy\",\"model_ready\":true,\"observed_at\":1784020800,\"ready\":true,\"required\":true},\"pylon\":{\"health\":\"healthy\",\"observed_at\":1784020800,\"ready\":true,\"required\":true},\"sandbox_docker\":{\"health\":\"unknown\",\"required\":true}}:1784020800",
+    "expected_message_sha256": "e819de220064ed337a7aa98836c43559f9338edbede78f3da22cfc5422b8c8eb"
+  }
+}

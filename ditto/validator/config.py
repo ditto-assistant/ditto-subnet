@@ -82,6 +82,29 @@ class ValidatorConfig:
     embed_preflight_timeout_seconds: float
     """Hard timeout for the functional embedding probe before ticket claim."""
 
+    # --- Per-component stack-health probes (heartbeat v9) ---
+    sandbox_docker_probe_url: str
+    """Optional readiness probe URL for the sandbox-docker sidecar on the
+    private Compose network (e.g. its Docker ``/_ping``). Empty disables the
+    probe and the component reports ``unknown``. Never published."""
+
+    model_relay_probe_url: str
+    """Optional health probe URL for the model relay on the private Compose
+    network. Empty disables the probe and the component reports ``unknown``.
+    Never published."""
+
+    pylon_probe_url: str
+    """Pylon API readiness probe URL. Empty falls back to ``pylon_url``.
+    Never published."""
+
+    stack_probe_timeout_seconds: float
+    """Hard per-probe timeout for the stack-health probes, so a failed sidecar
+    cannot stall heartbeat cadence."""
+
+    stack_health_cache_seconds: float
+    """Seconds a sidecar probe snapshot may be reused before re-probing.
+    ``0`` re-probes on every heartbeat."""
+
     # --- Identity / chain ---
     validator_hotkey: str
     """This validator's SS58 hotkey (must match the loaded signing keypair)."""
@@ -263,6 +286,28 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             "VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS must be a finite number > 0, "
             f"got {embed_preflight_timeout_seconds}"
         )
+    stack_probe_timeout_seconds = _parse_float(
+        "VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS", "2"
+    )
+    if (
+        not math.isfinite(stack_probe_timeout_seconds)
+        or stack_probe_timeout_seconds <= 0
+        or stack_probe_timeout_seconds > 10
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS must be in (0, 10]"
+        )
+    stack_health_cache_seconds = _parse_float(
+        "VALIDATOR_STACK_HEALTH_CACHE_SECONDS", "60"
+    )
+    if (
+        not math.isfinite(stack_health_cache_seconds)
+        or stack_health_cache_seconds < 0
+        or stack_health_cache_seconds > 3600
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_STACK_HEALTH_CACHE_SECONDS must be in [0, 3600]"
+        )
     capabilities_timeout_seconds = _parse_float(
         "VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS", "3"
     )
@@ -314,6 +359,13 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         dittobench_mock=dittobench_mock,
         embed_preflight_url=embed_preflight_url,
         embed_preflight_timeout_seconds=embed_preflight_timeout_seconds,
+        sandbox_docker_probe_url=os.environ.get(
+            "VALIDATOR_SANDBOX_DOCKER_PROBE_URL", ""
+        ),
+        model_relay_probe_url=os.environ.get("VALIDATOR_MODEL_RELAY_PROBE_URL", ""),
+        pylon_probe_url=os.environ.get("VALIDATOR_PYLON_PROBE_URL", ""),
+        stack_probe_timeout_seconds=stack_probe_timeout_seconds,
+        stack_health_cache_seconds=stack_health_cache_seconds,
         validator_hotkey=validator_hotkey,
         wallet_name=os.environ.get("VALIDATOR_WALLET_NAME") or None,
         wallet_hotkey=os.environ.get("VALIDATOR_WALLET_HOTKEY") or None,

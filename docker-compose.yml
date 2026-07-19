@@ -176,7 +176,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "8"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "9"
     restart: unless-stopped
     stop_grace_period: 80m
     labels:
@@ -191,6 +191,14 @@ services:
       # host.docker.internal:11434. The worker probes it before claiming a lease.
       VALIDATOR_EMBED_PREFLIGHT_URL: http://sandbox-docker:11434/api/embed
       VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS: "5"
+      # Heartbeat v9 per-component health probes. Private-network URLs only —
+      # they are configuration, never part of the public payload. The sandbox
+      # probe exercises the same harness-facing forwarder listener that inner
+      # sandboxes reach as host.docker.internal:11434.
+      VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:11434/
+      VALIDATOR_MODEL_RELAY_PROBE_URL: http://model-relay:11435/
+      VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS: "2"
+      VALIDATOR_STACK_HEALTH_CACHE_SECONDS: "60"
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
       VALIDATOR_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
       VALIDATOR_WALLET_HOTKEY: ${VALIDATOR_WALLET_HOTKEY}

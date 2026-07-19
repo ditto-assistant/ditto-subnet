@@ -1245,6 +1245,48 @@
         ],
         "type": "object"
       },
+      "ObservedComponentIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "image_digest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
       "ScorerBenchmarkCapability": {
         "additionalProperties": false,
         "properties": {
@@ -1398,6 +1440,74 @@
         ],
         "type": "object"
       },
+      "ValidatorComponentHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "health": {
+            "enum": [
+              "healthy",
+              "degraded",
+              "unreachable",
+              "identity_mismatch",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "model_ready": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "observed_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ObservedComponentIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ready": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "health",
+          "required"
+        ],
+        "type": "object"
+      },
       "ValidatorComponentIdentity": {
         "additionalProperties": false,
         "properties": {
@@ -1471,6 +1581,38 @@
           },
           "sandbox_docker": {
             "$ref": "#/$defs/ValidatorComponentIdentity"
+          }
+        },
+        "required": [
+          "ditto_subnet",
+          "dittobench_api",
+          "sandbox_docker",
+          "model_relay",
+          "pylon",
+          "ollama"
+        ],
+        "type": "object"
+      },
+      "ValidatorStackHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "ditto_subnet": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          },
+          "dittobench_api": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          },
+          "model_relay": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          },
+          "ollama": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          },
+          "pylon": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          },
+          "sandbox_docker": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
           }
         },
         "required": [
@@ -1579,6 +1721,17 @@
         "anyOf": [
           {
             "$ref": "#/$defs/ValidatorStackIdentity"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "stack_health": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ValidatorStackHealth"
           },
           {
             "type": "null"

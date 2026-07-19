@@ -18,5 +18,5 @@ def test_source_digest_is_stable_and_content_sensitive(tmp_path: Path) -> None:
 def test_build_info_has_public_protocol_identity() -> None:
     info = validator_build_info()
     assert info.software_version == __version__
-    assert info.protocol_version == 8
+    assert info.protocol_version == 9
     assert len(info.code_digest) == 64
