@@ -52,14 +52,14 @@ def test_source_checkout_revision_never_claims_descriptor_provenance(
     assert pinned_stack.components.dittobench_api.provenance == "committed_pin"
 
 
-def test_shared_requirement_switches_to_screened_only(
+def test_legacy_global_requirement_cannot_override_version_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("VALIDATOR_REQUIRE_SCREENED_IMAGE", "1")
     monkeypatch.setenv("VALIDATOR_SCREENED_IMAGES", "1")
     capabilities, _ = validator_capabilities_and_stack()
-    assert capabilities.require_screened_image is True
-    assert capabilities.source_build_fallback is False
+    assert capabilities.require_screened_image is False
+    assert capabilities.source_build_fallback is True
 
 
 def test_managed_descriptor_env_produces_only_signed_exact_identities(

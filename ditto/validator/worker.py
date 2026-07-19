@@ -1200,6 +1200,14 @@ class ValidatorWorker:
         than lend the ticket a signature. Tickets without a block hash
         (pre-derivation agents) proceed as before.
         """
+        if job.bench_version == 3 and (
+            job.minimum_screening_policy_version != 9
+            or job.requires_screened_image is not True
+        ):
+            raise PlatformError(
+                "benchmark v3 ticket did not declare its policy-9 "
+                "screened-image contract"
+            )
         if (
             job.seed is not None
             and job.dataset_seed_block_hash
@@ -1284,6 +1292,15 @@ class ValidatorWorker:
             raise PlatformError(
                 f"benchmark version mismatch for agent {agent_id}: "
                 f"ticket={bench_version!r} artifact={artifact.bench_version!r}"
+            )
+        if bench_version == 3 and (
+            artifact.screening_policy_version is None
+            or artifact.screening_policy_version < 9
+            or artifact.screened_image_url is None
+        ):
+            raise PlatformError(
+                f"benchmark v3 artifact for agent {agent_id} is not backed by "
+                "screening policy 9 and a verified image"
             )
         report = await self._dittobench.score_tarball(
             tarball_url=artifact.download_url,
