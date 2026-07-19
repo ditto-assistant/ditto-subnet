@@ -64,6 +64,9 @@ jobs:
     needs: release
     if: needs.release.outputs.released == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      validator_digest: ${{ steps.validator.outputs.digest }}
+      stack_digest: ${{ steps.stack.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -284,7 +287,7 @@ jobs:
             fi
           done
 
-      - name: Smoke-test both validator artifacts by exact child digest
+      - name: Smoke-test the amd64 validator artifact by exact child digest
         env:
           VERSION: ${{ needs.release.outputs.version }}
           REVISION: ${{ needs.release.outputs.commit_sha }}
@@ -294,32 +297,29 @@ jobs:
             docker buildx imagetools inspect --raw \
               "$VALIDATOR_REPOSITORY@$VALIDATOR_DIGEST"
           )"
-          for platform in linux/amd64 linux/arm64; do
-            architecture="${platform#linux/}"
-            child_digest="$(
-              jq -er --arg architecture "$architecture" \
-                '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture)] | if length == 1 then .[0].digest else error("expected one child manifest") end' \
-                <<<"$raw"
-            )"
-            exact="$VALIDATOR_REPOSITORY@$child_digest"
-            volume="ditto-validator-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${architecture}"
-            docker pull --platform "$platform" "$exact"
-            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$exact")" = "$COMPATIBILITY_EPOCH"
-            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$exact")" = "6"
-            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
-            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
-            docker volume create "$volume"
-            trap 'docker volume rm -f "$volume" >/dev/null 2>&1 || true' EXIT
-            docker run --rm --platform "$platform" --read-only --tmpfs /tmp \
-              --cap-drop ALL --cap-add DAC_READ_SEARCH \
-              --mount "type=volume,source=$volume,target=/var/lib/ditto-validator-update" \
-              --env UV_CACHE_DIR=/tmp/uv-cache \
-              --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
-              --entrypoint uv "$exact" run --no-sync python -c \
-              'from ditto.validator.update_control import bootstrap_should_start_drained as s, mark_bootstrap_resumed as m; assert s(True); assert m(); assert not s(True)'
-            docker volume rm "$volume"
-            trap - EXIT
-          done
+          child_digest="$(
+            jq -er \
+              '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("expected one child manifest") end' \
+              <<<"$raw"
+          )"
+          exact="$VALIDATOR_REPOSITORY@$child_digest"
+          volume="ditto-validator-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-amd64"
+          docker pull --platform linux/amd64 "$exact"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$exact")" = "$COMPATIBILITY_EPOCH"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$exact")" = "6"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
+          docker volume create "$volume"
+          trap 'docker volume rm -f "$volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm --platform linux/amd64 --read-only --tmpfs /tmp \
+            --cap-drop ALL --cap-add DAC_READ_SEARCH \
+            --mount "type=volume,source=$volume,target=/var/lib/ditto-validator-update" \
+            --env UV_CACHE_DIR=/tmp/uv-cache \
+            --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
+            --entrypoint uv "$exact" run --no-sync python -c \
+            'from ditto.validator.update_control import bootstrap_should_start_drained as s, mark_bootstrap_resumed as m; assert s(True); assert m(); assert not s(True)'
+          docker volume rm "$volume"
+          trap - EXIT
 
       - name: Render the digest-bound stack bundle
         run: |
@@ -394,12 +394,86 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$exact" >/dev/null
 
+  smoke-validator-arm64:
+    needs: [release, publish-stack-release]
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    permissions:
+      contents: read
+      packages: read
+    env:
+      VALIDATOR_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-validator
+      COMPATIBILITY_EPOCH: "2"
+    steps:
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke-test the arm64 validator artifact by exact child digest
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+          VALIDATOR_DIGEST: ${{ needs.publish-stack-release.outputs.validator_digest }}
+        run: |
+          raw="$(
+            docker buildx imagetools inspect --raw \
+              "$VALIDATOR_REPOSITORY@$VALIDATOR_DIGEST"
+          )"
+          child_digest="$(
+            jq -er \
+              '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | if length == 1 then .[0].digest else error("expected one child manifest") end' \
+              <<<"$raw"
+          )"
+          exact="$VALIDATOR_REPOSITORY@$child_digest"
+          volume="ditto-validator-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-arm64"
+          docker pull --platform linux/arm64 "$exact"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$exact")" = "$COMPATIBILITY_EPOCH"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$exact")" = "6"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
+          docker volume create "$volume"
+          trap 'docker volume rm -f "$volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm --platform linux/arm64 --read-only --tmpfs /tmp \
+            --cap-drop ALL --cap-add DAC_READ_SEARCH \
+            --mount "type=volume,source=$volume,target=/var/lib/ditto-validator-update" \
+            --env UV_CACHE_DIR=/tmp/uv-cache \
+            --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
+            --entrypoint uv "$exact" run --no-sync python -c \
+            'from ditto.validator.update_control import bootstrap_should_start_drained as s, mark_bootstrap_resumed as m; assert s(True); assert m(); assert not s(True)'
+          docker volume rm "$volume"
+          trap - EXIT
+
+  promote-stack-release:
+    needs: [release, publish-stack-release, smoke-validator-arm64]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+    env:
+      STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
+      COMPATIBILITY_EPOCH: "2"
+    steps:
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       # The mutable discovery tag advances only after every immutable component
-      # exists, the bundle was extracted on both platforms, and its digest was
-      # authenticated. Clients therefore observe either complete release.
+      # exists, both native validator smoke tests pass, the bundle was extracted
+      # on both platforms, and its digest was authenticated.
       - name: Promote only the authenticated stack descriptor
         env:
-          STACK_DIGEST: ${{ steps.stack.outputs.digest }}
+          STACK_DIGEST: ${{ needs.publish-stack-release.outputs.stack_digest }}
           RELEASE_TAG: ${{ needs.release.outputs.tag }}
         run: |
           source="$STACK_REPOSITORY@$STACK_DIGEST"

@@ -28,3 +28,18 @@ def test_public_screener_dependency_needs_no_private_authentication() -> None:
         assert "DITTO_SCREENER_PROTOCOL_READ_KEY" not in text
         assert "GIT_SSH_COMMAND" not in text
         assert "insteadOf" not in text
+
+
+def test_validator_release_smokes_each_architecture_natively_before_promotion() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+
+    assert jobs["publish-stack-release"]["runs-on"] == "blacksmith-4vcpu-ubuntu-2404"
+    assert (
+        jobs["smoke-validator-arm64"]["runs-on"] == "blacksmith-4vcpu-ubuntu-2404-arm"
+    )
+    assert jobs["promote-stack-release"]["needs"] == [
+        "release",
+        "publish-stack-release",
+        "smoke-validator-arm64",
+    ]
