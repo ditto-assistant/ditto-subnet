@@ -52,14 +52,18 @@ def apply_miner_emission_cap(
     """Reserve ``1 - miner_share`` for Subtensor's subnet-owner burn path.
 
     Pylon normalizes every submitted vector, so merely scaling miner weights to
-    sum to ``miner_share`` would still pay miners 100%. The final vector must
-    include the subnet owner's registered hotkey: Subtensor withholds and burns
-    miner incentive routed to an owner-associated hotkey. The eligible miner
-    vector is normalized before receiving its fixed share so a lone champion
-    receives exactly ``miner_share`` rather than its raw KOTH share.
+    sum to ``miner_share`` would still pay miners 100%. A residual share must
+    therefore be routed to the subnet owner's registered hotkey: Subtensor
+    withholds and burns miner incentive sent to an owner-associated hotkey. The
+    eligible miner vector is normalized before receiving its share so a lone
+    champion receives exactly ``miner_share`` rather than its raw KOTH share.
 
-    With no positive eligible miner weights, route the whole vector to burn.
-    The burn hotkey is excluded from the miner pool defensively.
+    At the deployed ``miner_share`` of ``1.0`` there is no residual and the burn
+    hotkey does not appear in the vector at all — miners take the full emission.
+
+    With no positive eligible miner weights, route the whole vector to burn
+    (the safe idle vector, at any ``miner_share``). The burn hotkey is excluded
+    from the miner pool defensively.
     """
     if not 0.0 <= miner_share <= 1.0:
         raise ValueError(f"miner_share must be in [0, 1], got {miner_share}")

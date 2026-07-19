@@ -158,6 +158,21 @@ class TestMinerEmissionCap:
         }
         assert sum(capped.values()) == pytest.approx(1.0)
 
+    def test_full_share_leaves_no_burn_weight(self) -> None:
+        # The deployed share: miners take everything, the burn hotkey is absent.
+        capped = apply_miner_emission_cap(
+            {"champ": 0.9, "tail": 0.1},
+            miner_share=1.0,
+            burn_hotkey=_BURN_HOTKEY,
+        )
+        assert capped == {"champ": pytest.approx(0.9), "tail": pytest.approx(0.1)}
+        assert _BURN_HOTKEY not in capped
+
+    def test_full_share_still_burns_an_empty_ledger(self) -> None:
+        assert apply_miner_emission_cap(
+            {}, miner_share=1.0, burn_hotkey=_BURN_HOTKEY
+        ) == {_BURN_HOTKEY: 1.0}
+
     def test_burn_hotkey_cannot_enter_miner_pool(self) -> None:
         assert apply_miner_emission_cap(
             {_BURN_HOTKEY: 0.9, "miner": 0.1},
@@ -208,7 +223,7 @@ def _config() -> MagicMock:
     cfg.koth_tail_size = 4
     cfg.koth_champion_share = 0.9
     cfg.koth_dethrone_z = 1.64
-    cfg.miner_emission_share = 0.2
+    cfg.miner_emission_share = 1.0
     cfg.burn_hotkey = _BURN_HOTKEY
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
@@ -365,9 +380,7 @@ class TestRunOnce:
         assert (
             platform.submit_score.await_args.kwargs["ticket_deadline"] == job.deadline
         )
-        chain.put_weights.assert_awaited_once_with(
-            {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5MinerA" + "x" * 41: 1.0})
 
     async def test_pre_requested_drain_claims_no_work(self) -> None:
         platform = _platform_with_ledger(jobs=[_job("5Miner" + "x" * 42)], ledger=[])
@@ -597,9 +610,7 @@ class TestRunOnce:
 
         platform.request_job.assert_not_awaited()
         platform.get_artifact.assert_not_awaited()
-        chain.put_weights.assert_awaited_once_with(
-            {"5MinerA" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5MinerA" + "x" * 41: 1.0})
 
     async def test_preflight_recovery_claims_on_next_normal_sweep(self) -> None:
         job = _job("5MinerA" + "x" * 41)
@@ -1308,9 +1319,7 @@ class TestRunOnce:
         assert n.queue_depth == 1  # the item was pulled...
         dittobench.score_tarball.assert_not_awaited()  # ...but never scored
         platform.submit_score.assert_not_awaited()
-        chain.put_weights.assert_awaited_once_with(
-            {"5Champ" + "x" * 42: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5Champ" + "x" * 42: 1.0})
 
     async def test_invalid_artifact_skips_only_its_ticket(self) -> None:
         first = _job("5MinerA" + "x" * 41)
@@ -1376,9 +1385,7 @@ class TestRunOnce:
         platform.get_artifact.assert_not_awaited()  # ...but refused unscored
         dittobench.score_tarball.assert_not_awaited()
         platform.submit_score.assert_not_awaited()
-        chain.put_weights.assert_awaited_once_with(
-            {"5Champ" + "x" * 42: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5Champ" + "x" * 42: 1.0})
 
     async def test_derived_seed_ticket_is_scored(self) -> None:
         # The companion arm: a ticket whose seed DOES re-derive proceeds.
@@ -1458,9 +1465,7 @@ class TestRunOnce:
         )
 
         assert (await worker.run_once()).queue_depth == 0
-        chain.put_weights.assert_awaited_once_with(
-            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 1.0})
 
     async def test_deregistered_champion_is_filtered_before_koth_fold(self) -> None:
         absent = "5Absent" + "x" * 40
@@ -1482,7 +1487,7 @@ class TestRunOnce:
         )
 
         await worker.run_once()
-        chain.put_weights.assert_awaited_once_with({registered: 0.2, _BURN_HOTKEY: 0.8})
+        chain.put_weights.assert_awaited_once_with({registered: 1.0})
 
     async def test_chain_registration_read_failure_leaves_weights_unchanged(
         self, caplog: pytest.LogCaptureFixture
@@ -1531,9 +1536,7 @@ class TestRunOnce:
         await worker.run_once()
         await worker.run_once()
         assert chain.put_weights.await_args_list[0].args == ({_BURN_HOTKEY: 1.0},)
-        assert chain.put_weights.await_args_list[1].args == (
-            {original: 0.2, _BURN_HOTKEY: 0.8},
-        )
+        assert chain.put_weights.await_args_list[1].args == ({original: 1.0},)
         assert all(
             replacement not in call.args[0]
             for call in chain.put_weights.await_args_list
@@ -1587,9 +1590,7 @@ class TestRunOnce:
         )
 
         assert (await worker.run_once()).queue_depth == 0
-        chain.put_weights.assert_awaited_once_with(
-            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 1.0})
 
     async def test_stale_ledger_is_still_folded_with_warning(
         self, caplog: pytest.LogCaptureFixture
@@ -1615,9 +1616,7 @@ class TestRunOnce:
         )
         with caplog.at_level("WARNING"):
             await worker.run_once()
-        chain.put_weights.assert_awaited_once_with(
-            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 1.0})
         assert any("STALE" in r.message for r in caplog.records)
 
     async def test_no_permit_skips_weight_submission(self) -> None:
@@ -1655,9 +1654,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
         assert (await worker.run_once()).queue_depth == 0
-        chain.put_weights.assert_awaited_once_with(
-            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 1.0})
 
     async def test_permit_check_error_fails_open(self) -> None:
         # A flaky metagraph read must not wedge weight-setting; proceed and let
@@ -1719,9 +1716,7 @@ class TestRunOnce:
             keypair=MagicMock(),
         )
         assert (await worker.run_once()).queue_depth == 0
-        chain.put_weights.assert_awaited_once_with(
-            {"5Champion" + "x" * 39: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        chain.put_weights.assert_awaited_once_with({"5Champion" + "x" * 39: 1.0})
 
     async def test_stake_check_error_fails_open(self) -> None:
         # Same fail-open posture as the permit check: a flaky read proceeds.
@@ -1823,10 +1818,8 @@ class TestRunOnce:
 
         n = await worker.run_once()
         assert n.queue_depth == 2
-        # The lone eligible miner receives the released 20%; 80% stays burned.
-        chain.put_weights.assert_awaited_once_with(
-            {"5MinerG" + "x" * 41: 0.2, _BURN_HOTKEY: 0.8}
-        )
+        # The lone eligible miner takes the whole miner emission; nothing burns.
+        chain.put_weights.assert_awaited_once_with({"5MinerG" + "x" * 41: 1.0})
 
     async def test_ledger_fetch_failure_leaves_weights_untouched(self) -> None:
         from ditto.validator.errors import PlatformError

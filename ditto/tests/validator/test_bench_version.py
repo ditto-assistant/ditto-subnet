@@ -166,7 +166,7 @@ def _worker() -> Any:
     cfg.koth_champion_share = 0.9
     cfg.koth_dethrone_z = 1.64
     cfg.koth_confirmation_seeds = 3
-    cfg.miner_emission_share = 0.2
+    cfg.miner_emission_share = 1.0
     cfg.burn_hotkey = "5Burn" + "x" * 43
     return ValidatorWorker(
         config=cfg,

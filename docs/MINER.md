@@ -143,9 +143,9 @@ result.
   the statistical error band; a near-miss is settled by re-scoring both agents
   on shared seeds rather than dataset luck.
 - The champion receives 90% of competitive weight; the next four distinct
-  miners split 10%. The competitive vector receives 20% of available miner
-  emission and the remaining 80% is burned. With no eligible miners, 100% is
-  burned.
+  miners split 10%. The competitive vector receives 100% of available miner
+  emission — nothing is burned while eligible miners exist. With no eligible
+  miners, 100% is burned.
 
 Scores, signatures, and each run's graded transcript are published so results
 can be independently checked: regenerate the dataset from the published seed,

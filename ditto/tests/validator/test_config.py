@@ -31,7 +31,7 @@ class TestKothConfig:
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
-        assert cfg.miner_emission_share == 0.2
+        assert cfg.miner_emission_share == 1.0
         assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
         # Cadence knobs stay env-driven, with these defaults.
         assert cfg.sweep_seconds == 120
@@ -59,7 +59,7 @@ class TestKothConfig:
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
-        assert cfg.miner_emission_share == 0.2
+        assert cfg.miner_emission_share == 1.0
         assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
 
     def test_localnet_burns_to_local_owner_validator(
