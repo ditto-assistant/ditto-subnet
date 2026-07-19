@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.17.0 (2026-07-19)
+
+### Features
+
+- Accept bench_version 4 and repin the scorer
+  ([#180](https://github.com/ditto-assistant/ditto-subnet/pull/180),
+  [`6d5eddc`](https://github.com/ditto-assistant/ditto-subnet/commit/6d5eddc91407e84b797e109839fcf3fccf9bd813))
+
+
 ## v0.16.3 (2026-07-19)
 
 ### Bug Fixes
