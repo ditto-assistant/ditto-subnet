@@ -1162,10 +1162,26 @@ class TestRunOnce:
     async def test_v3_ticket_artifact_scorer_and_signature_are_version_bound(
         self,
     ) -> None:
-        job = _job("5MinerA" + "x" * 41).model_copy(update={"bench_version": 3})
+        job = _job("5MinerA" + "x" * 41).model_copy(
+            update={
+                "bench_version": 3,
+                "minimum_screening_policy_version": 9,
+                "requires_screened_image": True,
+            }
+        )
         platform = _platform_with_ledger(jobs=[job], ledger=[])
         artifact = platform.get_artifact.return_value.model_copy(
-            update={"bench_version": 3}
+            update={
+                "bench_version": 3,
+                "screening_policy_version": 9,
+                "screened_image_url": "https://signed.example/image.tar",
+                "screened_image_sha256": "12" * 32,
+                "screened_image_size_bytes": 123,
+                "screened_image_id": "sha256:" + "34" * 32,
+                "screened_image_ref": (
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
+            }
         )
         platform.get_artifact = AsyncMock(return_value=artifact)
         report = _report("run-v3", 0.9).model_copy(update={"bench_version": 3})
@@ -1189,7 +1205,13 @@ class TestRunOnce:
         assert platform.submit_score.await_args.kwargs["report"].bench_version == 3
 
     async def test_ticket_artifact_benchmark_version_mismatch_is_terminal(self) -> None:
-        job = _job("5MinerA" + "x" * 41).model_copy(update={"bench_version": 3})
+        job = _job("5MinerA" + "x" * 41).model_copy(
+            update={
+                "bench_version": 3,
+                "minimum_screening_policy_version": 9,
+                "requires_screened_image": True,
+            }
+        )
         platform = _platform_with_ledger(jobs=[], ledger=[])
         artifact = platform.get_artifact.return_value.model_copy(
             update={"bench_version": 2}
@@ -2137,6 +2159,14 @@ class TestConfirmAndSubmit:
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
                 bench_version=3,
+                screening_policy_version=9,
+                screened_image_url="https://signed.example/image.tar",
+                screened_image_sha256="12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "34" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
             )
         )
         w = await self._worker(dittobench, platform)

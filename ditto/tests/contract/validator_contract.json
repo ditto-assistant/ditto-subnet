@@ -84,6 +84,18 @@
         ],
         "default": null
       },
+      "screening_policy_version": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "sha256": {
         "type": "string"
       }

@@ -5,11 +5,12 @@ no miner source, credentials, or runnable exploit payloads.
 
 ## Required production invariants
 
-- Validators prefer a screener-built image whose archive digest, image ID,
+- Validators load a screener-built image whose archive digest, image ID,
   source artifact, screening attempt, and lease are bound by the platform.
-- During gradual rollout, `DITTOBENCH_REQUIRE_SCREENED_IMAGE=0` intentionally
-  preserves source-build fallback for legacy records and mixed validator
-  versions. Set it to `1` only after verified-image coverage is sufficient.
+- Benchmark v2 preserves source-build fallback for legacy records and mixed
+  validator versions. Benchmark v3 is issued only after policy-9 screening and
+  a platform-verified image; this is a versioned contract, not a fleet-wide
+  environment switch.
 - Miner containers run non-root with a read-only root filesystem, ephemeral
   no-exec scratch, all capabilities dropped, no-new-privileges, resource and
   time limits, and request-scoped cleanup.
@@ -48,9 +49,9 @@ wallet, so the platform must not treat a heartbeat as proof of host integrity.
 
 1. Confirm the deployed screener version contains static malicious-source
    preflight and that its canary quarantines before any Docker build event.
-2. Confirm the platform assigns image-only records only to validators whose
-   signed v7 capability heartbeat advertises screened-image support. During the
-   prefer phase, source-capable validators may receive legacy records.
+2. Confirm the platform assigns v3 only to validators whose signed v8 capability
+   heartbeat advertises screened-image support and a freshly verified v3 scorer.
+   Source-capable validators may continue receiving v2 records.
 3. Inspect and record the executor daemon security options. Enable the reviewed
    seccomp and AppArmor profiles where the host supports them.
 4. Verify the executor account cannot read validator wallet paths, service

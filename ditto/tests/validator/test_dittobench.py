@@ -102,6 +102,13 @@ async def test_v3_uses_versioned_route_and_binds_request() -> None:
             tarball_url="https://example.test/agent.tgz",
             dataset_sha256="12" * 32,
             bench_version=3,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="34" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "56" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
         )
     assert seen["path"] == "/v2/score"
     assert cast(dict[str, object], seen["body"])["bench_version"] == 3

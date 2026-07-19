@@ -129,11 +129,13 @@ def validator_capabilities_and_stack() -> tuple[
     stack = _managed_identity() or _source_identity()
 
     screened_images = _truthy("VALIDATOR_SCREENED_IMAGES", default=False)
-    require_screened = _truthy("VALIDATOR_REQUIRE_SCREENED_IMAGE", default=False)
     capabilities = ValidatorCapabilities(
         screened_images=screened_images,
-        require_screened_image=require_screened,
-        source_build_fallback=not require_screened,
+        # These legacy global flags remain on the v8 wire for old platforms.
+        # Requirements are now benchmark-version contracts: v2 can fall back,
+        # while v3 always requires a screened image.
+        require_screened_image=False,
+        source_build_fallback=True,
         full_stack_managed=stack.mode == "managed",
         stack_updater=stack.mode == "managed" and _truthy("VALIDATOR_STACK_UPDATER"),
         sandbox_egress_restricted=_truthy(

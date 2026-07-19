@@ -413,6 +413,8 @@ class DittobenchClient:
                     "screened_image_ref": screened_image_ref,
                 }
             )
+        elif bench_version == 3:
+            raise DittobenchError("benchmark v3 requires a verified screened image")
         if seed is not None:
             body["seed"] = seed
         # Canonical validator path: pin the dataset so the engine fails on a

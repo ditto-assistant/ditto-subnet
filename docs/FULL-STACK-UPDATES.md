@@ -158,18 +158,12 @@ Use these rollout stages:
 1. deploy platform support;
 2. deploy screeners and observe verified image coverage;
 3. adopt the full-stack updater across validators;
-4. deploy validators in **prefer image** mode while coverage is measured; and
-5. enable **require image** only after coverage and rollback telemetry meet the
-   release gate.
+4. let v3-capable validators receive only policy-9, platform-verified images;
+5. keep v2 source-build fallback until old validators and legacy records age out.
 
-The currently proposed prebuilt-image subnet change hardcodes
-`DITTOBENCH_REQUIRE_SCREENED_IMAGE=1`. That release skips the prefer stage for
-any operator who pulls and rebuilds it. This updater does not weaken or hide
-that setting: it reports the installed stack descriptor and changes all scorer
-and sandbox components together. Before promoting that release to the managed
-channel, either verify complete artifact coverage and accept the strict cutover,
-or change the prebuilt-image release to make the prefer-to-require transition
-explicit.
+Image enforcement is bound to the benchmark contract. There is no global
+prefer/require switch that can accidentally strand v2 work: v2 remains
+backwards compatible, while v3 fails closed in platform, validator, and scorer.
 
 ## Source-built fallback
 

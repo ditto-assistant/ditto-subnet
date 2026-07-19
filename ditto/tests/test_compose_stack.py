@@ -105,9 +105,7 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     env = compose["services"]["dittobench-api"]["environment"]
     assert env["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
-    assert env["DITTOBENCH_REQUIRE_SCREENED_IMAGE"] == (
-        "${DITTOBENCH_REQUIRE_SCREENED_IMAGE:-0}"
-    )
+    assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
 
@@ -128,16 +126,15 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "/var/run/docker.sock" not in COMPOSE_PATH.read_text()
 
 
-def test_screened_image_rollout_mode_is_shared_with_capability_heartbeat() -> None:
+def test_screened_image_capability_is_enabled_without_a_global_requirement() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     scorer = compose["services"]["dittobench-api"]["environment"]
     validator = compose["services"]["ditto-subnet"]["environment"]
 
-    rollout = "${DITTOBENCH_REQUIRE_SCREENED_IMAGE:-0}"
     assert scorer["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
-    assert scorer["DITTOBENCH_REQUIRE_SCREENED_IMAGE"] == rollout
+    assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in scorer
     assert validator["VALIDATOR_SCREENED_IMAGES"] == "1"
-    assert validator["VALIDATOR_REQUIRE_SCREENED_IMAGE"] == rollout
+    assert "VALIDATOR_REQUIRE_SCREENED_IMAGE" not in validator
     assert validator["NETUID"] == "118"
     assert validator["VALIDATOR_STACK_MODE"] == "source"
     assert validator["VALIDATOR_EXECUTOR_ISOLATION"] == "privileged_dind"
@@ -163,9 +160,9 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert len(checksum) == 40
     assert checksum == checksum.lower()
     assert all(character in "0123456789abcdef" for character in checksum)
-    # dittobench-api PR #34 was squash-merged at this exact main commit. The
+    # dittobench-api PR #36 was squash-merged at this exact main commit. The
     # pre-merge PR head is not a valid production BuildKit checksum.
-    assert checksum == "119429b28b83cd6cb33528abdf690ddef9f950c0"
+    assert checksum == "0a9cac2a1c32a1ef4e0cb276c3eef79009fbb81f"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]

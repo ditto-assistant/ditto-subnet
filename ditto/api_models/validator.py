@@ -120,6 +120,10 @@ class JobResponse(BaseModel):
             description="Version-bound benchmark semantics for this lease.",
         ),
     ] = None
+    minimum_screening_policy_version: Annotated[
+        int | None, Field(default=None, ge=0)
+    ] = None
+    requires_screened_image: bool | None = None
     dataset_seed_block: Annotated[
         int | None,
         Field(
@@ -290,6 +294,7 @@ class ArtifactResponse(BaseModel):
         datetime, Field(description="When ``download_url`` stops being valid (UTC).")
     ]
     bench_version: Annotated[int | None, Field(default=None, ge=1)] = None
+    screening_policy_version: Annotated[int | None, Field(default=None, ge=0)] = None
     screened_image_url: Annotated[
         str | None,
         Field(
@@ -319,6 +324,12 @@ class ArtifactResponse(BaseModel):
             value is None for value in fields
         ):
             raise ValueError("screened image metadata must be complete")
+        if self.bench_version == 3 and (
+            self.screening_policy_version is None
+            or self.screening_policy_version < 9
+            or any(value is None for value in fields)
+        ):
+            raise ValueError("benchmark v3 requires a policy-9 verified screened image")
         return self
 
     model_config = ConfigDict(
