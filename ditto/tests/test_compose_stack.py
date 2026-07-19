@@ -216,8 +216,10 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert 'io.heyditto.validator.compose-schema="1"' in dockerfile
 
     assert 'COMPATIBILITY_EPOCH: "2"' in workflow
+    assert f'HEARTBEAT_PROTOCOL: "{HEARTBEAT_PROTOCOL_VERSION}"' in workflow
     assert "ditto-subnet-validator" in workflow
-    assert '--tag "$IMAGE:compat-$COMPATIBILITY_EPOCH"' in workflow
+    assert "STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack" in workflow
+    assert '--tag "$STACK_REPOSITORY:compat-$COMPATIBILITY_EPOCH"' in workflow
     assert ":sha-${{ needs.release.outputs.commit_sha }}" in workflow
     assert "packages: write" in workflow
     assert "secrets.GITHUB_TOKEN" in workflow
@@ -228,16 +230,28 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert (
         "docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130" in workflow
     )
-    assert workflow.count("docker/build-push-action@") == 1
-    assert 'exact="$IMAGE@$manifest_digest"' in workflow
+    # Validator, sandbox daemon, scorer, relay, and the final signed stack
+    # descriptor are independently built and published from the exact release.
+    assert workflow.count("docker/build-push-action@") == 5
+    for repository in (
+        "ghcr.io/ditto-assistant/ditto-subnet-validator",
+        "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",
+        "ghcr.io/ditto-assistant/dittobench-api-sandbox",
+        "ghcr.io/ditto-assistant/dittobench-api-relay",
+        "ghcr.io/ditto-assistant/ditto-subnet-stack",
+    ):
+        assert repository in workflow
     assert (
-        'raw_manifest="$(docker buildx imagetools inspect --raw "$exact")"' in workflow
+        'raw="$(docker buildx imagetools inspect --raw "$repository@$digest")"'
+        in workflow
     )
-    assert 'child_exact="$IMAGE@$child_digest"' in workflow
-    assert 'docker pull "$child_exact"' in workflow
-    assert 'docker pull --platform "$platform" "$exact"' not in workflow
+    assert 'child="$repository@$amd64_digest"' in workflow
+    assert 'docker pull --platform linux/amd64 "$child"' in workflow
+    assert 'exact="$STACK_REPOSITORY@$STACK_DIGEST"' in workflow
+    assert 'child_exact="$STACK_REPOSITORY@$child_digest"' in workflow
+    assert 'docker pull --platform "$platform" "$child_exact"' in workflow
     assert "for platform in linux/amd64 linux/arm64" in workflow
-    assert "Promote only the tested manifest" in workflow
+    assert "Promote only the authenticated stack descriptor" in workflow
 
 
 def test_systemd_unit_pins_runtime_settings_to_its_timeout_budget() -> None:

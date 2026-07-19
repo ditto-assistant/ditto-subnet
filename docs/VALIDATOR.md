@@ -203,68 +203,89 @@ validator remains drained. Repair the sidecars, verify them, then run
 - **Disk use grows:** inspect `sandbox-docker`. Its nested daemon prunes unused
   benchmark data; do not run broad cleanup against the host Docker daemon.
 
-## Automatic validator updates (opt-in)
+## Automatic full-stack updates (opt-in)
 
-Enable the timer only after supervised adoption succeeds:
+Managed installations update the complete immutable Compose stack. The
+one-time migration, transaction boundaries, rollback guarantees, Cosign trust
+policy, and gradual screened-image rollout are documented in
+[FULL-STACK-UPDATES.md](FULL-STACK-UPDATES.md).
 
-```sh
-sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=true/' .env
-sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
-  ./scripts/install-validator-auto-update.sh
-systemctl list-timers ditto-validator-auto-update.timer
-sudo systemctl status ditto-validator-auto-update.timer
-./scripts/validator-auto-update.sh status
-```
-
-The installer persists the operator's home, Docker configuration, and wallet
-directory in the systemd unit. It also preserves the wallet source mounted by
-an already-running validator. If wallets were moved or the validator is not
-running during installation, pass their absolute host directory explicitly:
+First disable the legacy updater, install Cosign from its verified upstream
+release, and resolve the signed stack channel to an immutable digest. With the
+timer still disabled, `migrate` waits for the current validator to drain,
+installs all six exact services, starts the validator quiescent, verifies a
+fresh accepted heartbeat, and records the stack:
 
 ```sh
-sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
-  DITTO_BITTENSOR_WALLETS_DIR=/path/to/.bittensor/wallets \
-  ./scripts/install-validator-auto-update.sh
+sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
+sudo systemctl disable --now ditto-validator-auto-update.timer 2>/dev/null || true
+STACK=ghcr.io/ditto-assistant/ditto-subnet-stack
+docker pull "$STACK:compat-2"
+DIGEST="$(
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+    "$STACK:compat-2" |
+  awk -v prefix="$STACK@" 'index($0, prefix) == 1 { print; exit }'
+)"
+test -n "$DIGEST"
+./scripts/validator-stack-auto-update.sh migrate "$DIGEST"
+./scripts/validator-stack-auto-update.sh status
 ```
 
-The timer checks `compat-2`, resolves it to an immutable digest, and validates
-the candidate before asking the worker to drain. An active benchmark is allowed
-to finish through signed result submission. If the drain deadline expires, the
-worker resumes and no replacement occurs.
+If all six services already match the descriptor, `adopt "$DIGEST"` records
+them without replacement. Both commands fail closed if the descriptor's
+keyless signature is not from this repository's `release.yml` on `main`.
 
-Only a newer patch release in the running major/minor line can be installed
-automatically. Minor or major changes, compatibility epoch changes, and changes
-to protocols, Compose schema, required configuration, wallet handling, or
-sidecars require a supervised migration. The updater only replaces the
-`ditto-subnet` service; it does not update Pylon, the scorer, relay, Ollama, or
-the sandbox.
+Enable the new timer only after migration or adoption succeeds:
+
+```sh
+if grep -q '^VALIDATOR_STACK_AUTO_UPDATE=' .env; then
+  sed -i 's/^VALIDATOR_STACK_AUTO_UPDATE=.*/VALIDATOR_STACK_AUTO_UPDATE=true/' .env
+else
+  printf '\nVALIDATOR_STACK_AUTO_UPDATE=true\n' >>.env
+fi
+sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
+  ./scripts/install-validator-stack-auto-update.sh
+systemctl list-timers ditto-validator-stack-auto-update.timer
+sudo systemctl status ditto-validator-stack-auto-update.timer
+./scripts/validator-stack-auto-update.sh status
+```
+
+The timer checks `compat-2`, authenticates and resolves it once, then validates
+and pre-pulls every exact component before asking the worker to drain. An active
+benchmark finishes through signed result submission. If the drain deadline
+expires, the worker resumes and no service is replaced.
+
+A newer patch or minor release in the same major line can install automatically
+only while the compatibility epoch, updater protocol, Compose schema, and
+descriptor format remain accepted by the stable host launcher. Major or schema
+changes require supervised migration. Every compatible update replaces Pylon,
+the scorer, relay, Ollama, sandbox daemon, and validator as one transaction.
 
 After replacement, the candidate starts unable to accept work until its exact
 digest and compatibility state are verified through a fresh accepted
-heartbeat. A failed candidate is suppressed and the retained previous image is
-restored. Recovery and rollback also require a drained validator. The updater
-fails closed when it cannot prove a safe state.
+heartbeat. A failed candidate is suppressed and the complete retained previous
+stack is restored. Recovery and rollback also require a drained validator. The
+updater fails closed when it cannot prove a safe state.
 
 To disable updates or inspect an interrupted run:
 
 ```sh
-sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
-sudo systemctl disable --now ditto-validator-auto-update.timer
-sudo systemctl stop ditto-validator-auto-update.service
-./scripts/validator-auto-update.sh status
+sed -i 's/^VALIDATOR_STACK_AUTO_UPDATE=.*/VALIDATOR_STACK_AUTO_UPDATE=false/' .env
+sudo systemctl disable --now ditto-validator-stack-auto-update.timer
+sudo systemctl stop ditto-validator-stack-auto-update.service
+./scripts/validator-stack-auto-update.sh status
 ```
 
 If the validator and all sidecars are healthy but `status` shows
-`TRANSACTION_PHASE`, run `./scripts/validator-auto-update.sh recover` only after
-verifying that resuming lease intake is safe.
+`transaction_phase`, run `./scripts/validator-stack-auto-update.sh recover`
+only after verifying that resuming lease intake is safe.
 
 For a later manual rollback, keep updates disabled and use the same cooperative
 drain path:
 
 ```sh
-./scripts/validator-auto-update.sh rollback
-./scripts/validator-compose.sh ps
-./scripts/validator-compose.sh logs --since 10m ditto-subnet
+./scripts/validator-stack-auto-update.sh rollback
+./scripts/validator-stack-auto-update.sh status
 ```
 
 ## How scoring and weights work
