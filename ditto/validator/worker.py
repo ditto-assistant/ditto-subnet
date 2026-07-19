@@ -42,7 +42,10 @@ from ditto.validator.errors import (
 from ditto.validator.onchain_seed import seed_matches
 from ditto.validator.signing import sign_heartbeat, sign_score
 from ditto.validator.stack_health import fallback_stack_health
-from ditto.validator.stack_identity import validator_capabilities_and_stack
+from ditto.validator.stack_identity import (
+    bind_observed_scorer_identity,
+    validator_capabilities_and_stack,
+)
 from ditto.validator.telemetry import (
     ScoredAgentStat,
     SweepStats,
@@ -476,6 +479,7 @@ class ValidatorWorker:
                 observed = capability_probe(stack)
                 if inspect.isawaitable(observed):
                     scorer_benchmarks = await observed
+            stack = bind_observed_scorer_identity(stack, scorer_benchmarks)
             capabilities = capabilities.model_copy(
                 update={"scorer_benchmarks": scorer_benchmarks}
             )

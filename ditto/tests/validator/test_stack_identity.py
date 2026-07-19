@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from ditto.validator.stack_identity import validator_capabilities_and_stack
+from ditto.api_models.validator_capabilities import ScorerBenchmarkCapability
+from ditto.validator.stack_identity import (
+    bind_observed_scorer_identity,
+    validator_capabilities_and_stack,
+)
 
 _DIGEST = "sha256:" + "12" * 32
 _REF = "ghcr.io/ditto-assistant/example@" + _DIGEST
@@ -50,6 +54,46 @@ def test_source_checkout_revision_never_claims_descriptor_provenance(
     monkeypatch.setenv("VALIDATOR_STACK_COMPONENT_DITTOBENCH_API", f"source:{revision}")
     _, pinned_stack = validator_capabilities_and_stack()
     assert pinned_stack.components.dittobench_api.provenance == "committed_pin"
+
+
+def test_source_stack_binds_version_observed_at_matching_pinned_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "ab" * 20
+    monkeypatch.setenv("VALIDATOR_STACK_MODE", "source")
+    monkeypatch.setenv("VALIDATOR_STACK_COMPONENT_DITTOBENCH_API", f"source:{revision}")
+    _, stack = validator_capabilities_and_stack()
+    scorer = ScorerBenchmarkCapability(
+        status="fresh_verified",
+        supported_bench_versions=(2, 3),
+        observed_at=1,
+        software_version="source-build",
+        source_revision=revision,
+    )
+
+    bound = bind_observed_scorer_identity(stack, scorer)
+
+    assert bound.components.dittobench_api.version == "source-build"
+    assert bound.components.dittobench_api.source_revision == revision
+    assert bound.components.dittobench_api.provenance == "committed_pin"
+
+
+def test_source_stack_does_not_bind_unverified_or_mismatched_scorer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "ab" * 20
+    monkeypatch.setenv("VALIDATOR_STACK_MODE", "source")
+    monkeypatch.setenv("VALIDATOR_STACK_COMPONENT_DITTOBENCH_API", f"source:{revision}")
+    _, stack = validator_capabilities_and_stack()
+    scorer = ScorerBenchmarkCapability(
+        status="identity_mismatch",
+        supported_bench_versions=(2,),
+        observed_at=1,
+        software_version="source-build",
+        source_revision="cd" * 20,
+    )
+
+    assert bind_observed_scorer_identity(stack, scorer) == stack
 
 
 def test_legacy_global_requirement_cannot_override_version_contract(
