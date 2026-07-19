@@ -69,6 +69,30 @@ def _is_embedding_infrastructure_failure(error: str) -> bool:
     )
 
 
+_SANDBOX_INFRASTRUCTURE_CODES = {
+    "sandbox_oom",
+    "sandbox_tmpfs_exhausted",
+}
+
+
+def _sandbox_infrastructure_failure_code(payload: dict[str, object]) -> str | None:
+    """Accept only the scorer's narrow, source-free resource classifier."""
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        return None
+    if (
+        failure.get("kind") != "validator_infrastructure"
+        or failure.get("retryable") is not True
+    ):
+        return None
+    code = failure.get("code")
+    return (
+        code
+        if isinstance(code, str) and code in _SANDBOX_INFRASTRUCTURE_CODES
+        else None
+    )
+
+
 @dataclass(frozen=True)
 class DittobenchProgressSnapshot:
     """Allowlisted progress extracted from an otherwise private scorer job."""
@@ -510,6 +534,12 @@ class DittobenchClient:
                     )
                 if status == _FAILED:
                     error = str(data.get("error", "unknown"))
+                    infrastructure_code = _sandbox_infrastructure_failure_code(data)
+                    if infrastructure_code is not None:
+                        raise ValidatorInfrastructureError(
+                            f"run {run_id} reported validator infrastructure "
+                            f"failure: {infrastructure_code}"
+                        )
                     if _is_embedding_infrastructure_failure(error):
                         raise ValidatorInfrastructureError(
                             f"run {run_id} lost validator embedding infrastructure: "
