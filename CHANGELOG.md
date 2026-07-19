@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.14.0 (2026-07-19)
+
+### Features
+
+- Mirror v3 audit fields + fetch, sign, and publish run transcripts
+  ([#155](https://github.com/ditto-assistant/ditto-subnet/pull/155),
+  [`4c3c79e`](https://github.com/ditto-assistant/ditto-subnet/commit/4c3c79e68e7fdab85b1b7abb405ac1bf7ba4da67))
+
+
 ## v0.13.0 (2026-07-19)
 
 ### Features
