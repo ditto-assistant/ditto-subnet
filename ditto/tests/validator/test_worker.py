@@ -14,6 +14,7 @@ import pytest
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_progress import MAX_BENCHMARK_CHECKS
+from ditto.api_models.stack_health import ValidatorComponentHealth
 from ditto.api_models.validator import (
     ArtifactResponse,
     JobResponse,
@@ -32,6 +33,7 @@ from ditto.validator.errors import (
     ValidatorInfrastructureError,
 )
 from ditto.validator.onchain_seed import derive_seed
+from ditto.validator.stack_health import fallback_stack_health
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
     apply_miner_emission_cap,
@@ -318,12 +320,18 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 8
+        assert heartbeat.protocol_version == 9
         assert heartbeat.capabilities is not None
         assert heartbeat.capabilities.screened_images is False
         assert heartbeat.capabilities.source_build_fallback is True
         assert heartbeat.stack is not None
         assert heartbeat.stack.mode == "source"
+        # No collector injected: the v9 heartbeat still validates, with the
+        # conservative fallback that claims only the reporting process itself.
+        assert heartbeat.stack_health is not None
+        assert heartbeat.stack_health.ditto_subnet.health == "healthy"
+        assert heartbeat.stack_health.dittobench_api.health == "unknown"
+        assert heartbeat.stack_health.ollama.health == "unknown"
         assert len(heartbeat.code_digest) == 64
         running = [
             heartbeat
@@ -685,6 +693,56 @@ class TestRunOnce:
         platform.submit_heartbeat.side_effect = PlatformError("offline")
         assert await worker._report_heartbeat("idle") is False
         assert worker._platform_accepted is False
+
+    async def test_heartbeat_carries_collected_stack_health(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        collected = fallback_stack_health().model_copy(
+            update={
+                "ollama": ValidatorComponentHealth(
+                    health="unreachable", required=True, observed_at=5
+                )
+            }
+        )
+        collector = MagicMock()
+        collector.collect = AsyncMock(return_value=collected)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+            stack_health=collector,
+        )
+
+        assert await worker._report_heartbeat("idle") is True
+        heartbeat = platform.submit_heartbeat.await_args.args[0]
+        assert heartbeat.stack_health == collected
+        collector.collect.assert_awaited_once()
+        # The collector observes the same stack identity and scorer capability
+        # the signed heartbeat itself claims.
+        kwargs = collector.collect.await_args.kwargs
+        assert kwargs["stack"] == heartbeat.stack
+        assert heartbeat.capabilities is not None
+        assert kwargs["scorer"] == heartbeat.capabilities.scorer_benchmarks
+
+    async def test_collector_failure_degrades_to_unknown_stack_health(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        collector = MagicMock()
+        collector.collect = AsyncMock(side_effect=RuntimeError("probe sweep died"))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+            stack_health=collector,
+        )
+
+        assert await worker._report_heartbeat("idle") is True
+        heartbeat = platform.submit_heartbeat.await_args.args[0]
+        assert heartbeat.stack_health is not None
+        assert heartbeat.stack_health.ditto_subnet.health == "healthy"
+        assert heartbeat.stack_health.ollama.health == "unknown"
 
     async def test_long_benchmark_refreshes_running_heartbeat(
         self, monkeypatch: pytest.MonkeyPatch

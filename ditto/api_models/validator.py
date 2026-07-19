@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_progress import BenchmarkProgress
+from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import SystemMetrics
 from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
@@ -197,6 +198,13 @@ class ValidatorHeartbeatRequest(BaseModel):
             default=None, description="Signed six-component stack identity under v7."
         ),
     ] = None
+    stack_health: Annotated[
+        ValidatorStackHealth | None,
+        Field(
+            default=None,
+            description="Signed per-component runtime health under v9.",
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -242,6 +250,16 @@ class ValidatorHeartbeatRequest(BaseModel):
         if scorer_capability is not None and self.protocol_version < 8:
             raise ValueError(
                 "scorer benchmark capability requires heartbeat protocol v8"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def stack_health_requires_v9(self) -> ValidatorHeartbeatRequest:
+        if self.protocol_version >= 9 and self.stack_health is None:
+            raise ValueError("heartbeat protocol v9 requires stack health")
+        if self.stack_health is not None and self.protocol_version < 9:
+            raise ValueError(
+                "per-component stack health requires heartbeat protocol v9"
             )
         return self
 

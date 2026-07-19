@@ -21,6 +21,7 @@ from ditto.api_models.validator_capabilities import (
 _DIGEST = "sha256:" + "12" * 32
 _REVISION = "ab" * 20
 _V7_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v7.json"
+_V9_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v9.json"
 
 
 def _component(
@@ -175,3 +176,61 @@ def test_heartbeat_protocol_v7_requires_both_typed_identity_sections() -> None:
     v7_with_scorer = v8 | {"protocol_version": 7}
     with pytest.raises(ValidationError):
         ValidatorHeartbeatRequest.model_validate(v7_with_scorer)
+
+
+def test_heartbeat_protocol_v9_requires_per_component_stack_health() -> None:
+    for fixture in json.loads(_V9_VECTOR.read_text()).values():
+        payload = fixture["request"] | {"signature": "ab" * 64}
+        request = ValidatorHeartbeatRequest.model_validate_json(json.dumps(payload))
+        assert request.protocol_version == 9
+        assert request.stack_health is not None
+
+        without_health = {
+            key: value for key, value in payload.items() if key != "stack_health"
+        }
+        with pytest.raises(ValidationError):
+            ValidatorHeartbeatRequest.model_validate_json(json.dumps(without_health))
+
+        downgraded = payload | {"protocol_version": 8}
+        with pytest.raises(ValidationError):
+            ValidatorHeartbeatRequest.model_validate_json(json.dumps(downgraded))
+
+        v8 = without_health | {"protocol_version": 8}
+        assert (
+            ValidatorHeartbeatRequest.model_validate_json(
+                json.dumps(v8)
+            ).protocol_version
+            == 8
+        )
+
+
+def test_scorer_capability_gating_is_independent_of_stack_health() -> None:
+    """v3 stays bound to the verified scorer predicate, not to sidecar health.
+
+    A heartbeat whose optional sidecar probes failed (unknown/unreachable
+    components) still validates and still advertises exactly the benchmark
+    versions its *verified scorer identity* supports — component health can
+    neither grant nor revoke the v3 predicate.
+    """
+    vectors = json.loads(_V9_VECTOR.read_text())
+    managed = vectors["managed"]["request"] | {"signature": "ab" * 64}
+    broken_sidecars = json.loads(json.dumps(managed))
+    for name in ("sandbox_docker", "model_relay", "pylon", "ollama"):
+        broken_sidecars["stack_health"][name] = {
+            "health": "unknown",
+            "required": True,
+        }
+    request = ValidatorHeartbeatRequest.model_validate_json(json.dumps(broken_sidecars))
+    assert request.capabilities is not None
+    scorer = request.capabilities.scorer_benchmarks
+    assert scorer is not None
+    assert scorer.status == "fresh_verified"
+    assert scorer.supported_bench_versions == (2, 3)
+
+    # And the inverse: healthy sidecars cannot conjure v3 out of an
+    # unverified scorer identity.
+    source = vectors["source"]["request"] | {"signature": "ab" * 64}
+    unverified = json.loads(json.dumps(source))
+    unverified["capabilities"]["scorer_benchmarks"]["supported_bench_versions"] = [2, 3]
+    with pytest.raises(ValidationError):
+        ValidatorHeartbeatRequest.model_validate_json(json.dumps(unverified))

@@ -24,6 +24,10 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     benchmark_progress_signing_token,
 )
+from ditto.api_models.stack_health import (
+    ValidatorStackHealth,
+    validator_stack_health_signing_token,
+)
 from ditto.api_models.system_health import (
     SystemMetrics,
     system_metrics_signing_token,
@@ -222,9 +226,29 @@ def heartbeat_signing_message(
     benchmark_progress: BenchmarkProgress | None = None,
     capabilities: ValidatorCapabilities | None = None,
     stack: ValidatorStackIdentity | None = None,
+    stack_health: ValidatorStackHealth | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
+    if stack_health is not None and protocol_version < 9:
+        raise ValueError("per-component stack health requires heartbeat protocol v9")
+    if protocol_version >= 9:
+        if capabilities is None or stack is None:
+            raise ValueError("heartbeat protocol v9 requires capabilities and stack")
+        if capabilities.scorer_benchmarks is None:
+            raise ValueError("heartbeat protocol v9 requires scorer capabilities")
+        if stack_health is None:
+            raise ValueError("heartbeat protocol v9 requires stack health")
+        identity_token = validator_identity_signing_token(capabilities, stack)
+        health_token = validator_stack_health_signing_token(stack_health)
+        return (
+            "ditto-validator-heartbeat:v9:"
+            f"{validator_hotkey}:{software_version}:{protocol_version}:"
+            f"{code_digest}:{state}:{active_agent_id or ''}:"
+            f"{system_metrics_signing_token(system_metrics)}:"
+            f"{benchmark_progress_signing_token(benchmark_progress)}:"
+            f"{identity_token}:{health_token}:{timestamp}"
+        ).encode()
     if protocol_version >= 8:
         if capabilities is None or stack is None:
             raise ValueError("heartbeat protocol v8 requires capabilities and stack")
@@ -294,6 +318,7 @@ def sign_heartbeat(
     benchmark_progress: BenchmarkProgress | None = None,
     capabilities: ValidatorCapabilities | None = None,
     stack: ValidatorStackIdentity | None = None,
+    stack_health: ValidatorStackHealth | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -308,6 +333,7 @@ def sign_heartbeat(
         benchmark_progress=benchmark_progress,
         capabilities=capabilities,
         stack=stack,
+        stack_health=stack_health,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

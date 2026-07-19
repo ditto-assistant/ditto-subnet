@@ -22,6 +22,7 @@ from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.dittobench import DittobenchClient
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import load_validator_keypair
+from ditto.validator.stack_health import StackHealthCollector
 from ditto.validator.telemetry import (
     build_telemetry,
     parse_telemetry_config_from_env,
@@ -127,6 +128,7 @@ async def _amain() -> int:
                     keypair=keypair,
                     telemetry=telemetry,
                     system_metrics=SystemMetricsCollector(),
+                    stack_health=StackHealthCollector(config, http),
                 )
                 _apply_ditto_logging()  # re-assert: bittensor has initialised
                 await worker.run_forever(stop, drain_requested=drain_requested)

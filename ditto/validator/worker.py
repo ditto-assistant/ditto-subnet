@@ -41,6 +41,7 @@ from ditto.validator.errors import (
 )
 from ditto.validator.onchain_seed import seed_matches
 from ditto.validator.signing import sign_heartbeat, sign_score
+from ditto.validator.stack_health import fallback_stack_health
 from ditto.validator.stack_identity import validator_capabilities_and_stack
 from ditto.validator.telemetry import (
     ScoredAgentStat,
@@ -83,6 +84,7 @@ if TYPE_CHECKING:
         ProgressCallback,
     )
     from ditto.validator.platform import PlatformClient
+    from ditto.validator.stack_health import StackHealthCollector
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +256,7 @@ class ValidatorWorker:
         weight_setter: Any | None = None,
         telemetry: ValidatorTelemetry | None = None,
         system_metrics: SystemMetricsCollector | None = None,
+        stack_health: StackHealthCollector | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -293,6 +296,7 @@ class ValidatorWorker:
         self._active_heartbeat_lock = asyncio.Lock()
         self._retain_failed_progress_until = 0.0
         self._system_metrics = system_metrics
+        self._stack_health = stack_health
 
     async def run_once(
         self,
@@ -475,6 +479,23 @@ class ValidatorWorker:
             capabilities = capabilities.model_copy(
                 update={"scorer_benchmarks": scorer_benchmarks}
             )
+            # v9: per-component runtime health. A collector failure (or no
+            # collector, as in older wiring and unit-test doubles) degrades to
+            # the conservative all-unknown snapshot rather than blocking the
+            # heartbeat or inventing observations.
+            stack_health = None
+            if self._stack_health is not None:
+                try:
+                    stack_health = await self._stack_health.collect(
+                        stack=stack, scorer=scorer_benchmarks
+                    )
+                except Exception as probe_error:  # noqa: BLE001 - never gate work
+                    logger.warning(
+                        "stack-health collection failed; reporting unknown: %s",
+                        probe_error,
+                    )
+            if stack_health is None:
+                stack_health = fallback_stack_health()
             signature = sign_heartbeat(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
@@ -487,6 +508,7 @@ class ValidatorWorker:
                 benchmark_progress=benchmark_progress,
                 capabilities=capabilities,
                 stack=stack,
+                stack_health=stack_health,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -500,6 +522,7 @@ class ValidatorWorker:
                 benchmark_progress=benchmark_progress,
                 capabilities=capabilities,
                 stack=stack,
+                stack_health=stack_health,
                 timestamp=timestamp,
                 signature=signature,
             )

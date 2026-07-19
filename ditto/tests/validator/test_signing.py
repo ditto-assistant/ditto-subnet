@@ -15,6 +15,10 @@ from uuid import UUID
 import bittensor
 
 from ditto.api_models.benchmark_progress import BenchmarkProgress
+from ditto.api_models.stack_health import (
+    ValidatorComponentHealth,
+    ValidatorStackHealth,
+)
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
@@ -37,6 +41,28 @@ _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _DEADLINE = datetime(2026, 7, 9, 12, 30, tzinfo=UTC)
 _V7_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v7.json"
 _V8_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v8.json"
+_V9_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v9.json"
+
+
+def _v9_request(
+    fixture: dict,
+) -> tuple[dict, ValidatorCapabilities, ValidatorStackIdentity, ValidatorStackHealth]:
+    """Split one v9 vector request into kwargs + validated models."""
+    request = dict(fixture["request"])
+    raw_capabilities = request.pop("capabilities")
+    raw_capabilities = {
+        **raw_capabilities,
+        "scorer_benchmarks": {
+            **raw_capabilities["scorer_benchmarks"],
+            "supported_bench_versions": tuple(
+                raw_capabilities["scorer_benchmarks"]["supported_bench_versions"]
+            ),
+        },
+    }
+    capabilities = ValidatorCapabilities.model_validate(raw_capabilities)
+    stack = ValidatorStackIdentity.model_validate(request.pop("stack"))
+    stack_health = ValidatorStackHealth.model_validate(request.pop("stack_health"))
+    return request, capabilities, stack, stack_health
 
 
 def test_message_is_canonical_format() -> None:
@@ -628,3 +654,74 @@ def test_protocol_v8_binds_verified_scorer_benchmark_capability() -> None:
     )
     assert message == v8_vector["expected_message_utf8"].encode()
     assert hashlib.sha256(message).hexdigest() == v8_vector["expected_message_sha256"]
+
+
+def test_protocol_v9_heartbeat_cross_repository_vectors() -> None:
+    """Freeze the exact v9 bytes for both the managed and the source stack."""
+    vectors = json.loads(_V9_VECTOR.read_text())
+    for name in ("managed", "source"):
+        request, capabilities, stack, stack_health = _v9_request(vectors[name])
+        message = heartbeat_signing_message(
+            **request,
+            capabilities=capabilities,
+            stack=stack,
+            stack_health=stack_health,
+        )
+        assert message.decode() == vectors[name]["expected_message_utf8"], name
+        assert (
+            hashlib.sha256(message).hexdigest()
+            == vectors[name]["expected_message_sha256"]
+        ), name
+
+
+def test_protocol_v9_signature_binds_component_health() -> None:
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_heartbeat(
+        keypair,
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+    )
+    # Upgrading one component's reported state must break the signature.
+    tampered = stack_health.model_copy(
+        update={
+            "ollama": ValidatorComponentHealth(
+                health="healthy",
+                required=True,
+                observed_at=1_784_020_740,
+                ready=True,
+                model_ready=True,
+            )
+        }
+    )
+    message = heartbeat_signing_message(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=tampered,
+    )
+    assert not keypair.verify(message, bytes.fromhex(signature))
+
+
+def test_protocol_v9_requires_stack_health_and_v8_rejects_it() -> None:
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    try:
+        heartbeat_signing_message(**request, capabilities=capabilities, stack=stack)
+        raise AssertionError("v9 without stack health must not sign")
+    except ValueError as e:
+        assert "stack health" in str(e)
+    downgraded = request | {"protocol_version": 8}
+    try:
+        heartbeat_signing_message(
+            **downgraded,
+            capabilities=capabilities,
+            stack=stack,
+            stack_health=stack_health,
+        )
+        raise AssertionError("v8 with stack health must not sign")
+    except ValueError as e:
+        assert "v9" in str(e)
