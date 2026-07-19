@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.10.0 (2026-07-19)
+
+### Features
+
+- Update the complete validator stack from GHCR
+  ([#158](https://github.com/ditto-assistant/ditto-subnet/pull/158),
+  [`f9254d9`](https://github.com/ditto-assistant/ditto-subnet/commit/f9254d9dc24d0021f86c35123d99175e3ebbf66d))
+
+
 ## v0.9.6 (2026-07-16)
 
 ### Bug Fixes
