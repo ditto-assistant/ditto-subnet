@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.15.0 (2026-07-19)
+
+### Features
+
+- **validator**: Signed per-component stack health (heartbeat protocol 9)
+  ([#174](https://github.com/ditto-assistant/ditto-subnet/pull/174),
+  [`cde5fff`](https://github.com/ditto-assistant/ditto-subnet/commit/cde5fff591b0b39811362bed0a9f4e6f164a6fb5))
+
+
 ## v0.14.4 (2026-07-19)
 
 ### Bug Fixes
