@@ -403,6 +403,7 @@ jobs:
     env:
       VALIDATOR_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-validator
       COMPATIBILITY_EPOCH: "2"
+      HEARTBEAT_PROTOCOL: "8"
     steps:
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v1
