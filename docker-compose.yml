@@ -173,6 +173,7 @@ services:
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
       VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
       VALIDATOR_DITTOBENCH_API_URL: http://sandbox-docker:8000
+      VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS: "3"
       # Same sandbox-docker:11434 listener reached from inner miner harnesses as
       # host.docker.internal:11434. The worker probes it before claiming a lease.
       VALIDATOR_EMBED_PREFLIGHT_URL: http://sandbox-docker:11434/api/embed
