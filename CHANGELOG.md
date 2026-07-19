@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.10.3 (2026-07-19)
+
+### Bug Fixes
+
+- Harden updater and native release smoke
+  ([#166](https://github.com/ditto-assistant/ditto-subnet/pull/166),
+  [`9ea0090`](https://github.com/ditto-assistant/ditto-subnet/commit/9ea0090abe7a376f0ebe0180dbcd8acd0f5d1db0))
+
+
 ## v0.10.2 (2026-07-19)
 
 ### Bug Fixes
