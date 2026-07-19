@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.16.3 (2026-07-19)
+
+### Bug Fixes
+
+- Fold platform-authoritative hybrid scores
+  ([#178](https://github.com/ditto-assistant/ditto-subnet/pull/178),
+  [`ac9b6d6`](https://github.com/ditto-assistant/ditto-subnet/commit/ac9b6d6d7251ffb3fa79d5237d1064679257725b))
+
+
 ## v0.16.2 (2026-07-19)
 
 ### Bug Fixes
