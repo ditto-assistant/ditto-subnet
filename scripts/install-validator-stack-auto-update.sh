@@ -34,6 +34,7 @@ id "$service_user" >/dev/null 2>&1 || die "operator user does not exist: $servic
 service_group="$(id -gn "$service_user")"; service_home="$(getent passwd "$service_user" | awk -F: 'NR==1 {print $6}')"
 [ -n "$service_home" ] || die "could not determine operator home"
 docker_config="${DITTO_VALIDATOR_DOCKER_CONFIG:-$service_home/.docker}"
+sigstore_dir="$service_home/.sigstore"
 wallets_dir="${DITTO_BITTENSOR_WALLETS_DIR:-}"
 if [ -z "$wallets_dir" ]; then
   wallets_dir="$(awk -F= '$1 == "DITTO_BITTENSOR_WALLETS_DIR" { print substr($0, index($0, "=") + 1) }' "$ROOT_DIR/.env" | tail -1)"
@@ -41,11 +42,13 @@ fi
 wallets_dir="${wallets_dir:-$service_home/.bittensor/wallets}"
 require_systemd_path HOME "$service_home"
 require_systemd_path DOCKER_CONFIG "$docker_config"
+require_systemd_path SIGSTORE_CACHE "$sigstore_dir"
 require_systemd_path DITTO_BITTENSOR_WALLETS_DIR "$wallets_dir"
 [ -d "$wallets_dir" ] || die "wallet directory does not exist: $wallets_dir"
 state_dir="$ROOT_DIR/.validator-stack-update"
 [ -f "$state_dir/managed-release.env" ] || die "run validator-stack-auto-update.sh adopt as the operator before installing"
 install -d -m 0700 -o "$service_user" -g "$service_group" "$state_dir"
+install -d -m 0700 -o "$service_user" -g "$service_group" "$sigstore_dir"
 [ -z "$(find "$state_dir" -type l -print -quit)" ] || die "remove symbolic links from $state_dir"
 chown -R "$service_user:$service_group" "$state_dir"; find "$state_dir" -type d -exec chmod 0700 {} +; find "$state_dir" -type f -exec chmod 0600 {} +
 
@@ -76,6 +79,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=$state_dir
+ReadWritePaths=$sigstore_dir
 RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true

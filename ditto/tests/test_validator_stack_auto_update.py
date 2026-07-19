@@ -356,6 +356,11 @@ def test_stack_bootstrap_persists_registry_wallet_and_signature_context() -> Non
     assert "command -v cosign" in installer
     assert 'Environment="DOCKER_CONFIG=$docker_config"' in installer
     assert 'Environment="DITTO_BITTENSOR_WALLETS_DIR=$wallets_dir"' in installer
+    assert "ReadWritePaths=$sigstore_dir" in installer
+    assert (
+        'install -d -m 0700 -o "$service_user" -g "$service_group" "$sigstore_dir"'
+        in installer
+    )
     assert "VALIDATOR_STACK_AUTO_UPDATE=true" in installer
     assert "DITTO_BITTENSOR_WALLETS_DIR" in compose
     assert (

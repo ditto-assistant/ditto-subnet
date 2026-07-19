@@ -232,7 +232,14 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     )
     # Validator, sandbox daemon, scorer, relay, and the final signed stack
     # descriptor are independently built and published from the exact release.
-    assert workflow.count("docker/build-push-action@") == 5
+    build_action_count = sum(
+        workflow.count(action)
+        for action in (
+            "docker/build-push-action@",
+            "useblacksmith/build-push-action@",
+        )
+    )
+    assert build_action_count == 5
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",
