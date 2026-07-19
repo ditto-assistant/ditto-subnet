@@ -1,10 +1,10 @@
 # Validator operations (SN118)
 
 A validator leases miner submissions, scores them in an isolated local sandbox,
-publishes signed results, and sets weights on Finney. The preferred production
-setup runs the validator from an immutable GHCR digest and uses the repository's
-cooperative updater for patch releases. Building the validator from source is a
-fallback when the release channel is unavailable.
+publishes signed results, and sets weights on Finney. Production runs the
+validator from an immutable GHCR digest with the repository's cooperative
+updater; building from source is a fallback when the release channel is
+unavailable.
 
 ## Contents
 
@@ -13,7 +13,7 @@ fallback when the release channel is unavailable.
 - [First deployment](#first-deployment)
 - [Verify health](#verify-health)
 - [Upgrade and operate](#upgrade-and-operate)
-- [Automatic validator updates (opt-in)](#automatic-validator-updates-opt-in)
+- [Automatic full-stack updates (recommended)](#automatic-full-stack-updates-recommended)
 - [How scoring and weights work](#how-scoring-and-weights-work)
 - [Optional observability](#optional-observability)
 - [Development](#development)
@@ -25,69 +25,21 @@ The root Docker Compose stack starts six services:
 | Service | Purpose |
 | --- | --- |
 | `ditto-subnet` | Leases work, signs scores, and computes weights. |
-| `dittobench-api` | Loads screened images and scores submissions. |
-| `sandbox-docker` | Loads and runs screened images; builds only legacy records. |
-| `model-relay` | Reaches the locked model on the selected provider (Chutes or OpenRouter) without exposing its key. |
+| `dittobench-api` | Scores submissions. |
+| `sandbox-docker` | Isolated nested Docker daemon that runs miner containers. |
+| `model-relay` | Reaches the locked model on the selected provider without exposing its key. |
 | `ollama` | Serves the embedding model used for memory scoring. |
 | `pylon` | Submits weights with the validator wallet. |
 
-The scorer admits one full miner run at a time. Each untrusted miner container
-keeps the existing 2-CPU, 512-PID, capability, seccomp, and restricted-egress
-controls while receiving 3 GiB RAM and a 512 MiB writable `/tmp`; its root
-filesystem remains read-only. Do not increase scorer concurrency on the same
-host. Add validators on separate capacity instead.
+The validator is stateless: the queue and score ledger live on the platform,
+and Pylon keeps in-flight weight state in a named volume. The platform screens
+every submission before it reaches validators and ships a verified pre-built
+Docker image with it, so your host normally does not compile miner code.
 
-The platform owns the queue and score ledger. Pylon keeps in-flight weight
-state in a named volume. Screening happens on the platform before work reaches
-validators. Passing screens include a content- and image-ID-pinned Docker image
-archive, so validators avoid recompiling the Rust crate. The source tarball is
-still downloaded for structural anti-copy evidence, and records created before
-this handoff retain the build fallback.
-
-The staged default is **prefer screened image**:
-`DITTOBENCH_ALLOW_SCREENED_IMAGES=1` and
-`DITTOBENCH_REQUIRE_SCREENED_IMAGE=0`. The scorer loads a verified image when
-one is present and otherwise retains the existing source build. After platform
-coverage and mixed-fleet telemetry are healthy, operators can set
-`DITTOBENCH_REQUIRE_SCREENED_IMAGE=1` to enter screened-only mode.
-
-The scorer enables only its screened-image download path. Its broader private
-harness URL bypass remains disabled in production, so validator-controlled
-arbitrary private or loopback artifact URLs are not accepted.
-
-Heartbeat protocol v7 signs the effective screened-image/fallback mode,
-executor isolation, managed-stack state, and identities for `ditto-subnet` plus
-all five sidecars. The platform uses this for compatible ticket routing during
-gradual rollout. It is not remote host attestation; the immutable descriptor
-and component digests prove release selection, while host compromise remains a
-separate executor-boundary risk.
-
-Heartbeat protocol v8 adds benchmark-version routing while preserving the
-exact v7 canonical bytes and treating all v1-v7 validators as v2-only. The
-validator calls the bounded, read-only `GET /v1/capabilities` endpoint and
-advertises v3 only when the scorer's live source revision matches the scorer
-revision in the signed stack identity. The response is public release metadata,
-so no new operator secret or `.env` cutover is required. Old 404 responses,
-timeouts, malformed responses, and identity mismatches all report v2-only. This
-makes platform/scorer deployment safely asynchronous: v3 tickets cannot reach
-validators that have not verified their reachable scorer. Legacy v2 tickets
-retain the old request and signature bytes.
-
-The scorer source is pinned to an exact commit on `dittobench-api` `main`.
-During a coordinated scorer rollout, merge the scorer change first and then
-update the `docker-compose.yml` checksum to its actual post-merge `main` SHA.
-For a supervised smoke before updating the committed pin, pass the same
-immutable main ref and checksum explicitly:
-
-```sh
-DITTOBENCH_BUILD_CONTEXT='https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=<40-character-post-merge-main-sha>' \
-  ./scripts/validator-compose.sh build model-relay dittobench-api
-```
-
-Before its first build, the wrapper verifies the checksum is in `main` history;
-an unmerged PR head cannot masquerade as a `main` pin. That evidence is cached
-beside the immutable checkout, so later restarts and read-only Compose commands
-do not depend on GitHub availability and the pin may safely lag a newer `main`.
+The scorer admits one full run at a time, and every miner container runs with
+strict CPU, memory, PID, capability, seccomp, and egress limits. Do not
+increase scorer concurrency on the same host; add validators on separate
+capacity instead.
 
 ## Requirements
 
@@ -97,26 +49,15 @@ do not depend on GitHub availability and the pin may safely lag a newer `main`.
 - Git and `flock` from util-linux.
 - A local Bittensor wallet whose hotkey is registered on Finney SN118 and has a
   validator permit.
-- An API key for the locked Qwen3-32B model on ONE certified provider: a
-  Chutes key (`Qwen/Qwen3-32B-TEE`, the default) or an OpenRouter key
-  (`qwen/qwen3-32b`, served by the certified Nebius deployment). Select with
-  `RELAY_PROVIDER`. The two are certified as comparable and validators are
-  meant to split across them: pinning the whole fleet to Chutes saturated
-  that endpoint and raised latency, so spreading scoring load across both
-  keeps throughput up. The model, upstream, and routing per provider are
-  locked in relay code, so scoring is identical either way, and a submission's
-  k=3 quorum may mix providers by design (every score reports the same model
-  id, so the median is over comparable numbers). The fleet-wide thinking-off
-  mode is enforced on both providers too (hard template switch on Chutes,
-  trailing Qwen3 `/no_think` on OpenRouter, where the relay places it after
-  all sandbox content so it cannot be overridden).
+- An API key for the locked Qwen3-32B model on ONE certified provider: Chutes
+  (`Qwen/Qwen3-32B-TEE`, the default) or OpenRouter (`qwen/qwen3-32b`). Select
+  with `RELAY_PROVIDER`. The two are certified as comparable, and the fleet is
+  meant to split across them to keep throughput up.
 - Outbound access to Finney, the selected model provider, the Ditto platform,
-  and GHCR.
-- Anonymous pull access to the public
-  `ghcr.io/ditto-assistant/ditto-subnet-validator` package.
+  and GHCR (anonymous pull of the public
+  `ghcr.io/ditto-assistant/ditto-subnet-validator` package).
 
-Python and `uv` are only required for development or running components outside
-Compose.
+Python and `uv` are only required for development.
 
 ## First deployment
 
@@ -137,12 +78,12 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_NAME` | Coldkey directory under `~/.bittensor/wallets`. |
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
-| `DITTOBENCH_CAPABILITIES_TOKEN` | Per-host random token authenticating the private validator-to-scorer capability probe. |
-| `RELAY_PROVIDER` | `chutes` (default) or `openrouter`; which certified upstream serves the locked model. |
+| `DITTOBENCH_CAPABILITIES_TOKEN` | Another random per-host token (`openssl rand -hex 32`). |
+| `RELAY_PROVIDER` | `chutes` (default) or `openrouter`. |
 | `RELAY_API_KEY` | API key for the selected provider, used only by `model-relay`. |
 
 The example selects Finney, SN118, and the production platform. For local
-testing, change both the platform and chain settings and use a separate `.env`.
+testing, change both the platform and chain settings in a separate `.env`.
 
 The wallet remains on the host and is mounted read-only. The loaded hotkey must
 exactly match `VALIDATOR_HOTKEY`. Never put a mnemonic in `.env`, never commit
@@ -163,13 +104,11 @@ test -n "$DIGEST"
 printf '%s\n' "$DIGEST"
 ```
 
-The public compatibility channel is a multi-architecture manifest promoted only
-after its Linux amd64 and arm64 images pass registry smoke tests. Stop if the
-pull or digest check fails. Do not substitute a mutable tag or an unpromoted
-source-SHA image; use the [source-build fallback](#development) until the
+Stop if the pull or digest check fails. Do not substitute a mutable tag or an
+unpromoted image; use the [source-build fallback](#development) until the
 channel is available.
 
-Start and verify the five sidecars, then start only the digest-pinned validator:
+Start the five sidecars, then start only the digest-pinned validator:
 
 ```sh
 ./scripts/validator-compose.sh config --quiet
@@ -189,16 +128,13 @@ running digest into managed mode:
 ./scripts/validator-auto-update.sh status
 ```
 
-`adopt` fails closed unless the running service exactly matches the digest and
-all release, source, protocol, Compose, and compatibility labels match. First
-adoption is always supervised and automatic updates must remain disabled until
-`status` shows the expected `managed_image`, version, revision, and operational
-state.
+`adopt` fails closed unless the running service exactly matches the digest.
+First adoption is always supervised; keep automatic updates disabled until
+`status` shows the expected `managed_image`, version, and operational state.
 
-For an existing source-built validator, schedule the same first adoption during
-a supervised maintenance window. Confirm it has no live ticket before replacing
-only `ditto-subnet` with the digest-pinned command above, then run `adopt`. Never
-interrupt a legacy benchmark to enter managed mode.
+For an existing source-built validator, do the same first adoption during a
+supervised maintenance window with no live ticket. Never interrupt a running
+benchmark to enter managed mode.
 
 ## Verify health
 
@@ -219,8 +155,7 @@ Production acceptance also requires:
 - the hotkey has a validator permit on SN118;
 - sweeps complete without recurring platform, scorer, or Pylon errors;
 - the on-chain last-update block advances after a weight submission; and
-- the public validators endpoint lists the hotkey online with its signed
-  version and source digest.
+- the public validators endpoint lists the hotkey online.
 
 ## Upgrade and operate
 
@@ -254,9 +189,9 @@ git pull --ff-only
 ```
 
 If reconciliation succeeds, set `VALIDATOR_AUTO_UPDATE=true` again and
-re-enable the timer. If a sidecar fails to build or become healthy, the
-validator remains drained. Repair the sidecars, verify them, then run
-`./scripts/validator-auto-update.sh recover` while the timer stays disabled.
+re-enable the timer. If a sidecar fails, the validator remains drained: repair
+and verify the sidecars, then run `./scripts/validator-auto-update.sh recover`
+while the timer stays disabled.
 
 ### Troubleshooting
 
@@ -265,46 +200,46 @@ validator remains drained. Repair the sidecars, verify them, then run
 - **No work is scored:** zero queued agents is normal. Otherwise inspect the
   validator, sandbox, scorer, relay, and Ollama health before restarting
   anything.
-- **Runs fail with `tool_endpoint advertised but unreachable`:** honest
-  submissions also fail this way when the scorer's tool endpoint is
-  unreachable from inside `sandbox-docker` (broken `host.docker.internal`
-  routing). One failure can be a non-compliant harness; recurring failures
-  across different agents mean your sandbox networking is broken — fix it
-  before the reopened tickets expire. No zeroed score is signed either way.
-- **Logs show `transcript publication failed` or `transcript fetch failed`:**
-  the score already stands; nothing is lost from the ledger. Check
-  `dittobench-api` health and platform reachability so future runs publish
-  their transcripts.
+- **Runs fail with `tool_endpoint advertised but unreachable`:** one failure
+  can be a non-compliant miner harness; recurring failures across different
+  agents mean your sandbox networking (`host.docker.internal` routing) is
+  broken — fix it before the reopened tickets expire. No zeroed score is
+  signed either way.
+- **Logs show `transcript publication failed`:** the accepted score already
+  stands. Check `dittobench-api` health and platform reachability so future
+  runs publish their transcripts.
 - **Updater reports a transaction:** keep the timer disabled, verify the
-  validator and all sidecars, then use `recover`. It may resume lease intake.
-- **Host rebooted:** verify Docker is enabled and active, then check Compose and
-  updater status. Do not add PM2 or another systemd service for the stack.
+  validator and all sidecars, then use `recover`.
+- **Host rebooted:** verify Docker is enabled and active, then check Compose
+  and updater status. Do not add PM2 or another systemd service for the stack.
 - **Disk use grows:** inspect `sandbox-docker`. Its nested daemon prunes unused
   benchmark data; do not run broad cleanup against the host Docker daemon.
-- **Sandbox resource failure:** inspect the scorer's sanitized failure code and
-  Docker/cgroup counters. `sandbox_oom` and `sandbox_tmpfs_exhausted` are
-  validator-infrastructure classifications, not miner verdicts. The worker
-  stops claiming more work and leaves the ticket to expire safely. After the
-  resource issue is verified and corrected, use the audited platform/Backroom
-  single-agent validation retry; never bulk retry or alter accepted scores.
+- **Sandbox resource failure (`sandbox_oom`, `sandbox_tmpfs_exhausted`):**
+  these are validator-infrastructure classifications, not miner verdicts; the
+  worker stops claiming work and the ticket expires safely. Fix the resource
+  issue, then ask the Ditto team for the audited single-agent retry; never
+  bulk retry or alter accepted scores.
 
-## Automatic full-stack updates (opt-in)
+## Automatic full-stack updates (recommended)
 
-Managed installations update the complete immutable Compose stack. The
-one-time migration, transaction boundaries, rollback guarantees, Cosign trust
-policy, and gradual screened-image rollout are documented in
-[FULL-STACK-UPDATES.md](FULL-STACK-UPDATES.md).
+Enable the managed stack updater unless you run your own update automation.
+Patch releases ship often, and the platform routes work by advertised
+compatibility, so a validator that lags the release channel falls out of
+ticket routing; the updater keeps the complete immutable Compose stack current
+as one transaction with automatic rollback. If
+you maintain your own updater instead, that is fine — it must track the
+`compat-2` channel promptly, pin exact digests, and drain the validator before
+replacing services.
 
-First disable the legacy updater, install Cosign from its verified upstream
-release, and resolve the signed stack channel to an immutable digest. With the
-timer still disabled, `migrate` waits for the current validator to drain,
-installs all six exact services, starts the validator quiescent, verifies a
-fresh accepted heartbeat, and records the stack:
+The migration preflight, transaction boundaries, rollback guarantees, and
+trust policy are documented in
+[FULL-STACK-UPDATES.md](FULL-STACK-UPDATES.md); read it before the first
+cutover.
 
-First update this checkout to the exact reviewed release and retain its existing
-`.env`; the host updater cannot update itself. Complete the
-[migration preflight](FULL-STACK-UPDATES.md#preflight-and-failure-boundary)
-before the first cutover.
+Update this checkout to the exact reviewed release, install Cosign from its
+verified upstream release, disable the legacy updater, and migrate. `migrate`
+waits for the validator to drain, installs all six exact services, and verifies
+a fresh accepted heartbeat before recording the stack:
 
 ```sh
 sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
@@ -323,9 +258,9 @@ test -n "$DIGEST"
 
 If all six services already match the descriptor, `adopt "$DIGEST"` records
 them without replacement. Both commands fail closed if the descriptor's
-keyless signature is not from this repository's `release.yml` on `main`.
+signature is not from this repository's release workflow.
 
-Enable the new timer only after migration or adoption succeeds:
+Enable the timer only after migration or adoption succeeds:
 
 ```sh
 if grep -q '^VALIDATOR_STACK_AUTO_UPDATE=' .env; then
@@ -336,89 +271,54 @@ fi
 sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
   ./scripts/install-validator-stack-auto-update.sh
 systemctl list-timers ditto-validator-stack-auto-update.timer
-sudo systemctl status ditto-validator-stack-auto-update.timer
 ./scripts/validator-stack-auto-update.sh status
 ```
 
-The timer checks `compat-2`, authenticates and resolves it once, then validates
-and pre-pulls every exact component before asking the worker to drain. An active
-benchmark finishes through signed result submission. If the drain deadline
-expires, the worker resumes and no service is replaced.
+Compatible patch and minor releases then install automatically: the updater
+drains the validator (an active benchmark finishes first), replaces all six
+services as one transaction, and rolls the complete previous stack back if the
+new one fails verification. Major or schema changes require supervised
+migration.
 
-A newer patch or minor release in the same major line can install automatically
-only while the compatibility epoch, updater protocol, Compose schema, and
-descriptor format remain accepted by the stable host launcher. Major or schema
-changes require supervised migration. Every compatible update replaces Pylon,
-the scorer, relay, Ollama, sandbox daemon, and validator as one transaction.
-
-After replacement, the candidate starts unable to accept work until its exact
-digest and compatibility state are verified through a fresh accepted
-heartbeat. A failed candidate is suppressed and the complete retained previous
-stack is restored. Recovery and rollback also require a drained validator. The
-updater fails closed when it cannot prove a safe state.
-
-To disable updates or inspect an interrupted run:
+To disable updates, inspect an interrupted run, or roll back manually:
 
 ```sh
 sed -i 's/^VALIDATOR_STACK_AUTO_UPDATE=.*/VALIDATOR_STACK_AUTO_UPDATE=false/' .env
 sudo systemctl disable --now ditto-validator-stack-auto-update.timer
 sudo systemctl stop ditto-validator-stack-auto-update.service
 ./scripts/validator-stack-auto-update.sh status
+./scripts/validator-stack-auto-update.sh rollback   # manual rollback only
 ```
 
-If the validator and all sidecars are healthy but `status` shows
-`transaction_phase`, run `./scripts/validator-stack-auto-update.sh recover`
-only after verifying that resuming lease intake is safe.
-
-For a later manual rollback, keep updates disabled and use the same cooperative
-drain path:
-
-```sh
-./scripts/validator-stack-auto-update.sh rollback
-./scripts/validator-stack-auto-update.sh status
-```
+If everything is healthy but `status` shows `transaction_phase`, run
+`./scripts/validator-stack-auto-update.sh recover` only after verifying that
+resuming lease intake is safe.
 
 ## How scoring and weights work
 
 The platform leases each submission to independent validators and finalizes the
 median signed score. Each ticket pins the workload and deadline; expired work
-reopens automatically. The validator computes the deterministic weight vector
-from the public finalized ledger, and Pylon handles UID resolution,
-commit-reveal, retries, and the on-chain extrinsic on an independent cadence.
-Weight scheduling honors the configured interval, chain rate limit, subnet
-tempo, and the validator's previous on-chain update after a restart.
+reopens automatically, and every benchmark run must originate from a live
+platform ticket. Each scored run starts with a reachability preflight that
+requires the miner harness to call the mock tool endpoint; if the probe is
+never observed the run fails and the ticket reopens — a zeroed report is never
+signed. After the platform accepts a score, the worker publishes the run's
+graded transcript for public verification.
 
-Every scored run starts with a reachability preflight: the scorer sends one
-probe case and requires the harness to route a tool call through the mock tool
-endpoint. If no call is observed, the run fails and the ticket reopens; a
-zeroed report is never signed. This protects miners from an endpoint that is
-advertised but unreachable from the harness container.
-
-Every benchmark run must originate from a live platform ticket. Benchmark-version
-rollout re-scores are issued through the ordinary job endpoint, so validators that
-support the new version gradually fill the rollout cohort without autonomous
-ledger-driven work. The public ledger is never treated as authorization to run or
-submit another score.
-
-Shared-seed KOTH confirmation remains a future refinement. It needs a dedicated,
-lease-bound platform flow for both the incumbent baseline and challenger before a
-validator may run it; validators do not currently start those runs on their own.
-
-After the platform accepts a signed score, the worker uploads the run's
-transcript — the graded per-case inputs, whose SHA-256 is bound into the score
-signature — and the platform publishes it content-addressed in the public
-bucket. Transcript fetch or upload failures only log; they never gate, delay,
-or unwind a score.
+The validator computes the deterministic weight vector from the public
+finalized ledger, and Pylon handles UID resolution, commit-reveal, retries, and
+the on-chain extrinsic on an independent cadence that honors the chain rate
+limit and subnet tempo.
 
 ## Optional observability
 
 Add the shared `WANDB_API_KEY` supplied by Ditto to `.env`, or set
-`WANDB_MODE=disabled`. Never commit the key. W&B distinguishes Pylon request
-acceptance from an update observed on chain.
+`WANDB_MODE=disabled`. Never commit the key.
 
 The validator also sends a signed public heartbeat with its version, source
-digest, phase, work ID, and coarse health. It does not send secrets, prompts,
-expected answers, model output, dataset contents, or host/container identity.
+digest, phase, and coarse health; the platform uses it to route compatible
+work. It does not send secrets, prompts, expected answers, model output, or
+host identity.
 
 ## Development
 
@@ -432,17 +332,11 @@ channel is unavailable. It does not enter managed updater mode:
 ```
 
 Upgrade a source-built validator only during a supervised window with no live
-lease:
+lease: `git pull --ff-only`, then the same three commands.
 
-```sh
-git pull --ff-only
-./scripts/validator-compose.sh config --quiet
-./scripts/validator-compose.sh up -d --build
-./scripts/validator-compose.sh ps
-```
-
-Do not enable the automatic updater until a supervised digest-pinned migration
-and `adopt` have succeeded.
+The wrapper builds `dittobench-api` from the exact reviewed commit pinned in
+`docker-compose.yml` and refuses a checksum that is not in that repository's
+`main` history.
 
 For local code work outside Compose:
 
@@ -452,8 +346,3 @@ make lint typecheck test
 ```
 
 The worker entry point is `uv run python -m ditto.validator`.
-
-The committed production context pins the scorer's reviewed post-merge `main`
-commit. The wrapper verifies that immutable checksum is still a `main`
-ancestor before any fresh remote build. The explicit unmerged-smoke override is
-reserved for local contributor testing and must never be used on Finney.
