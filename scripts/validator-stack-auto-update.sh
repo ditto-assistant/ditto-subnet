@@ -157,14 +157,31 @@ extract_descriptor() {
     return 1
   fi
   docker rm -f "$container" >/dev/null
-  validate_descriptor "$image" "$temporary" || { rm -rf -- "$temporary"; return 1; }
-  [ "$(find "$temporary" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 2 ] || { rm -rf -- "$temporary"; return 1; }
-  [ -z "$(find "$temporary" -mindepth 1 -maxdepth 1 -type d -print -quit)" ] || { rm -rf -- "$temporary"; return 1; }
+  # Reject every entry except the two regular release files before adding the
+  # updater-owned descriptor binding. This catches links, devices, sockets,
+  # FIFOs, and directories as well as ordinary unexpected files.
+  if [ ! -f "$temporary/manifest.env" ] || [ -L "$temporary/manifest.env" ] || \
+    [ ! -f "$temporary/compose.yml" ] || [ -L "$temporary/compose.yml" ] || \
+    [ "$(find "$temporary" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -ne 2 ]; then
+    rm -rf -- "$temporary"
+    return 1
+  fi
   printf '%s\n' "$image" >"$temporary/.descriptor-ref"
   chmod 0700 "$temporary"
   chmod 0600 "$temporary/manifest.env" "$temporary/compose.yml" "$temporary/.descriptor-ref"
   rm -rf -- "$destination"
-  mv "$temporary" "$destination"
+  if ! mv "$temporary" "$destination"; then
+    rm -rf -- "$temporary" "$destination"
+    return 1
+  fi
+  # The Compose trust wrapper only accepts the canonical updater-owned staged
+  # directory and requires its immutable descriptor binding. Move the
+  # untrusted extraction there before validation; callers cannot consume it
+  # unless this check succeeds, and failures remove it immediately.
+  if ! validate_descriptor "$image" "$destination"; then
+    rm -rf -- "$destination"
+    return 1
+  fi
 }
 
 resolve_channel_digest() {

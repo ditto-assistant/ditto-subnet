@@ -453,6 +453,20 @@ with open(state_path) as handle:
 release_dir = sys.argv[1]
 args = sys.argv[2:]
 state["compose_calls"].append([release_dir, *args])
+state_dir = os.path.realpath(os.environ["DITTO_VALIDATOR_STACK_UPDATE_STATE_DIR"])
+release_dir = os.path.realpath(release_dir)
+allowed = {os.path.join(state_dir, name) for name in ("current", "previous", "staged")}
+if release_dir not in allowed:
+    raise SystemExit("release directory is not updater-validated state")
+descriptor_path = os.path.join(release_dir, ".descriptor-ref")
+if not os.path.isfile(descriptor_path):
+    raise SystemExit("validated release has no regular .descriptor-ref")
+with open(descriptor_path) as handle:
+    descriptor_ref = handle.read().strip()
+if not descriptor_ref.startswith(
+    "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:"
+):
+    raise SystemExit("validated release descriptor reference is malformed")
 if args[:2] == ["ps", "-q"]:
     print(args[2] + "-container")
 elif args[:1] == ["up"]:
@@ -482,6 +496,7 @@ elif args[:1] == ["up"]:
         state["runtime_state"]["platform_accepted"] = not (
             is_candidate and state.get("fail_validator_acceptance", False)
         )
+        state["current_install_version"] = manifest["STACK_VERSION"]
 elif args[:2] == ["config", "--services"]:
     print("\n".join((
         "pylon", "sandbox-docker", "model-relay", "ollama",
@@ -504,6 +519,23 @@ with open(state_path, "w") as handle:
 
 
 FAKE_FLOCK = "#!/bin/sh\nexit 0\n"
+
+FAKE_MV = r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+
+path = os.environ["FAKE_STACK_STATE"]
+with open(path) as handle:
+    state = json.load(handle)
+args = sys.argv[1:]
+if state.get("fail_stage_move") and args and args[-1].endswith("/staged"):
+    state["failed_stage_moves"] = state.get("failed_stage_moves", 0) + 1
+    with open(path, "w") as handle:
+        json.dump(state, handle)
+    raise SystemExit("injected staged move failure")
+os.execv("/bin/mv", ["mv", *args])
+"""
 
 FAKE_COSIGN = r"""#!/usr/bin/env python3
 import json
@@ -563,6 +595,7 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
         "stack-compose": FAKE_COMPOSE,
         "flock": FAKE_FLOCK,
         "cosign": FAKE_COSIGN,
+        "mv": FAKE_MV,
     }.items():
         executable = fake_bin / name
         executable.write_text(contents)
@@ -629,6 +662,7 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
             "state": "working",
             "update_protocol": 1,
         },
+        "current_install_version": "0.9.6",
     }
     state_path = tmp_path / "state.json"
     state_path.write_text(json.dumps(state))
@@ -692,6 +726,87 @@ def test_supervised_adoption_binds_every_running_service(
     ]
     assert set(_images().values()).issubset(inspected)
     assert not any(call[0] in {"kill", "stop"} for call in state["calls"])
+
+
+def test_supervised_migration_stages_validated_descriptor_before_drain(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+
+    result = _run_updater(env, "migrate", OLD_STACK_DIGEST)
+
+    assert result.returncode == 0, result.stderr
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+    assert (state_dir / "current/.descriptor-ref").read_text().strip() == (
+        OLD_STACK_DIGEST
+    )
+    assert not (state_dir / "staged").exists()
+    state = json.loads(state_path.read_text())
+    assert state["current_install_version"] == "0.10.0"
+    signals = [call[1] for call in state["calls"] if call[:1] == ["kill"]]
+    assert signals[-2:] == ["--signal=USR1", "--signal=USR2"]
+    assert all(
+        Path(call[0]).name in {"current", "previous", "staged"}
+        for call in state["compose_calls"]
+    )
+
+
+@pytest.mark.parametrize(
+    "failure", ["missing", "extra-file", "extra-directory", "invalid"]
+)
+def test_invalid_extracted_descriptor_is_cleaned_before_migration_drain(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    failure: str,
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    release = Path(state["descriptor_dirs"][OLD_STACK_DIGEST])
+    if failure == "missing":
+        (release / "compose.yml").unlink()
+    elif failure == "extra-file":
+        (release / "unexpected.txt").write_text("unexpected\n")
+    elif failure == "extra-directory":
+        (release / "unexpected").mkdir()
+    else:
+        (release / "manifest.env").write_text("not-a-manifest\n")
+    before = state["containers"]
+
+    result = _run_updater(env, "migrate", OLD_STACK_DIGEST)
+
+    assert result.returncode != 0
+    final = json.loads(state_path.read_text())
+    assert final["current_install_version"] == "0.9.6"
+    assert final["containers"] == before
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert not any("up" in call for call in final["compose_calls"])
+    assert not (state_dir / "managed-release.env").exists()
+    assert not (state_dir / "staged").exists()
+    assert not list(state_dir.glob("staged.tmp.*"))
+
+
+def test_staged_descriptor_move_failure_cleans_up_without_drain(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    before = state["containers"]
+    state["fail_stage_move"] = True
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "migrate", OLD_STACK_DIGEST)
+
+    assert result.returncode != 0
+    final = json.loads(state_path.read_text())
+    assert final["failed_stage_moves"] == 1
+    assert final["current_install_version"] == "0.9.6"
+    assert final["containers"] == before
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert final["compose_calls"] == []
+    assert not (state_dir / "managed-release.env").exists()
+    assert not (state_dir / "staged").exists()
+    assert not list(state_dir.glob("staged.tmp.*"))
 
 
 def test_component_pull_failure_happens_before_validator_drain(
