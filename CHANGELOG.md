@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.14.4 (2026-07-19)
+
+### Bug Fixes
+
+- **validator**: Fail closed on an unexpected benchmark version
+  ([#171](https://github.com/ditto-assistant/ditto-subnet/pull/171),
+  [`57b9359`](https://github.com/ditto-assistant/ditto-subnet/commit/57b9359956bf5ce967963d48bf6ce39f8d5a9f34))
+
+### Chores
+
+- **docs**: Cut operator guides back to setup essentials
+  ([#170](https://github.com/ditto-assistant/ditto-subnet/pull/170),
+  [`aeb79c1`](https://github.com/ditto-assistant/ditto-subnet/commit/aeb79c1b55261e9bf3711d266d65ef587a2b18e7))
+
+- **tests**: Pin legacy confirmation regression
+  ([#169](https://github.com/ditto-assistant/ditto-subnet/pull/169),
+  [`8a7aee0`](https://github.com/ditto-assistant/ditto-subnet/commit/8a7aee052f6f9695d1f919509a3d9256c7137578))
+
+
 ## v0.14.3 (2026-07-19)
 
 ### Bug Fixes
