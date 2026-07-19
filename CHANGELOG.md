@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.14.3 (2026-07-19)
+
+### Bug Fixes
+
+- Keep validator rescoring lease-bound
+  ([#168](https://github.com/ditto-assistant/ditto-subnet/pull/168),
+  [`108e304`](https://github.com/ditto-assistant/ditto-subnet/commit/108e30423dd68775511e116cb4e883407ecbe47f))
+
+
 ## v0.14.2 (2026-07-19)
 
 ### Bug Fixes
