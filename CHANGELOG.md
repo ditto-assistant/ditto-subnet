@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.14.1 (2026-07-19)
+
+### Bug Fixes
+
+- Classify sandbox resource exhaustion as infrastructure
+  ([#156](https://github.com/ditto-assistant/ditto-subnet/pull/156),
+  [`e796c7c`](https://github.com/ditto-assistant/ditto-subnet/commit/e796c7c19e315a236f1eef616350513e360f1328))
+
+
 ## v0.14.0 (2026-07-19)
 
 ### Features
