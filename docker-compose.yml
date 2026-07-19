@@ -1,6 +1,6 @@
 # Complete SN118 validator stack. Configure the root .env, then run:
 #   ./scripts/validator-compose.sh up -d
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=4255e65613f1518a50bf812b24692f817ac10156}
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=3b7af10dd8a86f08fa845aea875c9ccf7c7082fe}
 
 services:
   pylon:
@@ -146,7 +146,7 @@ services:
       # broader private-harness URL bypass disabled.
       DITTOBENCH_ALLOW_SCREENED_IMAGES: "1"
       DITTOBENCH_SOFTWARE_VERSION: ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
-      DITTOBENCH_SOURCE_SHA: 4255e65613f1518a50bf812b24692f817ac10156
+      DITTOBENCH_SOURCE_SHA: 3b7af10dd8a86f08fa845aea875c9ccf7c7082fe
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
     read_only: true
@@ -220,9 +220,9 @@ services:
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:4255e65613f1518a50bf812b24692f817ac10156
+      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:3b7af10dd8a86f08fa845aea875c9ccf7c7082fe
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:4255e65613f1518a50bf812b24692f817ac10156
+      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:3b7af10dd8a86f08fa845aea875c9ccf7c7082fe
       VALIDATOR_STACK_COMPONENT_PYLON: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
       VALIDATOR_STACK_COMPONENT_OLLAMA: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
