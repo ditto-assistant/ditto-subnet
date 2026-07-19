@@ -1,5 +1,9 @@
 # Immutable full-stack validator updates
 
+> **Do not adopt v0.10.0.** Its bootstrap validates a descriptor before moving
+> it into updater-owned canonical state, so the hardened Compose wrapper rejects
+> every first migration before the validator drains. Use v0.10.1 or newer.
+
 The production GHCR channel is a release of the complete SN118 validator
 stack, not just the Python validator process. Each promoted stack descriptor
 binds these six services to immutable manifest digests:
