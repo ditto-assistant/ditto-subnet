@@ -58,6 +58,14 @@ _STABLE_COUNT_STATUSES = {"running", "scoring", "done"}
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 
+# Benchmark versions this validator knows how to drive. The allowlist is
+# fail-closed: an advertisement or ticket naming anything outside it is refused
+# rather than scored blind. Versions >= 3 share one scorer contract (/v2/score,
+# pinned dataset, policy-9 screened image), so version-specific behaviour is
+# expressed as ``>= _SCREENED_IMAGE_BENCH_VERSION`` rather than per-version arms.
+_SUPPORTED_BENCH_VERSIONS = (2, 3, 4)
+_SCREENED_IMAGE_BENCH_VERSION = 3
+
 
 def _is_embedding_infrastructure_failure(error: str) -> bool:
     """Identify scorer failures from the validator-owned Ollama route."""
@@ -164,11 +172,12 @@ class DittobenchClient:
     async def scorer_benchmark_capability(
         self, stack: ValidatorStackIdentity
     ) -> ScorerBenchmarkCapability:
-        """Observe scorer support and bind any v3 claim to signed stack identity.
+        """Observe scorer support and bind post-v2 claims to signed stack identity.
 
-        Legacy 404s, malformed replies, timeouts, and source mismatches all fail
-        closed to v2. A heartbeat must never infer v3 merely from the validator
-        package or Compose configuration.
+        Legacy 404s, malformed replies, timeouts, source mismatches, and any
+        advertised version outside :data:`_SUPPORTED_BENCH_VERSIONS` all fail
+        closed to v2. A heartbeat must never infer a post-v2 version merely from
+        the validator package or Compose configuration.
         """
         legacy = ScorerBenchmarkCapability(
             status="legacy_v2", supported_bench_versions=(2,)
@@ -216,7 +225,9 @@ class DittobenchClient:
                 status="unreachable", supported_bench_versions=(2,)
             )
         observed_versions = tuple(sorted(set(versions)))
-        if any(version not in (2, 3) for version in observed_versions):
+        if any(
+            version not in _SUPPORTED_BENCH_VERSIONS for version in observed_versions
+        ):
             return ScorerBenchmarkCapability(
                 status="unreachable", supported_bench_versions=(2,)
             )
@@ -320,7 +331,7 @@ class DittobenchClient:
         dataset). Without ``dataset_sha256`` it uses /v1/submit (practice /
         version-bump re-score, fresh-or-CRN seed).
         """
-        if bench_version not in (2, 3):
+        if bench_version is None or bench_version not in _SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         if self._config.dittobench_mock:
             self.last_details = {}
@@ -377,7 +388,7 @@ class DittobenchClient:
         screened_image_id: str | None = None,
         screened_image_ref: str | None = None,
     ) -> str:
-        if bench_version not in (2, 3):
+        if bench_version is None or bench_version not in _SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         body: dict[str, object] = {
             "tarball_url": tarball_url,
@@ -413,15 +424,19 @@ class DittobenchClient:
                     "screened_image_ref": screened_image_ref,
                 }
             )
-        elif bench_version == 3:
-            raise DittobenchError("benchmark v3 requires a verified screened image")
+        elif bench_version >= _SCREENED_IMAGE_BENCH_VERSION:
+            raise DittobenchError(
+                f"benchmark v{bench_version} requires a verified screened image"
+            )
         if seed is not None:
             body["seed"] = seed
         # Canonical validator path: pin the dataset so the engine fails on a
         # regenerated-hash mismatch. Otherwise the practice/re-score path.
-        if bench_version == 3:
+        if bench_version >= _SCREENED_IMAGE_BENCH_VERSION:
             if not dataset_sha256:
-                raise DittobenchError("benchmark v3 requires a pinned dataset")
+                raise DittobenchError(
+                    f"benchmark v{bench_version} requires a pinned dataset"
+                )
             body["dataset_sha256"] = dataset_sha256
             body["bench_version"] = bench_version
             endpoint = "/v2/score"
@@ -457,7 +472,10 @@ class DittobenchClient:
         progress_callback: ProgressCallback | None = None,
         expected_bench_version: int | None = None,
     ) -> ScoreReport:
-        if expected_bench_version not in (2, 3):
+        if (
+            expected_bench_version is None
+            or expected_bench_version not in _SUPPORTED_BENCH_VERSIONS
+        ):
             raise DittobenchError(
                 f"unsupported benchmark version {expected_bench_version!r}"
             )
@@ -527,11 +545,17 @@ class DittobenchClient:
                         else {}
                     )
                     parsed = self._parse_report(data)
-                    # Only v3 changes the platform score-signature domain. Keep
-                    # v2 reports byte-compatible with old platforms/scorers.
+                    # The score-signature domain is version-generic: signing.py
+                    # appends ``:{bench_version}`` whenever the report carries
+                    # one. Stamp the ACTUAL scored version so v4 (and any later
+                    # bump) signs its own domain rather than v3's. v2 leaves the
+                    # field unset, keeping those reports byte-compatible with
+                    # old platforms/scorers.
                     return (
-                        parsed.model_copy(update={"bench_version": 3})
-                        if expected_bench_version == 3
+                        parsed.model_copy(
+                            update={"bench_version": expected_bench_version}
+                        )
+                        if expected_bench_version >= _SCREENED_IMAGE_BENCH_VERSION
                         else parsed
                     )
                 if status == _FAILED:

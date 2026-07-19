@@ -324,12 +324,19 @@ class ArtifactResponse(BaseModel):
             value is None for value in fields
         ):
             raise ValueError("screened image metadata must be complete")
-        if self.bench_version == 3 and (
-            self.screening_policy_version is None
-            or self.screening_policy_version < 9
-            or any(value is None for value in fields)
+        if (
+            self.bench_version is not None
+            and self.bench_version >= 3
+            and (
+                self.screening_policy_version is None
+                or self.screening_policy_version < 9
+                or any(value is None for value in fields)
+            )
         ):
-            raise ValueError("benchmark v3 requires a policy-9 verified screened image")
+            raise ValueError(
+                f"benchmark v{self.bench_version} requires a policy-9 verified "
+                "screened image"
+            )
         return self
 
     model_config = ConfigDict(

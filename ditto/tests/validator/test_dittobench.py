@@ -47,17 +47,32 @@ def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status_code", "source_revision", "expected_status", "expected_versions"),
+    (
+        "status_code",
+        "source_revision",
+        "advertised",
+        "expected_status",
+        "expected_versions",
+    ),
     [
-        (200, _REVISION, "fresh_verified", (2, 3)),
-        (200, "cd" * 20, "identity_mismatch", (2,)),
-        (404, _REVISION, "legacy_v2", (2,)),
-        (503, _REVISION, "unreachable", (2,)),
+        (200, _REVISION, [2, 3], "fresh_verified", (2, 3)),
+        # A scorer that has rolled forward to v4 must stay fresh_verified with
+        # every advertised version intact; degrading to unreachable/v2 here
+        # would stall the in-flight rollout for the whole subnet.
+        (200, _REVISION, [2, 3, 4], "fresh_verified", (2, 3, 4)),
+        (200, _REVISION, [4], "fresh_verified", (4,)),
+        # Fail closed on anything outside the allowlist.
+        (200, _REVISION, [2, 3, 4, 5], "unreachable", (2,)),
+        (200, _REVISION, [5], "unreachable", (2,)),
+        (200, "cd" * 20, [2, 3, 4], "identity_mismatch", (2,)),
+        (404, _REVISION, [2, 3], "legacy_v2", (2,)),
+        (503, _REVISION, [2, 3], "unreachable", (2,)),
     ],
 )
 async def test_secretless_scorer_capability_is_provenance_bound(
     status_code: int,
     source_revision: str,
+    advertised: list[int],
     expected_status: str,
     expected_versions: tuple[int, ...],
 ) -> None:
@@ -68,7 +83,7 @@ async def test_secretless_scorer_capability_is_provenance_bound(
             json={
                 "software_version": "1.2.3",
                 "source_revision": source_revision,
-                "supported_bench_versions": [2, 3],
+                "supported_bench_versions": advertised,
             },
         )
 
@@ -86,7 +101,10 @@ async def test_secretless_scorer_capability_is_provenance_bound(
 
 
 @pytest.mark.asyncio
-async def test_v3_uses_versioned_route_and_binds_request() -> None:
+@pytest.mark.parametrize("bench_version", [3, 4])
+async def test_v3_plus_uses_versioned_route_and_binds_request(
+    bench_version: int,
+) -> None:
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -101,7 +119,7 @@ async def test_v3_uses_versioned_route_and_binds_request() -> None:
         await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
             tarball_url="https://example.test/agent.tgz",
             dataset_sha256="12" * 32,
-            bench_version=3,
+            bench_version=bench_version,
             screened_image_url="https://example.test/image.tar",
             screened_image_sha256="34" * 32,
             screened_image_size_bytes=123,
@@ -111,11 +129,11 @@ async def test_v3_uses_versioned_route_and_binds_request() -> None:
             ),
         )
     assert seen["path"] == "/v2/score"
-    assert cast(dict[str, object], seen["body"])["bench_version"] == 3
+    assert cast(dict[str, object], seen["body"])["bench_version"] == bench_version
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [None, 0, 1, 4])
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 5])
 async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     bench_version: int | None,
 ) -> None:
@@ -384,9 +402,12 @@ def _poll_config() -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("job_version", "report_version"), [(2, 3), (3, 2)])
-async def test_v3_poll_rejects_job_or_report_version_mismatch(
-    job_version: int, report_version: int
+@pytest.mark.parametrize(
+    ("expected", "job_version", "report_version"),
+    [(3, 2, 3), (3, 3, 2), (4, 3, 4), (4, 4, 3), (4, 2, 2)],
+)
+async def test_v3_plus_poll_rejects_job_or_report_version_mismatch(
+    expected: int, job_version: int, report_version: int
 ) -> None:
     payload = _done_job()
     payload["bench_version"] = job_version
@@ -399,28 +420,29 @@ async def test_v3_poll_rejects_job_or_report_version_mismatch(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(cast(Any, _poll_config()), http)
         with pytest.raises(DittobenchError, match="benchmark version mismatch"):
-            await client._poll("run-v3", expected_bench_version=3)
+            await client._poll("run-v3", expected_bench_version=expected)
 
 
 @pytest.mark.asyncio
-async def test_v3_poll_returns_version_bound_report() -> None:
+@pytest.mark.parametrize("bench_version", [3, 4])
+async def test_v3_plus_poll_returns_version_bound_report(bench_version: int) -> None:
     payload = _done_job()
-    payload["bench_version"] = 3
+    payload["bench_version"] = bench_version
     report = cast(dict[str, object], payload["report"])
-    report["details"] = {"bench_version": 3}
+    report["details"] = {"bench_version": bench_version}
 
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=payload)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         result = await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-            "run-v3", expected_bench_version=3
+            "run-v3", expected_bench_version=bench_version
         )
-    assert result.bench_version == 3
+    assert result.bench_version == bench_version
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 4])
+@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 5])
 async def test_poll_rejects_missing_or_unsupported_expected_version(
     expected_bench_version: int | None,
 ) -> None:

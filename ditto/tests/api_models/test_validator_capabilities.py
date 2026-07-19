@@ -139,9 +139,22 @@ def test_scorer_benchmark_capability_fails_closed_without_verified_identity() ->
         source_revision=_REVISION,
     )
     assert verified.supported_bench_versions == (2, 3)
-    for status in ("legacy_v2", "unreachable", "identity_mismatch"):
-        with pytest.raises(ValidationError):
-            ScorerBenchmarkCapability(status=status, supported_bench_versions=(2, 3))
+    verified_v4 = ScorerBenchmarkCapability(
+        status="fresh_verified",
+        supported_bench_versions=(2, 3, 4),
+        observed_at=1,
+        software_version="1.2.3",
+        source_revision=_REVISION,
+    )
+    assert verified_v4.supported_bench_versions == (2, 3, 4)
+    # Every post-v2 advertisement must be identity-bound. Pinning only v3 here
+    # let (2, 4) — and any later bump — skip the fresh-verified requirement.
+    for versions in ((2, 3), (2, 4), (2, 3, 4), (4,), (3,)):
+        for status in ("legacy_v2", "unreachable", "identity_mismatch"):
+            with pytest.raises(ValidationError):
+                ScorerBenchmarkCapability(
+                    status=status, supported_bench_versions=versions
+                )
 
 
 def test_heartbeat_protocol_v7_requires_both_typed_identity_sections() -> None:
@@ -227,10 +240,12 @@ def test_scorer_capability_gating_is_independent_of_stack_health() -> None:
     assert scorer.status == "fresh_verified"
     assert scorer.supported_bench_versions == (2, 3)
 
-    # And the inverse: healthy sidecars cannot conjure v3 out of an
-    # unverified scorer identity.
+    # And the inverse: healthy sidecars cannot conjure a post-v2 version out of
+    # an unverified scorer identity — for any post-v2 version, not just v3.
     source = vectors["source"]["request"] | {"signature": "ab" * 64}
-    unverified = json.loads(json.dumps(source))
-    unverified["capabilities"]["scorer_benchmarks"]["supported_bench_versions"] = [2, 3]
-    with pytest.raises(ValidationError):
-        ValidatorHeartbeatRequest.model_validate_json(json.dumps(unverified))
+    for advertised in ([2, 3], [2, 4], [2, 3, 4]):
+        unverified = json.loads(json.dumps(source))
+        scorer_claim = unverified["capabilities"]["scorer_benchmarks"]
+        scorer_claim["supported_bench_versions"] = advertised
+        with pytest.raises(ValidationError):
+            ValidatorHeartbeatRequest.model_validate_json(json.dumps(unverified))
