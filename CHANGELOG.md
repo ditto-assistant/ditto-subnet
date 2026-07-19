@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.10.1 (2026-07-19)
+
+### Bug Fixes
+
+- Validate stack descriptors from canonical staging
+  ([#162](https://github.com/ditto-assistant/ditto-subnet/pull/162),
+  [`83c635e`](https://github.com/ditto-assistant/ditto-subnet/commit/83c635e169ce769d6f65597c4e06304669f33860))
+
+
 ## v0.10.0 (2026-07-19)
 
 ### Features
