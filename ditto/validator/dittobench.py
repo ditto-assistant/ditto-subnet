@@ -490,18 +490,18 @@ class DittobenchClient:
                         else None
                     )
                     job_version = data.get("bench_version")
-                    if expected_bench_version == 3 and (
-                        job_version != 3 or reported_version != 3
+                    # Fail CLOSED on any version. Enumerating 2 and 3 with no
+                    # fallthrough meant a lease at an unknown version -- 4 after
+                    # the next bump, or None -- was scored with no job/report
+                    # verification at all. The check is the same for every
+                    # version, so express it once rather than per-version.
+                    if (
+                        job_version != expected_bench_version
+                        or reported_version != expected_bench_version
                     ):
                         raise DittobenchError(
-                            "benchmark version mismatch: ticket=3 "
-                            f"job={job_version!r} report={reported_version!r}"
-                        )
-                    if expected_bench_version == 2 and (
-                        job_version != 2 or reported_version != 2
-                    ):
-                        raise DittobenchError(
-                            "benchmark version mismatch: ticket=2 "
+                            "benchmark version mismatch: "
+                            f"ticket={expected_bench_version!r} "
                             f"job={job_version!r} report={reported_version!r}"
                         )
                     # Offline reproducibility: fetch the run's transcript
