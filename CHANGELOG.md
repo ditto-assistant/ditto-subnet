@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.12.0 (2026-07-19)
+
+### Features
+
+- Bench screened Docker images on validators
+  ([#154](https://github.com/ditto-assistant/ditto-subnet/pull/154),
+  [`6559112`](https://github.com/ditto-assistant/ditto-subnet/commit/655911283d97fb9e161215bbbf6a2c7f4058a5f3))
+
+
 ## v0.11.0 (2026-07-19)
 
 ### Features
