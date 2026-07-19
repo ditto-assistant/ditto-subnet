@@ -382,13 +382,10 @@ class ValidatorWorker:
                 logger.warning("scoring agent %s failed: %s", job.agent_id, e)
                 failed += 1
                 continue
-        if scoring_available and not self._new_work_blocked(
-            stop_requested, drain_requested
-        ):
-            await self._rescore_stale_champions(
-                stop_requested=stop_requested,
-                drain_requested=drain_requested,
-            )
+        # Score production is platform-lease-bound. In particular, do not infer
+        # autonomous re-score work from the public ledger: the score endpoint
+        # requires the exact live ticket deadline, and benchmark-version rollout
+        # work arrives through request_job() like every other assignment.
 
         outcome = _WeightOutcome()
         weights_ran = False
@@ -702,10 +699,9 @@ class ValidatorWorker:
                 leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
             )
 
-        # Re-scoring stale champions (§9 version-bump) is the scorer's job now,
-        # run in the scoring sweep (see _rescore_stale_champions); the fold reads
-        # whatever the scorer has already persisted. compute_weights ignores
-        # stale versions defensively regardless.
+        # Version-rollout re-scores are ordinary platform-leased jobs. The fold
+        # reads whatever leased scorers have persisted, and compute_weights
+        # ignores stale versions defensively regardless.
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
         miner_weights = compute_weights(
             registered_entries,

@@ -252,6 +252,36 @@ def _platform_with_ledger(
 
 
 class TestRunOnce:
+    async def test_idle_sweep_does_not_create_unticketed_rescore_work(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(
+            jobs=[],
+            ledger=[
+                _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+                    update={"bench_version": 2}
+                )
+            ],
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        confirm_and_submit = AsyncMock()
+        monkeypatch.setattr(worker, "_confirm_and_submit", confirm_and_submit)
+
+        outcome = await worker.run_once(set_weights=False)
+
+        assert outcome.queue_depth == 0
+        platform.request_job.assert_awaited_once()
+        # The ledger is an output for weight folding, not an authorization to
+        # benchmark. With no leased job, the scorer performs no work.
+        platform.get_ledger.assert_not_awaited()
+        confirm_and_submit.assert_not_awaited()
+
     async def test_scores_queue_and_sets_weights_from_ledger(self) -> None:
         job = _job("5MinerA" + "x" * 41)
         # The weight vector comes from the LEDGER, not the swept composites.
@@ -1613,8 +1643,8 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once()
 
     async def test_set_weights_false_scores_without_touching_weights(self) -> None:
-        # The scoring-only sweep (between weight-set epochs) drains the queue and
-        # re-scores stale champions (a ledger read) but never submits weights.
+        # The scoring-only sweep (between weight-set epochs) drains only its
+        # platform-leased queue and never reads the ledger or submits weights.
         job = _job("5MinerA" + "x" * 41)
         ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
         platform = _platform_with_ledger(jobs=[job], ledger=ledger)
@@ -1635,7 +1665,7 @@ class TestRunOnce:
         n = await worker.run_once(set_weights=False)
         assert n.queue_depth == 1
         assert platform.submit_score.await_count == 1
-        platform.get_ledger.assert_awaited()  # read for the stale-champion re-score
+        platform.get_ledger.assert_not_awaited()
         chain.put_weights.assert_not_awaited()
 
     async def test_one_agent_failure_does_not_block_weights(self) -> None:
