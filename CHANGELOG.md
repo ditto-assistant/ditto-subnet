@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.11.0 (2026-07-19)
+
+### Features
+
+- Bind managed scorer benchmark capabilities
+  ([#159](https://github.com/ditto-assistant/ditto-subnet/pull/159),
+  [`cd670af`](https://github.com/ditto-assistant/ditto-subnet/commit/cd670afef0044a8cec88a4bc24ca7de2287ff216))
+
+
 ## v0.10.3 (2026-07-19)
 
 ### Bug Fixes
