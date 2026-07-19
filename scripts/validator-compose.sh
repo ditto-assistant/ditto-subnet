@@ -7,8 +7,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
-STATE_DIR="${DITTO_VALIDATOR_UPDATE_STATE_DIR:-$ROOT_DIR/.validator-update}"
-MANAGED_IMAGE_FILE="$STATE_DIR/managed-image.env"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -36,49 +34,6 @@ export DITTO_BITTENSOR_WALLETS_DIR="$wallets_dir"
 
 if [ "$#" -eq 0 ]; then
   die "usage: $0 <docker compose arguments>"
-fi
-
-managed_image=""
-if [ -f "$MANAGED_IMAGE_FILE" ]; then
-  if [ "$(awk 'NF { count++ } END { print count + 0 }' "$MANAGED_IMAGE_FILE")" -ne 1 ]; then
-    die "managed image state must contain exactly one non-empty line"
-  fi
-  managed_line="$(awk 'NF { print; exit }' "$MANAGED_IMAGE_FILE")"
-  case "$managed_line" in
-    DITTO_SUBNET_IMAGE=*) managed_image="${managed_line#DITTO_SUBNET_IMAGE=}" ;;
-    *) die "managed image state is malformed: $MANAGED_IMAGE_FILE" ;;
-  esac
-  if [[ ! "$managed_image" =~ ^ghcr\.io/ditto-assistant/ditto-subnet-validator@sha256:[0-9a-f]{64}$ ]] &&
-    [[ ! "$managed_image" =~ ^ditto-subnet-validator-rollback:[0-9a-z-]+$ ]]; then
-    die "managed image is not an immutable validator digest or retained rollback tag"
-  fi
-  if [ "${DITTO_ALLOW_MANAGED_VALIDATOR_MUTATION:-false}" != "true" ] && \
-    [ -n "${DITTO_SUBNET_IMAGE:-}" ] && \
-    [ "$DITTO_SUBNET_IMAGE" != "$managed_image" ]; then
-    die "DITTO_SUBNET_IMAGE cannot override the adopted managed validator image"
-  fi
-  if [ "${DITTO_ALLOW_MANAGED_VALIDATOR_MUTATION:-false}" != "true" ]; then
-    export DITTO_SUBNET_IMAGE="$managed_image"
-  fi
-fi
-
-if [ "${1:-}" = "managed-reconcile" ]; then
-  [ -n "$managed_image" ] || die "managed-reconcile requires an adopted registry image"
-  [ "${DITTO_ALLOW_MANAGED_SIDECAR_RECONCILE:-false}" = "true" ] || \
-    die "managed-reconcile must run through validator-auto-update.sh reconcile-sidecars"
-  sidecar_ready_timeout="${DITTO_SIDECAR_READY_TIMEOUT_SECONDS:-180}"
-  [[ "$sidecar_ready_timeout" =~ ^[1-9][0-9]*$ ]] || \
-    die "DITTO_SIDECAR_READY_TIMEOUT_SECONDS must be a positive integer"
-  set -- up -d --build --no-deps --wait --wait-timeout "$sidecar_ready_timeout" \
-    pylon sandbox-docker model-relay ollama dittobench-api
-elif [ -n "$managed_image" ] && [ "${DITTO_ALLOW_MANAGED_VALIDATOR_MUTATION:-false}" != "true" ]; then
-  for argument in "$@"; do
-    case "$argument" in
-      up | down | create | restart | start | stop | kill | rm | run | pause | unpause)
-        die "managed validator mode blocks broad Compose mutation; use managed-reconcile or the validator updater"
-        ;;
-    esac
-  done
 fi
 
 compose_version="$(docker compose version --short 2>/dev/null)" || \

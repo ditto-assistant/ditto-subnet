@@ -120,20 +120,10 @@ DITTO_SUBNET_IMAGE="$DIGEST" \
 ./scripts/validator-compose.sh logs --since 10m ditto-subnet
 ```
 
-After the validator reports a fresh platform-accepted heartbeat, adopt the
-running digest into managed mode:
-
-```sh
-./scripts/validator-auto-update.sh adopt "$DIGEST"
-./scripts/validator-auto-update.sh status
-```
-
-`adopt` fails closed unless the running service exactly matches the digest.
-First adoption is always supervised; keep automatic updates disabled until
-`status` shows the expected `managed_image`, version, and operational state.
-
-For an existing source-built validator, do the same first adoption during a
-supervised maintenance window with no live ticket. Never interrupt a running
+After the validator reports a fresh platform-accepted heartbeat, enter managed
+mode with the supervised stack migration in
+[Automatic full-stack updates (recommended)](#automatic-full-stack-updates-recommended).
+Perform it during a window with no live ticket; never interrupt a running
 benchmark to enter managed mode.
 
 ## Verify health
@@ -142,7 +132,7 @@ benchmark to enter managed mode.
 ./scripts/validator-compose.sh ps
 ./scripts/validator-compose.sh logs --since 10m ditto-subnet
 curl -fsS https://platform-api.heyditto.ai/health
-./scripts/validator-auto-update.sh status
+./scripts/validator-stack-auto-update.sh status
 ```
 
 All six services should be `Up`; `ollama`, `sandbox-docker`, and
@@ -159,9 +149,12 @@ Production acceptance also requires:
 
 ## Upgrade and operate
 
-With automatic updates enabled, use the updater for the validator service. Do
-not use direct `docker compose`, a second supervisor, or manual validator
-restarts; those paths can replace a reviewed digest or interrupt leased work.
+In managed mode, the stack updater performs every upgrade — the validator and
+all five sidecars are replaced together as one transaction. Do not use direct
+`docker compose`, a second supervisor, or manual restarts; those paths can
+replace a reviewed digest or interrupt leased work. The host launcher scripts
+are outside the signed bundle, so keep the repository checkout on the reviewed
+release with `git pull --ff-only`.
 
 Useful commands:
 
@@ -171,27 +164,8 @@ Useful commands:
 ./scripts/validator-compose.sh logs --since 10m sandbox-docker
 ./scripts/validator-compose.sh logs --since 10m dittobench-api
 ./scripts/validator-compose.sh logs --since 10m pylon
-./scripts/validator-auto-update.sh status
+./scripts/validator-stack-auto-update.sh status
 ```
-
-Repository scripts and the five sidecars remain supervised. To update them,
-disable the updater, pull the reviewed repository change, and use the updater's
-drained reconciliation:
-
-```sh
-sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
-sudo systemctl disable --now ditto-validator-auto-update.timer
-sudo systemctl stop ditto-validator-auto-update.service
-git pull --ff-only
-./scripts/validator-compose.sh config --quiet
-./scripts/validator-auto-update.sh reconcile-sidecars
-./scripts/validator-compose.sh ps
-```
-
-If reconciliation succeeds, set `VALIDATOR_AUTO_UPDATE=true` again and
-re-enable the timer. If a sidecar fails, the validator remains drained: repair
-and verify the sidecars, then run `./scripts/validator-auto-update.sh recover`
-while the timer stays disabled.
 
 ### Troubleshooting
 
@@ -237,12 +211,12 @@ trust policy are documented in
 cutover.
 
 Update this checkout to the exact reviewed release, install Cosign from its
-verified upstream release, disable the legacy updater, and migrate. `migrate`
-waits for the validator to drain, installs all six exact services, and verifies
-a fresh accepted heartbeat before recording the stack:
+verified upstream release, and migrate. If this host ever ran the retired
+validator-only updater, disable its timer first. `migrate` waits for the
+validator to drain, installs all six exact services, and verifies a fresh
+accepted heartbeat before recording the stack:
 
 ```sh
-sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
 sudo systemctl disable --now ditto-validator-auto-update.timer 2>/dev/null || true
 STACK=ghcr.io/ditto-assistant/ditto-subnet-stack
 docker pull "$STACK:compat-2"
