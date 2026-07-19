@@ -56,6 +56,7 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
     assert (
         jobs["smoke-validator-arm64"]["runs-on"] == "blacksmith-4vcpu-ubuntu-2404-arm"
     )
+    assert jobs["smoke-validator-arm64"]["env"]["HEARTBEAT_PROTOCOL"] == "8"
     assert jobs["promote-stack-release"]["needs"] == [
         "release",
         "publish-stack-release",
