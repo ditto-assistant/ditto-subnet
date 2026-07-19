@@ -6,6 +6,7 @@ Locks the canonical signing-message format, which the platform's
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +17,7 @@ import bittensor
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.api_models.validator_capabilities import (
+    ScorerBenchmarkCapability,
     ValidatorCapabilities,
     ValidatorStackIdentity,
 )
@@ -34,6 +36,7 @@ _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _DEADLINE = datetime(2026, 7, 9, 12, 30, tzinfo=UTC)
 _V7_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v7.json"
+_V8_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v8.json"
 
 
 def test_message_is_canonical_format() -> None:
@@ -252,6 +255,22 @@ def test_heartbeat_signature_binds_build_state_and_timestamp() -> None:
         ),
         bytes.fromhex(signature),
     )
+
+
+def test_score_signature_adds_benchmark_version_only_for_v3() -> None:
+    def message(bench_version: int | None = None) -> bytes:
+        return score_signing_message(
+            validator_hotkey=_HOTKEY,
+            agent_id=_AGENT,
+            run_id="run-1",
+            composite=0.9,
+            seed=42,
+            bench_version=bench_version,
+        )
+
+    legacy = message()
+    assert message(None) == legacy
+    assert message(3) == legacy + b":3"
 
 
 def test_protocol_v3_heartbeat_signature_binds_system_metrics() -> None:
@@ -497,3 +516,28 @@ def test_protocol_v7_signature_binds_capabilities_and_stack() -> None:
     tampered = capabilities.model_copy(update={"require_screened_image": True})
     message = heartbeat_signing_message(**request, capabilities=tampered, stack=stack)
     assert not keypair.verify(message, bytes.fromhex(signature))
+
+
+def test_protocol_v8_binds_verified_scorer_benchmark_capability() -> None:
+    vector = json.loads(_V7_VECTOR.read_text())
+    v8_vector = json.loads(_V8_VECTOR.read_text())
+    request = vector["request"] | {"protocol_version": 8}
+    capabilities = ValidatorCapabilities.model_validate(request.pop("capabilities"))
+    stack = ValidatorStackIdentity.model_validate(request.pop("stack"))
+    capabilities = capabilities.model_copy(
+        update={
+            "scorer_benchmarks": ScorerBenchmarkCapability.model_validate(
+                {
+                    **v8_vector["scorer_benchmarks"],
+                    "supported_bench_versions": tuple(
+                        v8_vector["scorer_benchmarks"]["supported_bench_versions"]
+                    ),
+                }
+            )
+        }
+    )
+    message = heartbeat_signing_message(
+        **request, capabilities=capabilities, stack=stack
+    )
+    assert message == v8_vector["expected_message_utf8"].encode()
+    assert hashlib.sha256(message).hexdigest() == v8_vector["expected_message_sha256"]

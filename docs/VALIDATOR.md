@@ -56,6 +56,17 @@ gradual rollout. It is not remote host attestation; the immutable descriptor
 and component digests prove release selection, while host compromise remains a
 separate executor-boundary risk.
 
+Heartbeat protocol v8 adds benchmark-version routing while preserving the
+exact v7 canonical bytes and treating all v1-v7 validators as v2-only. The
+validator calls the bounded, read-only `GET /v1/capabilities` endpoint and
+advertises v3 only when the scorer's live source revision matches the scorer
+revision in the signed stack identity. The response is public release metadata,
+so no new operator secret or `.env` cutover is required. Old 404 responses,
+timeouts, malformed responses, and identity mismatches all report v2-only. This
+makes platform/scorer deployment safely asynchronous: v3 tickets cannot reach
+validators that have not verified their reachable scorer. Legacy v2 tickets
+retain the old request and signature bytes.
+
 The scorer source is pinned to an exact commit on `dittobench-api` `main`.
 During a coordinated scorer rollout, merge the scorer change first and then
 update the `docker-compose.yml` checksum to its actual post-merge `main` SHA.

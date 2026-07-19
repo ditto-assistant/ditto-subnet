@@ -178,7 +178,9 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert validator_environment["VALIDATOR_STACK_COMPONENT_MODEL_RELAY"] == (
         f"source:{checksum}"
     )
-    assert raw_compose.count(checksum) == 3
+    scorer_environment = compose["services"]["dittobench-api"]["environment"]
+    assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == checksum
+    assert raw_compose.count(checksum) == 4
     wrapper = COMPOSE_WRAPPER_PATH.read_text()
     assert 'git -C "$checkout" fetch' in wrapper
     assert 'context_override="${DITTOBENCH_BUILD_CONTEXT:-}"' in wrapper

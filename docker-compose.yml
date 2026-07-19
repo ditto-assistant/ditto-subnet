@@ -144,6 +144,8 @@ services:
       # Production opt-in for platform-verified screened archives. Keep the
       # broader private-harness URL bypass disabled.
       DITTOBENCH_ALLOW_SCREENED_IMAGES: "1"
+      DITTOBENCH_SOFTWARE_VERSION: ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
+      DITTOBENCH_SOURCE_SHA: 119429b28b83cd6cb33528abdf690ddef9f950c0
       # Gradual rollout defaults to prefer-screened while legacy records retain
       # source-build fallback. Flip to 1 only after image coverage is complete.
       DITTOBENCH_REQUIRE_SCREENED_IMAGE: ${DITTOBENCH_REQUIRE_SCREENED_IMAGE:-0}
@@ -173,7 +175,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "7"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "8"
     restart: unless-stopped
     stop_grace_period: 80m
     labels:

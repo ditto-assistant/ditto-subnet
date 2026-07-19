@@ -111,6 +111,14 @@ class JobResponse(BaseModel):
         str | None,
         Field(default=None, description="Generator profile (small|medium|full)."),
     ] = None
+    bench_version: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=1,
+            description="Version-bound benchmark semantics for this lease.",
+        ),
+    ] = None
     dataset_seed_block: Annotated[
         int | None,
         Field(
@@ -224,6 +232,17 @@ class ValidatorHeartbeatRequest(BaseModel):
                 raise ValueError("managed capability must match stack mode")
         elif identity_present:
             raise ValueError("capabilities and stack require heartbeat protocol v7")
+        scorer_capability = (
+            self.capabilities.scorer_benchmarks
+            if self.capabilities is not None
+            else None
+        )
+        if self.protocol_version >= 8 and scorer_capability is None:
+            raise ValueError("heartbeat protocol v8 requires scorer capability")
+        if scorer_capability is not None and self.protocol_version < 8:
+            raise ValueError(
+                "scorer benchmark capability requires heartbeat protocol v8"
+            )
         return self
 
 
@@ -252,6 +271,7 @@ class ArtifactResponse(BaseModel):
     expires_at: Annotated[
         datetime, Field(description="When ``download_url`` stops being valid (UTC).")
     ]
+    bench_version: Annotated[int | None, Field(default=None, ge=1)] = None
     screened_image_url: Annotated[
         str | None,
         Field(
@@ -382,6 +402,17 @@ class ScoreReport(BaseModel):
     """
 
     run_id: Annotated[str, Field(description="Scoring-engine run identifier.")]
+    bench_version: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=1,
+            description=(
+                "Version bound into new score signatures. Omission is accepted "
+                "only for legacy benchmark-v2 leases."
+            ),
+        ),
+    ] = None
     seed: Annotated[
         int,
         Field(

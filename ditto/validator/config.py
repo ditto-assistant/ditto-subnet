@@ -64,6 +64,9 @@ class ValidatorConfig:
     dittobench_api_url: str
     """Base URL of the hosted dittobench-api (Cloud Run)."""
 
+    dittobench_capabilities_timeout_seconds: float
+    """Hard timeout for scorer runtime-capability discovery."""
+
     run_size: str
     """dittobench run size: ``small`` | ``medium`` | ``full``."""
 
@@ -260,6 +263,17 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             "VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS must be a finite number > 0, "
             f"got {embed_preflight_timeout_seconds}"
         )
+    capabilities_timeout_seconds = _parse_float(
+        "VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS", "3"
+    )
+    if (
+        not math.isfinite(capabilities_timeout_seconds)
+        or capabilities_timeout_seconds <= 0
+        or capabilities_timeout_seconds > 10
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS must be in (0, 10]"
+        )
 
     # One Pylon token guards both the open-access reads and the identity write, so
     # the worker uses it for the permit self-check and for put_weights.
@@ -295,6 +309,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_PLATFORM_API_URL", "http://localhost:8000"),
         ),
         dittobench_api_url=dittobench_api_url,
+        dittobench_capabilities_timeout_seconds=capabilities_timeout_seconds,
         run_size=run_size,
         dittobench_mock=dittobench_mock,
         embed_preflight_url=embed_preflight_url,

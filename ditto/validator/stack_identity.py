@@ -75,7 +75,7 @@ def _managed_identity() -> ValidatorStackIdentity | None:
                 if name in {"ditto_subnet", "sandbox_docker"}
                 else None
             ),
-            version=version if name == "ditto_subnet" else None,
+            version=version if name in {"ditto_subnet", "dittobench_api"} else None,
             provenance="signed_descriptor",
         )
     return ValidatorStackIdentity(

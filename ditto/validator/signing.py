@@ -71,6 +71,7 @@ def score_signing_message(
     run_id: str,
     composite: float,
     seed: int,
+    bench_version: int | None = None,
 ) -> bytes:
     """Build the canonical bytes a score signature is computed over.
 
@@ -85,9 +86,8 @@ def score_signing_message(
         if ticket_deadline is not None
         else ""
     )
-    return (
-        f"{validator_hotkey}:{agent_id}:{lease}:{run_id}:{composite!r}:{seed}"
-    ).encode()
+    legacy = f"{validator_hotkey}:{agent_id}:{lease}:{run_id}:{composite!r}:{seed}"
+    return (legacy if bench_version is None else f"{legacy}:{bench_version}").encode()
 
 
 def sign_score(
@@ -99,6 +99,7 @@ def sign_score(
     run_id: str,
     composite: float,
     seed: int,
+    bench_version: int | None = None,
 ) -> str:
     """Return the hex sr25519 signature over the canonical score payload."""
     message = score_signing_message(
@@ -108,6 +109,7 @@ def sign_score(
         run_id=run_id,
         composite=composite,
         seed=seed,
+        bench_version=bench_version,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()
@@ -210,9 +212,25 @@ def heartbeat_signing_message(
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
+    if protocol_version >= 8:
+        if capabilities is None or stack is None:
+            raise ValueError("heartbeat protocol v8 requires capabilities and stack")
+        if capabilities.scorer_benchmarks is None:
+            raise ValueError("heartbeat protocol v8 requires scorer capabilities")
+        identity_token = validator_identity_signing_token(capabilities, stack)
+        return (
+            "ditto-validator-heartbeat:v8:"
+            f"{validator_hotkey}:{software_version}:{protocol_version}:"
+            f"{code_digest}:{state}:{active_agent_id or ''}:"
+            f"{system_metrics_signing_token(system_metrics)}:"
+            f"{benchmark_progress_signing_token(benchmark_progress)}:"
+            f"{identity_token}:{timestamp}"
+        ).encode()
     if protocol_version >= 7:
         if capabilities is None or stack is None:
             raise ValueError("heartbeat protocol v7 requires capabilities and stack")
+        if capabilities.scorer_benchmarks is not None:
+            raise ValueError("heartbeat protocol v7 cannot claim scorer capabilities")
         identity_token = validator_identity_signing_token(capabilities, stack)
         return (
             "ditto-validator-heartbeat:v7:"

@@ -10,12 +10,118 @@ from typing import Any, cast
 import httpx
 import pytest
 
+from ditto.api_models.validator_capabilities import (
+    ValidatorComponentIdentity,
+    ValidatorStackComponents,
+    ValidatorStackIdentity,
+)
 from ditto.validator.dittobench import (
     DittobenchClient,
     DittobenchProgressSnapshot,
     safe_progress_snapshot,
 )
 from ditto.validator.errors import DittobenchError, ValidatorInfrastructureError
+
+_REVISION = "ab" * 20
+
+
+def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
+    component = lambda rev=None: ValidatorComponentIdentity(  # noqa: E731
+        source_revision=rev or _REVISION,
+        version="source-build",
+        provenance="committed_pin",
+    )
+    return ValidatorStackIdentity(
+        mode="source",
+        compose_schema=1,
+        components=ValidatorStackComponents(
+            ditto_subnet=component(),
+            dittobench_api=component(revision),
+            sandbox_docker=component(),
+            model_relay=component(),
+            pylon=component(),
+            ollama=component(),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "source_revision", "expected_status", "expected_versions"),
+    [
+        (200, _REVISION, "fresh_verified", (2, 3)),
+        (200, "cd" * 20, "identity_mismatch", (2,)),
+        (404, _REVISION, "legacy_v2", (2,)),
+        (503, _REVISION, "unreachable", (2,)),
+    ],
+)
+async def test_secretless_scorer_capability_is_provenance_bound(
+    status_code: int,
+    source_revision: str,
+    expected_status: str,
+    expected_versions: tuple[int, ...],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "Authorization" not in request.headers
+        return httpx.Response(
+            status_code,
+            json={
+                "software_version": "1.2.3",
+                "source_revision": source_revision,
+                "supported_bench_versions": [2, 3],
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        observed = await DittobenchClient(config, http).scorer_benchmark_capability(  # type: ignore[arg-type]
+            _stack()
+        )
+    assert observed.status == expected_status
+    assert observed.supported_bench_versions == expected_versions
+
+
+@pytest.mark.asyncio
+async def test_v3_uses_versioned_route_and_binds_request() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(202, json={"run_id": "run-v3"})
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test", run_size="full"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
+            tarball_url="https://example.test/agent.tgz",
+            dataset_sha256="12" * 32,
+            bench_version=3,
+        )
+    assert seen["path"] == "/v2/score"
+    assert cast(dict[str, object], seen["body"])["bench_version"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 4])
+async def test_submit_rejects_missing_or_unsupported_benchmark_version(
+    bench_version: int | None,
+) -> None:
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test", run_size="full"
+    )
+    async with httpx.AsyncClient() as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(DittobenchError, match="unsupported benchmark version"):
+            await client._submit(
+                tarball_url="https://example.test/agent.tgz",
+                bench_version=bench_version,
+            )
 
 
 @pytest.mark.parametrize(
@@ -88,7 +194,9 @@ async def test_submit_does_not_forward_model_provider_credentials() -> None:
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
-        run_id = await client._submit(tarball_url="https://example.test/agent.tgz")
+        run_id = await client._submit(
+            tarball_url="https://example.test/agent.tgz", bench_version=2
+        )
 
     assert run_id == "run-1"
     assert request_body == {
@@ -113,6 +221,7 @@ async def test_submit_forwards_verified_screened_image_contract() -> None:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         await client._submit(
             tarball_url="https://example.test/agent.tgz",
+            bench_version=2,
             tarball_sha256="ab" * 32,
             screened_image_url="https://example.test/image.tar",
             screened_image_sha256="12" * 32,
@@ -150,6 +259,7 @@ async def test_submit_rejects_partial_screened_image_contract_before_request() -
         with pytest.raises(DittobenchError, match="must be complete"):
             await client._submit(
                 tarball_url="https://example.test/agent.tgz",
+                bench_version=2,
                 screened_image_url="https://example.test/image.tar",
             )
 
@@ -175,6 +285,7 @@ async def test_submit_rejects_empty_screened_image_identity(empty_field: str) ->
         with pytest.raises(DittobenchError, match="cannot be empty"):
             await client._submit(
                 tarball_url="https://example.test/agent.tgz",
+                bench_version=2,
                 screened_image_url=(
                     "" if empty_field == "url" else "https://example.test/image.tar"
                 ),
@@ -211,7 +322,7 @@ async def test_timeout_cancels_background_run() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         with pytest.raises(DittobenchError, match="did not finish"):
-            await client._poll("run-1")
+            await client._poll("run-1", expected_bench_version=2)
 
     assert methods == ["GET", "DELETE"]
 
@@ -231,12 +342,13 @@ async def test_timeout_tolerates_older_scorer_without_cancel_route() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         with pytest.raises(DittobenchError, match="did not finish"):
-            await client._poll("run-1")
+            await client._poll("run-1", expected_bench_version=2)
 
 
 def _done_job() -> dict[str, object]:
     return {
         "status": "done",
+        "bench_version": 2,
         "run_id": "private-run-id",
         "seed": 42,
         "error": "private error body",
@@ -251,6 +363,7 @@ def _done_job() -> dict[str, object]:
             "n": 114,
             "generated_at": "2026-07-14T12:00:00Z",
             "per_case": [],
+            "details": {"bench_version": 2},
         },
     }
 
@@ -261,6 +374,77 @@ def _poll_config() -> SimpleNamespace:
         dittobench_timeout_seconds=1.0,
         dittobench_poll_seconds=0.0,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("job_version", "report_version"), [(2, 3), (3, 2)])
+async def test_v3_poll_rejects_job_or_report_version_mismatch(
+    job_version: int, report_version: int
+) -> None:
+    payload = _done_job()
+    payload["bench_version"] = job_version
+    report = cast(dict[str, object], payload["report"])
+    report["details"] = {"bench_version": report_version}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(DittobenchError, match="benchmark version mismatch"):
+            await client._poll("run-v3", expected_bench_version=3)
+
+
+@pytest.mark.asyncio
+async def test_v3_poll_returns_version_bound_report() -> None:
+    payload = _done_job()
+    payload["bench_version"] = 3
+    report = cast(dict[str, object], payload["report"])
+    report["details"] = {"bench_version": 3}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+            "run-v3", expected_bench_version=3
+        )
+    assert result.bench_version == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 4])
+async def test_poll_rejects_missing_or_unsupported_expected_version(
+    expected_bench_version: int | None,
+) -> None:
+    async with httpx.AsyncClient() as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(DittobenchError, match="unsupported benchmark version"):
+            await client._poll(
+                "run-unknown", expected_bench_version=expected_bench_version
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_version", "report_version"),
+    [(None, 2), (2, None), (None, None), (3, 2), (2, 3)],
+)
+async def test_v2_poll_requires_explicit_matching_versions(
+    job_version: int | None, report_version: int | None
+) -> None:
+    payload = _done_job()
+    payload["bench_version"] = job_version
+    report = cast(dict[str, object], payload["report"])
+    report["details"] = {"bench_version": report_version}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(DittobenchError, match="benchmark version mismatch"):
+            await client._poll("run-v2", expected_bench_version=2)
 
 
 def _preflight_config() -> SimpleNamespace:
@@ -343,7 +527,9 @@ async def test_ollama_run_failure_is_retryable_infrastructure() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(ValidatorInfrastructureError, match="embedding"):
-            await DittobenchClient(cast(Any, _poll_config()), http)._poll("run-1")
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=2
+            )
 
 
 @pytest.mark.asyncio
@@ -358,7 +544,7 @@ async def test_poll_callback_receives_only_allowlisted_snapshot() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         report = await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-            "private-run-id", progress_callback=progress
+            "private-run-id", progress_callback=progress, expected_bench_version=2
         )
 
     assert report.n == 114
@@ -391,7 +577,9 @@ async def test_progress_callback_failure_cannot_abort_completed_report() -> None
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         report = await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-            "private-run-id", progress_callback=broken_callback
+            "private-run-id",
+            progress_callback=broken_callback,
+            expected_bench_version=2,
         )
 
     assert report.run_id == "private-run-id"
