@@ -113,6 +113,7 @@ services:
       target: relay
     restart: unless-stopped
     environment:
+      RELAY_PROVIDER: ${RELAY_PROVIDER:-chutes}
       RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY in .env}
       PORT: "11435"
     read_only: true

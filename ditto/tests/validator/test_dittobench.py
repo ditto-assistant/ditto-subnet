@@ -585,3 +585,69 @@ async def test_progress_callback_failure_cannot_abort_completed_report() -> None
     assert report.run_id == "private-run-id"
     assert report.composite == 0.9
     assert attempts == 6
+
+
+_TRANSCRIPT = b'{"run_id":"private-run-id","cases":[{"case_id":"a","response":{}}]}'
+
+
+def _done_job_with_transcript(declared: str) -> dict[str, object]:
+    job = _done_job()
+    job["transcript_sha256"] = declared
+    return job
+
+
+def _transcript_handler(declared: str, body: bytes) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/transcript"):
+            return httpx.Response(200, content=body)
+        return httpx.Response(200, json=_done_job_with_transcript(declared))
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_poll_fetches_transcript_and_binds_digest() -> None:
+    import hashlib
+
+    declared = hashlib.sha256(_TRANSCRIPT).hexdigest()
+    async with httpx.AsyncClient(
+        transport=_transcript_handler(declared, _TRANSCRIPT)
+    ) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        report = await client._poll("private-run-id", expected_bench_version=2)
+
+    assert isinstance(report.details, dict)
+    assert report.details["transcript_sha256"] == declared
+    assert client.last_transcript == _TRANSCRIPT
+    assert client.take_transcript("private-run-id") == _TRANSCRIPT
+    assert client.take_transcript("private-run-id") is None
+    assert client.last_details.get("transcript_sha256") == declared
+
+
+@pytest.mark.asyncio
+async def test_poll_drops_transcript_on_digest_mismatch() -> None:
+    async with httpx.AsyncClient(
+        transport=_transcript_handler("ab" * 32, _TRANSCRIPT)
+    ) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        report = await client._poll("private-run-id", expected_bench_version=2)
+
+    # The score itself never depends on the artifact: the run still parses, but
+    # no unverified digest is bound into the report.
+    assert report.composite == 0.9
+    assert client.last_transcript is None
+    assert client.take_transcript("private-run-id") is None
+    assert not (report.details or {}).get("transcript_sha256")
+
+
+@pytest.mark.asyncio
+async def test_poll_without_transcript_keeps_legacy_shape() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_done_job())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        report = await client._poll("private-run-id", expected_bench_version=2)
+
+    assert report.details == {"bench_version": 2}
+    assert client.last_transcript is None

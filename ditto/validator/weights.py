@@ -392,3 +392,103 @@ def agents_needing_rescore(
     champion = _champion(scored, margin, dethrone_z)
     rewarded = [champion, *_tail(scored, champion, tail_size)]
     return [e for e in rewarded if _entry_version(e) < current_version]
+
+
+def _unpaired_band(
+    challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
+) -> float:
+    """The unpaired indifference band :func:`_beats` applies to this pair:
+    ``max(margin * eff(champion), dethrone_z * sqrt(se_c² + se_champ²))``, the
+    statistical term engaging only when both entries carry a stderr."""
+    band = _effective_composite(champion) * margin
+    if dethrone_z > 0.0:
+        se_c = _entry_stderr(challenger)
+        se_champ = _entry_stderr(champion)
+        if se_c is not None and se_champ is not None:
+            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
+            if stat_band > band:
+                band = stat_band
+    return band
+
+
+def _entry_has_seeds(entry: LedgerEntry, seeds: Sequence[int]) -> bool:
+    """Whether ``entry`` already carries confirmation composites for every seed
+    in ``seeds`` — i.e. it has been confirmed on that exact seed set and does
+    not need re-scoring. Used to keep the champion from being re-scored on its
+    own anchored seeds once it already holds them."""
+    have = _entry_seed_composites(entry)
+    if have is None:
+        return False
+    return set(seeds).issubset(have.keys())
+
+
+def _shares_confirmation_seeds(a: LedgerEntry, b: LedgerEntry) -> bool:
+    """Whether the paired dethrone statistic can already decide this pair:
+    both entries carry per-seed confirmation composites over at least two
+    shared CRN seeds (the :func:`_paired_dethrone` precondition)."""
+    a_map = _entry_seed_composites(a)
+    b_map = _entry_seed_composites(b)
+    if a_map is None or b_map is None:
+        return False
+    return len(set(a_map) & set(b_map)) >= 2
+
+
+def contested_confirmation_set(
+    entries: Sequence[LedgerEntry],
+    *,
+    current_version: int,
+    margin: float,
+    dethrone_z: float = 0.0,
+) -> list[LedgerEntry]:
+    """The champion plus the current-version challengers whose crown decision
+    sits INSIDE the unpaired indifference band (the seed-luck zone) and cannot
+    yet be decided by the paired statistic. Empty when no contest needs
+    confirmation.
+
+    A dethrone resolved inside the band on unpaired data can ride dataset
+    difficulty: the champion's confirmation composites are a frozen draw (they
+    only refresh on a bench_version bump) while a new challenger holds one
+    commit-reveal seed, so neither side's luck cancels. Re-scoring both on a
+    common CRN seed set gives :func:`_paired_dethrone` the shared-seed data
+    that cancels difficulty, and the crown then moves (or holds) on the paired
+    statistic instead of the draw.
+
+    Selection, all over the public ledger so every validator derives the same
+    set (consensus-safe):
+
+    - champion: the fold's champion (:func:`_champion` over the full
+      positive-composite set);
+    - challengers: every other current-version entry whose effective composite
+      sits within the unpaired band of the champion on either side
+      (``|eff(challenger) − eff(champion)| <= band``) AND that does not yet
+      share >= 2 confirmation seeds with the champion. Clear wins, clear
+      losses, and already-settled pairs are excluded. Stale entries are
+      excluded too, since refreshing them is
+      :func:`agents_needing_rescore`'s job and runs first.
+
+    Returns the champion followed by the unsettled in-band challengers
+    (deterministic first-seen order), or ``[]`` when no challenger needs
+    confirmation. The caller anchors the CRN seed set to the CHAMPION's agent
+    id alone, not the contested set, so a newly appearing challenger is scored
+    once on the champion's unchanged seeds while already-settled challengers
+    keep sharing them and are never re-scored: cost is O(1) per new
+    challenger, not O(cohort) per sweep.
+    """
+    scored = [e for e in entries if e.composite > 0.0]
+    if len(scored) < 2:
+        return []
+    champion = _champion(scored, margin, dethrone_z)
+    if _entry_version(champion) != current_version:
+        return []
+    contested = [
+        e
+        for e in sorted(scored, key=lambda e: (e.first_seen, e.agent_id))
+        if e.agent_id != champion.agent_id
+        and _entry_version(e) == current_version
+        and abs(_effective_composite(e) - _effective_composite(champion))
+        <= _unpaired_band(e, champion, margin, dethrone_z)
+        and not _shares_confirmation_seeds(e, champion)
+    ]
+    if not contested:
+        return []
+    return [champion, *contested]

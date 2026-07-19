@@ -27,7 +27,7 @@ The root Docker Compose stack starts six services:
 | `ditto-subnet` | Leases work, signs scores, and computes weights. |
 | `dittobench-api` | Loads screened images and scores submissions. |
 | `sandbox-docker` | Loads and runs screened images; builds only legacy records. |
-| `model-relay` | Reaches the locked Chutes model without exposing its key. |
+| `model-relay` | Reaches the locked model on the selected provider (Chutes or OpenRouter) without exposing its key. |
 | `ollama` | Serves the embedding model used for memory scoring. |
 | `pylon` | Submits weights with the validator wallet. |
 
@@ -91,8 +91,21 @@ do not depend on GitHub availability and the pin may safely lag a newer `main`.
 - Git and `flock` from util-linux.
 - A local Bittensor wallet whose hotkey is registered on Finney SN118 and has a
   validator permit.
-- A Chutes API key for the locked `Qwen/Qwen3-32B-TEE` model.
-- Outbound access to Finney, Chutes, the Ditto platform, and GHCR.
+- An API key for the locked Qwen3-32B model on ONE certified provider: a
+  Chutes key (`Qwen/Qwen3-32B-TEE`, the default) or an OpenRouter key
+  (`qwen/qwen3-32b`, served by the certified Nebius deployment). Select with
+  `RELAY_PROVIDER`. The two are certified as comparable and validators are
+  meant to split across them: pinning the whole fleet to Chutes saturated
+  that endpoint and raised latency, so spreading scoring load across both
+  keeps throughput up. The model, upstream, and routing per provider are
+  locked in relay code, so scoring is identical either way, and a submission's
+  k=3 quorum may mix providers by design (every score reports the same model
+  id, so the median is over comparable numbers). The fleet-wide thinking-off
+  mode is enforced on both providers too (hard template switch on Chutes,
+  trailing Qwen3 `/no_think` on OpenRouter, where the relay places it after
+  all sandbox content so it cannot be overridden).
+- Outbound access to Finney, the selected model provider, the Ditto platform,
+  and GHCR.
 - Anonymous pull access to the public
   `ghcr.io/ditto-assistant/ditto-subnet-validator` package.
 
@@ -118,7 +131,9 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_NAME` | Coldkey directory under `~/.bittensor/wallets`. |
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
-| `RELAY_API_KEY` | Chutes API key used only by `model-relay`. |
+| `DITTOBENCH_CAPABILITIES_TOKEN` | Per-host random token authenticating the private validator-to-scorer capability probe. |
+| `RELAY_PROVIDER` | `chutes` (default) or `openrouter`; which certified upstream serves the locked model. |
+| `RELAY_API_KEY` | API key for the selected provider, used only by `model-relay`. |
 
 The example selects Finney, SN118, and the production platform. For local
 testing, change both the platform and chain settings and use a separate `.env`.
@@ -244,6 +259,16 @@ validator remains drained. Repair the sidecars, verify them, then run
 - **No work is scored:** zero queued agents is normal. Otherwise inspect the
   validator, sandbox, scorer, relay, and Ollama health before restarting
   anything.
+- **Runs fail with `tool_endpoint advertised but unreachable`:** honest
+  submissions also fail this way when the scorer's tool endpoint is
+  unreachable from inside `sandbox-docker` (broken `host.docker.internal`
+  routing). One failure can be a non-compliant harness; recurring failures
+  across different agents mean your sandbox networking is broken — fix it
+  before the reopened tickets expire. No zeroed score is signed either way.
+- **Logs show `transcript publication failed` or `transcript fetch failed`:**
+  the score already stands; nothing is lost from the ledger. Check
+  `dittobench-api` health and platform reachability so future runs publish
+  their transcripts.
 - **Updater reports a transaction:** keep the timer disabled, verify the
   validator and all sidecars, then use `recover`. It may resume lease intake.
 - **Host rebooted:** verify Docker is enabled and active, then check Compose and
@@ -345,6 +370,26 @@ from the public finalized ledger, and Pylon handles UID resolution,
 commit-reveal, retries, and the on-chain extrinsic on an independent cadence.
 Weight scheduling honors the configured interval, chain rate limit, subnet
 tempo, and the validator's previous on-chain update after a restart.
+
+Every scored run starts with a reachability preflight: the scorer sends one
+probe case and requires the harness to route a tool call through the mock tool
+endpoint. If no call is observed, the run fails and the ticket reopens; a
+zeroed report is never signed. This protects miners from an endpoint that is
+advertised but unreachable from the harness container.
+
+The scoring sweep also runs CRN confirmations when the ledger calls for them:
+after a bench-version bump it re-scores the stale champion and tail on common
+seeds, and when a challenger sits inside the dethrone indifference band it
+re-scores the contested set on shared seeds so the crown decision is paired
+rather than seed-lucky. Expect occasional bursts of extra benchmark runs (three
+per contested agent) with a `contested dethrone:` log line; they stop once the
+contested pair shares confirmation seeds.
+
+After the platform accepts a signed score, the worker uploads the run's
+transcript — the graded per-case inputs, whose SHA-256 is bound into the score
+signature — and the platform publishes it content-addressed in the public
+bucket. Transcript fetch or upload failures only log; they never gate, delay,
+or unwind a score.
 
 ## Optional observability
 

@@ -23,10 +23,36 @@ to confirm the copy is self-consistent, not to authoritatively refresh.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
+from types import ModuleType
 
-from ditto.tests.contract._schema import compute_contract
+
+def _load_contract_schema() -> ModuleType:
+    """Load the subnet-owned schema helper without shadowing platform ``ditto``.
+
+    The documented authoritative invocation runs this script from a platform
+    checkout. Importing ``ditto.tests`` would then require the platform to ship
+    subnet test helpers. Loading only the helper file keeps ``ditto.api_models``
+    resolved from the active checkout, which is the contract source of truth.
+    """
+    schema_path = (
+        Path(__file__).resolve().parent.parent
+        / "ditto"
+        / "tests"
+        / "contract"
+        / "_schema.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "validator_contract_schema", schema_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load validator contract schema from {schema_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 _DEFAULT_OUT = (
     Path(__file__).resolve().parent.parent
@@ -46,7 +72,7 @@ def main() -> None:
         help="destination golden path (default: the committed subnet golden)",
     )
     args = parser.parse_args()
-    contract = compute_contract()
+    contract = _load_contract_schema().compute_contract()
     args.out.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
     print(f"wrote {len(contract)} model(s) to {args.out}")
 

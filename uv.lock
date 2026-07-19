@@ -524,7 +524,7 @@ wheels = [
 
 [[package]]
 name = "ditto"
-version = "0.10.0"
+version = "0.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "async-substrate-interface" },
@@ -558,7 +558,7 @@ requires-dist = [
     { name = "bittensor", specifier = ">=10.2.1" },
     { name = "bittensor-pylon-client", git = "https://github.com/bittensor-church/bittensor-pylon?subdirectory=pylon_client" },
     { name = "bittensor-wallet", specifier = ">=4.1.0" },
-    { name = "ditto-screening-protocol", git = "https://github.com/ditto-assistant/ditto-screener.git?subdirectory=packages%2Fditto-screening-protocol&rev=4dbadc6221a2c851270f695953273f0de5657977" },
+    { name = "ditto-screening-protocol", git = "https://github.com/ditto-assistant/ditto-screener.git?subdirectory=packages%2Fditto-screening-protocol&rev=925d55d9537fd22cfae698376445a66dfdb7f7d0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pydantic", specifier = ">=2" },
@@ -578,8 +578,8 @@ dev = [
 
 [[package]]
 name = "ditto-screening-protocol"
-version = "0.6.1"
-source = { git = "https://github.com/ditto-assistant/ditto-screener.git?subdirectory=packages%2Fditto-screening-protocol&rev=4dbadc6221a2c851270f695953273f0de5657977#4dbadc6221a2c851270f695953273f0de5657977" }
+version = "0.9.0"
+source = { git = "https://github.com/ditto-assistant/ditto-screener.git?subdirectory=packages%2Fditto-screening-protocol&rev=925d55d9537fd22cfae698376445a66dfdb7f7d0#925d55d9537fd22cfae698376445a66dfdb7f7d0" }
 dependencies = [
     { name = "pydantic" },
 ]

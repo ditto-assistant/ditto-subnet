@@ -225,3 +225,51 @@ async def test_submit_heartbeat_surfaces_rejection() -> None:
             await PlatformClient(_config(), http, MagicMock()).submit_heartbeat(
                 _request()
             )
+
+
+async def test_submit_transcript_puts_raw_bytes_with_hotkey_header() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    body = b'{"run_id":"run_1","cases":[]}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PUT"
+        assert request.url.path == (
+            f"/api/v1/validator/agent/{agent_id}/transcript/run_1"
+        )
+        assert request.headers["X-Validator-Hotkey"] == keypair.ss58_address
+        assert request.content == body
+        return httpx.Response(
+            200,
+            json={
+                "agent_id": str(agent_id),
+                "run_id": "run_1",
+                "transcript_sha256": "ab" * 32,
+                "stored": True,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        await platform.submit_transcript(agent_id, run_id="run_1", body=body)
+
+
+async def test_submit_transcript_rejection_raises_platform_error() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, text="digest mismatch")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformError, match="transcript rejected"):
+            await platform.submit_transcript(agent_id, run_id="run_1", body=b"{}")

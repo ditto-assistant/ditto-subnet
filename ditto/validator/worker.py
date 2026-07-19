@@ -49,12 +49,20 @@ from ditto.validator.telemetry import (
     ValidatorTelemetry,
     scored_agent_stat,
 )
+from ditto.validator.transform_audit import (
+    ALPHA,
+    brittleness_pvalue,
+    brittleness_signature,
+    pool_audit_pairs,
+)
 from ditto.validator.update_control import write_update_state
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
+    _entry_has_seeds,
     agents_needing_rescore,
     apply_miner_emission_cap,
     compute_weights,
+    contested_confirmation_set,
 )
 
 if TYPE_CHECKING:
@@ -133,6 +141,56 @@ def _retry_delay_seconds(attempt: int, error: Exception) -> float:
         else _WEIGHT_SET_RETRY_SECONDS
     )
     return base * 2 ** (attempt - 1)
+
+
+def _attach_transform_audit(
+    representative: ScoreReport, reports: Sequence[ScoreReport]
+) -> ScoreReport:
+    """Record the reproduce-under-transform verdict on the submitted report.
+
+    The platform only ever sees the ONE representative report, so it cannot pool
+    the K confirmation runs itself. This sums the audit 2x2 counts across them
+    and attaches both the pooled counts and the resulting p-value.
+
+    Pooling is not a refinement, it is what makes a verdict possible at all: a
+    single full run yields only a handful of audit pairs and a couple of
+    discordant ones, which cannot reach ALPHA however the test is framed.
+
+    The verdict rides ``details``, which is advisory and NOT covered by the
+    signature, and never touches the composite. A directional audit result is
+    the surface-brittleness signature; it is not evidence about a robust local
+    solver, which recomputes correctly under the transform too and was measured
+    passing the audit.
+    """
+    pooled = pool_audit_pairs([r.details for r in reports])
+    if (
+        pooled["both_correct"]
+        + pooled["base_only"]
+        + pooled["transform_only"]
+        + pooled["both_wrong"]
+        == 0
+    ):
+        return representative  # older scoring engine: nothing measured
+
+    failed = brittleness_signature([r.details for r in reports])
+    pvalue = brittleness_pvalue(pooled["base_only"], pooled["transform_only"])
+    if failed:
+        logger.warning(
+            "agent %s: transform-audit brittleness signature — %d base-only vs "
+            "%d transform-only discordant pairs over %d run(s), p=%.4f <= %.3f",
+            representative.run_id,
+            pooled["base_only"],
+            pooled["transform_only"],
+            len(reports),
+            pvalue,
+            ALPHA,
+        )
+    details = dict(representative.details or {})
+    details["audit_pairs_pooled"] = pooled
+    details["audit_pairs_runs"] = len(reports)
+    details["transform_audit_pvalue"] = pvalue
+    details["transform_audit_failed"] = failed
+    return representative.model_copy(update={"details": details})
 
 
 def _pooled_confirmation_stderr(
@@ -750,7 +808,12 @@ class ValidatorWorker:
         except PlatformError as e:
             logger.warning("ledger fetch for re-score failed; skipping: %s", e)
             return
-        await self._rescore_stale_champion_and_tail(
+        ledger = await self._rescore_stale_champion_and_tail(
+            ledger,
+            stop_requested=stop_requested,
+            drain_requested=drain_requested,
+        )
+        await self._confirm_contested_dethrone(
             ledger,
             stop_requested=stop_requested,
             drain_requested=drain_requested,
@@ -829,6 +892,78 @@ class ValidatorWorker:
                 exc,
             )
             return ledger
+
+    async def _confirm_contested_dethrone(
+        self,
+        ledger: LedgerResponse,
+        *,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
+        """Settle a within-band crown contest on the champion-anchored CRN seeds.
+
+        When a current-version challenger's effective composite sits inside the
+        unpaired indifference band of the champion, the crown decision is
+        inside seed-luck range: the champion's confirmation composites are a
+        frozen draw and the challenger holds one commit-reveal seed, so
+        neither side's dataset difficulty cancels. Re-score the champion and
+        each unsettled in-band challenger
+        (:func:`ditto.validator.weights.contested_confirmation_set`) on a
+        common seed set derived from the CHAMPION's agent id alone, so the
+        fold's next read decides on the PAIRED statistic
+        (weights._paired_dethrone), which cancels per-seed difficulty.
+
+        Anchoring the seeds to the champion (not the contested cohort) is what
+        bounds the work: the seed set does not move when a new challenger
+        appears, so already-settled challengers keep sharing the champion's
+        seeds and are never re-scored, and the champion is re-scored only until
+        it carries those seeds once. A newly appearing challenger costs one
+        confirmation, not a re-run of the whole cohort. Clear wins and clear
+        losses never trigger this. One member failing to re-score is logged
+        and its ledger score stands.
+        """
+        contested = contested_confirmation_set(
+            ledger.entries,
+            current_version=self._current_bench_version,
+            margin=self._config.koth_margin,
+            dethrone_z=self._config.koth_dethrone_z,
+        )
+        if not contested:
+            return
+        champion = contested[0]
+        challengers = contested[1:]
+        # Champion-anchored: a pure function of the champion's identity and the
+        # version, so it is stable across sweeps and identical fleet-wide.
+        seeds = confirmation_seeds(
+            [str(champion.agent_id)],
+            version=self._current_bench_version,
+            count=self._config.koth_confirmation_seeds,
+        )
+        logger.info(
+            "contested dethrone: %d challenger(s) inside champion %s's band; "
+            "confirming on champion-anchored CRN seeds %s",
+            len(challengers),
+            champion.agent_id,
+            seeds,
+        )
+        # Score the champion once, only until its entry already carries the
+        # anchored seeds (a later sweep with a fresh challenger must not
+        # re-run the champion).
+        to_score = list(challengers)
+        if not _entry_has_seeds(champion, seeds):
+            to_score.insert(0, champion)
+        for e in to_score:
+            if self._new_work_blocked(stop_requested, drain_requested):
+                return
+            submitted = await self._confirm_and_submit(
+                e.agent_id, e.sha256, e.miner_hotkey, seeds=seeds
+            )
+            if submitted is None:
+                logger.warning(
+                    "contested-dethrone confirmation of agent %s produced no "
+                    "score; leaving its ledger score",
+                    e.agent_id,
+                )
 
     async def _validator_permitted(self) -> bool:
         """Best-effort self-check that our hotkey may set weights this epoch.
@@ -1180,6 +1315,16 @@ class ValidatorWorker:
                 f"ticket for agent {agent_id} expired before score submission; "
                 "leaving it to reopen"
             )
+        # Offline reproducibility: a transcript digest in the report details is
+        # bound into the signature, so the artifact published below cannot be
+        # swapped after the fact. Reports without one keep the legacy payload.
+        transcript_sha256 = (
+            report.details.get("transcript_sha256")
+            if isinstance(report.details, dict)
+            else None
+        )
+        if not isinstance(transcript_sha256, str) or not transcript_sha256:
+            transcript_sha256 = None
         signature = sign_score(
             self._keypair,
             validator_hotkey=self._config.validator_hotkey,
@@ -1189,6 +1334,7 @@ class ValidatorWorker:
             composite=report.composite,
             seed=report.seed,
             bench_version=report.bench_version,
+            transcript_sha256=transcript_sha256,
         )
         await self._platform.submit_score(
             agent_id,
@@ -1203,7 +1349,47 @@ class ValidatorWorker:
             report.composite,
             report.seed,
         )
+        await self._publish_transcript(agent_id, report, transcript_sha256)
         return report
+
+    async def _publish_transcript(
+        self, agent_id: UUID, report: ScoreReport, transcript_sha256: str | None
+    ) -> None:
+        """Best-effort publication of the signed score's transcript artifact.
+
+        The digest is already inside the accepted, signed score; the platform
+        verifies the bytes hash to it before storing them content-addressed.
+        Failure logs and never unwinds the score — the artifact can be
+        re-published, the score cannot be lost."""
+        if transcript_sha256 is None:
+            return
+        take_transcript = getattr(self._dittobench, "take_transcript", None)
+        transcript = (
+            take_transcript(report.run_id) if callable(take_transcript) else None
+        )
+        if not isinstance(transcript, bytes) or not transcript:
+            logger.warning(
+                "agent %s declared transcript %s but no bytes are held; "
+                "skipping publication",
+                agent_id,
+                transcript_sha256,
+            )
+            return
+        try:
+            await self._platform.submit_transcript(
+                agent_id, run_id=report.run_id, body=transcript
+            )
+            logger.info(
+                "published transcript for agent %s (run=%s sha256=%s bytes=%d)",
+                agent_id,
+                report.run_id,
+                transcript_sha256,
+                len(transcript),
+            )
+        except PlatformError as e:
+            logger.warning(
+                "transcript publication failed for agent %s: %s", agent_id, e
+            )
 
     async def _evaluate_and_submit(
         self,
@@ -1305,7 +1491,14 @@ class ValidatorWorker:
         reports: list[ScoreReport] = []
         for s in seeds:
             try:
-                reports.append(await self._evaluate(agent_id, expected_sha256, seed=s))
+                reports.append(
+                    await self._evaluate(
+                        agent_id,
+                        expected_sha256,
+                        seed=s,
+                        bench_version=self._current_bench_version,
+                    )
+                )
             except (PlatformError, DittobenchError) as exc:
                 logger.warning(
                     "re-score of stale agent %s (seed %d) failed; skipping seed: %s",
@@ -1340,6 +1533,7 @@ class ValidatorWorker:
                     ),
                 }
             )
+        representative = _attach_transform_audit(representative, reports)
         return await self._submit_report(agent_id, miner_hotkey, representative)
 
     async def run_forever(

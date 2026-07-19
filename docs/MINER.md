@@ -129,20 +129,37 @@ result.
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to Qwen3-32B in a TEE; your local
   practice key and model are not included in the submitted crate.
+- Every scored run starts with a reachability preflight. The validator sends
+  one probe case whose `case_id` begins with `preflight:`; your harness must
+  answer it by POSTing one call to a served tool (`search_web` with any args
+  is sufficient) to the advertised `tool_endpoint`. Hard-code this check on
+  the `case_id` prefix — do not rely on your model deciding to call the tool.
+  A run whose probe is never observed fails and is retried instead of being
+  scored, so a harness that skips the probe never finalizes a score. See the
+  scoring engine's `PROTOCOL.md` ("Reachability preflight").
 - Grading is deterministic and judge-free. Tool and memory means contribute
   equally to the composite; bounded efficiency, consistency, and integrity
   checks can reduce it.
 - Each miner competes with its highest eligible score. A challenger dethrones
   the incumbent only after clearing the greater of the 2% relative margin and
-  the configured statistical error band.
+  the configured statistical error band. A near-miss is not decided by dataset
+  luck: when a challenger lands inside that band, validators re-score both
+  agents on the same three shared seeds and the crown moves (or holds) on the
+  paired result.
 - The champion receives 90% of competitive weight; the next four distinct
   miners split 10%. The competitive vector receives 20% of available miner
   emission and the remaining 80% is burned. With no eligible miners, 100% is
   burned.
 
-Scores and signatures are published so results can be independently checked.
-The implementation and live chain remain authoritative if consensus parameters
-change.
+Scores, signatures, and each run's graded transcript are published so results
+can be independently checked. The transcript — your harness's responses and
+observed tool trajectory, exactly as graded — is stored content-addressed at
+`transcripts/{sha256}.json` in the public bucket, and its SHA-256 is bound
+inside the validator's score signature (`transcript_sha256` on the public
+score record). Regenerate the dataset from the published seed, re-run the
+public grader over the transcript, and the numbers must match the signed
+composite. The implementation and live chain remain authoritative if consensus
+parameters change.
 
 ## Duplicate protection
 

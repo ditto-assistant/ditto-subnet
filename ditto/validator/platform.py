@@ -201,3 +201,24 @@ class PlatformClient:
                 f"score rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return SubmitScoreResponse.model_validate(resp.json())
+
+    async def submit_transcript(
+        self, agent_id: UUID, *, run_id: str, body: bytes
+    ) -> None:
+        """Publish the run's transcript artifact behind an already-submitted score.
+
+        ``PUT /validator/agent/{id}/transcript/{run_id}`` with the raw canonical
+        bytes. The platform accepts them only when their SHA-256 equals the
+        digest the signed score declared (``details["transcript_sha256"]``) and
+        stores them content-addressed in the public bucket. Raises
+        :class:`PlatformError` on rejection so the caller can log it; callers
+        treat failure as best-effort (the score already stands)."""
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/transcript/{run_id}"
+        try:
+            resp = await self._client.put(url, content=body, headers=self._headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"transcript submit failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"transcript rejected ({resp.status_code}): {resp.text[:200]}"
+            )

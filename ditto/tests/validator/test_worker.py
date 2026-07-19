@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -31,7 +32,11 @@ from ditto.validator.errors import (
     ValidatorInfrastructureError,
 )
 from ditto.validator.onchain_seed import derive_seed
-from ditto.validator.weights import apply_miner_emission_cap, compute_weights
+from ditto.validator.weights import (
+    DEFAULT_BENCH_VERSION,
+    apply_miner_emission_cap,
+    compute_weights,
+)
 from ditto.validator.worker import ValidatorWorker
 
 _VALIDATOR_HOTKEY = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
@@ -2012,24 +2017,44 @@ class TestConfirmAndSubmit:
 
     async def test_submits_one_median_run_with_all_confirmations(self) -> None:
         agent_id = uuid4()
-        composites = {10: 0.90, 20: 0.70, 30: 0.80}  # median = 0.80 (seed 30)
+        # The median representative (seed 10) is deliberately not evaluated
+        # last, proving transcript publication is keyed by run id.
+        composites = {10: 0.80, 20: 0.90, 30: 0.70}
+        transcripts = {seed: f'{{"seed":{seed}}}'.encode() for seed in composites}
 
         async def _score(**kw: Any) -> ScoreReport:
-            return self._seeded_report(kw["seed"], composites[kw["seed"]])
+            seed = kw["seed"]
+            return self._seeded_report(seed, composites[seed]).model_copy(
+                update={
+                    "bench_version": 3,
+                    "details": {
+                        "bench_version": 3,
+                        "transcript_sha256": hashlib.sha256(
+                            transcripts[seed]
+                        ).hexdigest(),
+                    },
+                }
+            )
 
         dittobench = MagicMock()
         dittobench.score_tarball = AsyncMock(side_effect=_score)
+        dittobench.take_transcript = MagicMock(
+            side_effect=lambda run_id: transcripts[int(run_id.removeprefix("run-"))]
+        )
         dittobench.last_details = {"bench_version": 3}
         platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_transcript = AsyncMock()
         platform.get_artifact = AsyncMock(
             return_value=ArtifactResponse(
                 agent_id=agent_id,
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
+                bench_version=3,
             )
         )
         w = await self._worker(dittobench, platform)
+        w._current_bench_version = 3
 
         out = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -2042,15 +2067,19 @@ class TestConfirmAndSubmit:
         # The representative is a real run (the median composite/seed), and it
         # carries the sorted per-seed composites for the fold's median.
         assert report.composite == 0.80
-        assert report.seed == 30
+        assert report.seed == 10
         # Seed-aligned and seed-sorted: seeds [10, 20, 30] -> composites in that
         # seed order, so a later paired dethrone can intersect on shared seeds.
         assert report.confirmation_seeds == [10, 20, 30]
-        assert report.confirmation_composites == [0.90, 0.70, 0.80]
+        assert report.confirmation_composites == [0.80, 0.90, 0.70]
         # composite_stderr is pooled over the seeds: the per-seed reports carry
         # no single-run stderr, so it is the between-seed SEM
         # stdev([.7,.8,.9]) / sqrt(3) = 0.1 / sqrt(3).
         assert report.composite_stderr == pytest.approx(0.1 / 3**0.5)
+        dittobench.take_transcript.assert_called_once_with("run-10")
+        platform.submit_transcript.assert_awaited_once()
+        assert platform.submit_transcript.await_args.kwargs["run_id"] == "run-10"
+        assert platform.submit_transcript.await_args.kwargs["body"] == transcripts[10]
         assert out is report
 
     async def test_single_surviving_seed_has_no_confirmations(self) -> None:
@@ -2060,7 +2089,9 @@ class TestConfirmAndSubmit:
 
         async def _score(**kw: Any) -> ScoreReport:
             if kw["seed"] == 20:
-                return self._seeded_report(20, 0.75)
+                return self._seeded_report(20, 0.75).model_copy(
+                    update={"bench_version": 2, "details": {"bench_version": 2}}
+                )
             raise worker_mod.DittobenchError("boom")
 
         dittobench = MagicMock()
@@ -2073,9 +2104,11 @@ class TestConfirmAndSubmit:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
+                bench_version=2,
             )
         )
         w = await self._worker(dittobench, platform)
+        w._current_bench_version = 2
 
         report = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -2099,9 +2132,11 @@ class TestConfirmAndSubmit:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
+                bench_version=2,
             )
         )
         w = await self._worker(dittobench, platform)
+        w._current_bench_version = 2
 
         out = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -2140,3 +2175,251 @@ class TestPooledConfirmationStderr:
         one_run = 0.0293
         got = worker_mod._pooled_confirmation_stderr([0.88, 0.88, 0.88], one_run)
         assert got == pytest.approx(one_run / 3**0.5, rel=1e-6)
+
+
+class TestTranscriptPublication:
+    """Offline reproducibility (v3 finding 3): the worker binds a declared
+    transcript digest into the score signature and publishes the held bytes
+    after the score is accepted — best-effort, never unwinding the score."""
+
+    _DIGEST = "cd" * 32
+
+    def _report_with_transcript(self) -> ScoreReport:
+        report = _report("run_t", 0.9)
+        return report.model_copy(
+            update={
+                "bench_version": 3,
+                "details": {
+                    "bench_version": 3,
+                    "transcript_sha256": self._DIGEST,
+                },
+            }
+        )
+
+    async def test_submit_signs_digest_and_publishes_transcript(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_transcript = AsyncMock()
+        dittobench = MagicMock()
+        dittobench.take_transcript = MagicMock(return_value=b'{"cases":[]}')
+        signed_messages: list[bytes] = []
+
+        def _capture_sign(message: bytes) -> bytes:
+            signed_messages.append(message)
+            return b"\x01" * 64
+
+        keypair = MagicMock(sign=MagicMock(side_effect=_capture_sign))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=keypair,
+        )
+
+        await worker._submit_report(
+            uuid4(), "5MinerA" + "x" * 41, self._report_with_transcript()
+        )
+
+        assert len(signed_messages) == 1
+        assert signed_messages[0].endswith(f":3:{self._DIGEST}".encode())
+        dittobench.take_transcript.assert_called_once_with("run_t")
+        platform.submit_score.assert_awaited_once()
+        platform.submit_transcript.assert_awaited_once()
+        kwargs = platform.submit_transcript.await_args.kwargs
+        assert kwargs["run_id"] == "run_t"
+        assert kwargs["body"] == b'{"cases":[]}'
+
+    async def test_transcript_publication_failure_never_unwinds_score(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_transcript = AsyncMock(
+            side_effect=PlatformError("digest mismatch")
+        )
+        dittobench = MagicMock()
+        dittobench.take_transcript = MagicMock(return_value=b'{"cases":[]}')
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        report = await worker._submit_report(
+            uuid4(), "5MinerA" + "x" * 41, self._report_with_transcript()
+        )
+        assert report.composite == 0.9
+        platform.submit_score.assert_awaited_once()
+
+    async def test_report_without_transcript_keeps_legacy_signing(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_transcript = AsyncMock()
+        signed_messages: list[bytes] = []
+
+        def _capture_sign(message: bytes) -> bytes:
+            signed_messages.append(message)
+            return b"\x01" * 64
+
+        keypair = MagicMock(sign=MagicMock(side_effect=_capture_sign))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(take_transcript=MagicMock(return_value=None)),
+            chain=MagicMock(),
+            keypair=keypair,
+        )
+
+        await worker._submit_report(uuid4(), "5MinerA" + "x" * 41, _report("run", 0.9))
+
+        assert len(signed_messages) == 1
+        assert b"transcript" not in signed_messages[0]
+        assert not signed_messages[0].endswith(f":{self._DIGEST}".encode())
+        platform.submit_transcript.assert_not_awaited()
+
+
+class TestContestedDethroneConfirmation:
+    """Near-band crown contests re-score the whole contested set on common CRN
+    seeds so the fold decides on the paired statistic instead of seed luck."""
+
+    def _seeded_report(self, seed: int, composite: float) -> ScoreReport:
+        r = _report(f"run-{seed}", composite)
+        return r.model_copy(update={"seed": seed})
+
+    def _worker(self, dittobench: MagicMock, platform: MagicMock) -> ValidatorWorker:
+        cfg = _config()
+        cfg.koth_confirmation_seeds = 3
+        return ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+    async def test_in_band_contest_confirms_both_on_common_seeds(self) -> None:
+        # Deficit 0.005 sits inside the flat band (koth_margin 1% of 0.80).
+        champ = _entry("5A" + "a" * 44, 0.80)
+        chall = _entry("5B" + "b" * 44, 0.795, first_seen=_T0 + timedelta(minutes=1))
+
+        async def _score(**kw: Any) -> ScoreReport:
+            return self._seeded_report(kw["seed"], 0.8)
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=_score)
+        dittobench.last_details = {}
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=champ.agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+                bench_version=DEFAULT_BENCH_VERSION,
+            )
+        )
+        w = self._worker(dittobench, platform)
+
+        await w._confirm_contested_dethrone(
+            LedgerResponse(entries=[champ, chall], count=2)
+        )
+
+        # Both agents run all three common seeds; one signed score each.
+        assert dittobench.score_tarball.await_count == 6
+        assert platform.submit_score.await_count == 2
+        reports = [c.kwargs["report"] for c in platform.submit_score.await_args_list]
+        assert reports[0].confirmation_seeds == reports[1].confirmation_seeds
+
+        # Seeds are anchored to the CHAMPION's agent id alone, not the cohort,
+        # so they are stable across sweeps as challengers come and go.
+        from ditto.validator.crn import confirmation_seeds
+
+        expected = confirmation_seeds(
+            [str(champ.agent_id)], version=w._current_bench_version, count=3
+        )
+        # The report seed-sorts its pairs; compare as sets.
+        assert set(reports[0].confirmation_seeds) == set(expected)
+
+    async def test_settled_champion_not_rescored_for_fresh_entrant(self) -> None:
+        # The champion already carries its anchored seeds; a fresh in-band
+        # entrant must be confirmed WITHOUT re-running the champion (the
+        # O(1)-per-entrant guard against confirmation amplification).
+        from ditto.validator.crn import confirmation_seeds
+
+        champ_id = _entry("5A" + "a" * 44, 0.80).agent_id
+        seeds = confirmation_seeds(
+            [str(champ_id)], version=DEFAULT_BENCH_VERSION, count=3
+        )
+        champ = _entry("5A" + "a" * 44, 0.80, agent_id=champ_id).model_copy(
+            update={
+                "confirmation_seeds": seeds,
+                "confirmation_composites": [0.80, 0.80, 0.80],
+            }
+        )
+        entrant = _entry("5C" + "c" * 44, 0.795, first_seen=_T0 + timedelta(minutes=2))
+
+        async def _score(**kw: Any) -> ScoreReport:
+            return self._seeded_report(kw["seed"], 0.79)
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=_score)
+        dittobench.last_details = {}
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=entrant.agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+                bench_version=DEFAULT_BENCH_VERSION,
+            )
+        )
+        w = self._worker(dittobench, platform)
+
+        await w._confirm_contested_dethrone(
+            LedgerResponse(entries=[champ, entrant], count=2)
+        )
+
+        # Only the entrant runs (3 seeds, 1 submission); the champion is untouched.
+        assert dittobench.score_tarball.await_count == 3
+        assert platform.submit_score.await_count == 1
+        submitted_agent = platform.submit_score.await_args.args[0]
+        assert submitted_agent == entrant.agent_id
+
+    async def test_settled_contest_runs_nothing(self) -> None:
+        # Medians 0.80 vs 0.795: still inside the band, but the pair already
+        # shares three confirmation seeds, so the paired statistic decides it.
+        shared = {
+            "confirmation_composites": [0.79, 0.80, 0.81],
+            "confirmation_seeds": [7, 8, 9],
+        }
+        champ = _entry("5A" + "a" * 44, 0.80).model_copy(update=shared)
+        chall = _entry(
+            "5B" + "b" * 44, 0.795, first_seen=_T0 + timedelta(minutes=1)
+        ).model_copy(update={**shared, "confirmation_composites": [0.78, 0.795, 0.80]})
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock()
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        w = self._worker(dittobench, platform)
+
+        await w._confirm_contested_dethrone(
+            LedgerResponse(entries=[champ, chall], count=2)
+        )
+
+        dittobench.score_tarball.assert_not_awaited()
+        platform.submit_score.assert_not_awaited()
+
+    async def test_clear_lead_runs_nothing(self) -> None:
+        champ = _entry("5A" + "a" * 44, 0.80)
+        laggard = _entry("5B" + "b" * 44, 0.60, first_seen=_T0 + timedelta(minutes=1))
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock()
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        w = self._worker(dittobench, platform)
+
+        await w._confirm_contested_dethrone(
+            LedgerResponse(entries=[champ, laggard], count=2)
+        )
+
+        dittobench.score_tarball.assert_not_awaited()
+        platform.submit_score.assert_not_awaited()

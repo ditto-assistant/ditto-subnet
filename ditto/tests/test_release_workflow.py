@@ -1,9 +1,27 @@
+import tomllib
 from pathlib import Path
 
 import yaml
 
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
+PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
+
+
+def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
+    config = tomllib.loads(PYPROJECT_PATH.read_text())["tool"]["semantic_release"]
+    build_command = config["build_command"]
+    assert 'uv lock --upgrade-package "$PACKAGE_NAME"' in build_command
+    assert "git add uv.lock" in build_command
+
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    release_steps = workflow["jobs"]["publish-stack-release"]["steps"]
+    verification = next(
+        step
+        for step in release_steps
+        if step.get("name") == "Verify the exact release source"
+    )
+    assert "uv sync --locked --group dev" in verification["run"].splitlines()
 
 
 def test_public_screener_dependency_needs_no_private_authentication() -> None:

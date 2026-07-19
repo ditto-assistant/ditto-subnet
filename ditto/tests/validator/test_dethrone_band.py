@@ -24,6 +24,7 @@ from ditto.validator.weights import (
     _entry_stderr,
     _paired_dethrone,
     compute_weights,
+    contested_confirmation_set,
 )
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -335,3 +336,140 @@ class TestBeatsPaired:
         chal = _e("chal", 0.90, stderr=0.03, minutes=1)
         # independent band 1.64*sqrt(2)*0.03 = 0.070 < lead 0.10 -> dethrones.
         assert _beats(chal, champ, margin=0.02, dethrone_z=1.64) is True
+
+
+class TestContestedConfirmationSet:
+    """Near-band contested-dethrone selection: the champion + every
+    current-version challenger inside the unpaired indifference band, skipped
+    once the paired statistic can already decide every contested pair."""
+
+    _KW: dict[str, Any] = {"current_version": 1, "margin": 0.02, "dethrone_z": 0.0}
+
+    def test_in_band_challenger_selects_champion_and_challenger(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.80)
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)  # deficit 0.01 <= band 0.016
+        got = contested_confirmation_set([champ, chall], **self._KW)
+        assert [e.agent_id for e in got] == [champ.agent_id, chall.agent_id]
+
+    def test_clear_loss_is_not_contested(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.80)
+        chall = _e("5B" + "b" * 44, 0.70, minutes=1)  # deficit 0.10 > band
+        assert contested_confirmation_set([champ, chall], **self._KW) == []
+
+    def test_clear_win_flips_crown_without_confirmation(self) -> None:
+        old = _e("5A" + "a" * 44, 0.80)
+        new = _e("5B" + "b" * 44, 0.90, minutes=1)  # dethrones; old 0.10 behind
+        assert contested_confirmation_set([old, new], **self._KW) == []
+
+    def test_z_band_widens_the_contested_zone(self) -> None:
+        # Deficit 0.05 clears the flat 1.6% margin but sits inside the z band
+        # (1.64 * sqrt(0.03^2 + 0.03^2) ~= 0.0696), so the pair is contested.
+        champ = _e("5A" + "a" * 44, 0.80, stderr=0.03)
+        chall = _e("5B" + "b" * 44, 0.75, stderr=0.03, minutes=1)
+        got = contested_confirmation_set(
+            [champ, chall], current_version=1, margin=0.02, dethrone_z=1.64
+        )
+        assert [e.agent_id for e in got] == [champ.agent_id, chall.agent_id]
+
+    def test_settled_pair_never_retriggers(self) -> None:
+        champ = _e(
+            "5A" + "a" * 44, 0.80, confirmations=[0.79, 0.80, 0.81], seeds=[7, 8, 9]
+        )
+        chall = _e(
+            "5B" + "b" * 44,
+            0.79,
+            confirmations=[0.78, 0.79, 0.80],
+            seeds=[7, 8, 9],
+            minutes=1,
+        )
+        assert contested_confirmation_set([champ, chall], **self._KW) == []
+
+    def test_new_entrant_does_not_reopen_a_settled_pair(self) -> None:
+        # A settled challenger already shares the champion's seeds; a fresh
+        # in-band entrant must be confirmed WITHOUT re-scoring the settled pair
+        # (champion-anchored seeds do not move when the cohort grows). This is
+        # the O(1)-per-entrant property that bounds confirmation cost.
+        champ = _e(
+            "5A" + "a" * 44, 0.80, confirmations=[0.79, 0.80, 0.81], seeds=[7, 8, 9]
+        )
+        settled = _e(
+            "5B" + "b" * 44,
+            0.79,
+            confirmations=[0.78, 0.79, 0.80],
+            seeds=[7, 8, 9],
+            minutes=1,
+        )
+        entrant = _e("5C" + "c" * 44, 0.795, minutes=2)  # in band, no shared seeds
+        got = contested_confirmation_set([champ, settled, entrant], **self._KW)
+        # Only the champion (anchor) and the unsettled entrant; the settled
+        # challenger is excluded, so it is never re-scored.
+        assert [e.agent_id for e in got] == [champ.agent_id, entrant.agent_id]
+
+    def test_many_near_band_entrants_stay_linear(self) -> None:
+        # Griefing guard: N in-band challengers, none sharing seeds yet, select
+        # the champion once plus the N challengers — never an O(N^2) re-scoring
+        # cascade of already-processed members.
+        champ = _e("5A" + "a" * 44, 0.80)
+        challengers = [
+            _e(f"5{chr(66 + i)}" + "b" * 44, 0.795, minutes=i + 1) for i in range(6)
+        ]
+        got = contested_confirmation_set([champ, *challengers], **self._KW)
+        assert got[0].agent_id == champ.agent_id
+        assert len(got) == 1 + len(challengers)
+
+    def test_stale_challenger_is_the_version_sweeps_job(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.80)
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)
+        champ.bench_version = 2
+        # challenger carries no bench_version -> DEFAULT_BENCH_VERSION (1) < 2.
+        got = contested_confirmation_set(
+            [champ, chall], current_version=2, margin=0.02, dethrone_z=0.0
+        )
+        assert got == []
+
+    def test_stale_champion_defers_to_version_sweep(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.80)  # no bench_version -> stale at v2
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)
+        chall.bench_version = 2
+        got = contested_confirmation_set(
+            [champ, chall], current_version=2, margin=0.02, dethrone_z=0.0
+        )
+        assert got == []
+
+    def test_future_champion_is_not_confirmed_by_older_worker(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.80)
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)
+        champ.bench_version = 3
+        chall.bench_version = 2
+        assert (
+            contested_confirmation_set(
+                [champ, chall], current_version=2, margin=0.02, dethrone_z=0.0
+            )
+            == []
+        )
+
+    def test_future_challenger_is_not_confirmed_by_older_worker(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.80)
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)
+        champ.bench_version = 2
+        chall.bench_version = 3
+        assert (
+            contested_confirmation_set(
+                [champ, chall], current_version=2, margin=0.02, dethrone_z=0.0
+            )
+            == []
+        )
+
+    def test_contest_uses_effective_composites(self) -> None:
+        # The champion's raw composite (0.90, a lucky representative run) would
+        # put the challenger far outside the band; its confirmation MEDIAN
+        # (0.80) is what the fold compares, so the contest must too.
+        champ = _e(
+            "5A" + "a" * 44, 0.90, confirmations=[0.79, 0.80, 0.81], seeds=[7, 8, 9]
+        )
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)
+        got = contested_confirmation_set([champ, chall], **self._KW)
+        assert [e.agent_id for e in got] == [champ.agent_id, chall.agent_id]
+
+    def test_single_entry_ledger_has_no_contest(self) -> None:
+        assert contested_confirmation_set([_e("5A" + "a" * 44, 0.8)], **self._KW) == []

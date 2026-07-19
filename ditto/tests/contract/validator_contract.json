@@ -110,6 +110,19 @@
       "category": {
         "type": "string"
       },
+      "confidence": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "correct": {
         "default": false,
         "type": "boolean"
@@ -119,6 +132,10 @@
           "type": "string"
         },
         "type": "array"
+      },
+      "injection": {
+        "default": false,
+        "type": "boolean"
       },
       "kind": {
         "default": "",
@@ -134,7 +151,17 @@
         },
         "type": "array"
       },
+      "observed": {
+        "default": false,
+        "type": "boolean"
+      },
       "quality": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "result_usage": {
         "default": 0.0,
         "maximum": 1.0,
         "minimum": 0.0,
@@ -149,6 +176,10 @@
         "maximum": 1.0,
         "minimum": 0.0,
         "type": "number"
+      },
+      "twin_group": {
+        "default": "",
+        "type": "string"
       }
     },
     "required": [
@@ -168,6 +199,7 @@
           "screening",
           "screening_passed",
           "screening_failed",
+          "quarantined",
           "rejected",
           "evaluating",
           "scored",
@@ -300,6 +332,7 @@
           "screening",
           "screening_passed",
           "screening_failed",
+          "quarantined",
           "rejected",
           "evaluating",
           "scored",
@@ -480,6 +513,19 @@
           "category": {
             "type": "string"
           },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "correct": {
             "default": false,
             "type": "boolean"
@@ -489,6 +535,10 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "injection": {
+            "default": false,
+            "type": "boolean"
           },
           "kind": {
             "default": "",
@@ -504,7 +554,17 @@
             },
             "type": "array"
           },
+          "observed": {
+            "default": false,
+            "type": "boolean"
+          },
           "quality": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
             "minimum": 0.0,
@@ -519,6 +579,10 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "type": "number"
+          },
+          "twin_group": {
+            "default": "",
+            "type": "string"
           }
         },
         "required": [
@@ -527,6 +591,33 @@
           "score",
           "tool_score",
           "latency_ms"
+        ],
+        "type": "object"
+      },
+      "CategoryStat": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mean": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "std_err": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "count",
+          "mean"
         ],
         "type": "object"
       },
@@ -652,6 +743,20 @@
         },
         "type": "array"
       },
+      "per_category": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/CategoryStat"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "run_id": {
         "type": "string"
       },
@@ -705,6 +810,19 @@
           "category": {
             "type": "string"
           },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "correct": {
             "default": false,
             "type": "boolean"
@@ -714,6 +832,10 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "injection": {
+            "default": false,
+            "type": "boolean"
           },
           "kind": {
             "default": "",
@@ -729,7 +851,17 @@
             },
             "type": "array"
           },
+          "observed": {
+            "default": false,
+            "type": "boolean"
+          },
           "quality": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
             "minimum": 0.0,
@@ -744,6 +876,10 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "type": "number"
+          },
+          "twin_group": {
+            "default": "",
+            "type": "string"
           }
         },
         "required": [
@@ -752,6 +888,33 @@
           "score",
           "tool_score",
           "latency_ms"
+        ],
+        "type": "object"
+      },
+      "CategoryStat": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mean": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "std_err": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "count",
+          "mean"
         ],
         "type": "object"
       },
@@ -877,6 +1040,20 @@
             },
             "type": "array"
           },
+          "per_category": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/CategoryStat"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "run_id": {
             "type": "string"
           },
@@ -955,6 +1132,7 @@
           "screening",
           "screening_passed",
           "screening_failed",
+          "quarantined",
           "rejected",
           "evaluating",
           "scored",
