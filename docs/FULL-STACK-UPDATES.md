@@ -61,6 +61,40 @@ Use the exact commands in [VALIDATOR.md](VALIDATOR.md) and run
 `scripts/install-validator-stack-auto-update.sh` only after migration. Never substitute a
 mutable tag for the adoption digest.
 
+### Preflight and failure boundary
+
+The host launcher is outside the signed bundle and cannot update itself. Before
+`migrate`, use the exact reviewed release that published the descriptor, keep
+the existing `.env` in that checkout, and verify both updater timers are off:
+
+```sh
+git status --short
+git describe --tags --always
+test -f .env
+systemctl is-active ditto-validator-auto-update.timer || true
+systemctl is-active ditto-validator-stack-auto-update.timer || true
+./scripts/validator-compose.sh ps
+```
+
+Require a clean checkout and six healthy services. Do not copy `.env.example`,
+use a second checkout, or install the new timer before migration succeeds.
+
+Descriptor, digest, and Compose validation happen before drain. If migration
+fails before a drain is reported and `status` shows no transaction, the old
+stack was not replaced; leave healthy services running and capture the release,
+descriptor digest, and updater log:
+
+```sh
+./scripts/validator-stack-auto-update.sh status
+./scripts/validator-compose.sh ps
+systemctl status ditto-validator-auto-update.timer \
+  ditto-validator-stack-auto-update.timer --no-pager || true
+```
+
+Never edit extracted state or bypass descriptor checks. If `status` reports a
+transaction, keep both timers disabled and follow `recover`; a
+`migration_started` transaction deliberately requires supervised repair.
+
 Adoption does not interrupt active work. If the currently running services do
 not already match the descriptor, perform the migration in a maintenance
 window after the validator has cooperatively drained.

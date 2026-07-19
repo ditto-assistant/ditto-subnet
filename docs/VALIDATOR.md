@@ -289,6 +289,11 @@ timer still disabled, `migrate` waits for the current validator to drain,
 installs all six exact services, starts the validator quiescent, verifies a
 fresh accepted heartbeat, and records the stack:
 
+First update this checkout to the exact reviewed release and retain its existing
+`.env`; the host updater cannot update itself. Complete the
+[migration preflight](FULL-STACK-UPDATES.md#preflight-and-failure-boundary)
+before the first cutover.
+
 ```sh
 sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
 sudo systemctl disable --now ditto-validator-auto-update.timer 2>/dev/null || true
