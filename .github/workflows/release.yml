@@ -14,7 +14,7 @@ concurrency:
 jobs:
   release:
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     outputs:
@@ -63,7 +63,7 @@ jobs:
   publish-stack-release:
     needs: release
     if: needs.release.outputs.released == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       packages: write
@@ -141,8 +141,8 @@ jobs:
       - name: Set up QEMU for both release platforms
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -156,7 +156,7 @@ jobs:
 
       - name: Build and publish the validator index
         id: validator
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: .
           file: Dockerfile
@@ -172,7 +172,7 @@ jobs:
 
       - name: Build and publish the sandbox daemon index
         id: sandbox-docker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: .
           file: Dockerfile.sandbox-docker
@@ -188,7 +188,7 @@ jobs:
 
       - name: Build and publish the scorer index
         id: dittobench-api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: ${{ runner.temp }}/dittobench-source
           file: ${{ runner.temp }}/dittobench-source/Dockerfile
@@ -207,7 +207,7 @@ jobs:
 
       - name: Build and publish the model relay index
         id: model-relay
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: ${{ runner.temp }}/dittobench-source
           file: ${{ runner.temp }}/dittobench-source/Dockerfile
@@ -344,7 +344,7 @@ jobs:
 
       - name: Build and publish the immutable stack descriptor
         id: stack
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: useblacksmith/build-push-action@v2
         with:
           context: .
           file: Dockerfile.stack-release
