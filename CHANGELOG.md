@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.16.0 (2026-07-19)
+
+### Features
+
+- Enforce benchmark v3 screened-image contract
+  ([#175](https://github.com/ditto-assistant/ditto-subnet/pull/175),
+  [`2da1e4b`](https://github.com/ditto-assistant/ditto-subnet/commit/2da1e4b5fcf63a11b60b276228a8004c9c11d40e))
+
+
 ## v0.15.0 (2026-07-19)
 
 ### Features
