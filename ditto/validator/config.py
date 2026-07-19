@@ -32,7 +32,10 @@ KOTH_TAIL_SIZE = 4  # runners-up after the champion that split the tail
 KOTH_CHAMPION_SHARE = 0.9  # champion weight share (90% champion / 10% tail)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
-MINER_EMISSION_SHARE = 0.2  # release 20% of miner emission; burn the other 80%
+# Release the full miner emission through KOTH. The burn hotkey is retained only
+# as the safe idle vector: with no eligible miners the whole vector still routes
+# to burn rather than zeroing the chain.
+MINER_EMISSION_SHARE = 1.0
 FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
 
 
@@ -172,10 +175,12 @@ class ValidatorConfig:
     seed set). ``1`` reproduces the single-seed pre-P4 sweep, byte-identical."""
 
     miner_emission_share: float
-    """Share of miner emission released through KOTH; the remainder is burned."""
+    """Share of miner emission released through KOTH; the remainder is burned.
+    ``1.0`` releases all of it (the deployed value)."""
 
     burn_hotkey: str
-    """Owner-associated hotkey whose miner incentive Subtensor burns."""
+    """Owner-associated hotkey whose miner incentive Subtensor burns. Used for
+    the idle vector (no eligible miners) and for any residual share below 1.0."""
 
     min_stake_tao: float
     """Minimum stake (TAO) this validator expects on its own hotkey before it

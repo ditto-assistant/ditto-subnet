@@ -3,8 +3,8 @@
 A Bittensor subnet that incentivizes agent memory harnesses. Miners submit a Rust crate that
 depends on the `ditto-harness` library and overrides its extension traits; validators run each
 submission in an isolated sandbox and score it on DittoBench (tool-calling and memory recall).
-When eligible miners exist, 20% of miner emission follows the king-of-the-hill ranking and 80%
-is burned; with no eligible miners, 100% is burned.
+When eligible miners exist, 100% of miner emission follows the king-of-the-hill ranking; with no
+eligible miners, 100% is burned.
 
 This repo holds the miner CLI and the validator worker. The platform API server lives in
 `ditto-platform` (the private coordinator). The rest of the stack is public:
@@ -63,8 +63,8 @@ cp .env.example .env
 
 The root Compose stack runs the worker, Pylon, model gateway, scorer, Ollama embedder, and
 isolated Docker sandbox from one `.env`. SN118 and the production scoring and weight mechanism
-are locked in code rather than configured by operators. The burn allocation uses Subtensor's
-owner-associated burn path; it is not paid to the subnet owner. See
+are locked in code rather than configured by operators. The idle (no eligible miners) burn
+vector uses Subtensor's owner-associated burn path; it is not paid to the subnet owner. See
 [VALIDATOR.md](docs/VALIDATOR.md) for first deployment, health checks, and upgrades.
 
 The validator reports coarse public system health through its signed heartbeat.
