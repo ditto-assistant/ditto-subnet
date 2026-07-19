@@ -17,6 +17,7 @@ import httpx
 
 from ditto.api_models.validator import (
     ArtifactResponse,
+    ConfirmationJobRequest,
     JobRequest,
     JobResponse,
     LedgerResponse,
@@ -29,6 +30,7 @@ from ditto.api_models.validator import (
 from ditto.validator.errors import PlatformError
 from ditto.validator.signing import (
     sign_artifact_request,
+    sign_confirmation_job_request,
     sign_job_request,
     sign_ledger_request,
 )
@@ -105,6 +107,40 @@ class PlatformClient:
         if resp.status_code != 200:
             raise PlatformError(
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return JobResponse.model_validate(resp.json())
+
+    async def request_confirmation_job(
+        self, *, champion_agent_id: UUID, challenger_agent_id: UUID
+    ) -> JobResponse:
+        """Claim the one platform-validated uncertainty-band confirmation."""
+        url = f"{self._base}{_PREFIX}/confirmation-job"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = ConfirmationJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            champion_agent_id=champion_agent_id,
+            challenger_agent_id=challenger_agent_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_confirmation_job_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                champion_agent_id=champion_agent_id,
+                challenger_agent_id=challenger_agent_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        try:
+            resp = await self._client.post(
+                url, headers=self._headers, json=payload.model_dump(mode="json")
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"confirmation job request failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"confirmation job rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return JobResponse.model_validate(resp.json())
 

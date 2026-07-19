@@ -15,10 +15,12 @@ from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.validator.signing import (
     artifact_signing_message,
+    confirmation_job_signing_message,
     heartbeat_signing_message,
     job_signing_message,
     ledger_signing_message,
     score_signing_message,
+    sign_confirmation_job_request,
     sign_heartbeat,
     sign_job_request,
     sign_score,
@@ -139,6 +141,37 @@ def test_job_claim_signature_binds_hotkey_nonce_and_timestamp() -> None:
         requested_at=requested_at,
     )
     assert not keypair.verify(replay_as_other_nonce, bytes.fromhex(signature))
+
+
+def test_confirmation_claim_signature_binds_both_agent_ids() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    challenger = UUID("c9bf9e57-1685-4c89-bafb-ff5af830be8a")
+    nonce = UUID("7f4d1800-4cf1-4a24-8fd5-2e4cd59942ae")
+    requested_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+    signature = sign_confirmation_job_request(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        champion_agent_id=_AGENT,
+        challenger_agent_id=challenger,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    message = confirmation_job_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        champion_agent_id=_AGENT,
+        challenger_agent_id=challenger,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert keypair.verify(message, bytes.fromhex(signature))
+    swapped = confirmation_job_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        champion_agent_id=challenger,
+        challenger_agent_id=_AGENT,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert not keypair.verify(swapped, bytes.fromhex(signature))
 
 
 def test_artifact_signature_binds_agent_nonce_and_timestamp() -> None:

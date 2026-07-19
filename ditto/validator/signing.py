@@ -134,6 +134,44 @@ def sign_job_request(
     return signature.hex()
 
 
+def confirmation_job_signing_message(
+    *,
+    validator_hotkey: str,
+    champion_agent_id: UUID,
+    challenger_agent_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    """Build canonical bytes for one bounded KOTH confirmation claim."""
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return (
+        "validator-confirmation-job:v1:"
+        f"{validator_hotkey}:{champion_agent_id}:{challenger_agent_id}:"
+        f"{nonce}:{requested}"
+    ).encode()
+
+
+def sign_confirmation_job_request(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    champion_agent_id: UUID,
+    challenger_agent_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        confirmation_job_signing_message(
+            validator_hotkey=validator_hotkey,
+            champion_agent_id=champion_agent_id,
+            challenger_agent_id=challenger_agent_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
 def artifact_signing_message(
     *, validator_hotkey: str, agent_id: UUID, nonce: UUID, requested_at: datetime
 ) -> bytes:

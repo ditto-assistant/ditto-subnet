@@ -2012,6 +2012,55 @@ class TestConfirmAndSubmit:
         platform.submit_score.assert_not_awaited()
 
 
+class TestUncertainRawLeaderConfirmation:
+    async def test_claims_one_ticket_and_reuses_incumbent_seeds(self) -> None:
+        champion = _entry("champion", 0.88).model_copy(
+            update={
+                "bench_version": 2,
+                "composite_stderr": 0.03,
+                "confirmation_composites": [0.87, 0.88, 0.89],
+                "confirmation_seeds": [9, 7, 8],
+            }
+        )
+        challenger = _entry(
+            "challenger", 0.93, first_seen=_T0 + timedelta(minutes=1)
+        ).model_copy(update={"bench_version": 2, "composite_stderr": 0.03})
+        deadline = datetime.now(UTC) + timedelta(hours=1)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_confirmation_job = AsyncMock(
+            return_value=_job(challenger.miner_hotkey, deadline=deadline).model_copy(
+                update={"agent_id": challenger.agent_id}
+            )
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._current_bench_version = 2
+        worker_any: Any = worker
+        confirm = AsyncMock(return_value=_report("confirm", 0.92))
+        worker_any._confirm_and_submit = confirm
+
+        await worker._confirm_uncertain_raw_leader(
+            LedgerResponse(entries=[champion, challenger], count=2)
+        )
+
+        platform.request_confirmation_job.assert_awaited_once_with(
+            champion_agent_id=champion.agent_id,
+            challenger_agent_id=challenger.agent_id,
+        )
+        confirm.assert_awaited_once_with(
+            challenger.agent_id,
+            challenger.sha256,
+            challenger.miner_hotkey,
+            seeds=[7, 8, 9],
+            ticket_deadline=deadline,
+        )
+
+
 class TestPooledConfirmationStderr:
     def test_none_below_two_seeds(self) -> None:
         assert worker_mod._pooled_confirmation_stderr([], None) is None

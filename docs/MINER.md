@@ -135,6 +135,10 @@ result.
 - Each miner competes with its highest eligible score. A challenger dethrones
   the incumbent only after clearing the greater of the 2% relative margin and
   the configured statistical error band.
+- If the raw leader clears 2% but separate dataset seeds leave the result inside
+  that error band, the validator runs one shared-seed confirmation against the
+  incumbent's existing benchmark-version baseline. The paired result decides
+  the crown; clear wins and clear losses are never re-run by this rule.
 - The champion receives 90% of competitive weight; the next four distinct
   miners split 10%. The competitive vector receives 20% of available miner
   emission and the remaining 80% is burned. With no eligible miners, 100% is

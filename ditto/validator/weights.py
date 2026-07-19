@@ -392,3 +392,50 @@ def agents_needing_rescore(
     champion = _champion(scored, margin, dethrone_z)
     rewarded = [champion, *_tail(scored, champion, tail_size)]
     return [e for e in rewarded if _entry_version(e) < current_version]
+
+
+def confirmation_challenger(
+    entries: Sequence[LedgerEntry],
+    *,
+    current_version: int,
+    margin: float,
+    dethrone_z: float,
+) -> tuple[LedgerEntry, LedgerEntry] | None:
+    """Return ``(champion, raw leader)`` for one shared-seed confirmation.
+
+    The raw leader must already clear the flat incumbent margin but fail only
+    the unpaired statistical band. The current-version incumbent must expose at
+    least two confirmation seeds, so the worker can settle the comparison by
+    scoring only the challenger on that existing baseline. Clear wins/losses,
+    stale rows, and pairs that already share seeds are inert.
+    """
+    scored = [entry for entry in entries if entry.composite > 0.0]
+    if len(scored) < 2:
+        return None
+    champion = _champion(scored, margin, dethrone_z)
+    challenger = sorted(
+        scored, key=lambda entry: (-entry.composite, entry.first_seen, entry.agent_id)
+    )[0]
+    if (
+        challenger.agent_id == champion.agent_id
+        or _entry_version(champion) != current_version
+        or _entry_version(challenger) != current_version
+    ):
+        return None
+    champion_by_seed = _entry_seed_composites(champion)
+    if champion_by_seed is None or len(champion_by_seed) < 2:
+        return None
+    if _paired_dethrone(challenger, champion, dethrone_z) is not None:
+        return None
+    challenger_score = _effective_composite(challenger)
+    champion_score = _effective_composite(champion)
+    lead = challenger_score - champion_score
+    flat_margin = champion_score * margin
+    challenger_stderr = _entry_stderr(challenger)
+    champion_stderr = _entry_stderr(champion)
+    if dethrone_z <= 0.0 or challenger_stderr is None or champion_stderr is None:
+        return None
+    statistical_band = dethrone_z * math.sqrt(challenger_stderr**2 + champion_stderr**2)
+    if not (lead > flat_margin and lead <= max(flat_margin, statistical_band)):
+        return None
+    return champion, challenger

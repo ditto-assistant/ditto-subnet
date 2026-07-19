@@ -53,6 +53,7 @@ from ditto.validator.weights import (
     agents_needing_rescore,
     apply_miner_emission_cap,
     compute_weights,
+    confirmation_challenger,
 )
 
 if TYPE_CHECKING:
@@ -730,7 +731,12 @@ class ValidatorWorker:
         except PlatformError as e:
             logger.warning("ledger fetch for re-score failed; skipping: %s", e)
             return
-        await self._rescore_stale_champion_and_tail(
+        ledger = await self._rescore_stale_champion_and_tail(
+            ledger,
+            stop_requested=stop_requested,
+            drain_requested=drain_requested,
+        )
+        await self._confirm_uncertain_raw_leader(
             ledger,
             stop_requested=stop_requested,
             drain_requested=drain_requested,
@@ -809,6 +815,61 @@ class ValidatorWorker:
                 exc,
             )
             return ledger
+
+    async def _confirm_uncertain_raw_leader(
+        self,
+        ledger: LedgerResponse,
+        *,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
+        """Settle one raw-leader contest on the incumbent's existing seeds.
+
+        Benchmark-version sweeps establish a shared-seed baseline for the
+        champion and tail. When a later current-version raw leader clears the
+        flat 2% floor but remains blocked only by unpaired uncertainty, request
+        a platform-validated lease and score that challenger on the incumbent's
+        published seeds. The next fold uses the paired statistic. This never
+        starts while normal work is active and never re-runs a clear win/loss.
+        """
+        pair = confirmation_challenger(
+            ledger.entries,
+            current_version=self._current_bench_version,
+            margin=self._config.koth_margin,
+            dethrone_z=self._config.koth_dethrone_z,
+        )
+        if pair is None or self._new_work_blocked(stop_requested, drain_requested):
+            return
+        champion, challenger = pair
+        seeds = sorted(champion.confirmation_seeds or [])
+        try:
+            job = await self._platform.request_confirmation_job(
+                champion_agent_id=champion.agent_id,
+                challenger_agent_id=challenger.agent_id,
+            )
+            submitted = await self._confirm_and_submit(
+                challenger.agent_id,
+                challenger.sha256,
+                challenger.miner_hotkey,
+                seeds=seeds,
+                ticket_deadline=job.deadline,
+            )
+        except (PlatformError, DittobenchError) as exc:
+            logger.warning(
+                "KOTH shared-seed confirmation failed champion=%s challenger=%s: %s",
+                champion.agent_id,
+                challenger.agent_id,
+                exc,
+            )
+            return
+        if submitted is not None:
+            logger.info(
+                "submitted shared-seed KOTH confirmation champion=%s "
+                "challenger=%s seeds=%s",
+                champion.agent_id,
+                challenger.agent_id,
+                seeds,
+            )
 
     async def _validator_permitted(self) -> bool:
         """Best-effort self-check that our hotkey may set weights this epoch.
@@ -1246,6 +1307,7 @@ class ValidatorWorker:
         miner_hotkey: str,
         *,
         seeds: Sequence[int],
+        ticket_deadline: datetime | None = None,
     ) -> ScoreReport | None:
         """P4 re-score of one stale agent over ``seeds`` (K common CRN seeds).
 
@@ -1301,7 +1363,12 @@ class ValidatorWorker:
                     ),
                 }
             )
-        return await self._submit_report(agent_id, miner_hotkey, representative)
+        return await self._submit_report(
+            agent_id,
+            miner_hotkey,
+            representative,
+            ticket_deadline=ticket_deadline,
+        )
 
     async def run_forever(
         self,

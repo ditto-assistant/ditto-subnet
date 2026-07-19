@@ -24,6 +24,7 @@ from ditto.validator.weights import (
     _entry_stderr,
     _paired_dethrone,
     compute_weights,
+    confirmation_challenger,
 )
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -309,6 +310,72 @@ class TestBeatsPaired:
             minutes=1,
         )
         assert _beats(chal, champ, margin=0.02, dethrone_z=1.64) is True
+
+
+class TestConfirmationChallenger:
+    def test_flat_win_inside_unpaired_band_uses_incumbent_baseline(self) -> None:
+        champion = _e(
+            "champion",
+            0.88,
+            stderr=0.03,
+            confirmations=[0.87, 0.88, 0.89],
+            seeds=[7, 8, 9],
+            minutes=0,
+        )
+        challenger = _e("challenger", 0.93, stderr=0.03, minutes=1)
+
+        assert confirmation_challenger(
+            [champion, challenger],
+            current_version=1,
+            margin=0.02,
+            dethrone_z=1.64,
+        ) == (champion, challenger)
+
+    def test_clear_win_and_shared_seed_pair_do_not_retrigger(self) -> None:
+        champion = _e(
+            "champion",
+            0.88,
+            stderr=0.01,
+            confirmations=[0.87, 0.88, 0.89],
+            seeds=[7, 8, 9],
+            minutes=0,
+        )
+        clear = _e("clear", 0.95, stderr=0.01, minutes=1)
+        assert (
+            confirmation_challenger(
+                [champion, clear],
+                current_version=1,
+                margin=0.02,
+                dethrone_z=1.64,
+            )
+            is None
+        )
+
+        paired = _e(
+            "paired",
+            0.93,
+            stderr=0.03,
+            confirmations=[0.92, 0.93, 0.94],
+            seeds=[7, 8, 9],
+            minutes=1,
+        )
+        assert (
+            confirmation_challenger(
+                [champion, paired],
+                current_version=1,
+                margin=0.02,
+                dethrone_z=1.64,
+            )
+            is None
+        )
+        champ = _e(
+            "champ",
+            0.80,
+            stderr=0.03,
+            confirmations=[0.80, 0.79, 0.81],
+            seeds=[1, 2, 3],
+            minutes=0,
+        )
         chal_unpaired = _e(
             "chal",
             0.85,

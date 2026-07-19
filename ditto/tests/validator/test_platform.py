@@ -13,11 +13,16 @@ import bittensor
 import httpx
 import pytest
 
-from ditto.api_models.validator import JobRequest, ValidatorHeartbeatRequest
+from ditto.api_models.validator import (
+    ConfirmationJobRequest,
+    JobRequest,
+    ValidatorHeartbeatRequest,
+)
 from ditto.validator.errors import PlatformError
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
     artifact_signing_message,
+    confirmation_job_signing_message,
     job_signing_message,
     ledger_signing_message,
 )
@@ -44,6 +49,43 @@ async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
         assert await platform.request_job() is None
+
+
+async def test_confirmation_claim_binds_champion_and_challenger() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    champion = UUID("550e8400-e29b-41d4-a716-446655440000")
+    challenger = UUID("c9bf9e57-1685-4c89-bafb-ff5af830be8a")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        claim = ConfirmationJobRequest.model_validate(json.loads(request.content))
+        message = confirmation_job_signing_message(
+            validator_hotkey=claim.validator_hotkey,
+            champion_agent_id=claim.champion_agent_id,
+            challenger_agent_id=claim.challenger_agent_id,
+            nonce=claim.nonce,
+            requested_at=claim.requested_at,
+        )
+        assert keypair.verify(message, bytes.fromhex(claim.signature))
+        return httpx.Response(
+            200,
+            json={
+                "agent_id": str(challenger),
+                "miner_hotkey": "5Miner",
+                "sha256": "ab" * 32,
+                "deadline": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        job = await PlatformClient(config, http, keypair).request_confirmation_job(  # type: ignore[arg-type]
+            champion_agent_id=champion,
+            challenger_agent_id=challenger,
+        )
+    assert job.agent_id == challenger
 
 
 async def test_artifact_request_is_fresh_agent_bound_and_signed() -> None:
