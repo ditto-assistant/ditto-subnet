@@ -6,13 +6,19 @@ Locks the canonical signing-message format, which the platform's
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
 import bittensor
 
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
+from ditto.api_models.validator_capabilities import (
+    ValidatorCapabilities,
+    ValidatorStackIdentity,
+)
 from ditto.validator.signing import (
     artifact_signing_message,
     heartbeat_signing_message,
@@ -27,6 +33,7 @@ from ditto.validator.signing import (
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _DEADLINE = datetime(2026, 7, 9, 12, 30, tzinfo=UTC)
+_V7_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v7.json"
 
 
 def test_message_is_canonical_format() -> None:
@@ -444,3 +451,49 @@ def test_protocol_v4_heartbeat_canonical_vector() -> None:
         timestamp=1_784_020_800,
     )
     assert keypair.verify(expected, bytes.fromhex(signature))
+
+
+def test_protocol_v5_and_v6_messages_remain_backward_compatible() -> None:
+    """v5/v6 changed updater coordination, not the signed heartbeat fields."""
+    for protocol in (5, 6):
+        actual = heartbeat_signing_message(
+            validator_hotkey=_HOTKEY,
+            software_version="1.2.3",
+            protocol_version=protocol,
+            code_digest="ab" * 32,
+            state="idle",
+            timestamp=1_784_020_800,
+        )
+        expected = (
+            "ditto-validator-heartbeat:v4:"
+            f"{_HOTKEY}:1.2.3:{protocol}:{'ab' * 32}:idle::-:-:1784020800"
+        ).encode()
+        assert actual == expected
+
+
+def test_protocol_v7_heartbeat_cross_repository_vector() -> None:
+    """Freeze the exact combined capability and stack signature bytes."""
+    vector = json.loads(_V7_VECTOR.read_text())
+    request = vector["request"]
+    capabilities = ValidatorCapabilities.model_validate(request.pop("capabilities"))
+    stack = ValidatorStackIdentity.model_validate(request.pop("stack"))
+
+    actual = heartbeat_signing_message(
+        **request, capabilities=capabilities, stack=stack
+    )
+    assert actual.decode() == vector["expected_message_utf8"]
+    assert actual.hex() == vector["expected_message_hex"]
+
+
+def test_protocol_v7_signature_binds_capabilities_and_stack() -> None:
+    vector = json.loads(_V7_VECTOR.read_text())
+    request = vector["request"]
+    capabilities = ValidatorCapabilities.model_validate(request.pop("capabilities"))
+    stack = ValidatorStackIdentity.model_validate(request.pop("stack"))
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_heartbeat(
+        keypair, **request, capabilities=capabilities, stack=stack
+    )
+    tampered = capabilities.model_copy(update={"require_screened_image": True})
+    message = heartbeat_signing_message(**request, capabilities=tampered, stack=stack)
+    assert not keypair.verify(message, bytes.fromhex(signature))

@@ -28,6 +28,39 @@ class TestResolveNetwork:
         """The function returns the same object NETWORKS holds, not a copy."""
         assert resolve_network("finney") is NETWORKS["finney"]
 
+    def test_local_api_can_move_off_the_hardcoded_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DITTO_LOCAL_API_URL", "http://127.0.0.1:18000/")
+
+        resolved = resolve_network("local")
+
+        assert resolved.api_url == "http://127.0.0.1:18000"
+        assert resolved.subtensor_network == "local"
+
+    def test_local_api_override_must_be_http(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DITTO_LOCAL_API_URL", "file:///tmp/not-an-api")
+        with pytest.raises(NetworkResolutionError, match="http"):
+            resolve_network("local")
+
+    @pytest.mark.parametrize(
+        "api_url",
+        [
+            "http://",
+            "http://[",
+            "https://?query=1",
+            "http://localhost:8000/#fragment",
+        ],
+    )
+    def test_local_api_override_must_be_a_complete_base_url(
+        self, monkeypatch: pytest.MonkeyPatch, api_url: str
+    ) -> None:
+        monkeypatch.setenv("DITTO_LOCAL_API_URL", api_url)
+        with pytest.raises(NetworkResolutionError, match="complete http"):
+            resolve_network("local")
+
     def test_unknown_network_raises_typed_error(self) -> None:
         with pytest.raises(NetworkResolutionError) as excinfo:
             resolve_network("staging-canary")

@@ -81,7 +81,7 @@ jobs:
       OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
       COMPATIBILITY_EPOCH: "2"
       UPDATE_PROTOCOL: "1"
-      HEARTBEAT_PROTOCOL: "6"
+      HEARTBEAT_PROTOCOL: "7"
       COMPOSE_SCHEMA: "1"
     steps:
       - name: Check out the exact release commit
@@ -169,7 +169,7 @@ jobs:
             DITTO_VERSION=${{ needs.release.outputs.version }}
             DITTO_REVISION=${{ needs.release.outputs.commit_sha }}
             VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
-            VALIDATOR_HEARTBEAT_PROTOCOL=6
+            VALIDATOR_HEARTBEAT_PROTOCOL=7
           tags: |
             ${{ env.VALIDATOR_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 

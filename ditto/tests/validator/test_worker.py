@@ -229,6 +229,13 @@ def _platform_with_ledger(
             sha256="ab" * 32,
             download_url="https://signed.example/x.tar.gz?sig=1",
             expires_at=datetime.now(UTC),
+            screened_image_url="https://signed.example/x-image.tar?sig=1",
+            screened_image_sha256="12" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "34" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
         )
     )
     platform.submit_score = AsyncMock(
@@ -278,7 +285,12 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 6
+        assert heartbeat.protocol_version == 7
+        assert heartbeat.capabilities is not None
+        assert heartbeat.capabilities.screened_images is False
+        assert heartbeat.capabilities.source_build_fallback is True
+        assert heartbeat.stack is not None
+        assert heartbeat.stack.mode == "source"
         assert len(heartbeat.code_digest) == 64
         running = [
             heartbeat
@@ -1048,6 +1060,13 @@ class TestRunOnce:
         assert kwargs["seed"] == 12345
         assert kwargs["dataset_sha256"] == "cd" * 32
         assert kwargs["run_size"] == "full"
+        assert kwargs["screened_image_url"].startswith("https://")
+        assert kwargs["screened_image_sha256"] == "12" * 32
+        assert kwargs["screened_image_size_bytes"] == 123
+        assert kwargs["screened_image_id"] == "sha256:" + "34" * 32
+        assert kwargs["screened_image_ref"] == (
+            "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+        )
 
     async def test_sha_mismatch_skips_agent(self) -> None:
         # If the queue item and artifact disagree on the digest, the agent is
@@ -1085,6 +1104,36 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once_with(
             {"5Champ" + "x" * 42: 0.2, _BURN_HOTKEY: 0.8}
         )
+
+    async def test_invalid_artifact_skips_only_its_ticket(self) -> None:
+        first = _job("5MinerA" + "x" * 41)
+        second = _job("5MinerB" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[first, second], ledger=[])
+        valid_artifact = ArtifactResponse(
+            agent_id=second.agent_id,
+            sha256=second.sha256,
+            download_url="https://signed.example/second.tar.gz?sig=1",
+            expires_at=datetime.now(UTC),
+        )
+        platform.get_artifact = AsyncMock(
+            side_effect=[PlatformError("artifact response was invalid"), valid_artifact]
+        )
+        dittobench = MagicMock(
+            score_tarball=AsyncMock(return_value=_report("second", 0.9))
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(put_weights=AsyncMock()),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once()
+
+        assert outcome.queue_depth == 2
+        dittobench.score_tarball.assert_awaited_once()
+        platform.submit_score.assert_awaited_once()
 
     async def test_ground_seed_ticket_is_refused(self) -> None:
         # P2: a ticket whose seed does not re-derive from its pinned on-chain

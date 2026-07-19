@@ -40,6 +40,7 @@ from ditto.validator.errors import (
 )
 from ditto.validator.onchain_seed import seed_matches
 from ditto.validator.signing import sign_heartbeat, sign_score
+from ditto.validator.stack_identity import validator_capabilities_and_stack
 from ditto.validator.telemetry import (
     ScoredAgentStat,
     SweepStats,
@@ -404,6 +405,7 @@ class ValidatorWorker:
                 if self._system_metrics is not None
                 else None
             )
+            capabilities, stack = validator_capabilities_and_stack()
             signature = sign_heartbeat(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
@@ -414,6 +416,8 @@ class ValidatorWorker:
                 active_agent_id=active_agent_id,
                 system_metrics=system_metrics,
                 benchmark_progress=benchmark_progress,
+                capabilities=capabilities,
+                stack=stack,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -425,6 +429,8 @@ class ValidatorWorker:
                 active_agent_id=active_agent_id,
                 system_metrics=system_metrics,
                 benchmark_progress=benchmark_progress,
+                capabilities=capabilities,
+                stack=stack,
                 timestamp=timestamp,
                 signature=signature,
             )
@@ -1109,6 +1115,11 @@ class ValidatorWorker:
             dataset_sha256=dataset_sha256,
             run_size=run_size,
             progress_callback=progress_callback,
+            screened_image_url=artifact.screened_image_url,
+            screened_image_sha256=artifact.screened_image_sha256,
+            screened_image_size_bytes=artifact.screened_image_size_bytes,
+            screened_image_id=artifact.screened_image_id,
+            screened_image_ref=artifact.screened_image_ref,
         )
         details = getattr(self._dittobench, "last_details", None)
         bench_version = (

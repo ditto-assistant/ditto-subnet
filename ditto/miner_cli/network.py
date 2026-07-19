@@ -22,6 +22,9 @@ flag.
 
 from __future__ import annotations
 
+import os
+from urllib.parse import urlsplit
+
 from ditto.miner_cli.errors import NetworkResolutionError
 from ditto.miner_cli.models import NetworkConfig
 
@@ -68,4 +71,27 @@ def resolve_network(name: str) -> NetworkConfig:
     if name not in NETWORKS:
         known = sorted(NETWORKS)
         raise NetworkResolutionError(f"unknown network {name!r}; choose from {known}")
+    if name == "local" and (api_url := os.environ.get("DITTO_LOCAL_API_URL")):
+        try:
+            parsed_api_url = urlsplit(api_url)
+        except ValueError as exc:
+            raise NetworkResolutionError(
+                "DITTO_LOCAL_API_URL must be a complete http(s) base URL "
+                "without a query or fragment"
+            ) from exc
+        if (
+            parsed_api_url.scheme not in {"http", "https"}
+            or parsed_api_url.hostname is None
+            or parsed_api_url.query
+            or parsed_api_url.fragment
+        ):
+            raise NetworkResolutionError(
+                "DITTO_LOCAL_API_URL must be a complete http(s) base URL "
+                "without a query or fragment"
+            )
+        return NetworkConfig(
+            name="local",
+            api_url=api_url.rstrip("/"),
+            subtensor_network="local",
+        )
     return NETWORKS[name]

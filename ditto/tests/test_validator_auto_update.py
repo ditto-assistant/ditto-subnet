@@ -316,14 +316,32 @@ args = sys.argv[1:]
 if "remote" in args and "get-url" in args:
     print("https://github.com/ditto-assistant/dittobench-api.git")
 elif "rev-parse" in args:
-    print(os.environ["FAKE_DITTOBENCH_CHECKSUM"])
+    if args[-1] == "FETCH_HEAD":
+        print(
+            os.environ.get(
+                "FAKE_DITTOBENCH_REF_CHECKSUM",
+                os.environ["FAKE_DITTOBENCH_CHECKSUM"],
+            )
+        )
+    else:
+        print(os.environ["FAKE_DITTOBENCH_CHECKSUM"])
+elif "merge-base" in args:
+    if os.environ.get("FAKE_DITTOBENCH_IS_MAIN", "true") != "true":
+        raise SystemExit(1)
 elif "ls-tree" in args:
     records = [b"100644 Dockerfile"]
     executable = os.environ.get("FAKE_EXECUTABLE_PATH")
     if executable:
         records.append(b"100755 " + executable.encode())
     sys.stdout.buffer.write(b"\0".join(records) + b"\0")
-elif "status" in args or "cat-file" in args or "checkout" in args:
+elif "fetch" in args:
+    if os.environ.get("FAKE_DITTOBENCH_FETCH_FAIL") == "true":
+        raise SystemExit(1)
+elif (
+    "status" in args
+    or "cat-file" in args
+    or "checkout" in args
+):
     pass
 else:
     raise SystemExit("unhandled wrapper git command: " + repr(args))
@@ -503,8 +521,9 @@ def test_managed_compose_config_uses_the_persisted_immutable_image(
 def test_compose_wrapper_repairs_git_tracked_executable_modes(
     tmp_path: Path,
 ) -> None:
-    env, _, state_dir = _wrapper_env(tmp_path)
-    (state_dir / "managed-image.env").write_text(f"DITTO_SUBNET_IMAGE={DIGEST}\n")
+    env, _, _ = _wrapper_env(tmp_path)
+    env.pop("DITTOBENCH_ALLOW_UNMERGED_SMOKE", None)
+    env.pop("SUBTENSOR_NETWORK", None)
     checksum = env["FAKE_DITTOBENCH_CHECKSUM"]
     executable = (
         Path(env["DITTO_SUBNET_BUILD_CACHE"]) / "dittobench-api" / checksum / "run.sh"
@@ -514,7 +533,7 @@ def test_compose_wrapper_repairs_git_tracked_executable_modes(
     env["FAKE_EXECUTABLE_PATH"] = "run.sh"
 
     result = subprocess.run(
-        [str(COMPOSE_WRAPPER), "config", "--quiet"],
+        [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
         env=env,
         text=True,
         capture_output=True,
@@ -524,6 +543,126 @@ def test_compose_wrapper_repairs_git_tracked_executable_modes(
 
     assert result.returncode == 0, result.stderr
     assert executable.stat().st_mode & stat.S_IXUSR
+
+
+def test_compose_wrapper_rejects_checksum_that_is_not_on_main(tmp_path: Path) -> None:
+    env, _, _ = _wrapper_env(tmp_path)
+    env["FAKE_DITTOBENCH_IS_MAIN"] = "false"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "is not in refs/heads/main history" in result.stderr
+
+
+def test_compose_wrapper_caches_successful_main_ancestry(tmp_path: Path) -> None:
+    env, _, _ = _wrapper_env(tmp_path)
+
+    first = subprocess.run(
+        [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert first.returncode == 0, first.stderr
+
+    checksum = env["FAKE_DITTOBENCH_CHECKSUM"]
+    marker = (
+        Path(env["DITTO_SUBNET_BUILD_CACHE"])
+        / "dittobench-api"
+        / f"{checksum}.ref-verified"
+    )
+    assert marker.read_text() == f"refs/heads/main {checksum}\n"
+
+    # A later invocation trusts the immutable cached evidence and does not
+    # repeat a fetch or ancestry command (the fake would fail either now).
+    env["FAKE_DITTOBENCH_IS_MAIN"] = "false"
+    env["FAKE_DITTOBENCH_FETCH_FAIL"] = "true"
+    second = subprocess.run(
+        [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert second.returncode == 0, second.stderr
+
+
+def test_compose_wrapper_allows_exact_unmerged_ref_only_for_local_smoke(
+    tmp_path: Path,
+) -> None:
+    env, _, _ = _wrapper_env(tmp_path)
+    checksum = env["FAKE_DITTOBENCH_CHECKSUM"]
+    env["DITTOBENCH_BUILD_CONTEXT"] = (
+        "https://github.com/ditto-assistant/dittobench-api.git?"
+        "ref=refs/heads/test/unmerged-smoke&"
+        f"checksum={checksum}"
+    )
+
+    denied = subprocess.run(
+        [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert denied.returncode == 1
+    assert "require local network smoke opt-in" in denied.stderr
+
+    for partial_opt_in in (
+        {"DITTOBENCH_ALLOW_UNMERGED_SMOKE": "true"},
+        {"SUBTENSOR_NETWORK": "local"},
+    ):
+        partially_allowed = subprocess.run(
+            [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
+            env={**env, **partial_opt_in},
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        assert partially_allowed.returncode == 1
+        assert "require local network smoke opt-in" in partially_allowed.stderr
+
+    smoke_env = {
+        **env,
+        "DITTOBENCH_ALLOW_UNMERGED_SMOKE": "true",
+        "SUBTENSOR_NETWORK": "local",
+    }
+    wrong_tip = subprocess.run(
+        [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
+        env={
+            **smoke_env,
+            "FAKE_DITTOBENCH_REF_CHECKSUM": "f" * 40,
+        },
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert wrong_tip.returncode == 1
+    assert "is not the current" in wrong_tip.stderr
+
+    allowed = subprocess.run(
+        [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
+        env=smoke_env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert allowed.returncode == 0, allowed.stderr
 
 
 def test_managed_compose_blocks_broad_mutation_and_image_override(

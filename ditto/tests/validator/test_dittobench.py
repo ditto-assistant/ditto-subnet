@@ -98,6 +98,102 @@ async def test_submit_does_not_forward_model_provider_credentials() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submit_forwards_verified_screened_image_contract() -> None:
+    request_body: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_body.update(json.loads(request.content))
+        return httpx.Response(202, json={"run_id": "run-image"})
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        run_size="full",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        await client._submit(
+            tarball_url="https://example.test/agent.tgz",
+            tarball_sha256="ab" * 32,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="12" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "34" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
+        )
+
+    assert request_body["screened_image_url"] == "https://example.test/image.tar"
+    assert request_body["screened_image_sha256"] == "12" * 32
+    assert request_body["screened_image_size_bytes"] == 123
+    assert request_body["screened_image_id"] == "sha256:" + "34" * 32
+    assert request_body["screened_image_ref"] == (
+        "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_partial_screened_image_contract_before_request() -> None:
+    requested = False
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requested
+        requested = True
+        return httpx.Response(202, json={"run_id": "should-not-run"})
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        run_size="full",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(DittobenchError, match="must be complete"):
+            await client._submit(
+                tarball_url="https://example.test/agent.tgz",
+                screened_image_url="https://example.test/image.tar",
+            )
+
+    assert requested is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_field", ["url", "sha256", "id", "ref"])
+async def test_submit_rejects_empty_screened_image_identity(empty_field: str) -> None:
+    requested = False
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requested
+        requested = True
+        return httpx.Response(202, json={"run_id": "should-not-run"})
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        run_size="full",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(DittobenchError, match="cannot be empty"):
+            await client._submit(
+                tarball_url="https://example.test/agent.tgz",
+                screened_image_url=(
+                    "" if empty_field == "url" else "https://example.test/image.tar"
+                ),
+                screened_image_sha256="" if empty_field == "sha256" else "12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id=(
+                    "" if empty_field == "id" else "sha256:" + "34" * 32
+                ),
+                screened_image_ref=(
+                    ""
+                    if empty_field == "ref"
+                    else "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
+            )
+
+    assert requested is False
+
+
+@pytest.mark.asyncio
 async def test_timeout_cancels_background_run() -> None:
     methods: list[str] = []
 
