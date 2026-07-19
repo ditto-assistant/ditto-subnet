@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.13.0 (2026-07-19)
+
+### Features
+
+- Negotiate DittoBench v3 scorer capability
+  ([#160](https://github.com/ditto-assistant/ditto-subnet/pull/160),
+  [`236ebab`](https://github.com/ditto-assistant/ditto-subnet/commit/236ebab889da0d6443dd1af2282e0e176d03bb1f))
+
+
 ## v0.12.0 (2026-07-19)
 
 ### Features
