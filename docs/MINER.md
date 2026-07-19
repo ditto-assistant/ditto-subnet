@@ -19,7 +19,6 @@ serving live inference.
 - [Verify and submit](#verify-and-submit)
 - [Track your submission](#track-your-submission)
 - [Scoring and emissions](#scoring-and-emissions)
-- [Duplicate protection](#duplicate-protection)
 - [What counts as cheating](#what-counts-as-cheating)
 - [Common questions](#common-questions)
 
@@ -121,7 +120,7 @@ You can also follow the public submission pipeline and leaderboard at
 
 The normal pipeline is upload, automated build and health screening, evaluation
 by up to three independent validators, and median-score finalization. Failed or
-expired validator leases can be retried, so one validator does not control the
+expired validator leases are retried, so one validator does not control the
 result.
 
 ## Scoring and emissions
@@ -129,45 +128,29 @@ result.
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to Qwen3-32B in a TEE; your local
   practice key and model are not included in the submitted crate.
-- Every scored run starts with a reachability preflight. The validator sends
-  one probe case whose `case_id` begins with `preflight:`; your harness must
-  answer it by POSTing one call to a served tool (`search_web` with any args
-  is sufficient) to the advertised `tool_endpoint`. Hard-code this check on
-  the `case_id` prefix — do not rely on your model deciding to call the tool.
-  A run whose probe is never observed fails and is retried instead of being
-  scored, so a harness that skips the probe never finalizes a score. See the
+- Every scored run starts with a reachability preflight: the validator sends
+  one probe case whose `case_id` begins with `preflight:`, and your harness
+  must answer it by POSTing one tool call (`search_web` with any args is
+  sufficient) to the advertised `tool_endpoint`. Hard-code this on the
+  `case_id` prefix — do not rely on your model deciding to call the tool. A
+  run whose probe is never observed is retried instead of scored. See the
   scoring engine's `PROTOCOL.md` ("Reachability preflight").
 - Grading is deterministic and judge-free. Tool and memory means contribute
   equally to the composite; bounded efficiency, consistency, and integrity
   checks can reduce it.
 - Each miner competes with its highest eligible score. A challenger dethrones
   the incumbent only after clearing the greater of the 2% relative margin and
-  the configured statistical error band. A near-miss is not decided by dataset
-  luck: when a challenger lands inside that band, validators re-score both
-  agents on the same three shared seeds and the crown moves (or holds) on the
-  paired result.
+  the statistical error band; a near-miss is settled by re-scoring both agents
+  on shared seeds rather than dataset luck.
 - The champion receives 90% of competitive weight; the next four distinct
   miners split 10%. The competitive vector receives 20% of available miner
   emission and the remaining 80% is burned. With no eligible miners, 100% is
   burned.
 
 Scores, signatures, and each run's graded transcript are published so results
-can be independently checked. The transcript — your harness's responses and
-observed tool trajectory, exactly as graded — is stored content-addressed at
-`transcripts/{sha256}.json` in the public bucket, and its SHA-256 is bound
-inside the validator's score signature (`transcript_sha256` on the public
-score record). Regenerate the dataset from the published seed, re-run the
-public grader over the transcript, and the numbers must match the signed
-composite. The implementation and live chain remain authoritative if consensus
-parameters change.
-
-## Duplicate protection
-
-Building on the public starter kit is expected; copying another miner's work is
-not. Exact hashes plus lexical and structural fingerprints detect renamed,
-reformatted, or padded near-duplicates across miners. Matches are held for human
-review rather than automatically banned. Confirmed plagiarism can result in a
-hotkey-level ban.
+can be independently checked: regenerate the dataset from the published seed,
+re-run the public grader over the transcript, and the numbers must match the
+signed composite.
 
 ## What counts as cheating
 
@@ -177,10 +160,12 @@ tables or static dispatch, embedded evaluator logic or answer fixtures,
 fabricated tool trajectories, seed or state shortcuts, bypassing the locked
 model/provider path, and instructions intended to manipulate screening.
 
-Forking, replacing, or heavily optimizing the public starter harness is allowed.
-The screener builds and health-checks every crate and performs bounded source
-review; suspicious submissions are quarantined for human review rather than
-automatically rejected from a private signal alone.
+Forking, replacing, or heavily optimizing the public starter harness is
+allowed; copying another miner's work is not. Lexical and structural
+fingerprints detect renamed, reformatted, or padded near-duplicates across
+miners, and suspicious or matching submissions are quarantined for human review
+rather than automatically banned. Confirmed plagiarism can result in a
+hotkey-level ban.
 
 ## Common questions
 
@@ -191,24 +176,18 @@ the exact TAO amount before confirmation.
 container work. Expect minutes to hours depending on queue and build time.
 
 **Can I submit more than once?** Yes. Reuse the same hotkey and exact agent name
-when you improve an agent. Ditto records each accepted upload after versioning
-launch as the next immutable version (`v1`, `v2`, and so on); earlier uploads are
-shown as legacy submissions. Every version keeps its own agent ID, artifact,
-lifecycle, and score. A different name starts a new series at `v1`. The CLI saves
-the name after a successful upload and reuses it as that hotkey's local default;
-pass `--name` again whenever you intentionally want to change it. Every upload
-pays its own fee, and your highest eligible version represents your hotkey, so a
-lower-scoring or failed update does not replace your current best.
+to version an agent (`v1`, `v2`, and so on); a different name starts a new
+series. Every upload pays its own fee, and your highest eligible version
+represents your hotkey, so a lower-scoring or failed update never replaces your
+current best. The CLI saves the name after a successful upload and reuses it as
+that hotkey's default.
 
 **What earns emissions?** A material, reproducible improvement over the current
 champion. Small gains below the dethroning gate do not take the crown.
 
-**What happens if my hotkey is deregistered after I submit?** Ditto keeps your
-submission, screening history, payment record, accepted scores, and any pending
-evaluation. Validators may finish scoring it, but a hotkey that is absent from
-the SN118 metagraph cannot receive weight or emissions and is excluded from the
-current weight fold. Registering the same hotkey on SN118 restores eligibility
-automatically. A different hotkey is a separate miner identity: it does not
-inherit the first hotkey's submission, score, fee, or ownership, and submitting
-under it requires a new signed, paid upload. Ditto cannot prevent Subtensor from
-deregistering or evicting a neuron.
+**What happens if my hotkey is deregistered after I submit?** Your submission,
+scores, and payment record are kept, but a hotkey absent from the SN118
+metagraph cannot receive weight and is excluded from the weight fold.
+Registering the same hotkey again restores eligibility automatically. A
+different hotkey is a separate miner identity and requires a new signed, paid
+upload.
