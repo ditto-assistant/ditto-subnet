@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.10.2 (2026-07-19)
+
+### Bug Fixes
+
+- Allow updater signature cache writes
+  ([#164](https://github.com/ditto-assistant/ditto-subnet/pull/164),
+  [`f2e7ef3`](https://github.com/ditto-assistant/ditto-subnet/commit/f2e7ef3546b2b1f12b4db1896c22a99c92e279a1))
+
+### Chores
+
+- **.github/workflows**: Migrate workflows to Blacksmith runners
+  ([#165](https://github.com/ditto-assistant/ditto-subnet/pull/165),
+  [`97bc902`](https://github.com/ditto-assistant/ditto-subnet/commit/97bc9029c214b62c1712dff60a028d0036a5254b))
+
+
 ## v0.10.1 (2026-07-19)
 
 ### Bug Fixes
