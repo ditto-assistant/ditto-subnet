@@ -24,6 +24,7 @@ from ditto.api_models.validator import (
     SubmitScoreResponse,
     ValidatorHeartbeatResponse,
 )
+from ditto.api_models.validator_capabilities import ScorerBenchmarkCapability
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
 from ditto.validator.dittobench import DittobenchProgressSnapshot
@@ -724,6 +725,40 @@ class TestRunOnce:
         assert kwargs["stack"] == heartbeat.stack
         assert heartbeat.capabilities is not None
         assert kwargs["scorer"] == heartbeat.capabilities.scorer_benchmarks
+
+    async def test_source_heartbeat_binds_observed_dittobench_version(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        revision = "ab" * 20
+        monkeypatch.setenv("VALIDATOR_STACK_MODE", "source")
+        monkeypatch.setenv(
+            "VALIDATOR_STACK_COMPONENT_DITTOBENCH_API", f"source:{revision}"
+        )
+        scorer = ScorerBenchmarkCapability(
+            status="fresh_verified",
+            supported_bench_versions=(2, 3),
+            observed_at=1,
+            software_version="source-build",
+            source_revision=revision,
+        )
+        dittobench = MagicMock()
+        dittobench.scorer_benchmark_capability = AsyncMock(return_value=scorer)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker._report_heartbeat("idle") is True
+        heartbeat = platform.submit_heartbeat.await_args.args[0]
+        assert heartbeat.stack is not None
+        assert heartbeat.stack.components.dittobench_api.version == "source-build"
+        assert heartbeat.stack.components.dittobench_api.source_revision == revision
+        assert heartbeat.capabilities is not None
+        assert heartbeat.capabilities.scorer_benchmarks == scorer
 
     async def test_collector_failure_degrades_to_unknown_stack_health(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])

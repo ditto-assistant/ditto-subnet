@@ -9,6 +9,7 @@ from typing import cast
 from ditto import __version__
 from ditto.api_models.validator_capabilities import (
     ExecutorIsolation,
+    ScorerBenchmarkCapability,
     ValidatorCapabilities,
     ValidatorComponentIdentity,
     ValidatorStackComponents,
@@ -117,6 +118,35 @@ def _source_identity() -> ValidatorStackIdentity:
         release_descriptor_digest=None,
         components=ValidatorStackComponents(**components),
     )
+
+
+def bind_observed_scorer_identity(
+    stack: ValidatorStackIdentity, scorer: ScorerBenchmarkCapability
+) -> ValidatorStackIdentity:
+    """Bind a verified source scorer version to its committed revision.
+
+    Source installs cannot know the sidecar's runtime version from Compose
+    alone. The capabilities probe supplies it, but only after the scorer's
+    revision matches the signed committed pin. Managed stacks retain the
+    release descriptor's version and therefore never accept probe-derived
+    identity.
+    """
+    component = stack.components.dittobench_api
+    if (
+        stack.mode != "source"
+        or scorer.status != "fresh_verified"
+        or scorer.source_revision != component.source_revision
+        or scorer.software_version is None
+    ):
+        return stack
+    components = stack.components.model_copy(
+        update={
+            "dittobench_api": component.model_copy(
+                update={"version": scorer.software_version}
+            )
+        }
+    )
+    return stack.model_copy(update={"components": components})
 
 
 def validator_capabilities_and_stack() -> tuple[
