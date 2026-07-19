@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ditto"
-version = "0.17.0"
+version = "0.18.0"
 description = "Ditto Bittensor Subnet 118 (SN118): miner CLI + validator for the Rust agent-memory-harness incentive layer."
 readme = "README.md"
 license = "MIT"

@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.18.0 (2026-07-19)
+
+### Chores
+
+- Describe the threshold-gated single-version ledger in weights
+  ([#181](https://github.com/ditto-assistant/ditto-subnet/pull/181),
+  [`7131cc9`](https://github.com/ditto-assistant/ditto-subnet/commit/7131cc93fe9027168284b1936619e323878db202))
+
+- **docs**: Compress FULL-STACK-UPDATES.md into a trust/transaction reference
+  ([#182](https://github.com/ditto-assistant/ditto-subnet/pull/182),
+  [`a79b5e2`](https://github.com/ditto-assistant/ditto-subnet/commit/a79b5e2f23d4a7488f03acca46d90afe857fc320))
+
+### Features
+
+- **validator**: Release 100% of miner emission (remove the 80% burn)
+  ([#183](https://github.com/ditto-assistant/ditto-subnet/pull/183),
+  [`f56ef83`](https://github.com/ditto-assistant/ditto-subnet/commit/f56ef838f1df47fd73edd3a0398d3767cf58b158))
+
+
 ## v0.17.0 (2026-07-19)
 
 ### Features
