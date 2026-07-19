@@ -42,13 +42,16 @@ fi
 wallets_dir="${wallets_dir:-$service_home/.bittensor/wallets}"
 require_systemd_path HOME "$service_home"
 require_systemd_path DOCKER_CONFIG "$docker_config"
+[ ! -L "$sigstore_dir" ] || die "remove symbolic links from $sigstore_dir before installing"
+[ -z "$(find "$sigstore_dir" -type l -print -quit 2>/dev/null)" ] || die "remove symbolic links from $sigstore_dir before installing"
+install -d -m 0700 -o "$service_user" -g "$service_group" "$sigstore_dir"
+chown -R "$service_user:$service_group" "$sigstore_dir"; find "$sigstore_dir" -type d -exec chmod 0700 {} +; find "$sigstore_dir" -type f -exec chmod 0600 {} +
 require_systemd_path SIGSTORE_CACHE "$sigstore_dir"
 require_systemd_path DITTO_BITTENSOR_WALLETS_DIR "$wallets_dir"
 [ -d "$wallets_dir" ] || die "wallet directory does not exist: $wallets_dir"
 state_dir="$ROOT_DIR/.validator-stack-update"
 [ -f "$state_dir/managed-release.env" ] || die "run validator-stack-auto-update.sh adopt as the operator before installing"
 install -d -m 0700 -o "$service_user" -g "$service_group" "$state_dir"
-install -d -m 0700 -o "$service_user" -g "$service_group" "$sigstore_dir"
 [ -z "$(find "$state_dir" -type l -print -quit)" ] || die "remove symbolic links from $state_dir"
 chown -R "$service_user:$service_group" "$state_dir"; find "$state_dir" -type d -exec chmod 0700 {} +; find "$state_dir" -type f -exec chmod 0600 {} +
 
@@ -78,8 +81,7 @@ CapabilityBoundingSet=
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=$state_dir
-ReadWritePaths=$sigstore_dir
+ReadWritePaths=$state_dir $sigstore_dir
 RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
