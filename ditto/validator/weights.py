@@ -122,10 +122,10 @@ def filter_eligible(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
 def filter_to_latest_version(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
     """Return only entries at the maximum version for diagnostic callers.
 
-    The weight fold deliberately does *not* use this helper: the platform ledger
-    is already authoritative per agent and can be mixed during rollout. Keeping
-    the helper supports version inventory and focused tests without inviting a
-    second selection policy into consensus.
+    The weight fold deliberately does *not* use this helper: the platform decides
+    which version is authoritative and serves the ledger accordingly. Keeping the
+    helper supports version inventory and focused tests without inviting a second
+    selection policy into consensus.
     """
     latest = max_bench_version(entries)
     return [e for e in entries if _entry_version(e) == latest]
@@ -153,15 +153,20 @@ def compute_weights(
     champion gets ``champion_share``; the next ``tail_size`` miners by composite
     split ``1 - champion_share`` equally.
 
-    The platform has already selected one authoritative row per agent. During a
-    benchmark rollout this can be a hybrid pool: v3 after that agent reaches 3/3,
-    otherwise its v2 fallback. Folding the full pool is consensus-critical: old
-    validators ignore the additive ``bench_version`` field and already do this,
-    so upgraded validators must not discard fallback rows by taking a global
-    maximum version. Entries below the full-benchmark case floor
-    (:func:`filter_eligible`) are dropped: a smoke/practice run omits the hard
-    memory categories and is trivially aced, so it must never become champion or
-    take a tail slot.
+    The platform serves one authoritative row per agent, and the whole ledger
+    sits on a single ``bench_version`` at a time: the authority switch is
+    threshold-gated, flipping to a new version only once the full emission
+    recipient set (the champion plus ``tail_size`` runners-up — five agents at
+    the deployed ``tail_size`` of 4) holds a complete ranked 3/3 quorum on it. A
+    per-agent hybrid pool was rejected because ranking composites from two
+    benchmark versions in one fold compares incomparable scales. Mixed versions
+    are therefore not expected from the current platform, but the fold still
+    takes the pool as served and must not apply a global maximum version of its
+    own: old validators ignore the additive ``bench_version`` field, so a version
+    filter here would diverge from them. Entries below the full-benchmark case
+    floor (:func:`filter_eligible`) are dropped: a smoke/practice run omits the
+    hard memory categories and is trivially aced, so it must never become
+    champion or take a tail slot.
 
     Non-positive composites are dropped (a zero-scoring miner earns nothing).
     Returns an empty dict when no miner scored above zero — the caller then skips
