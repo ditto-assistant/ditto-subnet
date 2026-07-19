@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.16.2 (2026-07-19)
+
+### Bug Fixes
+
+- Repin dittobench runtime hotfix ([#177](https://github.com/ditto-assistant/ditto-subnet/pull/177),
+  [`dd9fddc`](https://github.com/ditto-assistant/ditto-subnet/commit/dd9fddc2b6dd8dd8ae7b189d07ad435d0e3c1ba1))
+
+
 ## v0.16.1 (2026-07-19)
 
 ### Bug Fixes
