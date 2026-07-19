@@ -39,10 +39,10 @@ candidate workload to replace its own trust anchor. A new updater protocol,
 Compose schema, required host capability, wallet layout, or compatibility
 epoch is therefore a **supervised migration**.
 
-An existing validator-only updater cannot update its own host scripts or stale
-Compose checkout. Moving to full-stack managed mode is also a one-time
-supervised migration. Do not treat a validator-only `managed-image.env` as a
-full-stack adoption record.
+The retired validator-only updater (removed from this repository) could not
+update its own host scripts or stale Compose checkout. Moving a host that ran
+it to full-stack managed mode is a one-time supervised migration. Do not treat
+a validator-only `managed-image.env` as a full-stack adoption record.
 
 ## Supervised first adoption
 

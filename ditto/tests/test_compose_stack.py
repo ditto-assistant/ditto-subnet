@@ -12,7 +12,6 @@ COMPOSE_WRAPPER_PATH = Path(__file__).parents[2] / "scripts/validator-compose.sh
 SANDBOX_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile.sandbox-docker"
 DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
-INSTALLER_PATH = Path(__file__).parents[2] / "scripts/install-validator-auto-update.sh"
 
 
 def test_ollama_is_pinned_with_functional_embedding_healthcheck() -> None:
@@ -243,17 +242,15 @@ def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
     }
 
 
-def test_only_validator_is_an_explicit_auto_update_target() -> None:
+def test_validator_service_pins_build_and_runtime_contract() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     services = compose["services"]
-    targeted = [
-        name
-        for name, service in services.items()
-        if service.get("labels", {}).get("io.heyditto.validator.auto-update-target")
-        == "true"
-    ]
+    # The legacy single-service updater's scoping label went away with it.
+    for service in services.values():
+        assert "io.heyditto.validator.auto-update-target" not in service.get(
+            "labels", {}
+        )
 
-    assert targeted == ["ditto-subnet"]
     validator = services["ditto-subnet"]
     assert validator["image"].endswith("ditto-subnet-validator:local}")
     assert validator["pull_policy"] == "build"
@@ -272,19 +269,6 @@ def test_only_validator_is_an_explicit_auto_update_target() -> None:
     assert 'git -C "$ROOT_DIR" rev-parse HEAD' in wrapper
     assert 'export DITTO_SOURCE_REVISION="$source_revision"' in wrapper
     assert 'export DITTO_SOURCE_IDENTITY="local-source:$source_revision"' in wrapper
-
-    # These services are deliberately outside updater scope and retain their
-    # existing deployment boundaries/pins.
-    for name in (
-        "pylon",
-        "sandbox-docker",
-        "ollama",
-        "model-relay",
-        "dittobench-api",
-    ):
-        assert "io.heyditto.validator.auto-update-target" not in services[name].get(
-            "labels", {}
-        )
 
 
 def test_validator_image_and_release_channel_share_compatibility_metadata() -> None:
@@ -354,36 +338,3 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert 'docker pull --platform "$platform" "$child_exact"' in workflow
     assert "for platform in linux/amd64 linux/arm64" in workflow
     assert "Promote only the authenticated stack descriptor" in workflow
-
-
-def test_systemd_unit_pins_runtime_settings_to_its_timeout_budget() -> None:
-    installer = INSTALLER_PATH.read_text()
-
-    for setting in (
-        "VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS",
-        "VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS",
-        "VALIDATOR_AUTO_UPDATE_CHECK_SECONDS",
-    ):
-        assert f"Environment={setting}=" in installer
-        assert (f"{setting}= " + "\\") in installer
-    assert "Environment=DITTO_SUBNET_ENV_FILE=" in installer
-    assert 'Environment="HOME=$service_home"' in installer
-    assert 'Environment="DOCKER_CONFIG=$docker_config"' in installer
-    assert 'Environment="XDG_CONFIG_HOME=$xdg_config_home"' in installer
-    assert 'Environment="DITTO_BITTENSOR_WALLETS_DIR=$wallets_dir"' in installer
-    assert "infer_running_wallets_dir" in installer
-    assert "io.heyditto.validator.auto-update-target=true" in installer
-    assert "*$'\\n'* | *$'\\r'* | *'\"'* | *\\\\* | *'%'*)" in installer
-    assert "*'\\\\'*" not in installer
-    assert "TimeoutStartSec=${start_timeout_seconds}s" in installer
-    assert "TimeoutStopSec=${stop_timeout_seconds}s" in installer
-
-
-def test_installer_repairs_private_updater_state_ownership() -> None:
-    installer = INSTALLER_PATH.read_text()
-
-    assert 'install -d -m 0700 -o "$service_user" -g "$service_group"' in installer
-    assert 'find "$state_dir" -type l -print -quit' in installer
-    assert 'chown -R "$service_user:$service_group" "$state_dir"' in installer
-    assert 'find "$state_dir" -type d -exec chmod 0700 {} +' in installer
-    assert 'find "$state_dir" -type f -exec chmod 0600 {} +' in installer

@@ -179,8 +179,6 @@ services:
         VALIDATOR_HEARTBEAT_PROTOCOL: "8"
     restart: unless-stopped
     stop_grace_period: 80m
-    labels:
-      io.heyditto.validator.auto-update-target: "true"
     environment:
       NETUID: "118"
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
