@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.16.1 (2026-07-19)
+
+### Bug Fixes
+
+- Report verified source scorer versions
+  ([#176](https://github.com/ditto-assistant/ditto-subnet/pull/176),
+  [`6a2f5b6`](https://github.com/ditto-assistant/ditto-subnet/commit/6a2f5b6ac74cf1bf233c8a72e4705d4978ba061e))
+
+
 ## v0.16.0 (2026-07-19)
 
 ### Features
