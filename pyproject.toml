@@ -94,7 +94,7 @@ addopts = ["-m", "not slow and not integration and not localnet and not e2e"]
 
 [tool.semantic_release]
 allow_zero_version = true
-build_command = "python -m ensurepip && python -m pip install --disable-pip-version-check uv==0.11.28 && uv lock && uv build"
+build_command = "python -m ensurepip && python -m pip install --disable-pip-version-check uv==0.11.28 && uv lock --upgrade-package \"$PACKAGE_NAME\" && git add uv.lock && uv build"
 commit_message = "chore(release): v{version} [skip ci]"
 tag_format = "v{version}"
 version_toml = ["pyproject.toml:project.version"]
