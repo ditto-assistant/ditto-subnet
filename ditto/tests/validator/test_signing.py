@@ -255,11 +255,14 @@ def test_job_fail_message_is_canonical_and_binds_the_exact_lease() -> None:
         nonce=nonce,
         requested_at=requested_at,
     )
-    assert message == (
-        f"validator-job-fail:v1:{keypair.ss58_address}:{agent_id}:"
-        "2026-07-14T12:30:00.000000+00:00:"
-        f"{nonce}:2026-07-14T01:30:00.000000+00:00"
-    ).encode()
+    assert (
+        message
+        == (
+            f"validator-job-fail:v1:{keypair.ss58_address}:{agent_id}:"
+            "2026-07-14T12:30:00.000000+00:00:"
+            f"{nonce}:2026-07-14T01:30:00.000000+00:00"
+        ).encode()
+    )
 
     signature = sign_job_fail_request(
         keypair,

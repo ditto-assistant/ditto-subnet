@@ -964,9 +964,7 @@ class TestRunOnce:
         worker = ValidatorWorker(
             config=_config(),
             platform=platform,
-            dittobench=MagicMock(
-                score_tarball=AsyncMock(side_effect=score_with_token)
-            ),
+            dittobench=MagicMock(score_tarball=AsyncMock(side_effect=score_with_token)),
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )

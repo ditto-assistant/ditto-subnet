@@ -124,9 +124,7 @@ async def test_report_ticket_failed_is_fresh_lease_bound_and_signed() -> None:
             requested_at=fail.requested_at,
         )
         assert keypair.verify(message, bytes.fromhex(fail.signature))
-        return httpx.Response(
-            200, json={"agent_id": str(agent_id), "reopened": True}
-        )
+        return httpx.Response(200, json={"agent_id": str(agent_id), "reopened": True})
 
     config = SimpleNamespace(
         platform_api_url="https://platform.test",
