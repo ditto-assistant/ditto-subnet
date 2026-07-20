@@ -85,6 +85,10 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # the agent's fault, so it must end the sweep and back off rather than blame
     # and re-lease the agent in a tight resubmit loop.
     "sandbox_network_unavailable",
+    # The scorer's locked-model-relay preflight failed (relay unreachable or its
+    # upstream provider degraded mid-run). Also validator-side infrastructure, so
+    # back off instead of failing the agent and re-leasing it in a loop.
+    "model_relay_unavailable",
 }
 
 

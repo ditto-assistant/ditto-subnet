@@ -109,11 +109,17 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
 
 def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    env = compose["services"]["dittobench-api"]["environment"]
+    service = compose["services"]["dittobench-api"]
+    env = service["environment"]
     assert env["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
     assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
+    # The scorer shares sandbox-docker's netns and reaches the model-relay /
+    # embedding forwarders on loopback; host.docker.internal must resolve there
+    # (it has no inner-container --add-host mapping) or the relay preflight fails.
+    assert "host.docker.internal:127.0.0.1" in service["extra_hosts"]
+    assert env["HARNESS_GATEWAY_URL"] == "http://host.docker.internal:11435"
 
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
