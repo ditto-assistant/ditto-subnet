@@ -115,10 +115,15 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
-    # The scorer shares sandbox-docker's netns and reaches the model-relay /
-    # embedding forwarders on loopback; host.docker.internal must resolve there
-    # (it has no inner-container --add-host mapping) or the relay preflight fails.
-    assert "host.docker.internal:127.0.0.1" in service["extra_hosts"]
+    # The scorer reaches the model-relay / embedding forwarders on loopback, so
+    # host.docker.internal must resolve there. The scorer joins sandbox-docker's
+    # netns and SHARES its /etc/hosts, so the mapping lives on sandbox-docker (an
+    # extra_hosts on the joining dittobench-api service would be ignored).
+    assert "extra_hosts" not in service
+    assert (
+        "host.docker.internal:127.0.0.1"
+        in compose["services"]["sandbox-docker"]["extra_hosts"]
+    )
     assert env["HARNESS_GATEWAY_URL"] == "http://host.docker.internal:11435"
 
     entrypoint = (

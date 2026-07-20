@@ -47,6 +47,17 @@ services:
       dockerfile: Dockerfile.sandbox-docker
     restart: unless-stopped
     privileged: true
+    # dittobench-api joins this container's network namespace
+    # (network_mode: service:sandbox-docker) and therefore SHARES this /etc/hosts
+    # file, so the mapping must live here — extra_hosts on the joining service is
+    # ignored. host.docker.internal has no --add-host mapping in this namespace
+    # (only the inner miner harnesses get one at `docker run`), so map it to
+    # loopback where the socat forwarders to the relay (11435) and Ollama (11434)
+    # listen; otherwise the scorer's own relay preflight fails "relay unreachable"
+    # even though the relay is healthy. Inner harnesses have their own hosts file
+    # and are unaffected.
+    extra_hosts:
+      - "host.docker.internal:127.0.0.1"
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
       DOCKER_TLS_CERTDIR: ""
@@ -129,17 +140,9 @@ services:
       target: sandbox
     restart: unless-stopped
     network_mode: service:sandbox-docker
-    # The scorer shares sandbox-docker's network namespace, where the socat
-    # forwarders to the model relay (11435) and Ollama (11434) listen on
-    # loopback. Unlike an inner miner harness — which the scorer starts with
-    # `--add-host host.docker.internal:host-gateway` — this process has no such
-    # mapping, so host.docker.internal is NXDOMAIN here and the scorer's own
-    # relay preflight (HARNESS_GATEWAY_URL) fails "relay unreachable" even though
-    # the relay is healthy. Map the name to loopback so the preflight reaches the
-    # local forwarders; inner harnesses are unaffected (they get their own host
-    # mapping at `docker run`).
-    extra_hosts:
-      - "host.docker.internal:127.0.0.1"
+    # host.docker.internal -> 127.0.0.1 is set on the sandbox-docker service: this
+    # container joins its network namespace and shares its /etc/hosts, so an
+    # extra_hosts here would be ignored. See the mapping + rationale there.
     depends_on:
       sandbox-docker:
         condition: service_healthy
