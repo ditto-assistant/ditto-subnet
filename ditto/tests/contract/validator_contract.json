@@ -211,7 +211,6 @@
           "screening",
           "screening_passed",
           "screening_failed",
-          "quarantined",
           "rejected",
           "evaluating",
           "scored",
@@ -256,6 +255,77 @@
           "composite",
           "validator_hotkey",
           "bench_version"
+        ],
+        "type": "object"
+      },
+      "LedgerScoreProof": {
+        "properties": {
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ticket_deadline": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcript_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator_hotkey",
+          "run_id",
+          "composite",
+          "seed"
         ],
         "type": "object"
       }
@@ -350,6 +420,12 @@
       "run_id": {
         "type": "string"
       },
+      "score_proofs": {
+        "items": {
+          "$ref": "#/$defs/LedgerScoreProof"
+        },
+        "type": "array"
+      },
       "seed": {
         "type": "integer"
       },
@@ -408,7 +484,6 @@
           "screening",
           "screening_passed",
           "screening_failed",
-          "quarantined",
           "rejected",
           "evaluating",
           "scored",
@@ -547,6 +622,12 @@
           "run_id": {
             "type": "string"
           },
+          "score_proofs": {
+            "items": {
+              "$ref": "#/$defs/LedgerScoreProof"
+            },
+            "type": "array"
+          },
           "seed": {
             "type": "integer"
           },
@@ -594,6 +675,77 @@
           "seed",
           "validator_hotkey",
           "status"
+        ],
+        "type": "object"
+      },
+      "LedgerScoreProof": {
+        "properties": {
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ticket_deadline": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcript_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator_hotkey",
+          "run_id",
+          "composite",
+          "seed"
         ],
         "type": "object"
       }
@@ -1298,7 +1450,6 @@
           "screening",
           "screening_passed",
           "screening_failed",
-          "quarantined",
           "rejected",
           "evaluating",
           "scored",

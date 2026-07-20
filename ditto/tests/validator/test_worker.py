@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -2846,6 +2847,41 @@ class TestChainCadenceFloor:
 
 
 class TestIndependentWeightLoop:
+    async def test_king_event_never_bypasses_local_commit_reveal_floor(self) -> None:
+        config = _config()
+        config.sweep_seconds = 0.005
+        worker = ValidatorWorker(
+            config=config,
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._ledger_changed.set()
+        worker._seconds_until_weight_window = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+        worker._observe_platform_king = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                True,
+                (
+                    "5Miner" + "x" * 41,
+                    UUID("550e8400-e29b-41d4-a716-446655440000"),
+                    0.9,
+                    4,
+                ),
+            )
+        )
+
+        started = time.monotonic()
+        await worker._wait_for_king_or_weight_window(
+            asyncio.Event(),
+            epoch_seconds=0.03,
+            baseline=None,
+            drain_requested=None,
+        )
+
+        assert time.monotonic() - started >= 0.02
+        worker._observe_platform_king.assert_awaited()
+
     async def test_weights_run_while_scoring_sweep_is_still_busy(self) -> None:
         scoring_started = asyncio.Event()
         release_scoring = asyncio.Event()

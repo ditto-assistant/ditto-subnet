@@ -15,12 +15,14 @@ from uuid import UUID
 import bittensor
 
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
     ValidatorStackHealth,
 )
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
+from ditto.api_models.validator import LedgerEntry, LedgerScoreProof
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
     ValidatorCapabilities,
@@ -40,6 +42,7 @@ from ditto.validator.signing import (
     sign_top5_confirmation_job_request,
     top5_confirmation_job_signing_message,
     top5_confirmation_score_signing_message,
+    verify_ledger_entry,
 )
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -883,3 +886,66 @@ def test_protocol_v11_heartbeat_uses_the_platform_v11_domain() -> None:
 
     assert message.startswith(b"ditto-validator-heartbeat:v11:")
     assert b":11:" in message
+
+
+def _signed_ledger_entry(*, tamper_median: bool = False) -> LedgerEntry:
+    keypairs = [bittensor.Keypair.create_from_uri(f"//Ledger{i}") for i in range(3)]
+    composites = [0.4, 0.6, 0.8]
+    proofs: list[LedgerScoreProof] = []
+    for i, (keypair, composite) in enumerate(zip(keypairs, composites, strict=True)):
+        run_id = f"run_{i}"
+        signature = sign_score(
+            keypair,
+            validator_hotkey=keypair.ss58_address,
+            agent_id=_AGENT,
+            ticket_deadline=_DEADLINE,
+            run_id=run_id,
+            composite=composite,
+            seed=i,
+            bench_version=4,
+            transcript_sha256="cd" * 32,
+        )
+        proofs.append(
+            LedgerScoreProof(
+                validator_hotkey=keypair.ss58_address,
+                run_id=run_id,
+                composite=composite,
+                seed=i,
+                bench_version=4,
+                ticket_deadline=_DEADLINE,
+                transcript_sha256="cd" * 32,
+                signature=signature,
+            )
+        )
+    median = proofs[1]
+    return LedgerEntry(
+        miner_hotkey=_HOTKEY,
+        agent_id=_AGENT,
+        composite=0.61 if tamper_median else median.composite,
+        n=114,
+        first_seen=_DEADLINE,
+        sha256="ab" * 32,
+        size_bytes=1024,
+        run_id=median.run_id,
+        seed=median.seed,
+        validator_hotkey=median.validator_hotkey,
+        bench_version=7,
+        signature=median.signature,
+        score_proofs=proofs,
+        status=AgentStatus.SCORED,
+    )
+
+
+def test_ledger_entry_verifies_all_receipts_and_recomputed_median() -> None:
+    assert verify_ledger_entry(_signed_ledger_entry())
+
+
+def test_ledger_entry_rejects_platform_median_tampering() -> None:
+    assert not verify_ledger_entry(_signed_ledger_entry(tamper_median=True))
+
+
+def test_ledger_entry_rejects_tampered_receipt() -> None:
+    entry = _signed_ledger_entry()
+    proofs = list(entry.score_proofs)
+    proofs[0] = proofs[0].model_copy(update={"composite": 0.41})
+    assert not verify_ledger_entry(entry.model_copy(update={"score_proofs": proofs}))
