@@ -158,14 +158,16 @@ def validator_capabilities_and_stack() -> tuple[
     # available while platform acceptance (and updater promotion) fails closed.
     stack = _managed_identity() or _source_identity()
 
-    screened_images = _truthy("VALIDATOR_SCREENED_IMAGES", default=False)
     capabilities = ValidatorCapabilities(
-        screened_images=screened_images,
-        # These legacy global flags remain on the v8 wire for old platforms.
-        # Requirements are now benchmark-version contracts: v2 can fall back,
-        # while v3 always requires a screened image.
-        require_screened_image=False,
-        source_build_fallback=True,
+        # Screened images are mandatory and there is no source-build fallback: the
+        # miner crate is built once by the trusted screener and NEVER rebuilt on a
+        # validator. The whole live benchmark era (v3+) is screened-image only, so
+        # advertise the requirement unconditionally rather than behind an env
+        # toggle that could silently leave a validator willing to docker-build
+        # untrusted source. (v2 is a retired practice contract.)
+        screened_images=True,
+        require_screened_image=True,
+        source_build_fallback=False,
         full_stack_managed=stack.mode == "managed",
         stack_updater=stack.mode == "managed" and _truthy("VALIDATOR_STACK_UPDATER"),
         sandbox_egress_restricted=_truthy(

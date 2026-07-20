@@ -96,7 +96,13 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     ).read_text()
 
     assert sandbox["volumes"] == ["sandbox-docker-rootful-data:/var/lib/docker"]
-    assert "docker system prune --all --force --filter 'until=24h'" in entrypoint
+    # `docker system prune` also removes unused networks, which would delete the
+    # idle ditto-sandbox bridge between benchmarks and break every harness run.
+    # Reclaim containers, images, and build cache explicitly; never system-prune.
+    assert "docker system prune" not in entrypoint
+    assert "docker container prune --force" in entrypoint
+    assert "docker image prune --all --force --filter 'until=24h'" in entrypoint
+    assert "docker builder prune --all --force" in entrypoint
     assert "docker volume prune --all --force" in entrypoint
     assert "sleep 21600" in entrypoint
 
@@ -117,7 +123,11 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "[ \"$network_driver\" != 'bridge' ]" in entrypoint
     assert "bridge_name" in entrypoint
     assert "[ \"$bridge_name\" != 'ditto-sandbox0' ]" in entrypoint
-    assert "refusing unverified sandbox reuse" in entrypoint
+    assert "unsafe ditto-sandbox network" in entrypoint
+    # The network + firewall are provisioned through one idempotent function that
+    # also runs inside the maintenance loop, so a missing bridge self-heals.
+    assert "ensure_sandbox_network" in entrypoint
+    assert entrypoint.count("ensure_sandbox_network") >= 3
     assert "DITTO-SANDBOX-EGRESS" in entrypoint
     assert '-d "$gateway" -p tcp --dport 11434 -j ACCEPT' in entrypoint
     assert '-d "$gateway" -p tcp --dport 11435 -j ACCEPT' in entrypoint

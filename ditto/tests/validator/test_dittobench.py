@@ -562,7 +562,9 @@ async def test_ollama_run_failure_is_retryable_infrastructure() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("code", ["sandbox_oom", "sandbox_tmpfs_exhausted"])
+@pytest.mark.parametrize(
+    "code", ["sandbox_oom", "sandbox_tmpfs_exhausted", "sandbox_network_unavailable"]
+)
 async def test_sandbox_resource_failure_is_retryable_infrastructure(
     code: str,
 ) -> None:
