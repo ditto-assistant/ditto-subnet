@@ -172,7 +172,7 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert all(character in "0123456789abcdef" for character in checksum)
     # dittobench-api PR #37 was squash-merged at this exact main commit. The
     # pre-merge PR head is not a valid production BuildKit checksum.
-    assert checksum == "b96433d026b4d44b018051a5e85a36f17208a223"
+    assert checksum == "cc9ef6ad57c33fd06dfa54fa8b42af24d78afb70"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]
