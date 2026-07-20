@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.18.3 (2026-07-20)
+
+### Bug Fixes
+
+- **sandbox**: Stop the maintenance loop from deleting the ditto-sandbox network
+  ([#186](https://github.com/ditto-assistant/ditto-subnet/pull/186),
+  [`89346bd`](https://github.com/ditto-assistant/ditto-subnet/commit/89346bd227253fb2848b848098862e6d9d6f450b))
+
+
 ## v0.18.2 (2026-07-20)
 
 ### Bug Fixes
