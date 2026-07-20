@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.19.0 (2026-07-20)
+
+### Features
+
+- **progress**: Granular generating_dataset / starting_harness stages
+  ([#190](https://github.com/ditto-assistant/ditto-subnet/pull/190),
+  [`03d4f0e`](https://github.com/ditto-assistant/ditto-subnet/commit/03d4f0e60b2e6acb0808ff33139380e1f6ba5966))
+
+
 ## v0.18.4 (2026-07-20)
 
 ### Bug Fixes
