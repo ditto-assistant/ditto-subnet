@@ -153,7 +153,7 @@ jobs:
             DITTO_VERSION=${{ needs.release.outputs.version }}
             DITTO_REVISION=${{ needs.release.outputs.commit_sha }}
             VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
-            VALIDATOR_HEARTBEAT_PROTOCOL=9
+            VALIDATOR_HEARTBEAT_PROTOCOL=${{ env.HEARTBEAT_PROTOCOL }}
           tags: |
             ${{ env.VALIDATOR_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 
