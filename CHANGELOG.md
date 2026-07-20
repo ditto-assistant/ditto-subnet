@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.20.0 (2026-07-20)
+
+### Features
+
+- **validator**: Report failed tickets for reissue + per-run token progress
+  ([#197](https://github.com/ditto-assistant/ditto-subnet/pull/197),
+  [`f9ddd09`](https://github.com/ditto-assistant/ditto-subnet/commit/f9ddd09f33036071d9fac6537693ef4d0efa1567))
+
+
 ## v0.19.4 (2026-07-20)
 
 ### Bug Fixes
