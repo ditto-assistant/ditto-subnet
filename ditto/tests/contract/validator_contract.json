@@ -240,7 +240,6 @@
         "default": null
       },
       "composite": {
-        "maximum": 1.25,
         "minimum": 0.0,
         "type": "number"
       },
@@ -385,7 +384,6 @@
             "default": null
           },
           "composite": {
-            "maximum": 1.25,
             "minimum": 0.0,
             "type": "number"
           },
@@ -700,7 +698,6 @@
         "default": null
       },
       "composite": {
-        "maximum": 1.25,
         "minimum": 0.0,
         "type": "number"
       },
@@ -1010,7 +1007,6 @@
             "default": null
           },
           "composite": {
-            "maximum": 1.25,
             "minimum": 0.0,
             "type": "number"
           },

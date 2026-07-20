@@ -122,15 +122,15 @@ def test_report_round_trips_by_value() -> None:
     assert report.seed == raw["seed"]
 
 
-def test_only_v5_allows_bounded_adjusted_composite_above_one() -> None:
+def test_only_v5_allows_finite_adjusted_composite_above_one() -> None:
     raw = _fixture()
-    raw.update({"bench_version": 5, "composite": 1.125})
-    assert ScoreReport.model_validate(raw).composite == 1.125
+    raw.update({"bench_version": 5, "composite": 2.84605})
+    assert ScoreReport.model_validate(raw).composite == 2.84605
 
     raw["bench_version"] = 4
     with pytest.raises(ValidationError, match="composite must be <= 1.0"):
         ScoreReport.model_validate(raw)
 
-    raw.update({"bench_version": 5, "composite": 1.251})
+    raw.update({"bench_version": 5, "composite": float("inf")})
     with pytest.raises(ValidationError):
         ScoreReport.model_validate(raw)

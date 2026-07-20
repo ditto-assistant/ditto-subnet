@@ -105,13 +105,15 @@ class TestEntryConfirmations:
             is None
         )
 
-    def test_v5_accepts_bounded_efficiency_adjusted_confirmations(self) -> None:
+    def test_v5_accepts_unbounded_finite_efficiency_adjusted_confirmations(
+        self,
+    ) -> None:
         assert _entry_confirmations(
-            _e("a", 1.1, confirmations=[1.05, 1.15], bench_version=5)
-        ) == [1.05, 1.15]
+            _e("a", 2.5, confirmations=[1.05, 2.84605], bench_version=5)
+        ) == [1.05, 2.84605]
         assert (
             _entry_confirmations(
-                _e("a", 1.1, confirmations=[1.05, 1.251], bench_version=5)
+                _e("a", 1.1, confirmations=[1.05, float("inf")], bench_version=5)
             )
             is None
         )
