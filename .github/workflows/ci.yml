@@ -40,6 +40,20 @@ jobs:
           /tmp/docker-compose --env-file .env.example \
             --project-directory . -f docker-compose.yml config --quiet
 
+      # `config` only PARSES the model — it never asks the daemon to create the
+      # containers, so it accepts options the daemon rejects at deploy time. A
+      # container that joins another's network namespace (network_mode:
+      # service:/container:) cannot carry its own network identity. v0.19.1
+      # shipped extra_hosts on such a service, passed this job green, and was
+      # un-deployable on the whole fleet. The exact daemon conflict set + its
+      # rationale (and unit tests) live in scripts/check_netns_incompatible.py.
+      - name: Reject network-namespace-incompatible service options
+        run: |
+          /tmp/docker-compose --env-file .env.example \
+            --project-directory . -f docker-compose.yml config --format json \
+            >/tmp/resolved-compose.json
+          python3 scripts/check_netns_incompatible.py /tmp/resolved-compose.json
+
   lint-and-test:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:

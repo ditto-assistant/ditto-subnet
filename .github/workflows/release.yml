@@ -11,6 +11,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# Shared, non-secret release constants. Hoisted to workflow scope so the parallel
+# build/assemble jobs share one definition instead of copy-pasting them.
+env:
+  VALIDATOR_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-validator
+  SANDBOX_DOCKER_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker
+  DITTOBENCH_API_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-sandbox
+  MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
+  STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
+  PYLON_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+  OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
+  COMPATIBILITY_EPOCH: "2"
+  UPDATE_PROTOCOL: "1"
+  HEARTBEAT_PROTOCOL: "9"
+  COMPOSE_SCHEMA: "1"
+
 jobs:
   release:
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
@@ -60,29 +75,18 @@ jobs:
           git_committer_name: github-actions
           git_committer_email: actions@users.noreply.github.com
 
-  publish-stack-release:
+  # ---------------------------------------------------------------------------
+  # Fan-out: independent verification + the four first-party image builds all run
+  # in parallel off the release commit. Release commits use [skip ci], so each
+  # re-derives from the exact published source rather than trusting a prior run.
+  # ---------------------------------------------------------------------------
+
+  verify-source:
     needs: release
     if: needs.release.outputs.released == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    outputs:
-      validator_digest: ${{ steps.validator.outputs.digest }}
-      stack_digest: ${{ steps.stack.outputs.digest }}
     permissions:
       contents: read
-      packages: write
-      id-token: write
-    env:
-      VALIDATOR_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-validator
-      SANDBOX_DOCKER_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker
-      DITTOBENCH_API_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-sandbox
-      MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
-      STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
-      PYLON_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
-      OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
-      COMPATIBILITY_EPOCH: "2"
-      UPDATE_PROTOCOL: "1"
-      HEARTBEAT_PROTOCOL: "9"
-      COMPOSE_SCHEMA: "1"
     steps:
       - name: Check out the exact release commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -90,8 +94,6 @@ jobs:
           ref: ${{ needs.release.outputs.commit_sha }}
           persist-credentials: false
 
-      # Release commits use [skip ci], so repeat the complete code checks on the
-      # exact source that will be published instead of trusting the parent run.
       - name: Install uv
         uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
         with:
@@ -108,6 +110,117 @@ jobs:
           uv run mypy ditto/
           uv run pytest
           uv run pytest -m integration ditto/tests/test_validator_auto_update.py
+
+  build-validator:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.validator.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Set up QEMU for both release platforms
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the validator index
+        id: validator
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            DITTO_VERSION=${{ needs.release.outputs.version }}
+            DITTO_REVISION=${{ needs.release.outputs.commit_sha }}
+            VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
+            VALIDATOR_HEARTBEAT_PROTOCOL=${{ env.HEARTBEAT_PROTOCOL }}
+          tags: |
+            ${{ env.VALIDATOR_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+
+  build-sandbox-docker:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.sandbox-docker.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Set up QEMU for both release platforms
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the sandbox daemon index
+        id: sandbox-docker
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: Dockerfile.sandbox-docker
+          platforms: linux/amd64,linux/arm64
+          push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/ditto-assistant/ditto-subnet
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.release.outputs.commit_sha }}
+            io.heyditto.validator.stack-service=sandbox-docker
+          tags: |
+            ${{ env.SANDBOX_DOCKER_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+
+  build-dittobench:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      revision: ${{ steps.dittobench-source.outputs.revision }}
+      scorer_digest: ${{ steps.dittobench-api.outputs.digest }}
+      relay_digest: ${{ steps.model-relay.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
 
       - name: Materialize the reviewed dittobench-api source
         id: dittobench-source
@@ -154,41 +267,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
-
-      - name: Build and publish the validator index
-        id: validator
-        uses: useblacksmith/build-push-action@v2
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            DITTO_VERSION=${{ needs.release.outputs.version }}
-            DITTO_REVISION=${{ needs.release.outputs.commit_sha }}
-            VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
-            VALIDATOR_HEARTBEAT_PROTOCOL=9
-          tags: |
-            ${{ env.VALIDATOR_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
-
-      - name: Build and publish the sandbox daemon index
-        id: sandbox-docker
-        uses: useblacksmith/build-push-action@v2
-        with:
-          context: .
-          file: Dockerfile.sandbox-docker
-          platforms: linux/amd64,linux/arm64
-          push: true
-          labels: |
-            org.opencontainers.image.source=https://github.com/ditto-assistant/ditto-subnet
-            org.opencontainers.image.version=${{ needs.release.outputs.version }}
-            org.opencontainers.image.revision=${{ needs.release.outputs.commit_sha }}
-            io.heyditto.validator.stack-service=sandbox-docker
-          tags: |
-            ${{ env.SANDBOX_DOCKER_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
-
       - name: Build and publish the scorer index
         id: dittobench-api
         uses: useblacksmith/build-push-action@v2
@@ -227,17 +305,73 @@ jobs:
           tags: |
             ${{ env.MODEL_RELAY_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 
+  # ---------------------------------------------------------------------------
+  # Fan-in: every component image exists and the source re-verified. Authenticate
+  # each index, smoke the amd64 validator, render the digest-bound bundle, and
+  # build + sign the immutable stack descriptor.
+  # ---------------------------------------------------------------------------
+
+  assemble-stack:
+    needs:
+      - release
+      - verify-source
+      - build-validator
+      - build-sandbox-docker
+      - build-dittobench
+    if: needs.release.outputs.released == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      validator_digest: ${{ needs.build-validator.outputs.digest }}
+      stack_digest: ${{ steps.stack.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # The render script (build-stack-release.py) imports PyYAML, so the project
+      # env must be synced here — the full source re-verification that used to
+      # sync it now runs in the parallel verify-source job.
+      - name: Sync the project environment
+        run: uv sync --locked --group dev
+
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
       - name: Verify every first-party multi-platform index
         env:
           VERSION: ${{ needs.release.outputs.version }}
           REVISION: ${{ needs.release.outputs.commit_sha }}
-          DITTOBENCH_REVISION: ${{ steps.dittobench-source.outputs.revision }}
+          DITTOBENCH_REVISION: ${{ needs.build-dittobench.outputs.revision }}
         run: |
           declare -A artifacts=(
-            ["$VALIDATOR_REPOSITORY"]="${{ steps.validator.outputs.digest }}"
-            ["$SANDBOX_DOCKER_REPOSITORY"]="${{ steps.sandbox-docker.outputs.digest }}"
-            ["$DITTOBENCH_API_REPOSITORY"]="${{ steps.dittobench-api.outputs.digest }}"
-            ["$MODEL_RELAY_REPOSITORY"]="${{ steps.model-relay.outputs.digest }}"
+            ["$VALIDATOR_REPOSITORY"]="${{ needs.build-validator.outputs.digest }}"
+            ["$SANDBOX_DOCKER_REPOSITORY"]="${{ needs.build-sandbox-docker.outputs.digest }}"
+            ["$DITTOBENCH_API_REPOSITORY"]="${{ needs.build-dittobench.outputs.scorer_digest }}"
+            ["$MODEL_RELAY_REPOSITORY"]="${{ needs.build-dittobench.outputs.relay_digest }}"
           )
           declare -A sources=(
             ["$VALIDATOR_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
@@ -291,7 +425,7 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           REVISION: ${{ needs.release.outputs.commit_sha }}
-          VALIDATOR_DIGEST: ${{ steps.validator.outputs.digest }}
+          VALIDATOR_DIGEST: ${{ needs.build-validator.outputs.digest }}
         run: |
           raw="$(
             docker buildx imagetools inspect --raw \
@@ -328,15 +462,15 @@ jobs:
             --output build/stack-release \
             --version "${{ needs.release.outputs.version }}" \
             --revision "${{ needs.release.outputs.commit_sha }}" \
-            --dittobench-revision "${{ steps.dittobench-source.outputs.revision }}" \
+            --dittobench-revision "${{ needs.build-dittobench.outputs.revision }}" \
             --compatibility-epoch "$COMPATIBILITY_EPOCH" \
             --update-protocol "$UPDATE_PROTOCOL" \
             --heartbeat-protocol "$HEARTBEAT_PROTOCOL" \
             --compose-schema "$COMPOSE_SCHEMA" \
-            --validator-image "$VALIDATOR_REPOSITORY@${{ steps.validator.outputs.digest }}" \
-            --sandbox-docker-image "$SANDBOX_DOCKER_REPOSITORY@${{ steps.sandbox-docker.outputs.digest }}" \
-            --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@${{ steps.dittobench-api.outputs.digest }}" \
-            --model-relay-image "$MODEL_RELAY_REPOSITORY@${{ steps.model-relay.outputs.digest }}" \
+            --validator-image "$VALIDATOR_REPOSITORY@${{ needs.build-validator.outputs.digest }}" \
+            --sandbox-docker-image "$SANDBOX_DOCKER_REPOSITORY@${{ needs.build-sandbox-docker.outputs.digest }}" \
+            --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@${{ needs.build-dittobench.outputs.scorer_digest }}" \
+            --model-relay-image "$MODEL_RELAY_REPOSITORY@${{ needs.build-dittobench.outputs.relay_digest }}" \
             --pylon-image "$PYLON_IMAGE" \
             --ollama-image "$OLLAMA_IMAGE"
           test "$(grep -c '^' build/stack-release/manifest.env)" = 14
@@ -395,15 +529,12 @@ jobs:
             "$exact" >/dev/null
 
   smoke-validator-arm64:
-    needs: [release, publish-stack-release]
+    needs: [release, build-validator]
+    if: needs.release.outputs.released == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     permissions:
       contents: read
       packages: read
-    env:
-      VALIDATOR_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-validator
-      COMPATIBILITY_EPOCH: "2"
-      HEARTBEAT_PROTOCOL: "9"
     steps:
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v1
@@ -419,7 +550,7 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           REVISION: ${{ needs.release.outputs.commit_sha }}
-          VALIDATOR_DIGEST: ${{ needs.publish-stack-release.outputs.validator_digest }}
+          VALIDATOR_DIGEST: ${{ needs.build-validator.outputs.digest }}
         run: |
           raw="$(
             docker buildx imagetools inspect --raw \
@@ -450,14 +581,12 @@ jobs:
           trap - EXIT
 
   promote-stack-release:
-    needs: [release, publish-stack-release, smoke-validator-arm64]
+    needs: [release, assemble-stack, smoke-validator-arm64]
+    if: needs.release.outputs.released == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       packages: write
-    env:
-      STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
-      COMPATIBILITY_EPOCH: "2"
     steps:
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v1
@@ -474,7 +603,7 @@ jobs:
       # on both platforms, and its digest was authenticated.
       - name: Promote only the authenticated stack descriptor
         env:
-          STACK_DIGEST: ${{ needs.publish-stack-release.outputs.stack_digest }}
+          STACK_DIGEST: ${{ needs.assemble-stack.outputs.stack_digest }}
           RELEASE_TAG: ${{ needs.release.outputs.tag }}
         run: |
           source="$STACK_REPOSITORY@$STACK_DIGEST"
