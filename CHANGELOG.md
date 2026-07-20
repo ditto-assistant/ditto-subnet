@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.19.1 (2026-07-20)
+
+### Bug Fixes
+
+- **scorer**: Resolve host.docker.internal so the relay preflight reaches the model relay
+  ([#191](https://github.com/ditto-assistant/ditto-subnet/pull/191),
+  [`0a74ab3`](https://github.com/ditto-assistant/ditto-subnet/commit/0a74ab351da9b7dd77bd39c49180ed465286348e))
+
+
 ## v0.19.0 (2026-07-20)
 
 ### Features
