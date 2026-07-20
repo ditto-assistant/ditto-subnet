@@ -1220,6 +1220,7 @@
             "enum": [
               "preparing",
               "building_harness",
+              "generating_dataset",
               "starting_harness",
               "running_benchmark",
               "finalizing",

@@ -16,7 +16,11 @@ from pydantic import (
 
 BenchmarkProgressStage = Literal[
     "preparing",
+    # building_harness is retained for back-compat (it now reports pulling and
+    # loading the screener-built image, not a source build) but is deprecated in
+    # favour of the more granular generating_dataset / starting_harness stages.
     "building_harness",
+    "generating_dataset",
     "starting_harness",
     "running_benchmark",
     "finalizing",
@@ -25,7 +29,12 @@ BenchmarkProgressStage = Literal[
 ]
 
 MAX_BENCHMARK_CHECKS = 10_000
-_EARLY_STAGES = {"preparing", "building_harness", "starting_harness"}
+_EARLY_STAGES = {
+    "preparing",
+    "building_harness",
+    "generating_dataset",
+    "starting_harness",
+}
 _TERMINAL_WORK_STAGES = {"finalizing", "submitting_result"}
 
 
