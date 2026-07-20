@@ -120,6 +120,7 @@ def _entry(
         seed=1,
         validator_hotkey=_VALIDATOR_HOTKEY,
         signature="ab" * 64,
+        score_proofs=[],
         status=AgentStatus.SCORED,
     )
 
