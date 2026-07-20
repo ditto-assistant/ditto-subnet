@@ -1206,7 +1206,7 @@ class TestRunOnce:
             "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
         )
 
-    @pytest.mark.parametrize("bench_version", [3, 4])
+    @pytest.mark.parametrize("bench_version", [3, 4, 5])
     async def test_v3_plus_ticket_artifact_scorer_and_signature_are_version_bound(
         self, bench_version: int
     ) -> None:

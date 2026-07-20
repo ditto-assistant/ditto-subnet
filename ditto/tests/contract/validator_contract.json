@@ -240,7 +240,7 @@
         "default": null
       },
       "composite": {
-        "maximum": 1.0,
+        "maximum": 1.25,
         "minimum": 0.0,
         "type": "number"
       },
@@ -385,7 +385,7 @@
             "default": null
           },
           "composite": {
-            "maximum": 1.0,
+            "maximum": 1.25,
             "minimum": 0.0,
             "type": "number"
           },
@@ -700,7 +700,7 @@
         "default": null
       },
       "composite": {
-        "maximum": 1.0,
+        "maximum": 1.25,
         "minimum": 0.0,
         "type": "number"
       },
@@ -786,6 +786,19 @@
               "$ref": "#/$defs/CategoryStat"
             },
             "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "raw_composite": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
           },
           {
             "type": "null"
@@ -997,7 +1010,7 @@
             "default": null
           },
           "composite": {
-            "maximum": 1.0,
+            "maximum": 1.25,
             "minimum": 0.0,
             "type": "number"
           },
@@ -1083,6 +1096,19 @@
                   "$ref": "#/$defs/CategoryStat"
                 },
                 "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "raw_composite": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
               },
               {
                 "type": "null"

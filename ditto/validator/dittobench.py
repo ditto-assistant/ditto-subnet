@@ -63,7 +63,7 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # rather than scored blind. Versions >= 3 share one scorer contract (/v2/score,
 # pinned dataset, policy-9 screened image), so version-specific behaviour is
 # expressed as ``>= _SCREENED_IMAGE_BENCH_VERSION`` rather than per-version arms.
-_SUPPORTED_BENCH_VERSIONS = (2, 3, 4)
+_SUPPORTED_BENCH_VERSIONS = (2, 3, 4, 5)
 _SCREENED_IMAGE_BENCH_VERSION = 3
 
 

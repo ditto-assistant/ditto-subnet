@@ -539,8 +539,22 @@ class ScoreReport(BaseModel):
         ),
     ]
     composite: Annotated[
-        float, Field(ge=0.0, le=1.0, description="Aggregate score in [0,1].")
+        float,
+        Field(
+            ge=0.0,
+            le=1.25,
+            description="Aggregate score in [0,1] for v1-v4; v5 may reach 1.25.",
+        ),
     ]
+    raw_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description="Pre-efficiency quality composite for benchmark v5.",
+        ),
+    ] = None
     tool_mean: Annotated[
         float, Field(ge=0.0, le=1.0, description="Mean tool accuracy in [0,1].")
     ]
@@ -639,6 +653,18 @@ class ScoreReport(BaseModel):
         ),
     ]
 
+    @model_validator(mode="after")
+    def _validate_versioned_composite_ceiling(self) -> ScoreReport:
+        ceiling = (
+            1.25 if self.bench_version is not None and self.bench_version >= 5 else 1.0
+        )
+        if self.composite > ceiling:
+            version = self.bench_version or 2
+            raise ValueError(
+                f"composite must be <= {ceiling} for bench_version {version}"
+            )
+        return self
+
 
 class SubmitScoreRequest(BaseModel):
     """Body of ``POST /validator/agent/{agent_id}/score``.
@@ -711,7 +737,14 @@ class LedgerEntry(BaseModel):
     miner_hotkey: Annotated[str, Field(description="Miner's SS58 hotkey.")]
     agent_id: Annotated[UUID, Field(description="The miner's best eligible agent.")]
     composite: Annotated[
-        float, Field(ge=0.0, le=1.0, description="Best composite score in [0,1].")
+        float,
+        Field(
+            ge=0.0,
+            le=1.25,
+            description=(
+                "Best composite score; v5 efficiency-adjusted scores may reach 1.25."
+            ),
+        ),
     ]
     n: Annotated[
         int,
@@ -805,6 +838,18 @@ class LedgerEntry(BaseModel):
     status: Annotated[
         AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
     ]
+
+    @model_validator(mode="after")
+    def _validate_versioned_composite_ceiling(self) -> LedgerEntry:
+        ceiling = (
+            1.25 if self.bench_version is not None and self.bench_version >= 5 else 1.0
+        )
+        if self.composite > ceiling:
+            version = self.bench_version or 2
+            raise ValueError(
+                f"composite must be <= {ceiling} for bench_version {version}"
+            )
+        return self
 
 
 class LedgerResponse(BaseModel):

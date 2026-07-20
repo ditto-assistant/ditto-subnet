@@ -207,18 +207,21 @@ def _entry_confirmations(entry: LedgerEntry) -> list[float] | None:
     does not carry them (prod hardening P4). Read via getattr so the wire model
     can stay untouched — until the platform surfaces ``confirmation_composites``
     this is inert and the fold uses the raw composite, byte-identical to today.
-    Requires at least two finite values in [0, 1]; anything else is treated as
+    Requires at least two finite values in the versioned composite range;
+    v1-v4 remain [0, 1] and v5+ may reach 1.25. Anything else is treated as
     absent (a consensus-safe guard: one validator must never fold a different
     effective composite than another off a malformed list)."""
     v = getattr(entry, "confirmation_composites", None)
     if not isinstance(v, (list, tuple)) or len(v) < 2:
         return None
     out: list[float] = []
+    bench_version = getattr(entry, "bench_version", None)
+    ceiling = 1.25 if bench_version is not None and bench_version >= 5 else 1.0
     for x in v:
         if (
             not isinstance(x, (int, float))
             or not math.isfinite(x)
-            or not 0.0 <= x <= 1.0
+            or not 0.0 <= x <= ceiling
         ):
             return None
         out.append(float(x))
