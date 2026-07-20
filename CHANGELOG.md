@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.19.2 (2026-07-20)
+
+### Bug Fixes
+
+- **compose**: Move host.docker.internal mapping to sandbox-docker (netns owner)
+  ([#192](https://github.com/ditto-assistant/ditto-subnet/pull/192),
+  [`67eb397`](https://github.com/ditto-assistant/ditto-subnet/commit/67eb397485328b9a647353902ea3c1ff285f9753))
+
+
 ## v0.19.1 (2026-07-20)
 
 ### Bug Fixes
