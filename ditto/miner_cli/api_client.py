@@ -39,6 +39,7 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     HotkeyAgentNotFoundError,
     PreCheckRejectedError,
+    TransientApiError,
     UploadAgentRejectedError,
 )
 from ditto.miner_cli.models import PaymentReceipt
@@ -56,6 +57,11 @@ DEFAULT_TIMEOUT_S = 60.0
 # api_models contract tests (next PR after this one) will catch it.
 _ERROR_CODE_AGENT_NOT_FOUND = 1200
 _ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
+
+# Safe post-payment retry set. These statuses conventionally represent a
+# transient request, capacity, gateway, or service failure. Other 4xx responses
+# are definitive upload/payment rejections and must surface immediately.
+_RETRYABLE_UPLOAD_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 
 
 class ApiClient:
@@ -122,18 +128,18 @@ class ApiClient:
         try:
             return self._client.request(method, path, **kwargs)
         except httpx.ConnectError as e:
-            raise ApiResponseError(
+            raise TransientApiError(
                 f"api unreachable at {self._base_url}: {e}. "
                 f"Hint: confirm the API is running and --network matches "
                 f"your deployment."
             ) from e
         except httpx.TimeoutException as e:
-            raise ApiResponseError(
+            raise TransientApiError(
                 f"api request timed out at {self._base_url}: {e}"
             ) from e
         except httpx.RequestError as e:
             # Catch-all for other transport faults (DNS, TLS, etc.).
-            raise ApiResponseError(
+            raise TransientApiError(
                 f"api request failed at {self._base_url}: {e}"
             ) from e
 
@@ -208,6 +214,8 @@ class ApiClient:
             files=files,
             data=data,
         )
+        if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
+            raise TransientApiError(_format_error(response, prefix="upload-agent"))
         if response.status_code != 200:
             raise UploadAgentRejectedError(
                 _format_error(response, prefix="upload-agent")

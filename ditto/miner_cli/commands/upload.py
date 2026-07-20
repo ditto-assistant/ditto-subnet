@@ -24,10 +24,12 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
+import time
 from pathlib import Path
 
-from ditto.api_models import UploadCheckRequest
+from ditto.api_models import UploadAgentResponse, UploadCheckRequest
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.commands.verify import _print_result
 from ditto.miner_cli.confirm import confirm_payment
@@ -39,17 +41,28 @@ from ditto.miner_cli.errors import (
     PaymentSubmissionError,
     PreCheckRejectedError,
     TarStructureError,
+    TransientApiError,
     UploadAgentRejectedError,
     WalletNotFoundError,
 )
+from ditto.miner_cli.models import PaymentReceipt
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
-from ditto.miner_cli.preferences import load_agent_name, save_agent_name
+from ditto.miner_cli.preferences import (
+    clear_pending_payment,
+    load_agent_name,
+    load_pending_payment,
+    save_agent_name,
+    save_pending_payment,
+)
 from ditto.miner_cli.signing import sign_upload_payload
 from ditto.miner_cli.tar_validator import run_preflight
 from ditto.miner_cli.wallet import load_wallet
 
 logger = logging.getLogger(__name__)
+
+_BLOCK_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
+_UPLOAD_RETRY_DELAYS_S = (1.0, 2.0, 4.0, 8.0)
 
 
 def add_subparser(
@@ -121,6 +134,14 @@ def add_subparser(
         action="store_true",
         help="Skip interactive payment confirmation. For scripted use.",
     )
+    recovery = parser.add_argument_group(
+        "payment recovery",
+        "Reuse a finalized payment after an upload transport/server failure. "
+        "All three fields are required together; no new transfer is submitted.",
+    )
+    recovery.add_argument("--payment-block-hash")
+    recovery.add_argument("--payment-block-number", type=int)
+    recovery.add_argument("--payment-extrinsic-index", type=int)
     parser.set_defaults(func=run)
     return parser
 
@@ -170,6 +191,8 @@ def _run_upload(
     subtensor_network: str,
     chain_endpoint: str | None = None,
 ) -> int:
+    explicit_recovery_receipt = _recovery_receipt_from_args(args)
+
     # Step 1: load wallet
     handle, live_wallet = load_wallet(
         coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
@@ -206,6 +229,22 @@ def _run_upload(
         handle=handle, live_wallet=live_wallet, sha256_hex=preflight.sha256
     )
 
+    # A finalized receipt is written locally before the first upload attempt.
+    # On a later identical command, reuse it automatically instead of sending a
+    # second transfer. The key includes the local tar digest; no tar bytes, paths,
+    # source, or remote artifact access are stored.
+    receipt = explicit_recovery_receipt
+    receipt_source = "explicit" if receipt is not None else None
+    if receipt is None:
+        receipt = load_pending_payment(
+            network=network_name,
+            hotkey=handle.hotkey_ss58,
+            name=agent_name,
+            sha256=preflight.sha256,
+        )
+        if receipt is not None:
+            receipt_source = "saved"
+
     with ApiClient(base_url=network_api_url) as client:
         # Step 4: pre-payment check
         check_response = client.post_upload_check(
@@ -235,49 +274,71 @@ def _run_upload(
             chain_endpoint=chain_endpoint,
         )
 
-        # Step 6: fetch current pricing
-        pricing = client.get_eval_pricing()
+        if receipt is None:
+            # Step 6: fetch current pricing
+            pricing = client.get_eval_pricing()
 
-        # Step 7: confirm payment
-        confirm_payment(
-            amount_rao=pricing.amount_rao,
-            dest_address=pricing.send_address,
-            hotkey_ss58=handle.hotkey_ss58,
-            coldkey_name=handle.coldkey_name,
-            skip=args.yes,
-        )
+            # Step 7: confirm payment
+            confirm_payment(
+                amount_rao=pricing.amount_rao,
+                dest_address=pricing.send_address,
+                hotkey_ss58=handle.hotkey_ss58,
+                coldkey_name=handle.coldkey_name,
+                skip=args.yes,
+            )
 
-        # Step 8: submit chain payment
-        print(
-            f"submitting payment on subtensor={subtensor_network}...",
-            file=sys.stderr,
-        )
-        receipt = submit_eval_payment(
-            live_wallet=live_wallet,
-            subtensor_network=subtensor_network,
-            amount_rao=pricing.amount_rao,
-            dest_address=pricing.send_address,
-            chain_endpoint=chain_endpoint,
-        )
-        print(
-            f"payment finalised: block={receipt.block_number} "
-            f"ext_idx={receipt.extrinsic_index}",
-            file=sys.stderr,
-        )
+            # Step 8: submit chain payment
+            print(
+                f"submitting payment on subtensor={subtensor_network}...",
+                file=sys.stderr,
+            )
+            receipt = submit_eval_payment(
+                live_wallet=live_wallet,
+                subtensor_network=subtensor_network,
+                amount_rao=pricing.amount_rao,
+                dest_address=pricing.send_address,
+                chain_endpoint=chain_endpoint,
+            )
+            print(
+                f"payment finalised: block={receipt.block_number} "
+                f"ext_idx={receipt.extrinsic_index}",
+                file=sys.stderr,
+            )
+            if not save_pending_payment(
+                network=network_name,
+                hotkey=handle.hotkey_ss58,
+                name=agent_name,
+                sha256=preflight.sha256,
+                payment=receipt,
+            ):
+                print(
+                    "warning: could not save the finalized payment proof locally; "
+                    "keep the printed proof if upload fails",
+                    file=sys.stderr,
+                )
+        else:
+            print(
+                (
+                    "found a saved finalized payment for this exact submission; "
+                    "no new transfer will be sent"
+                    if receipt_source == "saved"
+                    else "reusing finalized payment proof; no new transfer will be sent"
+                ),
+                file=sys.stderr,
+            )
 
         # Step 9: post tar + payment proof
         print("uploading tarball...", file=sys.stderr)
         try:
-            with args.tar_path.open("rb") as tar_fh:
-                result = client.post_upload_agent(
-                    agent_tar=tar_fh,
-                    agent_tar_filename=args.tar_path.name,
-                    hotkey=handle.hotkey_ss58,
-                    sha256=preflight.sha256,
-                    name=agent_name,
-                    signature=signature_hex,
-                    payment=receipt,
-                )
+            result = _post_upload_with_retries(
+                client=client,
+                tar_path=args.tar_path,
+                hotkey=handle.hotkey_ss58,
+                sha256=preflight.sha256,
+                name=agent_name,
+                signature=signature_hex,
+                payment=receipt,
+            )
         except ApiResponseError:
             # Money is on chain. Any post-payment API failure (server
             # rejection OR transport error like connect-refused / timeout)
@@ -297,6 +358,18 @@ def _run_upload(
 
     # Step 10: print agent_id to stdout, hint to stderr
     print(result.agent_id)
+    if not clear_pending_payment(
+        network=network_name,
+        hotkey=handle.hotkey_ss58,
+        name=agent_name,
+        sha256=preflight.sha256,
+        payment=receipt,
+    ):
+        print(
+            "warning: upload succeeded but the saved payment proof could not be "
+            "cleared; the server will still return this same agent on an exact retry",
+            file=sys.stderr,
+        )
     saved_name = save_agent_name(
         network=network_name, hotkey=handle.hotkey_ss58, name=agent_name
     )
@@ -311,3 +384,69 @@ def _run_upload(
         file=sys.stderr,
     )
     return 0
+
+
+def _recovery_receipt_from_args(args: argparse.Namespace) -> PaymentReceipt | None:
+    """Parse the all-or-none finalized-payment recovery flags."""
+    block_hash = getattr(args, "payment_block_hash", None)
+    block_number = getattr(args, "payment_block_number", None)
+    extrinsic_index = getattr(args, "payment_extrinsic_index", None)
+    supplied = (
+        block_hash is not None,
+        block_number is not None,
+        extrinsic_index is not None,
+    )
+    if any(supplied) and not all(supplied):
+        raise MinerCliError(
+            "payment recovery requires --payment-block-hash, "
+            "--payment-block-number, and --payment-extrinsic-index together"
+        )
+    if not any(supplied):
+        return None
+    if not isinstance(block_hash, str) or not _BLOCK_HASH_RE.fullmatch(block_hash):
+        raise MinerCliError("--payment-block-hash must be 0x plus 64 hex characters")
+    if not isinstance(block_number, int) or block_number < 1:
+        raise MinerCliError("--payment-block-number must be at least 1")
+    if not isinstance(extrinsic_index, int) or extrinsic_index < 0:
+        raise MinerCliError("--payment-extrinsic-index must be at least 0")
+    return PaymentReceipt(
+        block_hash=block_hash,
+        block_number=block_number,
+        extrinsic_index=extrinsic_index,
+    )
+
+
+def _post_upload_with_retries(
+    *,
+    client: ApiClient,
+    tar_path: Path,
+    hotkey: str,
+    sha256: str,
+    name: str,
+    signature: str,
+    payment: PaymentReceipt,
+) -> UploadAgentResponse:
+    """Retry only transient post-payment failures with the same proof."""
+    for attempt in range(len(_UPLOAD_RETRY_DELAYS_S) + 1):
+        try:
+            with tar_path.open("rb") as tar_fh:
+                return client.post_upload_agent(
+                    agent_tar=tar_fh,
+                    agent_tar_filename=tar_path.name,
+                    hotkey=hotkey,
+                    sha256=sha256,
+                    name=name,
+                    signature=signature,
+                    payment=payment,
+                )
+        except TransientApiError:
+            if attempt == len(_UPLOAD_RETRY_DELAYS_S):
+                raise
+            delay = _UPLOAD_RETRY_DELAYS_S[attempt]
+            print(
+                f"upload endpoint temporarily unavailable; retrying in {delay:g}s "
+                f"({attempt + 2}/{len(_UPLOAD_RETRY_DELAYS_S) + 1})...",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable upload retry loop")
