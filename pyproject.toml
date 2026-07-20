@@ -11,7 +11,10 @@ license = "MIT"
 requires-python = ">=3.11,<3.14"
 authors = [{ name = "heyDitto" }]
 dependencies = [
-    "bittensor>=10.2.1",
+    # 10.3.0 carries a breaking change the subnet requires — older releases no
+    # longer interoperate with the chain, so pin the floor there (the lock pins
+    # the exact resolved version operators install).
+    "bittensor>=10.3.0",
     # 4.1 reads the keyfile format emitted by current btcli releases.
     "bittensor-wallet>=4.1.0",
     "bittensor-pylon-client",
