@@ -47,8 +47,8 @@ _FAILED = "failed"
 _PROGRESS_STAGE_BY_STATUS: dict[str, BenchmarkProgressStage] = {
     "queued": "preparing",
     "building": "building_harness",
-    "generating": "starting_harness",
-    "seeding": "running_benchmark",
+    "generating": "generating_dataset",
+    "seeding": "starting_harness",
     "running": "running_benchmark",
     "scoring": "finalizing",
     "done": "finalizing",

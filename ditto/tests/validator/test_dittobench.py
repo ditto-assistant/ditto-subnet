@@ -154,8 +154,8 @@ async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     [
         ("queued", "preparing", (None, None)),
         ("building", "building_harness", (None, None)),
-        ("generating", "starting_harness", (None, None)),
-        ("seeding", "running_benchmark", (None, None)),
+        ("generating", "generating_dataset", (None, None)),
+        ("seeding", "starting_harness", (None, None)),
         ("running", "running_benchmark", (51, 114)),
         ("scoring", "finalizing", (114, 114)),
         ("done", "finalizing", (114, 114)),
