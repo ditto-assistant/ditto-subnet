@@ -43,54 +43,16 @@ jobs:
       # `config` only PARSES the model — it never asks the daemon to create the
       # containers, so it accepts options the daemon rejects at deploy time. A
       # container that joins another's network namespace (network_mode:
-      # service:/container:) cannot carry its own network identity. Moby's
-      # validateNetContainerMode (v28 runconfig/hostconfig.go) refuses EXACTLY:
-      # Hostname, Links, DNS, ExtraHosts, PortBindings, PublishAllPorts, and
-      # ExposedPorts — i.e. the compose keys hostname, links, dns, extra_hosts,
-      # ports, and expose. v0.19.1 shipped extra_hosts on such a service, passed
-      # this job green, and was un-deployable on the whole fleet. Assert the
-      # constraint against the fully-resolved model so a repeat fails the PR, not
-      # the validators.
+      # service:/container:) cannot carry its own network identity. v0.19.1
+      # shipped extra_hosts on such a service, passed this job green, and was
+      # un-deployable on the whole fleet. The exact daemon conflict set + its
+      # rationale (and unit tests) live in scripts/check_netns_incompatible.py.
       - name: Reject network-namespace-incompatible service options
         run: |
           /tmp/docker-compose --env-file .env.example \
             --project-directory . -f docker-compose.yml config --format json \
             >/tmp/resolved-compose.json
-          python3 - <<'PY'
-          import json, sys
-          with open("/tmp/resolved-compose.json") as fh:
-              model = json.load(fh)
-          # Exactly the set Moby's validateNetContainerMode refuses on a
-          # container-mode joiner. dns_search / dns_options / mac_address / networks
-          # are NOT part of that daemon check (verified against Docker 29.4 / Moby
-          # v28), so they are deliberately excluded rather than falsely flagged.
-          JOINER_INCOMPATIBLE = (
-              "extra_hosts", "ports", "expose", "hostname", "dns", "links",
-          )
-          problems = []
-          for name, svc in (model.get("services") or {}).items():
-              mode = svc.get("network_mode") or ""
-              if not (isinstance(mode, str) and mode.split(":", 1)[0] in ("service", "container")):
-                  continue
-              for opt in JOINER_INCOMPATIBLE:
-                  # Truthiness is deliberate (not `is not None`): the daemon
-                  # refuses only NON-EMPTY values (Moby checks `len(...) > 0`),
-                  # so an explicit-but-empty `ports: []` is accepted and must not
-                  # be flagged.
-                  if svc.get(opt):
-                      problems.append(
-                          f"service '{name}': '{opt}' is invalid with "
-                          f"network_mode: {mode} (the daemon rejects it at "
-                          f"container create; put it on the netns owner instead)"
-                      )
-          if problems:
-              print("network-namespace-incompatible compose options — this stack "
-                    "would fail to deploy:")
-              for p in problems:
-                  print("  -", p)
-              sys.exit(1)
-          print("compose network-namespace options OK")
-          PY
+          python3 scripts/check_netns_incompatible.py /tmp/resolved-compose.json
 
   lint-and-test:
     runs-on: blacksmith-4vcpu-ubuntu-2404
