@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict
 from types import SimpleNamespace
@@ -641,8 +642,19 @@ async def test_poll_callback_receives_only_allowlisted_snapshot() -> None:
         )
 
     assert report.n == 114
-    assert seen == [{"stage": "finalizing", "completed": 114, "total": 114}]
+    # run_token is the opaque sha256 prefix of the run id, stable for the run and
+    # never the raw id itself (the id stays private).
+    expected_token = hashlib.sha256(b"private-run-id").hexdigest()[:16]
+    assert seen == [
+        {
+            "stage": "finalizing",
+            "completed": 114,
+            "total": 114,
+            "run_token": expected_token,
+        }
+    ]
     serialized = json.dumps(seen)
+    assert "private-run-id" not in serialized
     for forbidden in ("case_id", "expected", "seed", "run_id", "error", "partial"):
         assert forbidden not in serialized
 

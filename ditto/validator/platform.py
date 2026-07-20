@@ -18,6 +18,9 @@ from pydantic import ValidationError
 
 from ditto.api_models.validator import (
     ArtifactResponse,
+    FailJobReason,
+    FailJobRequest,
+    FailJobResponse,
     JobRequest,
     JobResponse,
     LedgerResponse,
@@ -30,6 +33,7 @@ from ditto.api_models.validator import (
 from ditto.validator.errors import PlatformError
 from ditto.validator.signing import (
     sign_artifact_request,
+    sign_job_fail_request,
     sign_job_request,
     sign_ledger_request,
 )
@@ -108,6 +112,50 @@ class PlatformClient:
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return JobResponse.model_validate(resp.json())
+
+    async def report_ticket_failed(
+        self, job: JobResponse, reason: FailJobReason
+    ) -> FailJobResponse:
+        """Hand a failed ticket back so the platform reissues a fresh lease.
+
+        POST /validator/job/fail closes the still-live lease for
+        ``(job.agent_id, job.deadline)`` immediately (rather than waiting for it
+        to expire) so the next :meth:`request_job` mints a brand-new ticket
+        instead of resuming the failed attempt. Raises :class:`PlatformError` on
+        any non-200; callers MUST treat this as best-effort and never let a
+        failed report crash the scoring sweep — an old platform without this
+        endpoint just leaves the ticket to expire on its own, exactly as before.
+        """
+        url = f"{self._base}{_PREFIX}/job/fail"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = FailJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=job.agent_id,
+            ticket_deadline=job.deadline,
+            reason=reason,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_job_fail_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=job.agent_id,
+                ticket_deadline=job.deadline,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        try:
+            resp = await self._client.post(
+                url, headers=self._headers, json=payload.model_dump(mode="json")
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"job fail report failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"job fail report rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return FailJobResponse.model_validate(resp.json())
 
     async def get_ledger(self) -> LedgerResponse:
         """Pull the best-score-per-miner ledger the worker folds into weights.

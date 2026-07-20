@@ -17,7 +17,7 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -117,6 +117,10 @@ class DittobenchProgressSnapshot:
     stage: BenchmarkProgressStage
     completed: int | None = None
     total: int | None = None
+    # Opaque per-run identity, derived from the dittobench run id. Set by the
+    # poll loop once the run exists so the worker can tell a fresh re-attempt
+    # apart from the same still-live lease. Absent (None) means unknown.
+    run_token: str | None = None
 
 
 ProgressCallback = Callable[[DittobenchProgressSnapshot], Awaitable[None]]
@@ -491,6 +495,11 @@ class DittobenchClient:
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
         deadline = self._config.dittobench_timeout_seconds
         waited = 0.0
+        # Opaque, stable-per-run token every progress heartbeat for this run
+        # carries, so the platform can distinguish a fresh re-attempt of the same
+        # lease from continued progress on the previous run and rebaseline the
+        # monotonicity guard accordingly.
+        run_token = hashlib.sha256(run_id.encode()).hexdigest()[:16]
         try:
             while waited <= deadline:
                 resp = await self._client.get(url)
@@ -502,6 +511,8 @@ class DittobenchClient:
                 if not isinstance(data, dict):
                     raise DittobenchError("poll response was not a JSON object")
                 snapshot = safe_progress_snapshot(data)
+                if snapshot is not None:
+                    snapshot = replace(snapshot, run_token=run_token)
                 if snapshot is not None and progress_callback is not None:
                     try:
                         await progress_callback(snapshot)

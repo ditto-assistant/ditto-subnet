@@ -158,6 +158,50 @@ def sign_job_request(
     return signature.hex()
 
 
+def job_fail_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    ticket_deadline: datetime,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    """Build canonical bytes proving ownership for one ticket-fail report.
+
+    Binds the exact lease identity (``agent_id`` + ``ticket_deadline``) so a
+    captured signature cannot close a different validator's ticket or a later
+    reissue of this one.
+    """
+    deadline = ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return (
+        f"validator-job-fail:v1:{validator_hotkey}:{agent_id}:{deadline}:"
+        f"{nonce}:{requested}"
+    ).encode()
+
+
+def sign_job_fail_request(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    ticket_deadline: datetime,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Return the sr25519 signature for a fresh ticket-fail report."""
+    signature: bytes = keypair.sign(
+        job_fail_signing_message(
+            validator_hotkey=validator_hotkey,
+            agent_id=agent_id,
+            ticket_deadline=ticket_deadline,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
 def artifact_signing_message(
     *, validator_hotkey: str, agent_id: UUID, nonce: UUID, requested_at: datetime
 ) -> bytes:
