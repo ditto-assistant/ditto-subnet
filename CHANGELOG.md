@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.18.2 (2026-07-20)
+
+### Bug Fixes
+
+- Recover transient paid uploads ([#184](https://github.com/ditto-assistant/ditto-subnet/pull/184),
+  [`5213165`](https://github.com/ditto-assistant/ditto-subnet/commit/5213165436a0dd4e1935c872cf07d22534cb9d9d))
+
+
 ## v0.18.1 (2026-07-20)
 
 ### Bug Fixes
