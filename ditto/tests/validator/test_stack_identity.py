@@ -22,16 +22,19 @@ _COMPONENTS = (
 )
 
 
-def test_source_stack_defaults_to_prefer_screened_with_fallback(
+def test_source_stack_requires_screened_image_without_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Screened images are mandatory and there is no source-build fallback: a
+    # validator must never docker-build untrusted miner source. The requirement
+    # is unconditional and not gated on an env toggle.
     monkeypatch.setenv("VALIDATOR_STACK_MODE", "source")
-    monkeypatch.setenv("VALIDATOR_SCREENED_IMAGES", "1")
+    monkeypatch.delenv("VALIDATOR_SCREENED_IMAGES", raising=False)
     capabilities, stack = validator_capabilities_and_stack()
     assert stack.mode == "source"
     assert capabilities.screened_images is True
-    assert capabilities.require_screened_image is False
-    assert capabilities.source_build_fallback is True
+    assert capabilities.require_screened_image is True
+    assert capabilities.source_build_fallback is False
     assert capabilities.full_stack_managed is False
 
 
@@ -96,14 +99,19 @@ def test_source_stack_does_not_bind_unverified_or_mismatched_scorer(
     assert bind_observed_scorer_identity(stack, scorer) == stack
 
 
-def test_legacy_global_requirement_cannot_override_version_contract(
+def test_screened_image_requirement_is_unconditional(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VALIDATOR_REQUIRE_SCREENED_IMAGE", "1")
-    monkeypatch.setenv("VALIDATOR_SCREENED_IMAGES", "1")
-    capabilities, _ = validator_capabilities_and_stack()
-    assert capabilities.require_screened_image is False
-    assert capabilities.source_build_fallback is True
+    # The requirement is hardcoded on: neither an unset nor a falsey legacy
+    # global env can turn off screened images or re-enable the source-build
+    # fallback on a validator.
+    for value in ("0", "1"):
+        monkeypatch.setenv("VALIDATOR_REQUIRE_SCREENED_IMAGE", value)
+        monkeypatch.setenv("VALIDATOR_SCREENED_IMAGES", value)
+        capabilities, _ = validator_capabilities_and_stack()
+        assert capabilities.screened_images is True
+        assert capabilities.require_screened_image is True
+        assert capabilities.source_build_fallback is False
 
 
 def test_managed_descriptor_env_produces_only_signed_exact_identities(

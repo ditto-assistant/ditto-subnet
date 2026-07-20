@@ -338,8 +338,9 @@ class TestRunOnce:
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
         assert heartbeat.protocol_version == 9
         assert heartbeat.capabilities is not None
-        assert heartbeat.capabilities.screened_images is False
-        assert heartbeat.capabilities.source_build_fallback is True
+        assert heartbeat.capabilities.screened_images is True
+        assert heartbeat.capabilities.require_screened_image is True
+        assert heartbeat.capabilities.source_build_fallback is False
         assert heartbeat.stack is not None
         assert heartbeat.stack.mode == "source"
         # No collector injected: the v9 heartbeat still validates, with the
