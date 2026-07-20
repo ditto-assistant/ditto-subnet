@@ -21,7 +21,6 @@ through this endpoint unchanged.
 
 from __future__ import annotations
 
-import math
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -543,8 +542,8 @@ class ScoreReport(BaseModel):
         float,
         Field(
             ge=0.0,
-            allow_inf_nan=False,
-            description="Aggregate score in [0,1] for v1-v4; v5 may exceed 1.",
+            le=1.0,
+            description="Aggregate score after any bounded waste penalty, in [0,1].",
         ),
     ]
     raw_composite: Annotated[
@@ -654,15 +653,6 @@ class ScoreReport(BaseModel):
         ),
     ]
 
-    @model_validator(mode="after")
-    def _validate_versioned_composite_range(self) -> ScoreReport:
-        if not math.isfinite(self.composite):
-            raise ValueError("composite must be finite")
-        if (self.bench_version or 2) < 5 and self.composite > 1.0:
-            version = self.bench_version or 2
-            raise ValueError(f"composite must be <= 1.0 for bench_version {version}")
-        return self
-
 
 class SubmitScoreRequest(BaseModel):
     """Body of ``POST /validator/agent/{agent_id}/score``.
@@ -738,10 +728,8 @@ class LedgerEntry(BaseModel):
         float,
         Field(
             ge=0.0,
-            allow_inf_nan=False,
-            description=(
-                "Best composite score; v5 efficiency-adjusted scores may exceed 1."
-            ),
+            le=1.0,
+            description="Best aggregate benchmark score in [0,1].",
         ),
     ]
     n: Annotated[
@@ -836,15 +824,6 @@ class LedgerEntry(BaseModel):
     status: Annotated[
         AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
     ]
-
-    @model_validator(mode="after")
-    def _validate_versioned_composite_range(self) -> LedgerEntry:
-        if not math.isfinite(self.composite):
-            raise ValueError("composite must be finite")
-        if (self.bench_version or 2) < 5 and self.composite > 1.0:
-            version = self.bench_version or 2
-            raise ValueError(f"composite must be <= 1.0 for bench_version {version}")
-        return self
 
 
 class LedgerResponse(BaseModel):
