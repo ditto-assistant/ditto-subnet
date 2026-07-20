@@ -202,6 +202,17 @@ class PreCheckRejectedError(ApiResponseError):
     pass
 
 
+class TransientApiError(ApiResponseError):
+    """Raised for transport faults and retryable HTTP responses.
+
+    Upload callers may safely retry this error with the same finalized payment
+    proof. Definitive 4xx payment or artifact rejections remain
+    :class:`UploadAgentRejectedError` and are never retried automatically.
+    """
+
+    pass
+
+
 class UploadAgentRejectedError(ApiResponseError):
     """Raised when ``/upload/agent`` returns non-2xx after payment was made.
 

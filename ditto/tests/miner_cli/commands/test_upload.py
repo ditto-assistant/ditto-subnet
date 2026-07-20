@@ -36,6 +36,7 @@ from ditto.miner_cli.errors import (
     PaymentCancelledError,
     PaymentFinalizationTimeoutError,
     PaymentSubmissionError,
+    TransientApiError,
     UploadAgentRejectedError,
 )
 from ditto.miner_cli.models import PaymentReceipt, PreflightCheckResult, PreflightResult
@@ -71,6 +72,18 @@ def _stub_payment_signer_preflight():  # type: ignore[no-untyped-def]
     with (
         patch("ditto.miner_cli.commands.upload.preflight_payment_signer"),
         patch("ditto.miner_cli.commands.upload.save_agent_name", return_value=True),
+        patch(
+            "ditto.miner_cli.commands.upload.load_pending_payment",
+            return_value=None,
+        ),
+        patch(
+            "ditto.miner_cli.commands.upload.save_pending_payment",
+            return_value=True,
+        ),
+        patch(
+            "ditto.miner_cli.commands.upload.clear_pending_payment",
+            return_value=True,
+        ),
     ):
         yield
 
@@ -216,6 +229,182 @@ class TestUploadHappyPath:
         load_name.assert_called_once_with(network="local", hotkey=HOTKEY)
         assert client.post_upload_agent.call_args.kwargs["name"] == "remembered-agent"
         assert "using saved agent name: remembered-agent" in capsys.readouterr().err
+
+    def test_reuses_finalized_payment_without_new_transfer(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.post_upload_agent.return_value = _upload_response()
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(
+                make_args(
+                    good_tar,
+                    payment_block_hash=receipt.block_hash,
+                    payment_block_number=receipt.block_number,
+                    payment_extrinsic_index=receipt.extrinsic_index,
+                )
+            )
+
+        assert rc == 0
+        pay.assert_not_called()
+        client.get_eval_pricing.assert_not_called()
+        assert client.post_upload_agent.call_args.kwargs["payment"] == receipt
+        assert "no new transfer" in capsys.readouterr().err
+
+    def test_identical_rerun_auto_reuses_locally_saved_payment(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.post_upload_agent.return_value = _upload_response()
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payment",
+                return_value=receipt,
+            ) as load_pending,
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar))
+
+        assert rc == 0
+        load_pending.assert_called_once_with(
+            network="local", hotkey=HOTKEY, name="alpha", sha256="ab" * 32
+        )
+        pay.assert_not_called()
+        client.get_eval_pricing.assert_not_called()
+        assert client.post_upload_agent.call_args.kwargs["payment"] == receipt
+        assert "found a saved finalized payment" in capsys.readouterr().err
+
+    def test_new_payment_is_saved_before_upload_attempt(self, good_tar: Path) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.side_effect = UploadAgentRejectedError("rejected")
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=receipt,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.save_pending_payment",
+                return_value=True,
+            ) as save_pending,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            assert run(make_args(good_tar)) == 1
+
+        save_pending.assert_called_once_with(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ab" * 32,
+            payment=receipt,
+        )
+
+    def test_transient_upload_failure_retries_same_payment(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.side_effect = [
+            TransientApiError("gateway unavailable"),
+            _upload_response(),
+        ]
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=receipt,
+            ),
+            patch("ditto.miner_cli.commands.upload.time.sleep") as sleep,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar))
+
+        assert rc == 0
+        assert client.post_upload_agent.call_count == 2
+        assert {
+            call.kwargs["payment"] for call in client.post_upload_agent.call_args_list
+        } == {receipt}
+        sleep.assert_called_once_with(1.0)
+        assert "retrying in 1s" in capsys.readouterr().err
 
 
 def _peek_uuid_from_stdout(response):  # type: ignore[no-untyped-def]

@@ -105,9 +105,31 @@ confirmation, pays on chain, signs the artifact digest, uploads the archive,
 and prints the agent ID. Use `-y` only when automation is intended to accept the
 live fee without an interactive confirmation.
 
-Keep the payment proof (`block_hash`, `block_number`, `extrinsic_index`) if an
-upload fails after payment. Each proof is single-use and bound to the signed
-artifact digest.
+The CLI saves a finalized payment proof locally before uploading and retries
+short-lived gateway and service failures automatically. If every attempt fails,
+run the same command again with the same local tarball, hotkey, and agent name;
+the CLI detects the pending proof and does not submit another transfer. It
+stores only the proof and a hash of the upload identity—never tar contents,
+source paths, or an artifact URL.
+
+For a payment made by an older CLI, or when moving recovery to another machine,
+use the printed proof (`block_hash`, `block_number`, `extrinsic_index`):
+
+```sh
+uv run ditto --network finney upload \
+  --path ../dittobench-starter-kit/dittobench-submission.tgz \
+  --name my-agent \
+  --coldkey default \
+  --hotkey default \
+  --payment-block-hash 0x... \
+  --payment-block-number 123456 \
+  --payment-extrinsic-index 7
+```
+
+All three recovery flags are required together. The proof is single-use and
+bound to the authenticated artifact; an exact retry returns the original agent
+ID if the first response was lost. Never run a normal upload merely to recover
+from a post-payment error, because that would submit a second transfer.
 
 ## Track your submission
 

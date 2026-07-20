@@ -34,6 +34,7 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     HotkeyAgentNotFoundError,
     PreCheckRejectedError,
+    TransientApiError,
     UploadAgentRejectedError,
 )
 from ditto.miner_cli.models import PaymentReceipt
@@ -203,6 +204,14 @@ class TestUploadAgent:
             client.post_upload_agent(**self._kwargs())
 
         assert "3207" in str(e.value)
+
+    @pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
+    def test_retryable_status_raises_transient_error(self, status: int) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return _envelope_response(status, 3001, "retry shortly")
+
+        with make_client(handler) as client, pytest.raises(TransientApiError):
+            client.post_upload_agent(**self._kwargs())
 
 
 class TestAgentStatus:
