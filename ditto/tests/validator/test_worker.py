@@ -17,6 +17,7 @@ from ditto.api_models.benchmark_progress import MAX_BENCHMARK_CHECKS
 from ditto.api_models.stack_health import ValidatorComponentHealth
 from ditto.api_models.validator import (
     ArtifactResponse,
+    FailJobResponse,
     JobResponse,
     LedgerEntry,
     LedgerResponse,
@@ -265,6 +266,9 @@ def _platform_with_ledger(
         return_value=SubmitScoreResponse(
             agent_id=uuid4(), status=AgentStatus.SCORED, accepted=True
         )
+    )
+    platform.report_ticket_failed = AsyncMock(
+        return_value=FailJobResponse(agent_id=uuid4(), reopened=True)
     )
     return platform
 
@@ -663,6 +667,71 @@ class TestRunOnce:
 
         assert platform.request_job.await_count == 1
         platform.submit_score.assert_not_awaited()
+        # The failed lease is handed back for immediate reissue rather than left
+        # to expire; the sweep still ends and weights still proceed.
+        platform.report_ticket_failed.assert_awaited_once()
+        handed_job, reason = platform.report_ticket_failed.await_args.args
+        assert handed_job is jobs[0]
+        assert reason == "infrastructure"
+        chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
+
+    async def test_scoring_failure_hands_ticket_back_and_continues(self) -> None:
+        jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        # First job fails with an ordinary bench error, second scores cleanly.
+        dittobench.score_tarball = AsyncMock(
+            side_effect=[DittobenchError("harness crashed"), _report("run-b", 0.7)]
+        )
+        dittobench.last_details = {}
+        chain = MagicMock(put_weights=AsyncMock())
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(set_weights=False)
+
+        # Both tickets were pulled (the scoring-error branch continues), and the
+        # failed one was handed back as a scoring_error for fresh reissue.
+        assert outcome.queue_depth == 2
+        assert platform.request_job.await_count == 3  # two jobs + terminating 204
+        platform.report_ticket_failed.assert_awaited_once()
+        failed_job, reason = platform.report_ticket_failed.await_args.args
+        assert failed_job is jobs[0]
+        assert reason == "scoring_error"
+
+    async def test_ticket_hand_back_failure_never_crashes_the_sweep(self) -> None:
+        jobs = [_job("5MinerA" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        # An old platform (or transport failure) makes the hand-back itself fail;
+        # the sweep must swallow it exactly like the old expire-on-its-own path.
+        platform.report_ticket_failed = AsyncMock(
+            side_effect=PlatformError("no /job/fail endpoint")
+        )
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=ValidatorInfrastructureError("ollama forwarder lost")
+        )
+        chain = MagicMock(put_weights=AsyncMock())
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once()
+
+        assert outcome.queue_depth == 1
+        assert outcome.weights_ran is True
+        platform.report_ticket_failed.assert_awaited_once()
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
 
     async def test_expired_ticket_report_is_not_submitted(self) -> None:
@@ -871,6 +940,53 @@ class TestRunOnce:
         assert cleared.active_agent_id is None
         assert cleared.benchmark_progress is None
         platform.submit_score.assert_awaited_once()
+
+    async def test_run_token_from_scorer_rides_every_progress_heartbeat(self) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        token = "abc123def4560000"
+
+        async def score_with_token(  # type: ignore[no-untyped-def]
+            *, progress_callback, **_
+        ) -> ScoreReport:
+            # preparing was already published (before the run id existed) with no
+            # token; the scorer's first snapshot introduces the run identity.
+            await progress_callback(
+                DittobenchProgressSnapshot(
+                    stage="running_benchmark",
+                    completed=51,
+                    total=114,
+                    run_token=token,
+                )
+            )
+            return _report("run", 0.9).model_copy(update={"n": 114})
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(
+                score_tarball=AsyncMock(side_effect=score_with_token)
+            ),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker._score_job(job)
+
+        progress = [
+            call.args[0].benchmark_progress
+            for call in platform.submit_heartbeat.await_args_list
+            if call.args[0].benchmark_progress is not None
+        ]
+        by_stage = {item.stage: item.run_token for item in progress}
+        # preparing precedes the run id, so it legitimately carries no token.
+        assert by_stage["preparing"] is None
+        # Once learned, the token rides running/finalizing/submitting_result.
+        assert by_stage["running_benchmark"] == token
+        assert by_stage["finalizing"] == token
+        assert by_stage["submitting_result"] == token
+        # The active token is reset once the ticket clears.
+        assert worker._active_run_token is None
 
     async def test_failed_run_reports_only_generic_retry_stage(self) -> None:
         job = _job("5MinerA" + "x" * 41)

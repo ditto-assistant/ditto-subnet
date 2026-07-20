@@ -56,6 +56,21 @@ class BenchmarkProgress(BaseModel):
         StrictInt | None, Field(default=None, ge=1, le=MAX_BENCHMARK_CHECKS)
     ] = None
     ticket_deadline: datetime
+    run_token: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=r"^[0-9a-f]{8,64}$",
+            description=(
+                "Opaque per-run identity token (hex). Present once a benchmark "
+                "run has an id; absent for the pre-run stages and for validators "
+                "predating the token. Lets the platform tell a fresh re-attempt "
+                "apart from the same still-live lease so a new run rebaselines "
+                "progress instead of tripping the monotonicity guard. Never "
+                "exposed publicly."
+            ),
+        ),
+    ] = None
 
     @field_validator("ticket_deadline")
     @classmethod
@@ -92,4 +107,10 @@ def benchmark_progress_signing_token(progress: BenchmarkProgress | None) -> str:
     deadline = progress.ticket_deadline.astimezone(UTC).isoformat(
         timespec="microseconds"
     )
-    return f"{progress.stage},{completed},{total},{deadline}"
+    token = f"{progress.stage},{completed},{total},{deadline}"
+    # Backward-compatible: an omitted run_token keeps the v4 token byte-identical
+    # so every existing heartbeat signature still verifies. Only append it when a
+    # run identity is present.
+    if progress.run_token is not None:
+        token += f",{progress.run_token}"
+    return token

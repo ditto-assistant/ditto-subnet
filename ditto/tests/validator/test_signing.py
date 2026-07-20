@@ -28,10 +28,12 @@ from ditto.api_models.validator_capabilities import (
 from ditto.validator.signing import (
     artifact_signing_message,
     heartbeat_signing_message,
+    job_fail_signing_message,
     job_signing_message,
     ledger_signing_message,
     score_signing_message,
     sign_heartbeat,
+    sign_job_fail_request,
     sign_job_request,
     sign_score,
 )
@@ -237,6 +239,48 @@ def test_job_claim_signature_binds_hotkey_nonce_and_timestamp() -> None:
         requested_at=requested_at,
     )
     assert not keypair.verify(replay_as_other_nonce, bytes.fromhex(signature))
+
+
+def test_job_fail_message_is_canonical_and_binds_the_exact_lease() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    ticket_deadline = datetime(2026, 7, 14, 12, 30, tzinfo=UTC)
+    nonce = UUID("7f4d1800-4cf1-4a24-8fd5-2e4cd59942ae")
+    requested_at = datetime(2026, 7, 14, 1, 30, tzinfo=UTC)
+
+    message = job_fail_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        ticket_deadline=ticket_deadline,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert message == (
+        f"validator-job-fail:v1:{keypair.ss58_address}:{agent_id}:"
+        "2026-07-14T12:30:00.000000+00:00:"
+        f"{nonce}:2026-07-14T01:30:00.000000+00:00"
+    ).encode()
+
+    signature = sign_job_fail_request(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        ticket_deadline=ticket_deadline,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert keypair.verify(message, bytes.fromhex(signature))
+
+    # A different lease deadline (a reissued ticket) must not verify: the fail
+    # report can only close the exact lease it was signed for.
+    other_deadline = job_fail_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        ticket_deadline=datetime(2026, 7, 14, 13, 30, tzinfo=UTC),
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert not keypair.verify(other_deadline, bytes.fromhex(signature))
 
 
 def test_artifact_signature_binds_agent_nonce_and_timestamp() -> None:

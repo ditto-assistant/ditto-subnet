@@ -1216,6 +1216,18 @@
             ],
             "default": null
           },
+          "run_token": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{8,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "stage": {
             "enum": [
               "preparing",

@@ -149,6 +149,46 @@ def test_signing_token_contains_only_allowlisted_fields() -> None:
     assert benchmark_progress_signing_token(None) == "-"
 
 
+def test_signing_token_omits_absent_run_token_byte_for_byte() -> None:
+    # Backward-compat guard: a progress with no run_token must produce EXACTLY
+    # the pre-run_token v4 token, or every existing heartbeat signature breaks.
+    progress = BenchmarkProgress(
+        stage="running_benchmark",
+        completed=51,
+        total=114,
+        ticket_deadline=_DEADLINE,
+    )
+    assert progress.run_token is None
+    assert benchmark_progress_signing_token(progress) == (
+        "running_benchmark,51,114,2026-07-14T12:30:00.000000+00:00"
+    )
+
+
+def test_signing_token_appends_present_run_token() -> None:
+    progress = BenchmarkProgress(
+        stage="running_benchmark",
+        completed=51,
+        total=114,
+        ticket_deadline=_DEADLINE,
+        run_token="0123456789abcdef",
+    )
+    assert benchmark_progress_signing_token(progress) == (
+        "running_benchmark,51,114,2026-07-14T12:30:00.000000+00:00,0123456789abcdef"
+    )
+
+
+@pytest.mark.parametrize("bad", ["", "XYZ", "0123", "g" * 16, "AB" * 8])
+def test_run_token_rejects_non_hex_or_out_of_range(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        BenchmarkProgress(
+            stage="running_benchmark",
+            completed=51,
+            total=114,
+            ticket_deadline=_DEADLINE,
+            run_token=bad,
+        )
+
+
 def _heartbeat(**updates: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "validator_hotkey": _HOTKEY,

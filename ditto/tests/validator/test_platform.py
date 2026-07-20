@@ -13,11 +13,17 @@ import bittensor
 import httpx
 import pytest
 
-from ditto.api_models.validator import JobRequest, ValidatorHeartbeatRequest
+from ditto.api_models.validator import (
+    FailJobRequest,
+    JobRequest,
+    JobResponse,
+    ValidatorHeartbeatRequest,
+)
 from ditto.validator.errors import PlatformError
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
     artifact_signing_message,
+    job_fail_signing_message,
     job_signing_message,
     ledger_signing_message,
 )
@@ -87,6 +93,84 @@ async def test_artifact_request_is_fresh_agent_bound_and_signed() -> None:
         ).get_artifact(agent_id)
 
     assert response.agent_id == agent_id
+
+
+async def test_report_ticket_failed_is_fresh_lease_bound_and_signed() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    deadline = datetime(2026, 7, 14, 12, 30, tzinfo=UTC)
+    job = JobResponse(
+        agent_id=agent_id,
+        miner_hotkey="5MinerA" + "x" * 41,
+        sha256="ab" * 32,
+        deadline=deadline,
+        seed=12345,
+        dataset_sha256="cd" * 32,
+        run_size="full",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/validator/job/fail")
+        fail = FailJobRequest.model_validate(json.loads(request.content))
+        assert fail.validator_hotkey == keypair.ss58_address
+        assert fail.agent_id == agent_id
+        assert fail.ticket_deadline == deadline
+        assert fail.reason == "infrastructure"
+        message = job_fail_signing_message(
+            validator_hotkey=fail.validator_hotkey,
+            agent_id=fail.agent_id,
+            ticket_deadline=fail.ticket_deadline,
+            nonce=fail.nonce,
+            requested_at=fail.requested_at,
+        )
+        assert keypair.verify(message, bytes.fromhex(fail.signature))
+        return httpx.Response(
+            200, json={"agent_id": str(agent_id), "reopened": True}
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).report_ticket_failed(job, "infrastructure")
+
+    assert response.agent_id == agent_id
+    assert response.reopened is True
+
+
+async def test_report_ticket_failed_raises_typed_error_on_rejection() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    job = JobResponse(
+        agent_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
+        miner_hotkey="5MinerA" + "x" * 41,
+        sha256="ab" * 32,
+        deadline=datetime(2026, 7, 14, 12, 30, tzinfo=UTC),
+        seed=1,
+        dataset_sha256="cd" * 32,
+        run_size="full",
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        # An old platform without the endpoint answers 404; the client surfaces a
+        # typed PlatformError that the worker treats as best-effort.
+        return httpx.Response(404, text="not found")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformError):
+            await PlatformClient(
+                config,  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).report_ticket_failed(job, "scoring_error")
 
 
 @pytest.mark.parametrize(

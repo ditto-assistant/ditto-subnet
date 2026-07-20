@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ditto.api_models.validator import (
+        FailJobReason,
         JobResponse,
         LedgerEntry,
         LedgerResponse,
@@ -293,6 +294,11 @@ class ValidatorWorker:
         self._weights_active = False
         self._active_agent_id: UUID | None = None
         self._active_ticket_deadline: datetime | None = None
+        # Opaque per-run token for the active ticket, learned from the first
+        # scorer snapshot that carries a run id (None for the pre-run stages).
+        # Rides every published BenchmarkProgress so the platform can tell a
+        # fresh re-attempt apart from the same still-live lease.
+        self._active_run_token: str | None = None
         self._benchmark_progress: BenchmarkProgress | None = None
         self._last_progress_heartbeat_monotonic: float | None = None
         self._last_progress_bucket: int | None = None
@@ -372,21 +378,24 @@ class ValidatorWorker:
                     details = {}
                 scored.append(scored_agent_stat(job.miner_hotkey, report, details))
             except ValidatorInfrastructureError as e:
-                # The ticket remains leased until its existing deadline, then
-                # the platform reopens the miner submission. Stop this sweep so
-                # we neither blame the artifact nor immediately claim more work
+                # Hand the ticket back so the platform reopens the miner
+                # submission for a FRESH lease immediately instead of waiting for
+                # this one to expire. Still end the sweep and back off so we
+                # neither blame the artifact nor immediately claim more work
                 # against the same broken dependency.
                 logger.warning(
                     "validator scoring infrastructure failed for agent %s; "
-                    "leaving ticket to expire and ending scoring sweep: %s",
+                    "handing ticket back and ending scoring sweep: %s",
                     job.agent_id,
                     e,
                 )
+                await self._report_ticket_failed(job, "infrastructure")
                 failed += 1
                 scoring_available = False
                 break
             except (DittobenchError, PlatformError) as e:
                 logger.warning("scoring agent %s failed: %s", job.agent_id, e)
+                await self._report_ticket_failed(job, "scoring_error")
                 failed += 1
                 continue
         # Score production is platform-lease-bound. In particular, do not infer
@@ -620,6 +629,7 @@ class ValidatorWorker:
                 completed=completed,
                 total=total,
                 ticket_deadline=self._active_ticket_deadline,
+                run_token=self._active_run_token,
             )
             self._benchmark_progress = progress
             bucket = self._progress_bucket(progress)
@@ -649,6 +659,10 @@ class ValidatorWorker:
         self, snapshot: DittobenchProgressSnapshot
     ) -> None:
         """Map an already-sanitized scorer snapshot onto the signed heartbeat."""
+        # Learn the run identity the moment the scorer first reports it; from
+        # here on every progress heartbeat for this ticket carries the token.
+        if snapshot.run_token is not None:
+            self._active_run_token = snapshot.run_token
         completed = snapshot.completed
         total = snapshot.total
         if snapshot.stage == "finalizing" and (
@@ -674,6 +688,7 @@ class ValidatorWorker:
         self._retain_failed_progress_until = 0.0
         self._active_agent_id = agent_id
         self._active_ticket_deadline = ticket_deadline
+        self._active_run_token = None
         self._benchmark_progress = None
         self._last_progress_heartbeat_monotonic = None
         self._last_progress_bucket = None
@@ -682,6 +697,7 @@ class ValidatorWorker:
     def _clear_active_ticket(self) -> None:
         self._active_agent_id = None
         self._active_ticket_deadline = None
+        self._active_run_token = None
         self._benchmark_progress = None
         self._last_progress_heartbeat_monotonic = None
         self._last_progress_bucket = None
@@ -1194,6 +1210,27 @@ class ValidatorWorker:
         except Exception as e:  # noqa: BLE001 - evidence must not wedge weights
             logger.warning("on-chain weight evidence read failed: %s", e)
             return None, None
+
+    async def _report_ticket_failed(
+        self, job: JobResponse, reason: FailJobReason
+    ) -> None:
+        """Best-effort hand-back of a failed ticket for immediate reissue.
+
+        Closing the live lease lets the next :meth:`request_job` mint a fresh
+        ticket instead of resuming the failed attempt. Strictly best-effort: an
+        old platform without ``/validator/job/fail``, or any transport/validation
+        error, must never crash the sweep — the ticket then simply expires on its
+        own deadline exactly as it did before this endpoint existed.
+        """
+        try:
+            await self._platform.report_ticket_failed(job, reason)
+        except Exception as e:  # noqa: BLE001 - hand-back is best-effort telemetry
+            logger.warning(
+                "handing back failed ticket for agent %s did not land "
+                "(ticket will expire on its own): %s",
+                job.agent_id,
+                e,
+            )
 
     async def _score_job(self, job: JobResponse) -> ScoreReport:
         """Score one issued ticket against its platform-pinned dataset.
