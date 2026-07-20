@@ -555,7 +555,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "async-substrate-interface" },
-    { name = "bittensor", specifier = ">=10.2.1" },
+    { name = "bittensor", specifier = ">=10.3.0" },
     { name = "bittensor-pylon-client", git = "https://github.com/bittensor-church/bittensor-pylon?subdirectory=pylon_client" },
     { name = "bittensor-wallet", specifier = ">=4.1.0" },
     { name = "ditto-screening-protocol", git = "https://github.com/ditto-assistant/ditto-screener.git?subdirectory=packages%2Fditto-screening-protocol&rev=925d55d9537fd22cfae698376445a66dfdb7f7d0" },
