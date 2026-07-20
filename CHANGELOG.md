@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.19.3 (2026-07-20)
+
+### Bug Fixes
+
+- **deps**: Require bittensor >= 10.3.0
+  ([#195](https://github.com/ditto-assistant/ditto-subnet/pull/195),
+  [`2421378`](https://github.com/ditto-assistant/ditto-subnet/commit/24213789e2ef643a806a3b8b95b1cacba1ae4b05))
+
+
 ## v0.19.2 (2026-07-20)
 
 ### Bug Fixes
