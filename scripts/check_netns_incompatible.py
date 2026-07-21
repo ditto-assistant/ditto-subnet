@@ -11,7 +11,7 @@ stack and cannot carry its own network identity. Moby's
 ``PublishAllPorts``, and ``ExposedPorts``. In compose keys that is ``hostname``,
 ``links`` **and** ``external_links`` (both fold into ``HostConfig.Links``),
 ``dns``, ``extra_hosts``, ``ports``, and ``expose``. ``dns_search`` /
-``dns_options`` / ``mac_address`` / ``networks`` are NOT part of that daemon
+``dns_opt`` / ``mac_address`` / ``networks`` are NOT part of that daemon
 check (verified on Docker 29.4 / Moby v28) and are deliberately excluded so the
 gate never raises a false positive.
 

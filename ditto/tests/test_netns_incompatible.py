@@ -54,7 +54,7 @@ def test_expose_and_external_links_specifically() -> None:
     assert gate.find_incompatible(_joiner(external_links=["base:base"]))
 
 
-@pytest.mark.parametrize("opt", ["dns_search", "dns_options", "mac_address"])
+@pytest.mark.parametrize("opt", ["dns_search", "dns_opt", "mac_address"])
 def test_daemon_accepted_options_are_not_flagged(opt: str) -> None:
     # Not part of validateNetContainerMode — must never be a false positive.
     assert gate.find_incompatible(_joiner(**{opt: ["x"]})) == []
