@@ -2,6 +2,18 @@
 
 <!-- version list -->
 
+## v0.21.1 (2026-07-21)
+
+### Bug Fixes
+
+- Repin dittobench api ([#204](https://github.com/ditto-assistant/ditto-subnet/pull/204),
+  [`9677d09`](https://github.com/ditto-assistant/ditto-subnet/commit/9677d09f7b37ab9c8ec4b8f26e66f7e9e318314b))
+
+- **validator**: Relay preflight so a broken stack self-excludes instead of wedging agents
+  ([#205](https://github.com/ditto-assistant/ditto-subnet/pull/205),
+  [`f9f3e77`](https://github.com/ditto-assistant/ditto-subnet/commit/f9f3e77369d9b3320472f84aab22cdeba1c614aa))
+
+
 ## v0.21.0 (2026-07-21)
 
 ### Features
