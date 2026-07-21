@@ -793,6 +793,19 @@
         ],
         "default": null
       },
+      "raw_composite": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "run_id": {
         "type": "string"
       },
@@ -1083,6 +1096,19 @@
                   "$ref": "#/$defs/CategoryStat"
                 },
                 "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "raw_composite": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
               },
               {
                 "type": "null"

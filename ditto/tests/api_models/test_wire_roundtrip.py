@@ -19,6 +19,9 @@ this file), or copy the emitted report of any bench_version 3 run.
 import json
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from ditto.api_models.validator import ScoreReport
 
 FIXTURE = Path(__file__).parent / "fixtures" / "score_report_v3.json"
@@ -117,3 +120,18 @@ def test_report_round_trips_by_value() -> None:
     assert dumped["details"] == raw["details"]
     assert report.composite == raw["composite"]
     assert report.seed == raw["seed"]
+
+
+def test_every_benchmark_version_rejects_composite_above_one() -> None:
+    raw = _fixture()
+    raw.update({"bench_version": 5, "composite": 0.855})
+    assert ScoreReport.model_validate(raw).composite == 0.855
+
+    for bench_version in (4, 5):
+        raw.update({"bench_version": bench_version, "composite": 1.001})
+        with pytest.raises(ValidationError):
+            ScoreReport.model_validate(raw)
+
+    raw.update({"bench_version": 5, "composite": float("inf")})
+    with pytest.raises(ValidationError):
+        ScoreReport.model_validate(raw)

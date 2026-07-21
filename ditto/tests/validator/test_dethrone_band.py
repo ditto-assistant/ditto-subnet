@@ -37,6 +37,7 @@ def _e(
     stderr: float | None = None,
     confirmations: list[float] | None = None,
     seeds: list[int] | None = None,
+    bench_version: int | None = None,
     minutes: int = 0,
 ) -> Any:
     """A duck-typed ledger entry. ``stderr=None`` models a platform that does not
@@ -56,6 +57,8 @@ def _e(
         ns.confirmation_composites = confirmations
     if seeds is not None:
         ns.confirmation_seeds = seeds
+    if bench_version is not None:
+        ns.bench_version = bench_version
     return ns
 
 
@@ -99,6 +102,17 @@ class TestEntryConfirmations:
         assert _entry_confirmations(_e("a", 0.5, confirmations=[-0.1, 0.6])) is None
         assert (
             _entry_confirmations(_e("a", 0.5, confirmations=[float("nan"), 0.6]))
+            is None
+        )
+
+    def test_v5_waste_adjusted_confirmations_remain_bounded(self) -> None:
+        assert _entry_confirmations(
+            _e("a", 0.855, confirmations=[0.855, 0.88], bench_version=5)
+        ) == [0.855, 0.88]
+        assert (
+            _entry_confirmations(
+                _e("a", 0.9, confirmations=[0.88, 1.001], bench_version=5)
+            )
             is None
         )
 

@@ -605,8 +605,22 @@ class ScoreReport(BaseModel):
         ),
     ]
     composite: Annotated[
-        float, Field(ge=0.0, le=1.0, description="Aggregate score in [0,1].")
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description="Aggregate score after any bounded waste penalty, in [0,1].",
+        ),
     ]
+    raw_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description="Pre-efficiency quality composite for benchmark v5.",
+        ),
+    ] = None
     tool_mean: Annotated[
         float, Field(ge=0.0, le=1.0, description="Mean tool accuracy in [0,1].")
     ]
@@ -777,7 +791,12 @@ class LedgerEntry(BaseModel):
     miner_hotkey: Annotated[str, Field(description="Miner's SS58 hotkey.")]
     agent_id: Annotated[UUID, Field(description="The miner's best eligible agent.")]
     composite: Annotated[
-        float, Field(ge=0.0, le=1.0, description="Best composite score in [0,1].")
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description="Best aggregate benchmark score in [0,1].",
+        ),
     ]
     n: Annotated[
         int,
