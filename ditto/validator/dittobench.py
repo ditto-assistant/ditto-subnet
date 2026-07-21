@@ -12,6 +12,7 @@ wire contract is identical by design), so it round-trips straight back into
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import re
@@ -20,7 +21,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -123,6 +124,13 @@ class DittobenchProgressSnapshot:
     run_token: str | None = None
 
 
+@dataclass(frozen=True)
+class InferenceBrokerSession:
+    session_id: str
+    activation_secret: str
+    broker_public_key: str
+
+
 ProgressCallback = Callable[[DittobenchProgressSnapshot], Awaitable[None]]
 
 
@@ -177,10 +185,78 @@ class DittobenchClient:
         self._transcripts: dict[str, bytes] = {}
         # Backward-compatible diagnostic view of the most recent run.
         self.last_transcript: bytes | None = None
+        # Legacy scorers omit this field and therefore remain safely capacity=1.
+        self.full_run_capacity = (
+            int(getattr(config, "benchmark_capacity", 1))
+            if getattr(config, "dittobench_mock", False)
+            else 1
+        )
 
     def take_transcript(self, run_id: str) -> bytes | None:
         """Consume the verified transcript belonging to exactly ``run_id``."""
         return self._transcripts.pop(run_id, None)
+
+    async def prepare_inference_session(self) -> InferenceBrokerSession:
+        """Create a trusted memory-only broker key before claiming provider access."""
+        try:
+            response = await self._client.post(
+                f"{self._config.dittobench_api_url}/v1/inference/session"
+            )
+        except httpx.HTTPError as error:
+            raise ValidatorInfrastructureError(
+                f"inference broker preparation failed: {error}"
+            ) from error
+        if response.status_code != 201:
+            raise ValidatorInfrastructureError("inference broker preparation rejected")
+        try:
+            body = response.json()
+            return InferenceBrokerSession(
+                session_id=str(body["session_id"]),
+                activation_secret=str(body["activation_secret"]),
+                broker_public_key=str(body["broker_public_key"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValidatorInfrastructureError(
+                "inference broker returned an invalid session"
+            ) from error
+
+    async def activate_inference_session(
+        self,
+        session: InferenceBrokerSession,
+        *,
+        grant_id: UUID,
+        bearer: str,
+        proxy_url: str,
+        generation: int,
+        expires_at: datetime,
+    ) -> None:
+        """Deliver the platform capability directly to the trusted broker."""
+        try:
+            response = await self._client.post(
+                f"{self._config.dittobench_api_url}/v1/inference/session/"
+                f"{session.session_id}/activate",
+                json={
+                    "activation_secret": session.activation_secret,
+                    "grant_id": str(grant_id),
+                    "bearer": bearer,
+                    "proxy_url": proxy_url,
+                    "generation": generation,
+                    "expires_at": expires_at.isoformat(),
+                },
+            )
+        except httpx.HTTPError as error:
+            raise ValidatorInfrastructureError(
+                f"inference broker activation failed: {error}"
+            ) from error
+        if response.status_code != 200:
+            raise ValidatorInfrastructureError("inference broker activation rejected")
+
+    async def cancel_inference_session(self, session_id: str) -> None:
+        """Best-effort deletion for pre-run failures and completed sessions."""
+        with contextlib.suppress(httpx.HTTPError):
+            await self._client.delete(
+                f"{self._config.dittobench_api_url}/v1/inference/session/{session_id}"
+            )
 
     async def scorer_benchmark_capability(
         self, stack: ValidatorStackIdentity
@@ -197,6 +273,7 @@ class DittobenchClient:
         )
         if self._config.dittobench_mock:
             return legacy
+        self.full_run_capacity = 1
         try:
             response = await self._client.get(
                 f"{self._config.dittobench_api_url}/v1/capabilities",
@@ -225,6 +302,7 @@ class DittobenchClient:
         software_version = payload.get("software_version")
         source_revision = payload.get("source_revision")
         versions = payload.get("supported_bench_versions")
+        full_run_capacity = payload.get("full_run_capacity", 1)
         if (
             not isinstance(software_version, str)
             or _SOFTWARE_VERSION.fullmatch(software_version) is None
@@ -233,6 +311,8 @@ class DittobenchClient:
             or not isinstance(versions, list)
             or not versions
             or any(type(version) is not int for version in versions)
+            or type(full_run_capacity) is not int
+            or not 1 <= full_run_capacity <= 8
         ):
             return ScorerBenchmarkCapability(
                 status="unreachable", supported_bench_versions=(2,)
@@ -253,6 +333,7 @@ class DittobenchClient:
                 software_version=software_version,
                 source_revision=source_revision,
             )
+        self.full_run_capacity = full_run_capacity
         try:
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
@@ -372,6 +453,7 @@ class DittobenchClient:
         screened_image_size_bytes: int | None = None,
         screened_image_id: str | None = None,
         screened_image_ref: str | None = None,
+        inference_session_id: str | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
@@ -408,6 +490,7 @@ class DittobenchClient:
             screened_image_size_bytes=screened_image_size_bytes,
             screened_image_id=screened_image_id,
             screened_image_ref=screened_image_ref,
+            inference_session_id=inference_session_id,
         )
         return await self._poll(
             run_id,
@@ -446,6 +529,7 @@ class DittobenchClient:
         screened_image_size_bytes: int | None = None,
         screened_image_id: str | None = None,
         screened_image_ref: str | None = None,
+        inference_session_id: str | None = None,
     ) -> str:
         if bench_version is None or bench_version not in _SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
@@ -489,6 +573,8 @@ class DittobenchClient:
             )
         if seed is not None:
             body["seed"] = seed
+        if inference_session_id is not None:
+            body["inference_session_id"] = inference_session_id
         # Canonical validator path: pin the dataset so the engine fails on a
         # regenerated-hash mismatch. Otherwise the practice/re-score path.
         if bench_version >= _SCREENED_IMAGE_BENCH_VERSION:

@@ -140,8 +140,10 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "ensure_sandbox_network" in entrypoint
     assert entrypoint.count("ensure_sandbox_network") >= 3
     assert "DITTO-SANDBOX-EGRESS" in entrypoint
-    assert '-d "$gateway" -p tcp --dport 11434 -j ACCEPT' in entrypoint
-    assert '-d "$gateway" -p tcp --dport 11435 -j ACCEPT' in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11434 -j ACCEPT" in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11435 -j ACCEPT" in entrypoint
+    assert "com.docker.network.bridge.enable_icc=false" in entrypoint
+    assert "-i 'dtj+' -j DITTO-SANDBOX-EGRESS" in entrypoint
     assert "ditto-sandbox-deny" in entrypoint
     assert "-j DROP" in entrypoint
     assert "/var/run/docker.sock" not in COMPOSE_PATH.read_text()

@@ -185,6 +185,7 @@ class TestMinerEmissionCap:
 def _job(
     miner_hotkey: str,
     *,
+    slot_id: str = "slot-0",
     sha256: str = "ab" * 32,
     dataset_sha256: str | None = "cd" * 32,
     deadline: datetime | None = None,
@@ -194,6 +195,7 @@ def _job(
         miner_hotkey=miner_hotkey,
         sha256=sha256,
         deadline=deadline or datetime.now(UTC) + timedelta(hours=1),
+        slot_id=slot_id,
         seed=12345,
         dataset_sha256=dataset_sha256,
         run_size="full",
@@ -274,6 +276,87 @@ def _platform_with_ledger(
 
 
 class TestRunOnce:
+    async def test_capacity_mismatch_rejects_work_and_advertises_no_healthy_slots(
+        self,
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        config = _config()
+        config.benchmark_capacity = 2
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 1
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        platform.request_job.assert_not_awaited()
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.configured_slots == 2
+        assert final.benchmark_capacity.healthy_slots == []
+
+    async def test_parallel_slots_overlap_and_isolate_sibling_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        jobs = {
+            "slot-0": _job("5MinerA" + "x" * 41, slot_id="slot-0"),
+            "slot-1": _job("5MinerB" + "x" * 41, slot_id="slot-1"),
+        }
+        claimed: set[str] = set()
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            if slot_id in claimed:
+                return None
+            claimed.add(slot_id)
+            return jobs[slot_id]
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 2
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 2
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        both_started = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        max_active = 0
+
+        async def score(job: JobResponse) -> ScoreReport:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            if active == 2:
+                both_started.set()
+            await release.wait()
+            active -= 1
+            if job.slot_id == "slot-0":
+                raise ValidatorInfrastructureError("isolated sandbox failure")
+            return _report("run-slot-1", 0.8)
+
+        monkeypatch.setattr(worker, "_score_job", score)
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        assert max_active == 2
+        release.set()
+        outcome = await sweep
+
+        assert outcome.queue_depth == 2
+        assert platform.report_ticket_failed.await_count == 1
+        assert "slot-0" not in worker._healthy_slots
+        assert "slot-1" in worker._healthy_slots
+
     async def test_idle_sweep_does_not_create_unticketed_rescore_work(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -340,7 +423,9 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 9
+        assert heartbeat.protocol_version == 10
+        assert heartbeat.benchmark_capacity is not None
+        assert heartbeat.benchmark_capacity.configured_slots == 1
         assert heartbeat.capabilities is not None
         assert heartbeat.capabilities.screened_images is True
         assert heartbeat.capabilities.require_screened_image is True
@@ -616,6 +701,9 @@ class TestRunOnce:
         platform.request_job.assert_not_awaited()
         platform.get_artifact.assert_not_awaited()
         chain.put_weights.assert_awaited_once_with({"5MinerA" + "x" * 41: 1.0})
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.healthy_slots == []
 
     async def test_preflight_recovery_claims_on_next_normal_sweep(self) -> None:
         job = _job("5MinerA" + "x" * 41)
@@ -641,6 +729,9 @@ class TestRunOnce:
         assert second.queue_depth == 1
         assert second.weights_ran is False
         platform.submit_score.assert_awaited_once()
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.healthy_slots == ["slot-0"]
 
     async def test_midrun_infrastructure_failure_ends_sweep_without_next_claim(
         self,

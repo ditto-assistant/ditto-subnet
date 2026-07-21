@@ -14,6 +14,7 @@ from uuid import UUID
 
 import bittensor
 
+from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
@@ -772,3 +773,37 @@ def test_protocol_v9_requires_stack_health_and_v8_rejects_it() -> None:
         raise AssertionError("v8 with stack health must not sign")
     except ValueError as e:
         assert "v9" in str(e)
+
+
+def test_protocol_v10_heartbeat_binds_all_slot_capacity() -> None:
+    """Freeze the additive v10 suffix shared with the platform verifier."""
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 10
+    capacity = BenchmarkCapacity(configured_slots=2, healthy_slots=["slot-0", "slot-1"])
+    message = heartbeat_signing_message(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+    )
+    assert message.endswith(
+        b':94:{"active":[],"admission":"accepting","configured_slots":2,'
+        b'"healthy_slots":["slot-0","slot-1"]}:1784020800'
+    )
+    assert hashlib.sha256(message).hexdigest() == (
+        "036a7cd3e541ab381635e6c497f4a788f86198ffa713dac205c052aec48f9d53"
+    )
+
+    try:
+        heartbeat_signing_message(
+            **(request | {"protocol_version": 9}),
+            capabilities=capabilities,
+            stack=stack,
+            stack_health=stack_health,
+            benchmark_capacity=capacity,
+        )
+        raise AssertionError("v9 must reject an unsigned capacity extension")
+    except ValueError as error:
+        assert "v10" in str(error)

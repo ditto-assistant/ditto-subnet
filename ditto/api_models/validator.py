@@ -28,7 +28,9 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
+from ditto.api_models.inference import InferenceGrantOffer
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import SystemMetrics
 from ditto.api_models.upload import (
@@ -65,6 +67,7 @@ class JobRequest(BaseModel):
     validator_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Claiming validator hotkey.")
     ]
+    slot_id: Annotated[str | None, Field(pattern=r"^slot-[0-7]$")] = None
     nonce: Annotated[UUID, Field(description="One-time claim nonce.")]
     requested_at: Annotated[
         datetime, Field(description="UTC time at which the claim was signed.")
@@ -98,6 +101,7 @@ class JobResponse(BaseModel):
     """
 
     agent_id: Annotated[UUID, Field(description="Agent this ticket is for.")]
+    slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")] = "slot-0"
     miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
     sha256: Annotated[
         str, Field(description="SHA-256 of the uploaded tarball, lowercase hex.")
@@ -130,6 +134,7 @@ class JobResponse(BaseModel):
         int | None, Field(default=None, ge=0)
     ] = None
     requires_screened_image: bool | None = None
+    inference: InferenceGrantOffer | None = None
     dataset_seed_block: Annotated[
         int | None,
         Field(
@@ -275,6 +280,13 @@ class ValidatorHeartbeatRequest(BaseModel):
             description="Signed per-component runtime health under v9.",
         ),
     ] = None
+    benchmark_capacity: Annotated[
+        BenchmarkCapacity | None,
+        Field(
+            default=None,
+            description="Signed bounded slot capacity and progress under protocol v10.",
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -331,6 +343,32 @@ class ValidatorHeartbeatRequest(BaseModel):
             raise ValueError(
                 "per-component stack health requires heartbeat protocol v9"
             )
+        if self.protocol_version >= 10:
+            if self.benchmark_capacity is None:
+                raise ValueError("heartbeat protocol v10 requires benchmark capacity")
+            primary = (
+                sorted(self.benchmark_capacity.active, key=lambda slot: slot.slot_id)[0]
+                if self.benchmark_capacity.active
+                else None
+            )
+            if primary is None:
+                if (
+                    self.active_agent_id is not None
+                    or self.benchmark_progress is not None
+                ):
+                    raise ValueError(
+                        "idle v10 capacity cannot carry legacy active work"
+                    )
+            elif (
+                self.state != "running_benchmark"
+                or self.active_agent_id != primary.agent_id
+                or self.benchmark_progress != primary.progress
+            ):
+                raise ValueError(
+                    "v10 legacy active fields must mirror the first active slot"
+                )
+        elif self.benchmark_capacity is not None:
+            raise ValueError("benchmark capacity requires heartbeat protocol v10")
         return self
 
 

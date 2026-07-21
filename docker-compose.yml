@@ -114,18 +114,18 @@ services:
       timeout: 15s
       retries: 30
 
-  # The model-pinning gateway: fronts Chutes, forces the frozen Qwen3-32B model
-  # and thinking mode, and keeps the Chutes key out of the sandbox. It stays on
-  # the private Compose network; the forwarder exposes it only to inner sandboxes
-  # at host.docker.internal:11435.
+  # Soft-deprecated rollback-only model gateway. Ticket-bound execution uses
+  # the platform proxy through dittobench-api's trusted broker.
   model-relay:
     build:
       context: *dittobench-build-context
       target: relay
     restart: unless-stopped
     environment:
-      RELAY_PROVIDER: ${RELAY_PROVIDER:-chutes}
-      RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY in .env}
+      # Rollback-only during the bounded platform-proxy transition. New ticket
+      # inference bypasses this relay; Chutes is no longer an active default.
+      RELAY_PROVIDER: ${RELAY_PROVIDER:-openrouter}
+      RELAY_API_KEY: ${RELAY_API_KEY:-disabled}
       PORT: "11435"
     read_only: true
     security_opt:
@@ -163,6 +163,7 @@ services:
       DITTOBENCH_SOURCE_SHA: a0a0bca0460620cb5dcd381b1802a04567a6c762
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
+      DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
     read_only: true
     tmpfs:
       - /tmp
@@ -187,7 +188,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "9"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "10"
     restart: unless-stopped
     stop_grace_period: 80m
     labels:
@@ -202,7 +203,7 @@ services:
       # host.docker.internal:11434. The worker probes it before claiming a lease.
       VALIDATOR_EMBED_PREFLIGHT_URL: http://sandbox-docker:11434/api/embed
       VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS: "5"
-      # Heartbeat v9 per-component health probes. Private-network URLs only —
+      # Heartbeat v10 per-component health probes. Private-network URLs only —
       # they are configuration, never part of the public payload. The sandbox
       # probe exercises the same harness-facing forwarder listener that inner
       # sandboxes reach as host.docker.internal:11434.
@@ -220,6 +221,9 @@ services:
       VALIDATOR_SWEEP_SECONDS: "120"
       VALIDATOR_EPOCH_SECONDS: "3600"
       VALIDATOR_QUEUE_LIMIT: "50"
+      # Heartbeat v10 advertises every active slot. The scorer independently
+      # publishes the same bound and the worker fails closed on mismatch.
+      VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"

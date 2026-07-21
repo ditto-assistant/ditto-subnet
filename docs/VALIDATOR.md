@@ -36,10 +36,10 @@ and Pylon keeps in-flight weight state in a named volume. The platform screens
 every submission before it reaches validators and ships a verified pre-built
 Docker image with it, so your host normally does not compile miner code.
 
-The scorer admits one full run at a time, and every miner container runs with
+The scorer admits one full run at a time by default, and every miner container runs with
 strict CPU, memory, PID, capability, seccomp, and egress limits. Do not
-increase scorer concurrency on the same host; add validators on separate
-capacity instead.
+increase `VALIDATOR_BENCHMARK_CAPACITY` until the host has passed the bounded
+parallel resource and sibling-isolation checks.
 
 ## Requirements
 
@@ -49,12 +49,7 @@ capacity instead.
 - Git and `flock` from util-linux.
 - A local Bittensor wallet whose hotkey is registered on Finney SN118 and has a
   validator permit.
-- An API key for the locked Qwen3-32B model on ONE certified provider: Chutes
-  (`Qwen/Qwen3-32B-TEE`, the default) or OpenRouter (`qwen/qwen3-32b`). Select
-  with `RELAY_PROVIDER`. The two are certified as comparable, and the fleet is
-  meant to split across them to keep throughput up.
-- Outbound access to Finney, the selected model provider, the Ditto platform,
-  and GHCR (anonymous pull of the public
+- Outbound access to Finney, the Ditto platform, and GHCR (anonymous pull of the public
   `ghcr.io/ditto-assistant/ditto-subnet-validator` package).
 
 Python and `uv` are only required for development.
@@ -78,9 +73,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_NAME` | Coldkey directory under `~/.bittensor/wallets`. |
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
-| `DITTOBENCH_CAPABILITIES_TOKEN` | Another random per-host token (`openssl rand -hex 32`). |
-| `RELAY_PROVIDER` | `chutes` (default) or `openrouter`. |
-| `RELAY_API_KEY` | API key for the selected provider, used only by `model-relay`. |
+| `VALIDATOR_BENCHMARK_CAPACITY` | Healthy full-run slots; leave at `1` until parallel rollout approval. |
 
 The example selects Finney, SN118, and the production platform. For local
 testing, change both the platform and chain settings in a separate `.env`.
@@ -327,6 +320,12 @@ The validator also sends a signed public heartbeat with its version, source
 digest, phase, and coarse health; the platform uses it to route compatible
 work. It does not send secrets, prompts, expected answers, model output, or
 host identity.
+
+Heartbeat protocol 10 adds authoritative bounded capacity: configured and
+healthy slot ids, admission state, and privacy-safe progress for every active
+benchmark. Active heartbeats refresh every 30 seconds, with changed aggregate
+question counts eligible every 15 seconds. Capacity defaults to one; draining
+or paused validators advertise no healthy slots and receive no new work.
 
 ### Per-component stack health
 

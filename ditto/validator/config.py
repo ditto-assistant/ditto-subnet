@@ -79,6 +79,13 @@ class ValidatorConfig:
     For local end-to-end plumbing tests where no dittobench-api is available.
     Enabled via ``VALIDATOR_DITTOBENCH_MOCK``."""
 
+    benchmark_capacity: int
+    """Bounded concurrent scoring slots advertised by heartbeat v10.
+
+    Defaults to one for compatibility and is capped at eight by the wire
+    contract. This must not exceed dittobench-api's full-run capacity.
+    """
+
     embed_preflight_url: str
     """Ollama ``/api/embed`` URL through the harness-facing TCP forwarder."""
 
@@ -362,6 +369,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         dittobench_capabilities_timeout_seconds=capabilities_timeout_seconds,
         run_size=run_size,
         dittobench_mock=dittobench_mock,
+        benchmark_capacity=int(os.environ.get("VALIDATOR_BENCHMARK_CAPACITY", "1")),
         embed_preflight_url=embed_preflight_url,
         embed_preflight_timeout_seconds=embed_preflight_timeout_seconds,
         sandbox_docker_probe_url=os.environ.get(
@@ -404,4 +412,6 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         raise ValidatorConfigError(
             "no signing key: set VALIDATOR_WALLET_NAME + VALIDATOR_WALLET_HOTKEY"
         )
+    if not 1 <= config.benchmark_capacity <= 8:
+        raise ValidatorConfigError("VALIDATOR_BENCHMARK_CAPACITY must be in [1, 8]")
     return config

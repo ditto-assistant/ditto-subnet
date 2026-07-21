@@ -20,6 +20,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from ditto.api_models.benchmark_capacity import (
+    BenchmarkCapacity,
+    benchmark_capacity_signing_token,
+)
 from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     benchmark_progress_signing_token,
@@ -133,11 +137,19 @@ def sign_score(
 
 
 def job_signing_message(
-    *, validator_hotkey: str, nonce: UUID, requested_at: datetime
+    *,
+    validator_hotkey: str,
+    nonce: UUID,
+    requested_at: datetime,
+    slot_id: str | None = None,
 ) -> bytes:
     """Build canonical bytes proving ownership for one job claim."""
     requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
-    return f"validator-job:{validator_hotkey}:{nonce}:{requested}".encode()
+    if slot_id is None:
+        return f"validator-job:{validator_hotkey}:{nonce}:{requested}".encode()
+    return (
+        f"validator-job:v2:{validator_hotkey}:{slot_id}:{nonce}:{requested}"
+    ).encode()
 
 
 def sign_job_request(
@@ -146,6 +158,7 @@ def sign_job_request(
     validator_hotkey: str,
     nonce: UUID,
     requested_at: datetime,
+    slot_id: str | None = None,
 ) -> str:
     """Return the sr25519 signature for a fresh, one-time job claim."""
     signature: bytes = keypair.sign(
@@ -153,9 +166,46 @@ def sign_job_request(
             validator_hotkey=validator_hotkey,
             nonce=nonce,
             requested_at=requested_at,
+            slot_id=slot_id,
         )
     )
     return signature.hex()
+
+
+def inference_exchange_signing_message(
+    *,
+    validator_hotkey: str,
+    grant_id: UUID,
+    broker_public_key: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    """Bind one platform grant to one trusted broker public key."""
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return (
+        f"validator-inference:v1:{validator_hotkey}:{grant_id}:"
+        f"{broker_public_key.rstrip('=')}:{nonce}:{requested}"
+    ).encode()
+
+
+def sign_inference_exchange(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    grant_id: UUID,
+    broker_public_key: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    return keypair.sign(
+        inference_exchange_signing_message(
+            validator_hotkey=validator_hotkey,
+            grant_id=grant_id,
+            broker_public_key=broker_public_key,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    ).hex()
 
 
 def job_fail_signing_message(
@@ -271,11 +321,33 @@ def heartbeat_signing_message(
     capabilities: ValidatorCapabilities | None = None,
     stack: ValidatorStackIdentity | None = None,
     stack_health: ValidatorStackHealth | None = None,
+    benchmark_capacity: BenchmarkCapacity | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
+    if benchmark_capacity is not None and protocol_version < 10:
+        raise ValueError("benchmark capacity requires heartbeat protocol v10")
+    if protocol_version >= 10:
+        if capabilities is None or stack is None or stack_health is None:
+            raise ValueError(
+                "heartbeat protocol v10 requires identity and stack health"
+            )
+        if capabilities.scorer_benchmarks is None:
+            raise ValueError("heartbeat protocol v10 requires scorer capabilities")
+        if benchmark_capacity is None:
+            raise ValueError("heartbeat protocol v10 requires benchmark capacity")
+        return (
+            "ditto-validator-heartbeat:v10:"
+            f"{validator_hotkey}:{software_version}:{protocol_version}:"
+            f"{code_digest}:{state}:{active_agent_id or ''}:"
+            f"{system_metrics_signing_token(system_metrics)}:"
+            f"{benchmark_progress_signing_token(benchmark_progress)}:"
+            f"{validator_identity_signing_token(capabilities, stack)}:"
+            f"{validator_stack_health_signing_token(stack_health)}:"
+            f"{benchmark_capacity_signing_token(benchmark_capacity)}:{timestamp}"
+        ).encode()
     if protocol_version >= 9:
         if capabilities is None or stack is None:
             raise ValueError("heartbeat protocol v9 requires capabilities and stack")
@@ -363,6 +435,7 @@ def sign_heartbeat(
     capabilities: ValidatorCapabilities | None = None,
     stack: ValidatorStackIdentity | None = None,
     stack_health: ValidatorStackHealth | None = None,
+    benchmark_capacity: BenchmarkCapacity | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -378,6 +451,7 @@ def sign_heartbeat(
         capabilities=capabilities,
         stack=stack,
         stack_health=stack_health,
+        benchmark_capacity=benchmark_capacity,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)
