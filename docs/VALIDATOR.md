@@ -49,6 +49,9 @@ parallel resource and sibling-isolation checks.
 - Git and `flock` from util-linux.
 - A local Bittensor wallet whose hotkey is registered on Finney SN118 and has a
   validator permit.
+- During the bounded v6 transition, the existing frozen-relay provider key and
+  outbound provider access. V7 does not consume this key, and a later cleanup
+  release removes both after activation and all v6 leases drain.
 - Outbound access to Finney, the Ditto platform, and GHCR (anonymous pull of the public
   `ghcr.io/ditto-assistant/ditto-subnet-validator` package).
 
@@ -74,6 +77,9 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
 | `VALIDATOR_BENCHMARK_CAPACITY` | Healthy full-run slots; leave at `1` until parallel rollout approval. |
+| `RELAY_PROVIDER` / `RELAY_API_KEY` | Existing frozen v6 route only; retain during transition. |
+| `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Leave `false` until v6 drains; v7 is independently fail-closed. |
+| `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Leave `false` until v6 drains; v7 is independently fail-closed. |
 
 The example selects Finney, SN118, and the production platform. For local
 testing, change both the platform and chain settings in a separate `.env`.
@@ -349,8 +355,8 @@ Each component reports `healthy`, `degraded`, `unreachable`,
 private Compose network — no Docker socket is mounted for telemetry — and are
 bounded so a wedged sidecar never stalls the heartbeat. Optional env:
 
-- `VALIDATOR_SANDBOX_DOCKER_PROBE_URL` — internal readiness endpoint. The
-  deprecated relay probe stays unset and reports optional `unknown`.
+- `VALIDATOR_SANDBOX_DOCKER_PROBE_URL` / `VALIDATOR_MODEL_RELAY_PROBE_URL` —
+  internal readiness endpoints. The relay probe is removed with the v6 cleanup.
 - `VALIDATOR_PYLON_PROBE_URL` — defaults to `PYLON_URL`.
 - `VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS` (default 2) and
   `VALIDATOR_STACK_HEALTH_CACHE_SECONDS` (default 60).

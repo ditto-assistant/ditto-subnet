@@ -601,8 +601,7 @@ class ValidatorWorker:
             self._healthy_slots = {
                 slot_id
                 for slot_id in self._slots
-                if self._resource_blocked_until.get(slot_id, 0.0)
-                <= time.monotonic()
+                if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
             }
             return True
         try:
@@ -614,8 +613,7 @@ class ValidatorWorker:
             self._healthy_slots = {
                 slot_id
                 for slot_id in self._slots
-                if self._resource_blocked_until.get(slot_id, 0.0)
-                <= time.monotonic()
+                if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
             }
             return True
         except ValidatorInfrastructureError as e:
@@ -1487,14 +1485,26 @@ class ValidatorWorker:
                 f"{job.dataset_seed_block_hash!r}; refusing to score"
             )
         inference_session_id: str | None = None
-        if (
-            job.inference is None
-            and getattr(self._config, "inference_proxy_required", False) is True
+        bench_requires_ticket_inference = (
+            job.bench_version is not None and job.bench_version >= 7
+        )
+        fleet_requires_ticket_inference = (
+            getattr(self._config, "inference_proxy_required", False) is True
+        )
+        if job.inference is None and (
+            bench_requires_ticket_inference or fleet_requires_ticket_inference
         ):
             raise ValidatorInfrastructureError(
                 "platform inference is required but the ticket carried no capability"
             )
-        if job.inference is not None:
+        # During the bounded transition, v6 tickets may carry an additive offer
+        # but must retain their existing frozen relay route. V7 always consumes
+        # the offer. Once fleet-wide enforcement is enabled after v6 drains, any
+        # residual legacy ticket also uses platform inference rather than a
+        # validator provider credential.
+        if job.inference is not None and (
+            bench_requires_ticket_inference or fleet_requires_ticket_inference
+        ):
             broker = await self._dittobench.prepare_inference_session()
             try:
                 exchange = await self._platform.exchange_inference_grant(

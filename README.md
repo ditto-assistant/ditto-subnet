@@ -54,7 +54,8 @@ ditto verify --path <agent.tar.gz>      # pre-flight checks only; no chain/API c
 
 ```sh
 cp .env.example .env
-# Fill in the wallet names, validator hotkey, Pylon token, and shared W&B key.
+# Fill in the wallet names, validator hotkey, Pylon token, bounded-transition
+# v6 relay key, and shared W&B key.
 # Set WANDB_MODE=disabled instead if you opt out of aggregate telemetry.
 ./scripts/validator-compose.sh config --quiet
 ./scripts/validator-compose.sh up -d --build

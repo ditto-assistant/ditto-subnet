@@ -110,16 +110,23 @@ services:
       timeout: 15s
       retries: 30
 
-  # Code-frozen compatibility artifact retained for signed-stack shape only.
-  # It starts in an explicit no-provider stub mode, holds no credential, is not
-  # a scorer dependency, and is unreachable from miner networks.
+  # Bounded-transition v6 relay. Existing v6 tickets continue through the
+  # validator-owned frozen Qwen route until v7 is activated and every v6 lease
+  # has drained. Ticket-bound v7 runs ignore HARNESS_GATEWAY_URL and use the
+  # trusted local inference broker instead. Remove this service and its secret
+  # only in the separately announced post-v7 cleanup release.
   model-relay:
     build:
       context: *dittobench-build-context
       target: relay
     restart: unless-stopped
     environment:
-      RELAY_DISABLED: "1"
+      RELAY_PROVIDER: ${RELAY_PROVIDER:-chutes}
+      # The scorer keeps the frozen v6 Chutes profile behind an explicit
+      # transition gate. Leave it enabled only while v6 tickets can still be
+      # issued or retried; the post-v7 cleanup removes this relay and secret.
+      RELAY_ENABLE_DEPRECATED_CHUTES: ${RELAY_ENABLE_DEPRECATED_CHUTES:-1}
+      RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY in .env during the v6 transition}
       PORT: "11435"
     read_only: true
     security_opt:
@@ -140,11 +147,15 @@ services:
     depends_on:
       sandbox-docker:
         condition: service_healthy
+      model-relay:
+        condition: service_started
       ollama:
         condition: service_healthy
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
-      HARNESS_GATEWAY_URL: http://host.docker.internal:11436/v1/inference
+      # Legacy v6 uses the frozen relay. A ticket inference session replaces
+      # this value with the source-bound broker URL for v7.
+      HARNESS_GATEWAY_URL: http://host.docker.internal:11435
       HARNESS_EMBED_URL: http://host.docker.internal:11434
       DITTOBENCH_SANDBOX_HARDEN: "1"
       DITTOBENCH_SANDBOX_EGRESS_NETWORK: ditto-sandbox
@@ -156,7 +167,11 @@ services:
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
-      DITTOBENCH_REQUIRE_TICKET_INFERENCE: "1"
+      DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES: ${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}
+      # V7 always requires a ticket inference session in scorer code. Keep the
+      # global enforcement switch dark so in-flight/retried v6 tickets retain
+      # their frozen relay path during the bounded transition.
+      DITTOBENCH_REQUIRE_TICKET_INFERENCE: ${DITTOBENCH_REQUIRE_TICKET_INFERENCE:-false}
     read_only: true
     tmpfs:
       - /tmp
@@ -201,6 +216,7 @@ services:
       # probe exercises the same harness-facing forwarder listener that inner
       # sandboxes reach as host.docker.internal:11434.
       VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:11434/
+      VALIDATOR_MODEL_RELAY_PROBE_URL: http://model-relay:11435/
       VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS: "2"
       VALIDATOR_STACK_HEALTH_CACHE_SECONDS: "60"
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
@@ -216,7 +232,9 @@ services:
       # Heartbeat v10 advertises every active slot. The scorer independently
       # publishes the same bound and the worker fails closed on mismatch.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
-      VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-true}
+      # V7 tickets fail closed without platform inference regardless of this
+      # flag. Leave fleet-wide enforcement dark until v6 has drained.
+      VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-false}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"

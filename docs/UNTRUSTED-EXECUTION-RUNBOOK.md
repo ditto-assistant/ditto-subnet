@@ -14,10 +14,11 @@ no miner source, credentials, or runnable exploit payloads.
 - Miner containers run non-root with a read-only root filesystem, ephemeral
   no-exec scratch, all capabilities dropped, no-new-privileges, resource and
   time limits, and request-scoped cleanup.
-- The `ditto-sandbox` bridge denies forwarding by default. Only local
-  embeddings on 11434 and the source-bound ticket broker on 11436 are admitted;
-  the deprecated process-wide relay on 11435 is denied. Denials are logged with
-  the `ditto-sandbox-deny` prefix.
+- The `ditto-sandbox` bridge denies forwarding by default. During the bounded
+  v6 transition, only local embeddings on 11434, the frozen v6 relay on 11435,
+  and the source-bound v7 ticket broker on 11436 are admitted. The v6 relay and
+  validator provider secret are removed only after activation and lease drain.
+  Denials are logged with the `ditto-sandbox-deny` prefix.
 - No wallet, `.env`, cloud credential, Docker control socket, or host directory
   is mounted into a miner container. Host network, PID, IPC, and other namespaces
   are not shared or joined with miner containers.

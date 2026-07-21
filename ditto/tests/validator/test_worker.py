@@ -14,6 +14,7 @@ import pytest
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_progress import MAX_BENCHMARK_CHECKS
+from ditto.api_models.inference import InferenceGrantOffer
 from ditto.api_models.stack_health import ValidatorComponentHealth
 from ditto.api_models.validator import (
     ArtifactResponse,
@@ -1050,6 +1051,73 @@ class TestRunOnce:
             match="ticket carried no capability",
         ):
             await worker._score_job(_job("5MinerA" + "x" * 41))
+
+    async def test_v7_requires_ticket_inference_even_before_fleet_enforcement(
+        self,
+    ) -> None:
+        config = _config()
+        config.inference_proxy_required = False
+        worker = ValidatorWorker(
+            config=config,
+            platform=_platform_with_ledger(jobs=[], ledger=[]),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        job = _job("5MinerA" + "x" * 41).model_copy(
+            update={
+                "bench_version": 7,
+                "minimum_screening_policy_version": 9,
+                "requires_screened_image": True,
+            }
+        )
+
+        with pytest.raises(
+            ValidatorInfrastructureError,
+            match="ticket carried no capability",
+        ):
+            await worker._score_job(job)
+
+    async def test_v6_ignores_additive_inference_offer_during_transition(
+        self,
+    ) -> None:
+        config = _config()
+        config.inference_proxy_required = False
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        dittobench = MagicMock()
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._evaluate_and_submit = AsyncMock(return_value=_report("run", 0.9))  # type: ignore[method-assign]
+        offer = InferenceGrantOffer(
+            grant_id=uuid4(),
+            exchange_url="https://platform.example/exchange",
+            proxy_url="https://platform.example/inference",
+            allowed_models=["qwen/qwen3-32b"],
+            request_budget=500,
+            token_budget=1_000_000,
+            expires_at=datetime.now(UTC) + timedelta(minutes=30),
+        )
+        job = _job("5MinerA" + "x" * 41).model_copy(
+            update={
+                "bench_version": 6,
+                "minimum_screening_policy_version": 9,
+                "requires_screened_image": True,
+                "inference": offer,
+            }
+        )
+
+        await worker._score_job(job)
+
+        dittobench.prepare_inference_session.assert_not_called()
+        platform.exchange_inference_grant.assert_not_called()
+        score_call = worker._evaluate_and_submit.await_args
+        assert score_call is not None
+        assert score_call.kwargs["inference_session_id"] is None
 
     async def test_run_token_from_scorer_rides_every_progress_heartbeat(self) -> None:
         job = _job("5MinerA" + "x" * 41)
