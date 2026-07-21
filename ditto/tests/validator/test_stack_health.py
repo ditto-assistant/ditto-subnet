@@ -238,10 +238,9 @@ class TestCollector:
         assert health.model_relay.ready is True
         assert health.model_relay.observed_identity is None
 
-    async def test_broken_relay_path_degrades_the_scorer(self) -> None:
-        # The scorer is reachable and identity-verified, but reports (from its own
-        # netns) that it cannot reach the relay it scores with. Without this the
-        # dashboard shows a fully healthy validator that fast-fails every run.
+    async def test_deprecated_relay_path_is_not_a_scorer_dependency(self) -> None:
+        # Ticket inference is probed only after capability activation. A stale
+        # legacy relay-preflight failure must not degrade the new scorer.
         def handler(request: httpx.Request) -> httpx.Response:
             if str(request.url) == _RELAY_PREFLIGHT_URL:
                 return httpx.Response(
@@ -261,12 +260,10 @@ class TestCollector:
             collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
             health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
 
-        assert health.dittobench_api.health == "degraded"
-        assert health.dittobench_api.ready is False
+        assert health.dittobench_api.health == "healthy"
+        assert health.dittobench_api.ready is True
         assert health.dittobench_api.observed_identity is not None
         assert health.dittobench_api.observed_identity.source_revision == _REV
-        # The relay's own service-name probe still passes; the divergence between a
-        # healthy model_relay and a degraded scorer is the diagnostic signal.
         assert health.model_relay.health == "healthy"
 
     async def test_older_scorer_without_relay_preflight_stays_healthy(self) -> None:
@@ -311,6 +308,7 @@ class TestCollector:
 
         for name in ("sandbox_docker", "model_relay", "pylon", "ollama"):
             assert getattr(health, name).health == "unknown"
+        assert health.model_relay.required is False
 
     async def test_mock_mode_performs_no_probes(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -337,9 +335,8 @@ class TestCollector:
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
             first = calls["count"]
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-        # Four sidecar probes + the scorer relay-path probe = five per sweep.
-        assert first == 5
-        assert calls["count"] == 5
+        assert first == 4
+        assert calls["count"] == 4
 
     async def test_zero_cache_reprobes_every_collect(self) -> None:
         calls = {"count": 0}
@@ -353,8 +350,8 @@ class TestCollector:
             collector = StackHealthCollector(config, client)  # type: ignore[arg-type]
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-        # Five probes per sweep, re-run every collect when caching is disabled.
-        assert calls["count"] == 10
+        # Four sidecar probes per sweep, re-run when caching is disabled.
+        assert calls["count"] == 8
 
     async def test_probe_sweep_crash_degrades_to_unknown(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:

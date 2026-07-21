@@ -1032,6 +1032,25 @@ class TestRunOnce:
         assert cleared.benchmark_progress is None
         platform.submit_score.assert_awaited_once()
 
+    async def test_required_ticket_inference_fails_as_validator_infrastructure(
+        self,
+    ) -> None:
+        config = _config()
+        config.inference_proxy_required = True
+        worker = ValidatorWorker(
+            config=config,
+            platform=_platform_with_ledger(jobs=[], ledger=[]),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        with pytest.raises(
+            ValidatorInfrastructureError,
+            match="ticket carried no capability",
+        ):
+            await worker._score_job(_job("5MinerA" + "x" * 41))
+
     async def test_run_token_from_scorer_rides_every_progress_heartbeat(self) -> None:
         job = _job("5MinerA" + "x" * 41)
         platform = _platform_with_ledger(jobs=[], ledger=[])

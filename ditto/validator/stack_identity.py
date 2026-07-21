@@ -173,6 +173,7 @@ def validator_capabilities_and_stack() -> tuple[
         sandbox_egress_restricted=_truthy(
             "VALIDATOR_SANDBOX_EGRESS_RESTRICTED", default=False
         ),
+        ticket_inference=True,
         executor_isolation=cast(
             ExecutorIsolation,
             os.environ.get("VALIDATOR_EXECUTOR_ISOLATION", "unknown"),

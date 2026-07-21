@@ -391,7 +391,9 @@ class DittobenchClient:
             raise ValidatorInfrastructureError(
                 "embedding preflight returned no embedding vector"
             )
-        await self._relay_preflight()
+        # The locked model is now ticket-scoped, so it cannot be probed before
+        # the platform issues and the local broker activates a capability. Each
+        # scored run performs that trusted probe after activation instead.
 
     async def _relay_preflight(self) -> None:
         """Verify the scorer's model-relay path from where the scorer runs it.
@@ -595,6 +597,10 @@ class DittobenchClient:
             resp = await self._client.post(url, json=body)
         except httpx.HTTPError as e:
             raise DittobenchError(f"submit failed: {e}") from e
+        if resp.status_code in (429, 503):
+            raise ValidatorInfrastructureError(
+                f"scorer admission unavailable ({resp.status_code})"
+            )
         if resp.status_code not in (200, 202):
             raise DittobenchError(
                 f"submit rejected ({resp.status_code}): {resp.text[:200]}"

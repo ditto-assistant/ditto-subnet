@@ -50,12 +50,8 @@ services:
     # dittobench-api joins this container's network namespace
     # (network_mode: service:sandbox-docker) and therefore SHARES this /etc/hosts
     # file, so the mapping must live here — extra_hosts on the joining service is
-    # ignored. host.docker.internal has no --add-host mapping in this namespace
-    # (only the inner miner harnesses get one at `docker run`), so map it to
-    # loopback where the socat forwarders to the relay (11435) and Ollama (11434)
-    # listen; otherwise the scorer's own relay preflight fails "relay unreachable"
-    # even though the relay is healthy. Inner harnesses have their own hosts file
-    # and are unaffected.
+    # ignored. Inner harnesses receive their own mapping to the source-bound
+    # broker and embedding forwarder.
     extra_hosts:
       - "host.docker.internal:127.0.0.1"
     environment:
@@ -114,18 +110,16 @@ services:
       timeout: 15s
       retries: 30
 
-  # Soft-deprecated rollback-only model gateway. Ticket-bound execution uses
-  # the platform proxy through dittobench-api's trusted broker.
+  # Code-frozen compatibility artifact retained for signed-stack shape only.
+  # It starts in an explicit no-provider stub mode, holds no credential, is not
+  # a scorer dependency, and is unreachable from miner networks.
   model-relay:
     build:
       context: *dittobench-build-context
       target: relay
     restart: unless-stopped
     environment:
-      # Rollback-only during the bounded platform-proxy transition. New ticket
-      # inference bypasses this relay; Chutes is no longer an active default.
-      RELAY_PROVIDER: ${RELAY_PROVIDER:-openrouter}
-      RELAY_API_KEY: ${RELAY_API_KEY:-disabled}
+      RELAY_DISABLED: "1"
       PORT: "11435"
     read_only: true
     security_opt:
@@ -146,13 +140,11 @@ services:
     depends_on:
       sandbox-docker:
         condition: service_healthy
-      model-relay:
-        condition: service_started
       ollama:
         condition: service_healthy
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
-      HARNESS_GATEWAY_URL: http://host.docker.internal:11435
+      HARNESS_GATEWAY_URL: http://host.docker.internal:11436/v1/inference
       HARNESS_EMBED_URL: http://host.docker.internal:11434
       DITTOBENCH_SANDBOX_HARDEN: "1"
       DITTOBENCH_SANDBOX_EGRESS_NETWORK: ditto-sandbox
@@ -164,6 +156,7 @@ services:
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
+      DITTOBENCH_REQUIRE_TICKET_INFERENCE: "1"
     read_only: true
     tmpfs:
       - /tmp
@@ -208,7 +201,6 @@ services:
       # probe exercises the same harness-facing forwarder listener that inner
       # sandboxes reach as host.docker.internal:11434.
       VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:11434/
-      VALIDATOR_MODEL_RELAY_PROBE_URL: http://model-relay:11435/
       VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS: "2"
       VALIDATOR_STACK_HEALTH_CACHE_SECONDS: "60"
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
@@ -224,6 +216,7 @@ services:
       # Heartbeat v10 advertises every active slot. The scorer independently
       # publishes the same bound and the worker fails closed on mismatch.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
+      VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-true}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"

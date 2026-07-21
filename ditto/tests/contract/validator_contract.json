@@ -1568,6 +1568,10 @@
           },
           "stack_updater": {
             "type": "boolean"
+          },
+          "ticket_inference": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [

@@ -115,7 +115,7 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
-    # The scorer reaches the model-relay / embedding forwarders on loopback, so
+    # The scorer reaches the embedding forwarder on loopback, so
     # host.docker.internal must resolve there. The scorer joins sandbox-docker's
     # netns and SHARES its /etc/hosts, so the mapping lives on sandbox-docker (an
     # extra_hosts on the joining dittobench-api service would be ignored).
@@ -124,7 +124,11 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
         "host.docker.internal:127.0.0.1"
         in compose["services"]["sandbox-docker"]["extra_hosts"]
     )
-    assert env["HARNESS_GATEWAY_URL"] == "http://host.docker.internal:11435"
+    assert env["DITTOBENCH_REQUIRE_TICKET_INFERENCE"] == "1"
+    relay = compose["services"]["model-relay"]
+    assert relay["environment"] == {"RELAY_DISABLED": "1", "PORT": "11435"}
+    assert "RELAY_API_KEY" not in COMPOSE_PATH.read_text()
+    assert "model-relay" not in service["depends_on"]
 
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
@@ -141,7 +145,9 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert entrypoint.count("ensure_sandbox_network") >= 3
     assert "DITTO-SANDBOX-EGRESS" in entrypoint
     assert "--dst-type LOCAL -p tcp --dport 11434 -j ACCEPT" in entrypoint
-    assert "--dst-type LOCAL -p tcp --dport 11435 -j ACCEPT" in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11435 -j ACCEPT" not in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11436 -j ACCEPT" in entrypoint
+    assert "-i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS" in entrypoint
     assert "com.docker.network.bridge.enable_icc=false" in entrypoint
     assert "-i 'dtj+' -j DITTO-SANDBOX-EGRESS" in entrypoint
     assert "ditto-sandbox-deny" in entrypoint
@@ -296,11 +302,11 @@ def test_only_validator_is_an_explicit_auto_update_target() -> None:
     # These services are deliberately outside updater scope and retain their
     # existing deployment boundaries/pins.
     for name in (
-        "pylon",
-        "sandbox-docker",
-        "ollama",
-        "model-relay",
-        "dittobench-api",
+            "pylon",
+            "sandbox-docker",
+            "ollama",
+            "model-relay",
+            "dittobench-api",
     ):
         assert "io.heyditto.validator.auto-update-target" not in services[name].get(
             "labels", {}

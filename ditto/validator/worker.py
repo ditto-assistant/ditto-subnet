@@ -127,6 +127,7 @@ _ACTIVE_TELEMETRY_TIMEOUT_SECONDS = 2.0
 # Keep a successfully reported generic failure visible through at least one
 # progress reporting interval. A new ticket supersedes it immediately.
 _FAILED_PROGRESS_MIN_VISIBLE_SECONDS = 60.0
+_RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
 
 _PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
     "preparing": 0,
@@ -322,6 +323,7 @@ class ValidatorWorker:
             for index in range(configured_slots)
         }
         self._healthy_slots = set(self._slots)
+        self._resource_blocked_until: dict[str, float] = {}
         self._admission: BenchmarkAdmission = "accepting"
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
@@ -518,6 +520,13 @@ class ValidatorWorker:
                             )
                             await self._report_ticket_failed(job, "infrastructure")
                             self._healthy_slots.discard(slot_id)
+                            if any(
+                                code in str(error)
+                                for code in ("sandbox_oom", "sandbox_tmpfs_exhausted")
+                            ):
+                                self._resource_blocked_until[slot_id] = (
+                                    time.monotonic() + _RESOURCE_SLOT_RECOVERY_SECONDS
+                                )
                             slot_failed += 1
                             break
                         except (DittobenchError, PlatformError) as error:
@@ -589,7 +598,12 @@ class ValidatorWorker:
             return False
         preflight = getattr(self._dittobench, "preflight", None)
         if preflight is None:
-            self._healthy_slots = set(self._slots)
+            self._healthy_slots = {
+                slot_id
+                for slot_id in self._slots
+                if self._resource_blocked_until.get(slot_id, 0.0)
+                <= time.monotonic()
+            }
             return True
         try:
             result = preflight()
@@ -597,7 +611,12 @@ class ValidatorWorker:
                 await result
             # A successful trusted scorer probe is the recovery signal for
             # capacity dropped by a prior sibling failure or dependency outage.
-            self._healthy_slots = set(self._slots)
+            self._healthy_slots = {
+                slot_id
+                for slot_id in self._slots
+                if self._resource_blocked_until.get(slot_id, 0.0)
+                <= time.monotonic()
+            }
             return True
         except ValidatorInfrastructureError as e:
             self._healthy_slots.clear()
@@ -609,6 +628,18 @@ class ValidatorWorker:
             return False
 
     async def _report_heartbeat(
+        self,
+        state: ValidatorRuntimeState,
+        *,
+        active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
+    ) -> bool:
+        """Serialize all signed heartbeat timestamps and acceptance updates."""
+        async with self._active_heartbeat_lock:
+            return await self._report_heartbeat_unlocked(
+                state, active_snapshot=active_snapshot
+            )
+
+    async def _report_heartbeat_unlocked(
         self,
         state: ValidatorRuntimeState,
         *,
@@ -749,9 +780,18 @@ class ValidatorWorker:
         async with self._active_heartbeat_lock:
             active_snapshot = (self._active_agent_id, self._benchmark_progress)
             sent_progress = active_snapshot[1]
-            delivered = await self._report_heartbeat_bounded(
-                "running_benchmark", active_snapshot=active_snapshot
-            )
+            try:
+                delivered = await asyncio.wait_for(
+                    self._report_heartbeat_unlocked(
+                        "running_benchmark", active_snapshot=active_snapshot
+                    ),
+                    timeout=_ACTIVE_TELEMETRY_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "validator progress heartbeat timed out; scoring continues"
+                )
+                delivered = False
             if delivered and sent_progress is not None:
                 self._last_progress_heartbeat_monotonic = time.monotonic()
                 self._last_progress_bucket = self._progress_bucket(sent_progress)
@@ -1447,6 +1487,13 @@ class ValidatorWorker:
                 f"{job.dataset_seed_block_hash!r}; refusing to score"
             )
         inference_session_id: str | None = None
+        if (
+            job.inference is None
+            and getattr(self._config, "inference_proxy_required", False) is True
+        ):
+            raise ValidatorInfrastructureError(
+                "platform inference is required but the ticket carried no capability"
+            )
         if job.inference is not None:
             broker = await self._dittobench.prepare_inference_session()
             try:

@@ -349,8 +349,8 @@ Each component reports `healthy`, `degraded`, `unreachable`,
 private Compose network — no Docker socket is mounted for telemetry — and are
 bounded so a wedged sidecar never stalls the heartbeat. Optional env:
 
-- `VALIDATOR_SANDBOX_DOCKER_PROBE_URL` / `VALIDATOR_MODEL_RELAY_PROBE_URL` —
-  internal readiness endpoints; unset components report `unknown`.
+- `VALIDATOR_SANDBOX_DOCKER_PROBE_URL` — internal readiness endpoint. The
+  deprecated relay probe stays unset and reports optional `unknown`.
 - `VALIDATOR_PYLON_PROBE_URL` — defaults to `PYLON_URL`.
 - `VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS` (default 2) and
   `VALIDATOR_STACK_HEALTH_CACHE_SECONDS` (default 60).
