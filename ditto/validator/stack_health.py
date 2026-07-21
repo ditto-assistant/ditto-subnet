@@ -138,7 +138,9 @@ class StackHealthCollector:
     def __init__(self, config: ValidatorConfig, client: httpx.AsyncClient) -> None:
         self._config = config
         self._client = client
-        self._sidecar_cache: dict[str, ValidatorComponentHealth] | None = None
+        self._sidecar_cache: (
+            tuple[dict[str, ValidatorComponentHealth], bool] | None
+        ) = None
         self._sidecar_cache_monotonic: float = 0.0
 
     async def collect(
@@ -160,20 +162,36 @@ class StackHealthCollector:
         if self._config.dittobench_mock:
             # Local plumbing mode performs no observations; do not invent any.
             return fallback_stack_health()
+        relay_path_broken = False
         try:
-            sidecars = await self._sidecar_snapshot(stack)
+            sidecars, relay_path_broken = await self._sidecar_snapshot(stack)
         except Exception as e:  # noqa: BLE001 - telemetry must never gate work
             logger.warning("stack-health probe sweep failed: %s", e)
             sidecars = {name: _unknown_component() for name in _SIDECAR_NAMES}
+        dittobench_api = _scorer_component(scorer, observed_at)
+        if relay_path_broken and dittobench_api.health == "healthy":
+            # The scorer is reachable and identity-verified, but it cannot reach
+            # the locked model relay on the path it actually uses to score
+            # (host.docker.internal, resolvable only inside the scorer's netns).
+            # The model_relay sidecar probe hits a service name and stays green,
+            # so without this the dashboard shows a fully healthy validator that
+            # fast-fails every scored run. Surface it as a degraded scorer.
+            dittobench_api = ValidatorComponentHealth(
+                health="degraded",
+                required=True,
+                observed_at=observed_at,
+                ready=False,
+                observed_identity=dittobench_api.observed_identity,
+            )
         return ValidatorStackHealth(
             ditto_subnet=_self_component(observed_at),
-            dittobench_api=_scorer_component(scorer, observed_at),
+            dittobench_api=dittobench_api,
             **sidecars,
         )
 
     async def _sidecar_snapshot(
         self, stack: ValidatorStackIdentity
-    ) -> dict[str, ValidatorComponentHealth]:
+    ) -> tuple[dict[str, ValidatorComponentHealth], bool]:
         now = time.monotonic()
         if (
             self._sidecar_cache is not None
@@ -181,16 +199,18 @@ class StackHealthCollector:
             < self._config.stack_health_cache_seconds
         ):
             return self._sidecar_cache
-        results = await asyncio.gather(
+        *sidecar_results, relay_path_broken = await asyncio.gather(
             self._probe_sandbox_docker(),
             self._probe_model_relay(stack),
             self._probe_pylon(),
             self._probe_ollama(),
+            self._probe_scorer_relay_path(),
         )
-        snapshot = dict(zip(_SIDECAR_NAMES, results, strict=True))
-        self._sidecar_cache = snapshot
+        snapshot = dict(zip(_SIDECAR_NAMES, sidecar_results, strict=True))
+        result = (snapshot, bool(relay_path_broken))
+        self._sidecar_cache = result
         self._sidecar_cache_monotonic = now
-        return snapshot
+        return result
 
     async def _get(self, url: str) -> httpx.Response | None:
         """One bounded GET; ``None`` means the endpoint was unreachable."""
@@ -313,6 +333,36 @@ class StackHealthCollector:
             observed_at=observed_at,
             ready=True,
             model_ready=False,
+        )
+
+    async def _probe_scorer_relay_path(self) -> bool:
+        """Report whether the scorer cannot reach the model relay it scores with.
+
+        The scorer calls the locked relay at ``host.docker.internal:11435`` inside
+        sandbox-docker's shared netns. This validator is off that netns and its
+        ``model_relay`` probe hits a service name, so a broken ``host.docker.internal``
+        mapping (e.g. a managed stack whose compose predates the fix) stays green
+        here even though every scored run fast-fails ``model_relay_unavailable``.
+        ``GET /v1/relay-preflight`` lets the scorer report the real path health from
+        the right netns, so the failure surfaces on the dashboard instead of looking
+        fully healthy. A missing endpoint (older scorer), any non-503 answer, or an
+        unreachable scorer is "not observable as broken" — never a fabricated fault.
+        """
+        base = self._config.dittobench_api_url
+        if not base:
+            return False
+        response = await self._get(f"{base}/v1/relay-preflight")
+        if response is None or response.status_code != 503:
+            return False
+        if len(response.content) > _MAX_PROBE_BODY_BYTES:
+            return False
+        try:
+            failure = response.json().get("failure")
+        except ValueError:
+            return False
+        return (
+            isinstance(failure, dict)
+            and failure.get("kind") == "validator_infrastructure"
         )
 
 
