@@ -127,7 +127,7 @@ def test_every_benchmark_version_rejects_composite_above_one() -> None:
     raw.update({"bench_version": 5, "composite": 0.855})
     assert ScoreReport.model_validate(raw).composite == 0.855
 
-    for bench_version in (4, 5):
+    for bench_version in (4, 5, 6):
         raw.update({"bench_version": bench_version, "composite": 1.001})
         with pytest.raises(ValidationError):
             ScoreReport.model_validate(raw)

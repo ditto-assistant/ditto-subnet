@@ -62,10 +62,12 @@ def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
         # would stall the in-flight rollout for the whole subnet.
         (200, _REVISION, [2, 3, 4], "fresh_verified", (2, 3, 4)),
         (200, _REVISION, [4], "fresh_verified", (4,)),
-        # Fail closed on anything outside the allowlist.
-        (200, _REVISION, [2, 3, 4, 5], "fresh_verified", (2, 3, 4, 5)),
+        # Keep the deployed v6 scorer capability fresh. Reject only versions
+        # beyond the validator's explicit allowlist.
+        (200, _REVISION, [2, 3, 4, 5, 6], "fresh_verified", (2, 3, 4, 5, 6)),
         (200, _REVISION, [5], "fresh_verified", (5,)),
-        (200, _REVISION, [2, 3, 4, 5, 6], "unreachable", (2,)),
+        (200, _REVISION, [6], "fresh_verified", (6,)),
+        (200, _REVISION, [2, 3, 4, 5, 6, 7], "unreachable", (2,)),
         (200, "cd" * 20, [2, 3, 4], "identity_mismatch", (2,)),
         (404, _REVISION, [2, 3], "legacy_v2", (2,)),
         (503, _REVISION, [2, 3], "unreachable", (2,)),
@@ -103,7 +105,7 @@ async def test_secretless_scorer_capability_is_provenance_bound(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [3, 4, 5])
+@pytest.mark.parametrize("bench_version", [3, 4, 5, 6])
 async def test_v3_plus_uses_versioned_route_and_binds_request(
     bench_version: int,
 ) -> None:
@@ -135,7 +137,7 @@ async def test_v3_plus_uses_versioned_route_and_binds_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [None, 0, 1, 6])
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 7])
 async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     bench_version: int | None,
 ) -> None:
@@ -426,7 +428,7 @@ async def test_v3_plus_poll_rejects_job_or_report_version_mismatch(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [3, 4, 5])
+@pytest.mark.parametrize("bench_version", [3, 4, 5, 6])
 async def test_v3_plus_poll_returns_version_bound_report(bench_version: int) -> None:
     payload = _done_job()
     payload["bench_version"] = bench_version
@@ -444,7 +446,7 @@ async def test_v3_plus_poll_returns_version_bound_report(bench_version: int) -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 6])
+@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 7])
 async def test_poll_rejects_missing_or_unsupported_expected_version(
     expected_bench_version: int | None,
 ) -> None:
