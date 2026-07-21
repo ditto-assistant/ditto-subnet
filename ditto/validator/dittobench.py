@@ -310,6 +310,52 @@ class DittobenchClient:
             raise ValidatorInfrastructureError(
                 "embedding preflight returned no embedding vector"
             )
+        await self._relay_preflight()
+
+    async def _relay_preflight(self) -> None:
+        """Verify the scorer's model-relay path from where the scorer runs it.
+
+        The scorer reaches the locked model relay at ``host.docker.internal:11435``
+        inside sandbox-docker's shared network namespace. This validator is NOT in
+        that namespace — it reaches the relay only by service name — so it cannot
+        itself detect a broken ``host.docker.internal`` mapping (e.g. a managed
+        stack whose frozen compose predates the extra_hosts-on-sandbox-docker fix).
+        The embed preflight above has the same blind spot. So a broken relay path
+        stays invisible pre-lease, and the validator claims tickets it fast-fails
+        at run start (``model_relay_unavailable``), burning each agent's retry
+        budget until it wedges at quorum.
+
+        Ask the scorer — which IS in the right namespace — to run its own relay
+        health check via ``GET /v1/relay-preflight``. A broken relay surfaces as a
+        503 ``validator_infrastructure`` envelope; raising here makes the sweep
+        back off and claim no ticket, so a broken stack self-excludes and
+        self-heals instead of wedging agents.
+
+        Purely additive: an older scorer without the endpoint (404), or any other
+        non-503 response or transport blip, is left to the existing per-run relay
+        signal rather than newly blocking ticket claims.
+        """
+        try:
+            response = await self._client.get(
+                f"{self._config.dittobench_api_url}/v1/relay-preflight",
+                timeout=self._config.embed_preflight_timeout_seconds,
+            )
+        except httpx.HTTPError:
+            return
+        if response.status_code != 503:
+            return
+        try:
+            failure = response.json().get("failure")
+        except ValueError:
+            failure = None
+        if not isinstance(failure, dict):
+            return
+        if failure.get("kind") == "validator_infrastructure":
+            code = failure.get("code") or "model_relay_unavailable"
+            raise ValidatorInfrastructureError(
+                "scorer relay preflight reported the model relay is unreachable "
+                f"from the scorer ({code}); not claiming a ticket this sweep"
+            )
 
     async def score_tarball(
         self,
