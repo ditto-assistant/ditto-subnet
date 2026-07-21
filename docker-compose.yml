@@ -236,7 +236,7 @@ services:
       # flag. Leave fleet-wide enforcement dark until v6 has drained.
       VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-false}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
-      VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
+      VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "5400"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"
       # Source/manual installs must never inherit managed-release identity from
       # an operator shell or .env file. The immutable release renderer replaces

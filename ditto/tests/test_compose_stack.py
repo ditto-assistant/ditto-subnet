@@ -305,7 +305,7 @@ def test_only_validator_is_an_explicit_auto_update_target() -> None:
     )
     assert validator["environment"]["VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH"] == "2"
     assert validator["stop_grace_period"] == "80m"
-    assert validator["environment"]["VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS"] == "4500"
+    assert validator["environment"]["VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS"] == "5400"
     wrapper = COMPOSE_WRAPPER_PATH.read_text()
     assert 'git -C "$ROOT_DIR" rev-parse HEAD' in wrapper
     assert 'export DITTO_SOURCE_REVISION="$source_revision"' in wrapper

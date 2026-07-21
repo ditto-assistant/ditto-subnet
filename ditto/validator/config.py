@@ -419,7 +419,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_DITTOBENCH_POLL_SECONDS", "10")
         ),
         dittobench_timeout_seconds=float(
-            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "4500")
+            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "5400")
         ),
         http_timeout_seconds=float(
             os.environ.get("VALIDATOR_HTTP_TIMEOUT_SECONDS", "30")
