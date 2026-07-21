@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.20.1 (2026-07-21)
+
+### Bug Fixes
+
+- Repin dittobench api ([#200](https://github.com/ditto-assistant/ditto-subnet/pull/200),
+  [`306e30a`](https://github.com/ditto-assistant/ditto-subnet/commit/306e30a1b69db7bb9e1dd9e2b24545da2e7db75b))
+
+### Chores
+
+- **ci**: Pipeline the release + add a deploy-time compose gate
+  ([#193](https://github.com/ditto-assistant/ditto-subnet/pull/193),
+  [`200dea4`](https://github.com/ditto-assistant/ditto-subnet/commit/200dea40acf89082b07dd82c9ec4d9d808f1ab76))
+
+- **tests**: Correct dns_opt terminology
+  ([#199](https://github.com/ditto-assistant/ditto-subnet/pull/199),
+  [`353f372`](https://github.com/ditto-assistant/ditto-subnet/commit/353f372f911ad0aacff505be87c52f760327972d))
+
+
 ## v0.20.0 (2026-07-20)
 
 ### Features
