@@ -8,7 +8,8 @@ downloaded copy — which at best ties — never earns. A small **participation
 tail** (default 10% over the next few miners) keeps the subnet populated without
 reopening the copy hole.
 
-This is a *deterministic* fold over the platform's best-score-per-miner ledger
+This is a *deterministic* fold over the platform's
+best-score-per-payment-coldkey ledger
 (``GET /scoring/scores``): every validator runs this identical function on the
 identical pool, so Yuma consensus converges and clips any deviator. It must stay
 pure — no I/O, no clock, no rounding (compare the raw reported doubles) — or two
@@ -145,7 +146,11 @@ def compute_weights(
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
-    ``entries`` is the ledger: one best-scoring agent per miner. The champion is
+    ``entries`` is the ledger: one best-scoring generation per payment-time
+    coldkey. The selected entry still carries a hotkey, which is the exact
+    on-chain weight destination. The validator deliberately does not repeat
+    ownership resolution: every validator must fold the identical canonical
+    platform ledger, and coldkey ownership can change after upload. The champion is
     found by folding entries in **first-seen order** (``first_seen`` then
     ``agent_id`` to break timestamp ties) and dethroning the running champion
     only when a later entry's composite clears the **indifference band**
@@ -157,7 +162,8 @@ def compute_weights(
     champion gets ``champion_share``; the next ``tail_size`` miners by composite
     split ``1 - champion_share`` equally.
 
-    The platform serves one authoritative row per agent, and the whole ledger
+    The platform first selects one authoritative row per agent, then one best
+    eligible generation per payment-time coldkey, and the whole ledger
     sits on a single ``bench_version`` at a time: the authority switch is
     threshold-gated, flipping to a new version only once the full emission
     recipient set (the champion plus ``tail_size`` runners-up — five agents at
