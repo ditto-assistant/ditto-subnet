@@ -481,6 +481,7 @@ async def test_v2_poll_requires_explicit_matching_versions(
 def _preflight_config() -> SimpleNamespace:
     return SimpleNamespace(
         dittobench_mock=False,
+        dittobench_api_url="http://sandbox-docker:8000",
         embed_preflight_url="http://sandbox-docker:11434/api/embed",
         embed_preflight_timeout_seconds=5.0,
     )
@@ -491,6 +492,8 @@ async def test_embedding_preflight_accepts_nonempty_vector() -> None:
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/relay-preflight":
+            return httpx.Response(200, json={"status": "ok"})
         seen.append(str(request.url))
         assert json.loads(request.content) == {
             "model": "embeddinggemma",
@@ -531,7 +534,9 @@ async def test_embedding_preflight_recovers_on_next_sweep_probe() -> None:
         httpx.Response(200, json={"embeddings": [[0.1]]}),
     ]
 
-    def handler(_: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/relay-preflight":
+            return httpx.Response(200, json={"status": "ok"})
         return responses.pop(0)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
@@ -539,6 +544,75 @@ async def test_embedding_preflight_recovers_on_next_sweep_probe() -> None:
         with pytest.raises(ValidatorInfrastructureError):
             await client.preflight()
         await client.preflight()
+
+
+@pytest.mark.asyncio
+async def test_relay_preflight_broken_relay_blocks_ticket_claim() -> None:
+    # The scorer (in sandbox-docker's netns) reports host.docker.internal:11435
+    # unreachable. The validator, off that netns, only learns of it here — and must
+    # not claim a ticket it will fast-fail.
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/v1/relay-preflight":
+            return httpx.Response(
+                503,
+                json={
+                    "status": "unavailable",
+                    "failure": {
+                        "kind": "validator_infrastructure",
+                        "code": "model_relay_unavailable",
+                        "retryable": True,
+                    },
+                },
+            )
+        return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(
+            ValidatorInfrastructureError, match="model_relay_unavailable"
+        ):
+            await DittobenchClient(cast(Any, _preflight_config()), http).preflight()
+    assert "/v1/relay-preflight" in seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "relay_response",
+    [
+        # Older scorer without the endpoint: fall back to the per-run signal.
+        httpx.Response(404, text="not found"),
+        # A 503 that is not the infrastructure envelope must not block claims.
+        httpx.Response(503, json={"status": "unavailable"}),
+        httpx.Response(503, text="gateway error"),
+        # Healthy relay.
+        httpx.Response(200, json={"status": "ok", "provider": "openrouter"}),
+    ],
+)
+async def test_relay_preflight_is_additive_and_does_not_over_block(
+    relay_response: httpx.Response,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/relay-preflight":
+            return relay_response
+        return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        # No raise: none of these are a validator_infrastructure envelope.
+        await DittobenchClient(cast(Any, _preflight_config()), http).preflight()
+
+
+@pytest.mark.asyncio
+async def test_relay_preflight_transport_blip_does_not_block_claim() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/relay-preflight":
+            raise httpx.ConnectError("transient", request=request)
+        return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        # A blip reaching the scorer here is left to the per-run signal.
+        await DittobenchClient(cast(Any, _preflight_config()), http).preflight()
 
 
 @pytest.mark.asyncio

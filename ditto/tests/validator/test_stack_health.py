@@ -31,11 +31,14 @@ _SANDBOX_URL = "http://sandbox-docker.internal:2375/_ping"
 _RELAY_URL = "http://model-relay.internal:8080/healthz"
 _PYLON_URL = "http://pylon.internal:8000"
 _OLLAMA_URL = "http://sandbox-docker.internal:11434/api/embed"
+_DITTO_API_URL = "http://sandbox-docker.internal:8000"
+_RELAY_PREFLIGHT_URL = f"{_DITTO_API_URL}/v1/relay-preflight"
 
 
 def _config(**overrides: object) -> SimpleNamespace:
     values: dict[str, object] = {
         "dittobench_mock": False,
+        "dittobench_api_url": _DITTO_API_URL,
         "sandbox_docker_probe_url": _SANDBOX_URL,
         "model_relay_probe_url": _RELAY_URL,
         "pylon_probe_url": "",
@@ -112,6 +115,8 @@ def _all_up_handler(
             return httpx.Response(404, json={"detail": "not found"})
         if url == _OLLAMA_URL:
             return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
+        if url == _RELAY_PREFLIGHT_URL:
+            return httpx.Response(200, json={"status": "ok"})
         raise AssertionError(f"unexpected probe URL {url}")
 
     return handler
@@ -175,6 +180,8 @@ class TestCollector:
             if url == _OLLAMA_URL:
                 # Reachable, but the required embedding model is not loaded.
                 return httpx.Response(200, json={"embeddings": []})
+            if url == _RELAY_PREFLIGHT_URL:
+                return httpx.Response(200, json={"status": "ok"})
             raise AssertionError(url)
 
         async with _client(handler) as client:
@@ -231,6 +238,64 @@ class TestCollector:
         assert health.model_relay.ready is True
         assert health.model_relay.observed_identity is None
 
+    async def test_broken_relay_path_degrades_the_scorer(self) -> None:
+        # The scorer is reachable and identity-verified, but reports (from its own
+        # netns) that it cannot reach the relay it scores with. Without this the
+        # dashboard shows a fully healthy validator that fast-fails every run.
+        def handler(request: httpx.Request) -> httpx.Response:
+            if str(request.url) == _RELAY_PREFLIGHT_URL:
+                return httpx.Response(
+                    503,
+                    json={
+                        "status": "unavailable",
+                        "failure": {
+                            "kind": "validator_infrastructure",
+                            "code": "model_relay_unavailable",
+                            "retryable": True,
+                        },
+                    },
+                )
+            return _all_up_handler()(request)  # type: ignore[operator]
+
+        async with _client(handler) as client:
+            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
+            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
+
+        assert health.dittobench_api.health == "degraded"
+        assert health.dittobench_api.ready is False
+        assert health.dittobench_api.observed_identity is not None
+        assert health.dittobench_api.observed_identity.source_revision == _REV
+        # The relay's own service-name probe still passes; the divergence between a
+        # healthy model_relay and a degraded scorer is the diagnostic signal.
+        assert health.model_relay.health == "healthy"
+
+    async def test_older_scorer_without_relay_preflight_stays_healthy(self) -> None:
+        # A scorer that predates the relay-preflight endpoint (404) is left to the
+        # per-run signal; the check must never fabricate a fault.
+        def handler(request: httpx.Request) -> httpx.Response:
+            if str(request.url) == _RELAY_PREFLIGHT_URL:
+                return httpx.Response(404, text="not found")
+            return _all_up_handler()(request)  # type: ignore[operator]
+
+        async with _client(handler) as client:
+            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
+            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
+
+        assert health.dittobench_api.health == "healthy"
+
+    async def test_relay_path_non_infrastructure_503_does_not_degrade(self) -> None:
+        # A 503 that is not the validator_infrastructure envelope is not our signal.
+        def handler(request: httpx.Request) -> httpx.Response:
+            if str(request.url) == _RELAY_PREFLIGHT_URL:
+                return httpx.Response(503, text="temporarily unavailable")
+            return _all_up_handler()(request)  # type: ignore[operator]
+
+        async with _client(handler) as client:
+            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
+            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
+
+        assert health.dittobench_api.health == "healthy"
+
     async def test_unconfigured_probes_stay_unknown(self) -> None:
         config = _config(
             sandbox_docker_probe_url="",
@@ -272,8 +337,9 @@ class TestCollector:
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
             first = calls["count"]
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-        assert first == 4
-        assert calls["count"] == 4
+        # Four sidecar probes + the scorer relay-path probe = five per sweep.
+        assert first == 5
+        assert calls["count"] == 5
 
     async def test_zero_cache_reprobes_every_collect(self) -> None:
         calls = {"count": 0}
@@ -287,7 +353,8 @@ class TestCollector:
             collector = StackHealthCollector(config, client)  # type: ignore[arg-type]
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-        assert calls["count"] == 8
+        # Five probes per sweep, re-run every collect when caching is disabled.
+        assert calls["count"] == 10
 
     async def test_probe_sweep_crash_degrades_to_unknown(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
