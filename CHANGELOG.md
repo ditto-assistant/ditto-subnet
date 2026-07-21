@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.21.5 (2026-07-21)
+
+### Bug Fixes
+
+- Accept DittoBench v6 capability ([#212](https://github.com/ditto-assistant/ditto-subnet/pull/212),
+  [`f1ffd1b`](https://github.com/ditto-assistant/ditto-subnet/commit/f1ffd1b4da8f25e8c45c7588448450430d544a97))
+
+### Chores
+
+- Remove Python 3.11 tests ([#210](https://github.com/ditto-assistant/ditto-subnet/pull/210),
+  [`239b74e`](https://github.com/ditto-assistant/ditto-subnet/commit/239b74ec4fa85d1d721480d7c733f1bd5ed82c7a))
+
+
 ## v0.21.4 (2026-07-21)
 
 ### Bug Fixes
