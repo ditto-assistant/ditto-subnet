@@ -138,9 +138,9 @@ class StackHealthCollector:
     def __init__(self, config: ValidatorConfig, client: httpx.AsyncClient) -> None:
         self._config = config
         self._client = client
-        self._sidecar_cache: (
-            tuple[dict[str, ValidatorComponentHealth], bool] | None
-        ) = None
+        self._sidecar_cache: tuple[dict[str, ValidatorComponentHealth], bool] | None = (
+            None
+        )
         self._sidecar_cache_monotonic: float = 0.0
 
     async def collect(
