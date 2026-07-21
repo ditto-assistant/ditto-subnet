@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.20.2 (2026-07-21)
+
+### Bug Fixes
+
+- Repin dittobench api ([#203](https://github.com/ditto-assistant/ditto-subnet/pull/203),
+  [`d6ec1d7`](https://github.com/ditto-assistant/ditto-subnet/commit/d6ec1d7e63fee5d2a81d94c52121623cf65a903d))
+
+### Chores
+
+- **docs**: Define coldkey-level emission contract
+  ([#201](https://github.com/ditto-assistant/ditto-subnet/pull/201),
+  [`b78996a`](https://github.com/ditto-assistant/ditto-subnet/commit/b78996a4f59d085f0a9863aeeda8bacf9bb34773))
+
+
 ## v0.20.1 (2026-07-21)
 
 ### Bug Fixes
