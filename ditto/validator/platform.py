@@ -158,7 +158,12 @@ class PlatformClient:
         return FailJobResponse.model_validate(resp.json())
 
     async def get_ledger(self) -> LedgerResponse:
-        """Pull the best-score-per-miner ledger the worker folds into weights.
+        """Pull the best-score-per-payment-coldkey ledger folded into weights.
+
+        The platform resolves ownership from the immutable coldkey captured at
+        payment time and returns only the winning generation's hotkey. The
+        validator must weight that returned hotkey without re-resolving current
+        chain ownership.
 
         This is the durable scoring pool (``GET /scoring/scores``) — the source
         of the on-chain weight vector every epoch, so a scored agent keeps its

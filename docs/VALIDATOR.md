@@ -386,3 +386,16 @@ make lint typecheck test
 ```
 
 The worker entry point is `uv run python -m ditto.validator`.
+
+### One emission position per coldkey
+
+The platform ledger contains at most one generation for each coldkey captured
+at upload-payment time. Different agent names and hotkeys owned by that coldkey
+compete for the same position; the best fully eligible canonical score wins,
+with first submission time and agent UUID as deterministic ties. The winning
+row's hotkey remains the chain weight destination.
+
+Validators do not query current coldkey ownership or perform a second collapse.
+They fold the platform's identical, payment-time snapshot so hotkey rotation or
+a later ownership change cannot make validators disagree. A held, banned, or
+otherwise ineligible newer generation cannot shadow an older eligible winner.
