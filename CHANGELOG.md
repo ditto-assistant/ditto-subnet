@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.21.0 (2026-07-21)
+
+### Features
+
+- Support benchmark v5 waste-penalty reports
+  ([#194](https://github.com/ditto-assistant/ditto-subnet/pull/194),
+  [`1b5f9c4`](https://github.com/ditto-assistant/ditto-subnet/commit/1b5f9c4798c47c405cb9b951e70012e5dd79bac5))
+
+
 ## v0.20.2 (2026-07-21)
 
 ### Bug Fixes
