@@ -1,9 +1,8 @@
 """Statistically-principled (indifference-band) KOTH dethroning.
 
 A challenger must beat the incumbent by more than the **indifference band** =
-max(flat relative margin, z·√(se_c² + se_champ²)). With no per-entry
-``composite_stderr`` the band is exactly the flat relative margin, so the fold is
-byte-identical to the pre-band rule.
+max(fixed composite-point margin, z·√(se_c² + se_champ²)). With no per-entry
+``composite_stderr`` the band is exactly the fixed composite-point margin.
 """
 
 from __future__ import annotations
@@ -179,60 +178,67 @@ class TestBeatsWithConfirmations:
     def test_a_median_lead_beyond_margin_dethrones(self) -> None:
         champ = _e("champ", 0.80, confirmations=[0.80, 0.79, 0.81], minutes=0)
         chal = _e("chal", 0.90, confirmations=[0.90, 0.88, 0.92], minutes=1)
-        # median(chal)=0.90 vs median(champ)=0.80, lead 0.10 > flat 0.04 → dethrone.
+        # median(chal)=0.90 vs median(champ)=0.80, lead 0.10 > flat 0.05 → dethrone.
         assert _beats(chal, champ, 0.05, 0.0)
 
 
 class TestBeats:
-    def test_no_stderr_is_flat_relative_margin(self) -> None:
+    def test_no_stderr_is_fixed_composite_point_margin(self) -> None:
         champ = _e("champ", 0.80, minutes=0)
-        # margin 0.05 → threshold 0.80*1.05 = 0.84.
-        assert not _beats(_e("c", 0.84, minutes=1), champ, 0.05, 1.64)  # exactly at
-        assert not _beats(_e("c", 0.839, minutes=1), champ, 0.05, 1.64)
-        assert _beats(_e("c", 0.841, minutes=1), champ, 0.05, 1.64)
+        # margin 0.04 → threshold 0.80 + 0.04 = 0.84.
+        assert not _beats(_e("c", 0.84, minutes=1), champ, 0.04, 1.64)  # exactly at
+        assert not _beats(_e("c", 0.839, minutes=1), champ, 0.04, 1.64)
+        assert _beats(_e("c", 0.841, minutes=1), champ, 0.04, 1.64)
+
+    def test_fixed_margin_does_not_grow_into_a_ceiling_lock(self) -> None:
+        champ = _e("champ", 0.930, minutes=0)
+        # The production 0.005-point hysteresis lets a real 0.006 improvement
+        # contend near the ceiling. The old 2% relative rule required 0.0186.
+        assert not _beats(_e("tie", 0.935, minutes=1), champ, 0.005, 0.0)
+        assert _beats(_e("better", 0.936, minutes=1), champ, 0.005, 0.0)
 
     def test_statistical_band_blocks_a_sub_uncertainty_lead(self) -> None:
         champ = _champ()  # stderr 0.03
-        # margin band = 0.05*0.80 = 0.04; stat band = 1.64*sqrt(0.03²+0.03²) ≈ 0.0696.
+        # fixed margin = 0.04; stat band = 1.64*sqrt(0.03²+0.03²) ≈ 0.0696.
         # A 0.05 lead clears the flat margin but NOT the statistical band.
         challenger = _e("c", 0.85, stderr=0.03, minutes=1)
         assert 0.85 - 0.80 > 0.04  # would dethrone under the old flat rule
-        assert not _beats(challenger, champ, 0.05, 1.64)
+        assert not _beats(challenger, champ, 0.04, 1.64)
 
     def test_clear_lead_beyond_uncertainty_dethrones(self) -> None:
         champ = _champ()
-        assert _beats(_e("c", 0.88, stderr=0.03, minutes=1), champ, 0.05, 1.64)
+        assert _beats(_e("c", 0.88, stderr=0.03, minutes=1), champ, 0.04, 1.64)
 
     def test_z_zero_disables_statistical_band(self) -> None:
         champ = _champ()
         # With z=0 the band is the flat margin (0.04); a 0.05 lead dethrones.
-        assert _beats(_e("c", 0.85, stderr=0.03, minutes=1), champ, 0.05, 0.0)
+        assert _beats(_e("c", 0.85, stderr=0.03, minutes=1), champ, 0.04, 0.0)
 
     def test_both_entries_need_stderr(self) -> None:
         champ = _champ()  # has stderr
         # Challenger lacks stderr → statistical band inapplicable → flat margin.
-        assert _beats(_e("c", 0.85, minutes=1), champ, 0.05, 1.64)
+        assert _beats(_e("c", 0.85, minutes=1), champ, 0.04, 1.64)
 
     def test_manual_band_matches_formula(self) -> None:
         champ = _champ()
         band = 1.64 * math.sqrt(0.03**2 + 0.03**2)
         # A lead just under the band does not dethrone; just over does.
         assert not _beats(
-            _e("c", 0.80 + band - 0.001, stderr=0.03, minutes=1), champ, 0.05, 1.64
+            _e("c", 0.80 + band - 0.001, stderr=0.03, minutes=1), champ, 0.04, 1.64
         )
         assert _beats(
-            _e("c", 0.80 + band + 0.001, stderr=0.03, minutes=1), champ, 0.05, 1.64
+            _e("c", 0.80 + band + 0.001, stderr=0.03, minutes=1), champ, 0.04, 1.64
         )
 
 
 class TestComputeWeightsWithBand:
     def test_default_z_zero_is_backward_compatible(self) -> None:
-        # No dethrone_z passed → flat relative margin, even with stderr present.
+        # No dethrone_z passed → fixed composite-point margin, even with stderr present.
         entries = [
             _e("champ", 0.80, stderr=0.03, minutes=0),
             _e("chal", 0.85, stderr=0.03, minutes=1),
         ]
-        w = compute_weights(entries, margin=0.05, tail_size=0, champion_share=1.0)
+        w = compute_weights(entries, margin=0.04, tail_size=0, champion_share=1.0)
         assert w == {"chal": pytest.approx(1.0)}  # 0.05 lead > flat 0.04
 
     def test_band_keeps_incumbent_under_uncertainty(self) -> None:
@@ -243,7 +249,7 @@ class TestComputeWeightsWithBand:
         # Same entries, now with the statistical band active: the 0.05 lead is
         # inside the ~0.0696 band, so the incumbent keeps the crown.
         w = compute_weights(
-            entries, margin=0.05, tail_size=0, champion_share=1.0, dethrone_z=1.64
+            entries, margin=0.04, tail_size=0, champion_share=1.0, dethrone_z=1.64
         )
         assert w == {"champ": pytest.approx(1.0)}
 
@@ -253,7 +259,7 @@ class TestComputeWeightsWithBand:
             _e("chal", 0.90, stderr=0.03, minutes=1),
         ]
         w = compute_weights(
-            entries, margin=0.05, tail_size=0, champion_share=1.0, dethrone_z=1.64
+            entries, margin=0.04, tail_size=0, champion_share=1.0, dethrone_z=1.64
         )
         assert w == {"chal": pytest.approx(1.0)}
 
@@ -264,9 +270,9 @@ class TestComputeWeightsWithBand:
             _e("champ", 0.80, minutes=0),
             _e("chal", 0.85, minutes=1),
         ]
-        base = compute_weights(entries, margin=0.05, tail_size=0, champion_share=1.0)
+        base = compute_weights(entries, margin=0.04, tail_size=0, champion_share=1.0)
         withz = compute_weights(
-            entries, margin=0.05, tail_size=0, champion_share=1.0, dethrone_z=1.64
+            entries, margin=0.04, tail_size=0, champion_share=1.0, dethrone_z=1.64
         )
         assert base == withz == {"chal": pytest.approx(1.0)}
 
@@ -339,7 +345,7 @@ class TestPairedDethrone:
 class TestBeatsPaired:
     def test_tight_paired_lead_dethrones_where_unpaired_holds(self) -> None:
         # Both carry stderr 0.03 AND aligned seeds, with a steady +0.05 per-seed
-        # lead. PAIRED: se_diff ~ 0, so the band is the flat 2% floor (0.016) and
+        # lead. PAIRED: se_diff ~ 0, so the fixed 0.02-point test margin wins and
         # the 0.05 lead clears it. UNPAIRED (seeds stripped): the independent-sum
         # band 1.64*sqrt(0.03^2 + 0.03^2) = 0.070 holds the same 0.05 lead. Same
         # data, opposite verdict -- that is exactly the CRN pairing win.
@@ -397,7 +403,7 @@ class TestContestedConfirmationSet:
 
     def test_in_band_challenger_selects_champion_and_challenger(self) -> None:
         champ = _e("5A" + "a" * 44, 0.80)
-        chall = _e("5B" + "b" * 44, 0.79, minutes=1)  # deficit 0.01 <= band 0.016
+        chall = _e("5B" + "b" * 44, 0.79, minutes=1)  # deficit 0.01 <= band 0.02
         got = contested_confirmation_set([champ, chall], **self._KW)
         assert [e.agent_id for e in got] == [champ.agent_id, chall.agent_id]
 
@@ -412,7 +418,7 @@ class TestContestedConfirmationSet:
         assert contested_confirmation_set([old, new], **self._KW) == []
 
     def test_z_band_widens_the_contested_zone(self) -> None:
-        # Deficit 0.05 clears the flat 1.6% margin but sits inside the z band
+        # Deficit 0.05 clears the fixed 0.02-point margin but sits inside the z band
         # (1.64 * sqrt(0.03^2 + 0.03^2) ~= 0.0696), so the pair is contested.
         champ = _e("5A" + "a" * 44, 0.80, stderr=0.03)
         chall = _e("5B" + "b" * 44, 0.75, stderr=0.03, minutes=1)

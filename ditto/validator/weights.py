@@ -2,7 +2,8 @@
 
 The incentive mechanism (``docs/VALIDATOR.md``): the reigning
 all-time-high holder is the **champion** and takes ~all emissions; a challenger
-only dethrones it by beating its score by a **relative margin** (default 2%);
+only dethrones it by beating its score by a fixed **composite-point
+hysteresis** (default 0.005);
 ties and sub-margin gains keep the incumbent, so **first-to-submit wins** and a
 downloaded copy — which at best ties — never earns. A small **participation
 tail** (default 10% over the next few miners) keeps the subnet populated without
@@ -157,11 +158,11 @@ def compute_weights(
     found by folding entries in **first-seen order** (``first_seen`` then
     ``agent_id`` to break timestamp ties) and dethroning the running champion
     only when a later entry's composite clears the **indifference band**
-    (:func:`_beats`): the larger of the flat relative ``margin`` and, when the
+    (:func:`_beats`): the larger of the fixed composite-point ``margin`` and, when the
     ledger surfaces per-entry ``composite_stderr`` and ``dethrone_z > 0``, the
     statistical band ``dethrone_z * sqrt(se_c² + se_champ²)`` — so a challenger
     inside the measurement noise cannot flip the crown. With no stderr the
-    band is exactly ``margin`` relative, identical to the pre-band rule. The
+    band is exactly ``margin`` composite points. The
     champion gets ``champion_share``; the next ``tail_size`` miners by composite
     split ``1 - champion_share`` equally.
 
@@ -193,8 +194,9 @@ def compute_weights(
         return {}
 
     # Champion: fold in creation order; a later entry must beat the running
-    # champion by the relative margin to take the crown. Order-independent of
-    # when each agent happened to be scored — only creation order matters.
+    # champion by the fixed composite-point margin to take the crown.
+    # Order-independent of when each agent happened to be scored — only creation
+    # order matters.
     champion = _champion(scored, margin, dethrone_z)
     weights: dict[str, float] = {champion.miner_hotkey: champion_share}
 
@@ -286,8 +288,8 @@ def _entry_stderr(entry: LedgerEntry) -> float | None:
     """The entry's composite standard error, or None when the platform ledger
     does not carry one. Read via getattr so the wire model can stay untouched
     (the platform surfacing ``composite_stderr`` is optional; until then the
-    statistical band is inert and the fold uses the flat relative margin,
-    byte-identical to today). Non-finite or
+    statistical band is inert and the fold uses the fixed composite-point
+    margin). Non-finite or
     negative values are treated as absent (a consensus-safe guard)."""
     v = getattr(entry, "composite_stderr", None)
     if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0.0:
@@ -433,7 +435,7 @@ def _beats(
     challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
 ) -> bool:
     """Whether ``challenger`` dethrones ``champion``. The lead must exceed the
-    **indifference band** = max(flat relative margin, statistical band).
+    **indifference band** = max(fixed composite-point margin, statistical band).
 
     When both entries carry aligned per-seed confirmation composites over at
     least two SHARED CRN seeds (P5) and ``dethrone_z > 0``, the statistical term
@@ -444,23 +446,23 @@ def _beats(
 
     Otherwise the **unpaired** rule applies (byte-identical to before):
 
-        band = max( margin * champion.composite,
+        band = max( margin,
                     dethrone_z * sqrt(se_challenger² + se_champion²) )
 
     a two-sample z-test that engages only when BOTH entries carry a
     ``composite_stderr`` and ``dethrone_z > 0``; with no stderr (or z=0) the band
-    is exactly the flat relative margin. Both sides use
+    is exactly the fixed composite-point margin. Both sides use
     :func:`_effective_composite` (the MEDIAN over confirmation seeds when present,
     else the raw composite). Pure and deterministic (consensus-safe)."""
     paired = _paired_dethrone(challenger, champion, dethrone_z)
     if paired is not None:
         mean_diff, champ_ref, se_diff = paired
-        band = max(champ_ref * margin, dethrone_z * se_diff)
-        return mean_diff > band
+        band = max(margin, dethrone_z * se_diff)
+        return champ_ref + mean_diff > champ_ref + band
 
     chall = _effective_composite(challenger)
     champ = _effective_composite(champion)
-    band = champ * margin
+    band = margin
     if dethrone_z > 0.0:
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)
@@ -468,7 +470,10 @@ def _beats(
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
-    return chall - champ > band
+    # Compare scores against the threshold rather than subtracting first. For
+    # decimal wire values such as 0.935 and 0.930, subtraction can round an exact
+    # 0.005 boundary infinitesimally upward and incorrectly defeat first-seen.
+    return chall > champ + band
 
 
 def _champion(
@@ -526,9 +531,9 @@ def _unpaired_band(
     challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
 ) -> float:
     """The unpaired indifference band :func:`_beats` applies to this pair:
-    ``max(margin * eff(champion), dethrone_z * sqrt(se_c² + se_champ²))``, the
+    ``max(margin, dethrone_z * sqrt(se_c² + se_champ²))``, the
     statistical term engaging only when both entries carry a stderr."""
-    band = _effective_composite(champion) * margin
+    band = margin
     if dethrone_z > 0.0:
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)

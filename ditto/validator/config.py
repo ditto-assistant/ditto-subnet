@@ -27,7 +27,7 @@ from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
 # Margin: the flat dethrone gate protects the incumbent from negligible gains,
 # while the statistical band below separately protects against measurement noise.
 # Keep this frozen across validators because it changes the deterministic KOTH fold.
-KOTH_MARGIN = 0.02  # relative dethrone margin (2%)
+KOTH_MARGIN = 0.005  # absolute composite-point dethrone hysteresis
 KOTH_TAIL_SIZE = 4  # runners-up after the champion that split the tail
 KOTH_CHAMPION_SHARE = 0.9  # champion weight share (90% champion / 10% tail)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
@@ -152,11 +152,12 @@ class ValidatorConfig:
     # champion_share / dethrone_z / confirmation_seeds are all set from the frozen
     # KOTH_* module constants above, not from env. ---
     koth_margin: float
-    """Relative margin a challenger must beat the incumbent by to dethrone it.
+    """Absolute composite-point lead required to dethrone the incumbent.
 
-    ``0.02`` = 2%: a challenger becomes champion only if its composite exceeds the
-    incumbent's by more than this. Ties + sub-margin gains keep the incumbent
-    (first-seen wins), which is what makes a copy unprofitable."""
+    ``0.005`` means a challenger becomes champion only if its composite exceeds
+    the incumbent's by more than 0.005 points. Ties + sub-margin gains keep the
+    incumbent (first-seen wins), which is what makes a copy unprofitable without
+    giving high-scoring incumbents a growing percentage-based moat."""
 
     koth_tail_size: int
     """How many runners-up (after the champion) split the participation tail."""
@@ -168,12 +169,12 @@ class ValidatorConfig:
     koth_dethrone_z: float
     """z-multiplier for the **statistical** half of the dethroning band. A
     challenger must beat the incumbent by
-    more than ``max(koth_margin * incumbent, koth_dethrone_z * sqrt(se_c² +
-    se_champ²))`` — the larger of the flat relative margin and the combined
+    more than ``max(koth_margin, koth_dethrone_z * sqrt(se_c² +
+    se_champ²))`` — the larger of the fixed composite-point hysteresis and the combined
     measurement uncertainty, when the ledger surfaces a per-entry
     ``composite_stderr``. A **consensus knob** (every validator must agree) like
     ``koth_margin``. Inert until the platform surfaces stderr — with no stderr the
-    band is the flat relative margin, byte-identical to today. ``1.64`` ≈ one-sided
+    band is the fixed composite-point hysteresis. ``1.64`` ≈ one-sided
     95%; ``0`` disables the statistical half."""
 
     koth_confirmation_seeds: int

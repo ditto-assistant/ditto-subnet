@@ -26,7 +26,7 @@ class TestKothConfig:
         cfg = parse_validator_config_from_env()
         # Consensus-critical mechanism values are frozen in code (the KOTH_*
         # constants), not env, so every validator folds identically.
-        assert cfg.koth_margin == 0.02
+        assert cfg.koth_margin == 0.005
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
@@ -54,7 +54,7 @@ class TestKothConfig:
         ):
             monkeypatch.setenv(var, "999")
         cfg = parse_validator_config_from_env()
-        assert cfg.koth_margin == 0.02
+        assert cfg.koth_margin == 0.005
         assert cfg.koth_tail_size == 4
         assert cfg.koth_champion_share == 0.9
         assert cfg.koth_dethrone_z == 1.64
