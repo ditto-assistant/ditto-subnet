@@ -156,6 +156,15 @@ def test_scorer_benchmark_capability_fails_closed_without_verified_identity() ->
                     status=status, supported_bench_versions=versions
                 )
 
+    with pytest.raises(ValidationError, match="v7 support requires exact"):
+        ScorerBenchmarkCapability(
+            status="fresh_verified",
+            supported_bench_versions=(2, 7),
+            observed_at=1,
+            software_version="1.2.3",
+            source_revision=_REVISION,
+        )
+
 
 def test_heartbeat_protocol_v7_requires_both_typed_identity_sections() -> None:
     payload = json.loads(_V7_VECTOR.read_text())["request"]

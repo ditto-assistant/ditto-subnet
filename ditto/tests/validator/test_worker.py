@@ -14,7 +14,7 @@ import pytest
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_progress import MAX_BENCHMARK_CHECKS
-from ditto.api_models.inference import InferenceGrantOffer
+from ditto.api_models.inference import InferenceExchangeResponse, InferenceGrantOffer
 from ditto.api_models.stack_health import ValidatorComponentHealth
 from ditto.api_models.validator import (
     ArtifactResponse,
@@ -26,10 +26,17 @@ from ditto.api_models.validator import (
     SubmitScoreResponse,
     ValidatorHeartbeatResponse,
 )
-from ditto.api_models.validator_capabilities import ScorerBenchmarkCapability
+from ditto.api_models.validator_capabilities import (
+    InferenceCalibrationRoute,
+    ScorerBenchmarkCapability,
+    V7InferenceCalibration,
+)
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
-from ditto.validator.dittobench import DittobenchProgressSnapshot
+from ditto.validator.dittobench import (
+    DittobenchProgressSnapshot,
+    InferenceBrokerSession,
+)
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
@@ -47,6 +54,47 @@ from ditto.validator.worker import ValidatorWorker
 _VALIDATOR_HOTKEY = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
 _BURN_HOTKEY = "5Burn" + "x" * 43
 _T0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+
+
+class _ImmediateHeartbeatClock:
+    """Advance requested sleeps immediately so worker tests stay deterministic."""
+
+    def __init__(self) -> None:
+        self.now = 1_000_000.25
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.now += seconds
+        await asyncio.sleep(0)
+
+
+class _ControlledHeartbeatClock(worker_mod._HeartbeatClock):
+    """Hold the coalesced flush until a test advances the wall clock."""
+
+    def __init__(self) -> None:
+        self.now = 1_000_000.25
+        self.sleep_started = asyncio.Event()
+        self._release_sleep = asyncio.Event()
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        target = self.now + seconds
+        self.sleep_started.set()
+        await self._release_sleep.wait()
+        self.now = max(self.now, target)
+
+    def advance_to_next_second(self) -> None:
+        self.now = int(self.now) + 1.25
+        self._release_sleep.set()
+
+
+@pytest.fixture(autouse=True)
+def _fast_heartbeat_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker_mod, "_new_heartbeat_clock", _ImmediateHeartbeatClock)
 
 
 def _entry(
@@ -472,7 +520,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 10
+        assert heartbeat.protocol_version == 11
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
         assert heartbeat.capabilities is not None
@@ -957,10 +1005,20 @@ class TestRunOnce:
         )
         scorer = ScorerBenchmarkCapability(
             status="fresh_verified",
-            supported_bench_versions=(2, 3, 4),
+            supported_bench_versions=(2, 3, 4, 5, 6, 7),
             observed_at=1,
             software_version="source-build",
             source_revision=revision,
+            v7_calibration=V7InferenceCalibration(
+                manifest_sha256="12" * 32,
+                supported_routes=(
+                    InferenceCalibrationRoute(
+                        provider="amazon-bedrock",
+                        profile_revision="openrouter-amazon-bedrock-gpt-oss-20b-v1",
+                        model="openai/gpt-oss-20b",
+                    ),
+                ),
+            ),
         )
         dittobench = MagicMock()
         dittobench.scorer_benchmark_capability = AsyncMock(return_value=scorer)
@@ -979,6 +1037,7 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
+        assert heartbeat.protocol_version == 11
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
     async def test_collector_failure_degrades_to_unknown_stack_health(self) -> None:
@@ -1100,9 +1159,7 @@ class TestRunOnce:
         ):
             await worker._score_job(_job("5MinerA" + "x" * 41))
 
-    async def test_v7_requires_ticket_inference_even_before_fleet_enforcement(
-        self,
-    ) -> None:
+    async def test_v7_ticket_inference_is_required_without_operator_flag(self) -> None:
         config = _config()
         config.inference_proxy_required = False
         worker = ValidatorWorker(
@@ -1122,7 +1179,7 @@ class TestRunOnce:
 
         with pytest.raises(
             ValidatorInfrastructureError,
-            match="ticket carried no capability",
+            match="benchmark v7 requires platform inference",
         ):
             await worker._score_job(job)
 
@@ -1140,7 +1197,9 @@ class TestRunOnce:
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
-        worker._evaluate_and_submit = AsyncMock(return_value=_report("run", 0.9))  # type: ignore[method-assign]
+        worker._evaluate_and_submit = AsyncMock(  # type: ignore[method-assign]
+            return_value=_report("run", 0.9)
+        )
         offer = InferenceGrantOffer(
             grant_id=uuid4(),
             exchange_url="https://platform.example/exchange",
@@ -1166,6 +1225,166 @@ class TestRunOnce:
         score_call = worker._evaluate_and_submit.await_args
         assert score_call is not None
         assert score_call.kwargs["inference_session_id"] is None
+
+    @pytest.mark.parametrize("missing_identity", ["ticket", "exchange"])
+    async def test_v7_rejects_legacy_inference_route_identity(
+        self, missing_identity: str
+    ) -> None:
+        deadline = datetime.now(UTC) + timedelta(hours=1)
+        grant_id = uuid4()
+        provider = None if missing_identity == "ticket" else "amazon-bedrock"
+        profile = (
+            None
+            if missing_identity == "ticket"
+            else "openrouter-amazon-bedrock-gpt-oss-20b-v1"
+        )
+        inference = InferenceGrantOffer(
+            grant_id=grant_id,
+            exchange_url="https://platform.test/exchange",
+            proxy_url="https://platform.test/inference",
+            allowed_models=["openai/gpt-oss-20b"],
+            request_budget=401,
+            token_budget=1_000_000,
+            expires_at=deadline,
+            provider=provider,
+            profile_revision=profile,
+        )
+        exchange_provider = None if missing_identity == "exchange" else "amazon-bedrock"
+        exchange_profile = (
+            None
+            if missing_identity == "exchange"
+            else "openrouter-amazon-bedrock-gpt-oss-20b-v1"
+        )
+        exchange_model = (
+            None if missing_identity == "exchange" else "openai/gpt-oss-20b"
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.exchange_inference_grant = AsyncMock(
+            return_value=InferenceExchangeResponse(
+                grant_id=grant_id,
+                bearer="x" * 32,
+                proxy_url=inference.proxy_url,
+                expires_at=deadline,
+                generation=1,
+                provider=exchange_provider,
+                profile_revision=exchange_profile,
+                model=exchange_model,
+            )
+        )
+        dittobench = MagicMock()
+        dittobench.prepare_inference_session = AsyncMock(
+            return_value=InferenceBrokerSession(
+                session_id="session",
+                activation_secret="activation",
+                broker_public_key="a" * 43,
+            )
+        )
+        dittobench.cancel_inference_session = AsyncMock()
+        dittobench.activate_inference_session = AsyncMock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        job = _job("5MinerA" + "x" * 41, deadline=deadline).model_copy(
+            update={
+                "bench_version": 7,
+                "minimum_screening_policy_version": 9,
+                "requires_screened_image": True,
+                "inference": inference,
+            }
+        )
+
+        with pytest.raises(PlatformError, match="escaped ticket bounds"):
+            await worker._score_job(job)
+        dittobench.activate_inference_session.assert_not_awaited()
+        dittobench.cancel_inference_session.assert_awaited_once_with("session")
+
+    async def test_v7_binds_ticket_identity_through_activation_and_score(self) -> None:
+        deadline = datetime.now(UTC) + timedelta(hours=1)
+        grant_id = uuid4()
+        profile_revision = "openrouter-amazon-bedrock-gpt-oss-20b-v1"
+        inference = InferenceGrantOffer(
+            grant_id=grant_id,
+            exchange_url="https://platform.test/exchange",
+            proxy_url="https://platform.test/inference",
+            allowed_models=["openai/gpt-oss-20b"],
+            request_budget=401,
+            token_budget=1_000_000,
+            expires_at=deadline,
+            provider="amazon-bedrock",
+            profile_revision=profile_revision,
+        )
+        job = _job(
+            "5MinerA" + "x" * 41,
+            slot_id="slot-3",
+            deadline=deadline,
+        ).model_copy(
+            update={
+                "bench_version": 7,
+                "minimum_screening_policy_version": 9,
+                "requires_screened_image": True,
+                "inference": inference,
+            }
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.exchange_inference_grant = AsyncMock(
+            return_value=InferenceExchangeResponse(
+                grant_id=grant_id,
+                bearer="x" * 32,
+                proxy_url=inference.proxy_url,
+                expires_at=deadline,
+                generation=1,
+                provider="amazon-bedrock",
+                profile_revision=profile_revision,
+                model="openai/gpt-oss-20b",
+            )
+        )
+        artifact = platform.get_artifact.return_value.model_copy(
+            update={
+                "agent_id": job.agent_id,
+                "bench_version": 7,
+                "screening_policy_version": 9,
+            }
+        )
+        platform.get_artifact = AsyncMock(return_value=artifact)
+        dittobench = MagicMock()
+        dittobench.prepare_inference_session = AsyncMock(
+            return_value=InferenceBrokerSession(
+                session_id="session-v7",
+                activation_secret="activation",
+                broker_public_key="a" * 43,
+            )
+        )
+        dittobench.activate_inference_session = AsyncMock()
+        dittobench.cancel_inference_session = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            return_value=_report("run-v7", 0.9).model_copy(update={"bench_version": 7})
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker._score_job(job)
+
+        activation = dittobench.activate_inference_session.await_args.kwargs
+        assert activation["grant_id"] == grant_id
+        assert activation["agent_id"] == job.agent_id
+        assert activation["slot_id"] == "slot-3"
+        assert activation["ticket_deadline"] == deadline
+        score = dittobench.score_tarball.await_args.kwargs
+        assert score["inference_session_id"] == "session-v7"
+        assert score["inference_grant_id"] == grant_id
+        assert score["inference_agent_id"] == job.agent_id
+        assert score["inference_slot_id"] == "slot-3"
+        assert score["inference_ticket_deadline"] == deadline
+        dittobench.cancel_inference_session.assert_awaited_once_with("session-v7")
 
     async def test_run_token_from_scorer_rides_every_progress_heartbeat(self) -> None:
         job = _job("5MinerA" + "x" * 41)
@@ -1429,6 +1648,39 @@ class TestRunOnce:
         assert await second is True
         assert requests[1].benchmark_progress.stage == "finalizing"
         assert worker._last_progress_bucket == 100
+
+    async def test_parallel_heartbeats_coalesce_without_future_timestamp(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        clock = _ControlledHeartbeatClock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+            heartbeat_clock=clock,
+        )
+
+        assert await worker._report_heartbeat("polling") is True
+        first = asyncio.create_task(worker._report_heartbeat("updating_weights"))
+        await clock.sleep_started.wait()
+        second = asyncio.create_task(worker._report_heartbeat("polling"))
+        await asyncio.sleep(0)
+
+        assert platform.submit_heartbeat.await_count == 1
+        clock.advance_to_next_second()
+        assert await asyncio.gather(first, second) == [True, True]
+
+        heartbeats = [
+            call.args[0] for call in platform.submit_heartbeat.await_args_list
+        ]
+        assert len(heartbeats) == 2
+        assert [heartbeat.timestamp for heartbeat in heartbeats] == [
+            1_000_000,
+            1_000_001,
+        ]
+        assert heartbeats[-1].timestamp <= int(clock.time())
+        assert heartbeats[-1].state == "polling"
 
     @pytest.mark.parametrize(
         ("n", "ticket_deadline"),

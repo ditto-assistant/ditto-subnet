@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import UUID
 
@@ -307,6 +307,46 @@ async def test_submit_heartbeat_surfaces_rejection() -> None:
             await PlatformClient(_config(), http, MagicMock()).submit_heartbeat(
                 _request()
             )
+
+
+async def test_exchange_inference_grant_preserves_ticket_route_identity() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    grant_id = UUID("00000000-0000-0000-0000-000000000001")
+    expires_at = datetime.now(UTC)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/inference/exchange"
+        return httpx.Response(
+            200,
+            json={
+                "grant_id": str(grant_id),
+                "bearer": "b" * 32,
+                "proxy_url": "https://platform.test/api/v1/inference/chat/completions",
+                "expires_at": expires_at.isoformat(),
+                "generation": 1,
+                "provider": "WandB",
+                "profile_revision": "openrouter-route-wandb-v1",
+                "model": "openai/gpt-oss-20b",
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            cast(Any, config),
+            http,
+            keypair,
+        ).exchange_inference_grant(
+            grant_id,
+            "A" * 43,
+            "https://platform.test/api/v1/inference/exchange",
+        )
+
+    assert response.provider == "WandB"
+    assert response.model == "openai/gpt-oss-20b"
 
 
 async def test_submit_transcript_puts_raw_bytes_with_hotkey_header() -> None:

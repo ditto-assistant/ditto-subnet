@@ -196,7 +196,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "10"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "11"
     restart: unless-stopped
     stop_grace_period: 80m
     labels:
@@ -211,7 +211,7 @@ services:
       # host.docker.internal:11434. The worker probes it before claiming a lease.
       VALIDATOR_EMBED_PREFLIGHT_URL: http://sandbox-docker:11434/api/embed
       VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS: "5"
-      # Heartbeat v10 per-component health probes. Private-network URLs only —
+      # Heartbeat v10+ per-component health probes. Private-network URLs only —
       # they are configuration, never part of the public payload. The sandbox
       # probe exercises the same harness-facing forwarder listener that inner
       # sandboxes reach as host.docker.internal:11434.
@@ -229,7 +229,7 @@ services:
       VALIDATOR_SWEEP_SECONDS: "120"
       VALIDATOR_EPOCH_SECONDS: "3600"
       VALIDATOR_QUEUE_LIMIT: "50"
-      # Heartbeat v10 advertises every active slot. The scorer independently
+      # Heartbeat v10+ advertises every active slot. The scorer independently
       # publishes the same bound and the worker fails closed on mismatch.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
       # V7 tickets fail closed without platform inference regardless of this

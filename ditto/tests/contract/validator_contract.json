@@ -1490,6 +1490,31 @@
         ],
         "type": "object"
       },
+      "InferenceCalibrationRoute": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "pattern": "^[0-9A-Za-z][0-9A-Za-z._+/-]{0,127}$",
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "profile_revision",
+          "model"
+        ],
+        "type": "object"
+      },
       "ObservedComponentIdentity": {
         "additionalProperties": false,
         "properties": {
@@ -1586,6 +1611,17 @@
               "type": "integer"
             },
             "type": "array"
+          },
+          "v7_calibration": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V7InferenceCalibration"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -1629,6 +1665,26 @@
           "memory_percent",
           "disk_percent",
           "docker"
+        ],
+        "type": "object"
+      },
+      "V7InferenceCalibration": {
+        "additionalProperties": false,
+        "properties": {
+          "manifest_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "supported_routes": {
+            "items": {
+              "$ref": "#/$defs/InferenceCalibrationRoute"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "manifest_sha256",
+          "supported_routes"
         ],
         "type": "object"
       },
