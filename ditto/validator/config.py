@@ -32,6 +32,8 @@ KOTH_TAIL_SIZE = 4  # runners-up after the champion that split the tail
 KOTH_CHAMPION_SHARE = 0.9  # champion weight share (90% champion / 10% tail)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
+TOP5_MAX_CONFIRMATION_SEEDS = 16
+TOP5_CATCH_UP_RATE = 2
 # Release the full miner emission through KOTH. The burn hotkey is retained only
 # as the safe idle vector: with no eligible miners the whole vector still routes
 # to burn rather than zeroing the chain.
@@ -183,6 +185,12 @@ class ValidatorConfig:
     replicate across seeds instead of riding one lucky draw. A **consensus knob**
     like ``koth_margin`` (every validator must run the same K to derive the same
     seed set). ``1`` reproduces the single-seed pre-P4 sweep, byte-identical."""
+
+    top5_max_confirmation_seeds: int
+    """Maximum champion-anchored seed depth retained by the continual lane."""
+
+    top5_catch_up_rate: int
+    """Missing seeds a new top-five entrant may catch up per claimed round."""
 
     miner_emission_share: float
     """Share of miner emission released through KOTH; the remainder is burned.
@@ -399,6 +407,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_champion_share=KOTH_CHAMPION_SHARE,
         koth_dethrone_z=KOTH_DETHRONE_Z,
         koth_confirmation_seeds=KOTH_CONFIRMATION_SEEDS,
+        top5_max_confirmation_seeds=TOP5_MAX_CONFIRMATION_SEEDS,
+        top5_catch_up_rate=TOP5_CATCH_UP_RATE,
         miner_emission_share=MINER_EMISSION_SHARE,
         burn_hotkey=burn_hotkey,
         min_stake_tao=min_stake_tao,

@@ -17,6 +17,15 @@ the same dataset → comparable composites. It is still anti-cheat: the seed
 depends on agent ids not known before submission and rotates per pairing/version,
 so nothing can be precomputed. The int63 masking mirrors ``gen.FreshSeed`` on the
 dittobench-api side so the value round-trips through the wire unchanged.
+
+**Version-scoped + single source of truth.** ``crn_seed`` is keyed on the major
+bench ``version`` (v4, v5, …), so each version has its own seed family and a
+version bump cleanly starts a fresh confirmation baseline. This encoding is the
+**single source of truth for both repos**: the ditto-platform mirrors it
+byte-for-byte and, for the top-5 confirmation lane (ditto-platform #280),
+**validates every submitted confirmation seed** against its own derivation from
+``(champion_id, version, k)`` — so a validator cannot cherry-pick a favorable
+seed (anti-grind). Any change here must land identically on the platform.
 """
 
 from __future__ import annotations

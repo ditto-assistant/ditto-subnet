@@ -25,6 +25,7 @@ from ditto.validator.weights import (
     _paired_dethrone,
     compute_weights,
     contested_confirmation_set,
+    top5_confirmation_set,
 )
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -78,6 +79,41 @@ class TestEntryStderr:
         assert _entry_stderr(_e("a", 0.5, stderr=float("nan"))) is None
         assert _entry_stderr(_e("a", 0.5, stderr=float("inf"))) is None
         assert _entry_stderr(_e("a", 0.5, stderr=-0.01)) is None
+
+
+class TestTop5ConfirmationSet:
+    def test_bootstraps_champion_and_catches_up_tail(self) -> None:
+        champion = _e("champ", 0.9, bench_version=6)
+        tail = _e("tail", 0.8, bench_version=6, minutes=1)
+        plan = top5_confirmation_set(
+            [tail, champion],
+            current_version=6,
+            margin=0.02,
+            dethrone_z=1.64,
+            tail_size=4,
+            baseline_seeds=3,
+            max_seeds=16,
+            catch_up_rate=2,
+        )
+        assert plan is not None
+        by_miner = {member.entry.miner_hotkey: member for member in plan.members}
+        assert len(by_miner["champ"].seeds_to_score) == 3
+        assert len(by_miner["tail"].seeds_to_score) == 2
+
+    def test_ignores_stale_benchmark_entries(self) -> None:
+        stale = _e("stale", 0.99, bench_version=5)
+        assert (
+            top5_confirmation_set(
+                [stale],
+                current_version=6,
+                margin=0.02,
+                dethrone_z=1.64,
+                tail_size=4,
+                baseline_seeds=3,
+                max_seeds=16,
+            )
+            is None
+        )
 
 
 class TestEntryConfirmations:

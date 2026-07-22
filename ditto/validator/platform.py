@@ -31,6 +31,7 @@ from ditto.api_models.validator import (
     ScoreReport,
     SubmitScoreRequest,
     SubmitScoreResponse,
+    Top5ConfirmationJobRequest,
     ValidatorHeartbeatRequest,
     ValidatorHeartbeatResponse,
 )
@@ -41,6 +42,8 @@ from ditto.validator.signing import (
     sign_job_fail_request,
     sign_job_request,
     sign_ledger_request,
+    sign_top5_confirmation_job_request,
+    sign_top5_confirmation_score,
 )
 
 if TYPE_CHECKING:
@@ -203,6 +206,55 @@ class PlatformClient:
             )
         return FailJobResponse.model_validate(resp.json())
 
+    async def request_top5_confirmation_job(
+        self, *, champion_agent_id: UUID, member_agent_id: UUID
+    ) -> JobResponse:
+        """Claim a lease for one member of the top-5 shared-seed rescore lane.
+
+        Generalizes :meth:`request_confirmation_job` from the single uncertain
+        raw leader to any emission-set member (champion or tail). The platform
+        rebuilds the same current-version KOTH projection, verifies the claimed
+        ``champion_agent_id`` is the reigning incumbent and ``member_agent_id``
+        is either that champion or a current tail entrant, gates issuance on the
+        rescore tempo, and grants a confirmation ticket the ordinary
+        ``submit_score`` path can bind to (the #195 mechanism, generalized). The
+        validator then benchmarks ``member_agent_id`` on the champion-anchored
+        CRN seeds and submits through the ordinary score API with the granted
+        deadline. This is the single point of contact with the platform's top-5
+        lane; the wire contract is reconciled against the parallel ditto-platform
+        PR (see ``docs/top5-rescore-lane.md``).
+        """
+        url = f"{self._base}{_PREFIX}/top5-confirmation-job"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = Top5ConfirmationJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            champion_agent_id=champion_agent_id,
+            member_agent_id=member_agent_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_top5_confirmation_job_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                champion_agent_id=champion_agent_id,
+                member_agent_id=member_agent_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        try:
+            resp = await self._client.post(
+                url, headers=self._headers, json=payload.model_dump(mode="json")
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"top-5 confirmation job request failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"top-5 confirmation job rejected "
+                f"({resp.status_code}): {resp.text[:200]}"
+            )
+        return JobResponse.model_validate(resp.json())
+
     async def get_ledger(self) -> LedgerResponse:
         """Pull the best-score-per-payment-coldkey ledger folded into weights.
 
@@ -298,6 +350,49 @@ class PlatformClient:
         if resp.status_code != 200:
             raise PlatformError(
                 f"score rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return SubmitScoreResponse.model_validate(resp.json())
+
+    async def submit_top5_confirmation_score(
+        self,
+        agent_id: UUID,
+        *,
+        report: ScoreReport,
+        ticket_deadline: datetime,
+    ) -> SubmitScoreResponse:
+        """Append shared-seed evidence without replacing the canonical score."""
+        if (
+            report.bench_version is None
+            or report.confirmation_seeds is None
+            or report.confirmation_composites is None
+        ):
+            raise PlatformError("top-5 confirmation report is incomplete")
+        signature = sign_top5_confirmation_score(
+            self._keypair,
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=agent_id,
+            ticket_deadline=ticket_deadline,
+            run_id=report.run_id,
+            bench_version=report.bench_version,
+            confirmation_seeds=report.confirmation_seeds,
+            confirmation_composites=report.confirmation_composites,
+        )
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/top5-confirmation-score"
+        payload = SubmitScoreRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            ticket_deadline=ticket_deadline,
+            signature=signature,
+            report=report,
+        )
+        try:
+            resp = await self._client.post(
+                url, json=payload.model_dump(mode="json"), headers=self._headers
+            )
+        except httpx.HTTPError as exc:
+            raise PlatformError(f"top-5 confirmation submit failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"top-5 confirmation rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return SubmitScoreResponse.model_validate(resp.json())
 

@@ -227,6 +227,9 @@ def _config() -> MagicMock:
     cfg.koth_tail_size = 4
     cfg.koth_champion_share = 0.9
     cfg.koth_dethrone_z = 1.64
+    cfg.koth_confirmation_seeds = 3
+    cfg.top5_max_confirmation_seeds = 16
+    cfg.top5_catch_up_rate = 2
     cfg.miner_emission_share = 1.0
     cfg.burn_hotkey = _BURN_HOTKEY
     cfg.min_stake_tao = 0.0
@@ -247,6 +250,10 @@ def _platform_with_ledger(
     )
     # Ticket poll: hand out one ticket per job, then 204 (None) to end the sweep.
     platform.request_job = AsyncMock(side_effect=[*jobs, None])
+    platform.request_top5_confirmation_job = AsyncMock(
+        side_effect=PlatformError("top-five lane unavailable")
+    )
+    platform.submit_top5_confirmation_score = AsyncMock()
     platform.get_ledger = AsyncMock(
         return_value=LedgerResponse(entries=ledger, count=len(ledger))
     )
@@ -274,6 +281,46 @@ def _platform_with_ledger(
         return_value=FailJobResponse(agent_id=uuid4(), reopened=True)
     )
     return platform
+
+
+class TestTop5ConfirmationLane:
+    async def test_appends_multi_seed_receipt_without_replacing_score(self) -> None:
+        entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+            update={"bench_version": 1}
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[entry])
+        platform.request_top5_confirmation_job = AsyncMock(
+            return_value=_job(entry.miner_hotkey).model_copy(
+                update={
+                    "agent_id": entry.agent_id,
+                    "bench_version": 1,
+                    "deadline": datetime.now(UTC) + timedelta(hours=3),
+                }
+            )
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        async def evaluate(
+            _agent_id: UUID, _sha256: str, *, seed: int, **_: object
+        ) -> ScoreReport:
+            return _report(str(seed), 0.8).model_copy(
+                update={"seed": seed, "bench_version": 1}
+            )
+
+        worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
+        await worker._run_top5_confirmation_lane()
+
+        platform.submit_score.assert_not_awaited()
+        platform.submit_top5_confirmation_score.assert_awaited_once()
+        report = platform.submit_top5_confirmation_score.await_args.kwargs["report"]
+        assert len(report.confirmation_seeds) == 3
+        assert report.confirmation_composites == [0.8, 0.8, 0.8]
 
 
 class TestRunOnce:
@@ -381,9 +428,10 @@ class TestRunOnce:
 
         assert outcome.queue_depth == 0
         platform.request_job.assert_awaited_once()
-        # The ledger is an output for weight folding, not an authorization to
-        # benchmark. With no leased job, the scorer performs no work.
-        platform.get_ledger.assert_not_awaited()
+        # The continual lane may inspect the ledger, but the platform claim is
+        # still the authorization boundary; a declined claim does no work.
+        platform.get_ledger.assert_awaited_once()
+        platform.request_top5_confirmation_job.assert_awaited_once()
         confirm_and_submit.assert_not_awaited()
 
     async def test_scores_queue_and_sets_weights_from_ledger(self) -> None:
@@ -2054,8 +2102,8 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once()
 
     async def test_set_weights_false_scores_without_touching_weights(self) -> None:
-        # The scoring-only sweep (between weight-set epochs) drains only its
-        # platform-leased queue and never reads the ledger or submits weights.
+        # The scoring-only sweep may inspect the ledger for the separately
+        # leased top-five lane, but it never submits chain weights.
         job = _job("5MinerA" + "x" * 41)
         ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
         platform = _platform_with_ledger(jobs=[job], ledger=ledger)
@@ -2076,7 +2124,7 @@ class TestRunOnce:
         n = await worker.run_once(set_weights=False)
         assert n.queue_depth == 1
         assert platform.submit_score.await_count == 1
-        platform.get_ledger.assert_not_awaited()
+        platform.get_ledger.assert_awaited_once()
         chain.put_weights.assert_not_awaited()
 
     async def test_one_agent_failure_does_not_block_weights(self) -> None:
