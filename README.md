@@ -6,9 +6,9 @@ submission in an isolated sandbox and score it on DittoBench (tool-calling and m
 When eligible miners exist, 100% of miner emission follows the king-of-the-hill ranking; with no
 eligible miners, 100% is burned.
 
-This repo holds the miner CLI and the validator worker. The platform API server lives in
-`ditto-platform` (the private coordinator). The rest of the stack is public:
+This repo holds the miner CLI and the validator worker. The public Ditto stack is split across:
 
+- [`ditto-platform`](https://github.com/ditto-assistant/ditto-platform): the public API server, live dashboard, submission coordinator, and score ledger.
 - [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness): the reference memory harness your crate builds on.
 - [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit): the miner starting point plus the offline practice loop.
 - [`dittobench-api`](https://github.com/ditto-assistant/dittobench-api): the scoring engine each validator runs.
