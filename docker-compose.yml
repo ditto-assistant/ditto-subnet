@@ -1,6 +1,6 @@
 # Complete SN118 validator stack. Configure the root .env, then run:
 #   ./scripts/validator-compose.sh up -d
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=a0a0bca0460620cb5dcd381b1802a04567a6c762}
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=26531b1d4bca9162056cfb82d1c4fcce63b2cdda}
 
 services:
   pylon:
@@ -50,12 +50,8 @@ services:
     # dittobench-api joins this container's network namespace
     # (network_mode: service:sandbox-docker) and therefore SHARES this /etc/hosts
     # file, so the mapping must live here — extra_hosts on the joining service is
-    # ignored. host.docker.internal has no --add-host mapping in this namespace
-    # (only the inner miner harnesses get one at `docker run`), so map it to
-    # loopback where the socat forwarders to the relay (11435) and Ollama (11434)
-    # listen; otherwise the scorer's own relay preflight fails "relay unreachable"
-    # even though the relay is healthy. Inner harnesses have their own hosts file
-    # and are unaffected.
+    # ignored. Inner harnesses receive their own mapping to the source-bound
+    # broker and embedding forwarder.
     extra_hosts:
       - "host.docker.internal:127.0.0.1"
     environment:
@@ -114,10 +110,11 @@ services:
       timeout: 15s
       retries: 30
 
-  # The model-pinning gateway: fronts Chutes, forces the frozen Qwen3-32B model
-  # and thinking mode, and keeps the Chutes key out of the sandbox. It stays on
-  # the private Compose network; the forwarder exposes it only to inner sandboxes
-  # at host.docker.internal:11435.
+  # Bounded-transition v6 relay. Existing v6 tickets continue through the
+  # validator-owned frozen Qwen route until v7 is activated and every v6 lease
+  # has drained. Ticket-bound v7 runs ignore HARNESS_GATEWAY_URL and use the
+  # trusted local inference broker instead. Remove this service and its secret
+  # only in the separately announced post-v7 cleanup release.
   model-relay:
     build:
       context: *dittobench-build-context
@@ -125,7 +122,11 @@ services:
     restart: unless-stopped
     environment:
       RELAY_PROVIDER: ${RELAY_PROVIDER:-chutes}
-      RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY in .env}
+      # The scorer keeps the frozen v6 Chutes profile behind an explicit
+      # transition gate. Leave it enabled only while v6 tickets can still be
+      # issued or retried; the post-v7 cleanup removes this relay and secret.
+      RELAY_ENABLE_DEPRECATED_CHUTES: ${RELAY_ENABLE_DEPRECATED_CHUTES:-1}
+      RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY in .env during the v6 transition}
       PORT: "11435"
     read_only: true
     security_opt:
@@ -152,6 +153,8 @@ services:
         condition: service_healthy
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
+      # Legacy v6 uses the frozen relay. A ticket inference session replaces
+      # this value with the source-bound broker URL for v7.
       HARNESS_GATEWAY_URL: http://host.docker.internal:11435
       HARNESS_EMBED_URL: http://host.docker.internal:11434
       DITTOBENCH_SANDBOX_HARDEN: "1"
@@ -160,9 +163,15 @@ services:
       # broader private-harness URL bypass disabled.
       DITTOBENCH_ALLOW_SCREENED_IMAGES: "1"
       DITTOBENCH_SOFTWARE_VERSION: ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
-      DITTOBENCH_SOURCE_SHA: a0a0bca0460620cb5dcd381b1802a04567a6c762
+      DITTOBENCH_SOURCE_SHA: 26531b1d4bca9162056cfb82d1c4fcce63b2cdda
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
+      DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
+      DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES: ${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}
+      # V7 always requires a ticket inference session in scorer code. Keep the
+      # global enforcement switch dark so in-flight/retried v6 tickets retain
+      # their frozen relay path during the bounded transition.
+      DITTOBENCH_REQUIRE_TICKET_INFERENCE: ${DITTOBENCH_REQUIRE_TICKET_INFERENCE:-false}
     read_only: true
     tmpfs:
       - /tmp
@@ -187,7 +196,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "9"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "10"
     restart: unless-stopped
     stop_grace_period: 80m
     labels:
@@ -202,7 +211,7 @@ services:
       # host.docker.internal:11434. The worker probes it before claiming a lease.
       VALIDATOR_EMBED_PREFLIGHT_URL: http://sandbox-docker:11434/api/embed
       VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS: "5"
-      # Heartbeat v9 per-component health probes. Private-network URLs only —
+      # Heartbeat v10 per-component health probes. Private-network URLs only —
       # they are configuration, never part of the public payload. The sandbox
       # probe exercises the same harness-facing forwarder listener that inner
       # sandboxes reach as host.docker.internal:11434.
@@ -220,6 +229,12 @@ services:
       VALIDATOR_SWEEP_SECONDS: "120"
       VALIDATOR_EPOCH_SECONDS: "3600"
       VALIDATOR_QUEUE_LIMIT: "50"
+      # Heartbeat v10 advertises every active slot. The scorer independently
+      # publishes the same bound and the worker fails closed on mismatch.
+      VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
+      # V7 tickets fail closed without platform inference regardless of this
+      # flag. Leave fleet-wide enforcement dark until v6 has drained.
+      VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-false}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"
@@ -234,9 +249,9 @@ services:
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:a0a0bca0460620cb5dcd381b1802a04567a6c762
+      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:26531b1d4bca9162056cfb82d1c4fcce63b2cdda
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:a0a0bca0460620cb5dcd381b1802a04567a6c762
+      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:26531b1d4bca9162056cfb82d1c4fcce63b2cdda
       VALIDATOR_STACK_COMPONENT_PYLON: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
       VALIDATOR_STACK_COMPONENT_OLLAMA: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}

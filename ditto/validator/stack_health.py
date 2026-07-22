@@ -11,8 +11,9 @@ No Docker socket is mounted and no new privilege is added for telemetry:
   observation the heartbeat already performs (:meth:`DittobenchClient.
   scorer_benchmark_capability`), so capability verification and health stay
   one observation.
-* ``sandbox_docker`` / ``model_relay`` / ``pylon`` — bounded reachability /
-  readiness GETs against operator-configured internal probe URLs.
+* ``sandbox_docker`` / ``pylon`` — bounded reachability / readiness GETs
+  against operator-configured internal probe URLs. ``model_relay`` remains an
+  optional, disabled compatibility component and is not probed by default.
 * ``ollama`` — the same functional embedding request the scoring preflight
   uses, proving the forwarder, Ollama, and the required embedding model.
 
@@ -55,8 +56,8 @@ _MAX_PROBE_BODY_BYTES = 8192
 _SIDECAR_NAMES = ("sandbox_docker", "model_relay", "pylon", "ollama")
 
 
-def _unknown_component() -> ValidatorComponentHealth:
-    return ValidatorComponentHealth(health="unknown", required=True)
+def _unknown_component(*, required: bool = True) -> ValidatorComponentHealth:
+    return ValidatorComponentHealth(health="unknown", required=required)
 
 
 def _self_component(observed_at: int) -> ValidatorComponentHealth:
@@ -199,15 +200,16 @@ class StackHealthCollector:
             < self._config.stack_health_cache_seconds
         ):
             return self._sidecar_cache
-        *sidecar_results, relay_path_broken = await asyncio.gather(
+        sidecar_results = await asyncio.gather(
             self._probe_sandbox_docker(),
             self._probe_model_relay(stack),
             self._probe_pylon(),
             self._probe_ollama(),
-            self._probe_scorer_relay_path(),
         )
         snapshot = dict(zip(_SIDECAR_NAMES, sidecar_results, strict=True))
-        result = (snapshot, bool(relay_path_broken))
+        # Ticket inference is probed only after ticket activation. The
+        # deprecated process-wide relay is not a live stack dependency.
+        result = (snapshot, False)
         self._sidecar_cache = result
         self._sidecar_cache_monotonic = now
         return result
@@ -244,7 +246,7 @@ class StackHealthCollector:
     ) -> ValidatorComponentHealth:
         url = self._config.model_relay_probe_url
         if not url:
-            return _unknown_component()
+            return _unknown_component(required=False)
         observed_at = int(time.time())
         response = await self._get(url)
         if response is None:

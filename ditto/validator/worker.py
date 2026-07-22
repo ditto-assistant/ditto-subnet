@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import inspect
 import logging
 import math
@@ -24,6 +25,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from ditto.api_models.benchmark_capacity import (
+    ActiveBenchmarkSlot,
+    BenchmarkAdmission,
+    BenchmarkCapacity,
+)
 from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     BenchmarkProgressStage,
@@ -112,15 +118,16 @@ _RATE_LIMIT_MARKERS = ("rate limit", "ratelimit", "too fast", "toofast")
 
 # Keep a validator visibly online throughout a long full benchmark. This is a
 # protocol cadence, not an operator tuning knob.
-_ACTIVE_HEARTBEAT_SECONDS = 120.0
-# Count-only updates are intentionally slower than the scorer's ten-second poll.
+_ACTIVE_HEARTBEAT_SECONDS = 30.0
+# OpenRouter shortens case latency, so publish aggregate count motion promptly.
 # Stage transitions still publish immediately.
-_PROGRESS_UPDATE_SECONDS = 60.0
+_PROGRESS_UPDATE_SECONDS = 15.0
 # Active ticket work must never wait on the platform client's normal HTTP timeout.
 _ACTIVE_TELEMETRY_TIMEOUT_SECONDS = 2.0
 # Keep a successfully reported generic failure visible through at least one
 # progress reporting interval. A new ticket supersedes it immediately.
 _FAILED_PROGRESS_MIN_VISIBLE_SECONDS = 60.0
+_RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
 
 _PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
     "preparing": 0,
@@ -247,6 +254,24 @@ class _SweepOutcome:
     weights_ran: bool
 
 
+@dataclass
+class _SlotState:
+    slot_id: str
+    active_agent_id: UUID | None = None
+    bench_version: int = DEFAULT_BENCH_VERSION
+    ticket_deadline: datetime | None = None
+    run_token: str | None = None
+    progress: BenchmarkProgress | None = None
+    last_progress_heartbeat_monotonic: float | None = None
+    last_progress_bucket: int | None = None
+    retain_failed_progress_until: float = 0.0
+
+
+_CURRENT_SLOT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "validator_benchmark_slot", default="slot-0"
+)
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -292,20 +317,103 @@ class ValidatorWorker:
         # so their check/set transitions are atomic within this event loop.
         self._scoring_active = False
         self._weights_active = False
-        self._active_agent_id: UUID | None = None
-        self._active_ticket_deadline: datetime | None = None
+        configured_slots = int(getattr(config, "benchmark_capacity", 1))
+        self._slots = {
+            f"slot-{index}": _SlotState(slot_id=f"slot-{index}")
+            for index in range(configured_slots)
+        }
+        self._healthy_slots = set(self._slots)
+        self._resource_blocked_until: dict[str, float] = {}
+        self._admission: BenchmarkAdmission = "accepting"
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
         # Rides every published BenchmarkProgress so the platform can tell a
         # fresh re-attempt apart from the same still-live lease.
-        self._active_run_token: str | None = None
-        self._benchmark_progress: BenchmarkProgress | None = None
-        self._last_progress_heartbeat_monotonic: float | None = None
-        self._last_progress_bucket: int | None = None
         self._active_heartbeat_lock = asyncio.Lock()
-        self._retain_failed_progress_until = 0.0
         self._system_metrics = system_metrics
         self._stack_health = stack_health
+
+    def _slot_state(self) -> _SlotState:
+        return self._slots[_CURRENT_SLOT.get()]
+
+    @property
+    def _active_agent_id(self) -> UUID | None:
+        return self._slot_state().active_agent_id
+
+    @_active_agent_id.setter
+    def _active_agent_id(self, value: UUID | None) -> None:
+        self._slot_state().active_agent_id = value
+
+    @property
+    def _active_ticket_deadline(self) -> datetime | None:
+        return self._slot_state().ticket_deadline
+
+    @_active_ticket_deadline.setter
+    def _active_ticket_deadline(self, value: datetime | None) -> None:
+        self._slot_state().ticket_deadline = value
+
+    @property
+    def _active_run_token(self) -> str | None:
+        return self._slot_state().run_token
+
+    @_active_run_token.setter
+    def _active_run_token(self, value: str | None) -> None:
+        self._slot_state().run_token = value
+
+    @property
+    def _benchmark_progress(self) -> BenchmarkProgress | None:
+        return self._slot_state().progress
+
+    @_benchmark_progress.setter
+    def _benchmark_progress(self, value: BenchmarkProgress | None) -> None:
+        self._slot_state().progress = value
+
+    @property
+    def _last_progress_heartbeat_monotonic(self) -> float | None:
+        return self._slot_state().last_progress_heartbeat_monotonic
+
+    @_last_progress_heartbeat_monotonic.setter
+    def _last_progress_heartbeat_monotonic(self, value: float | None) -> None:
+        self._slot_state().last_progress_heartbeat_monotonic = value
+
+    @property
+    def _last_progress_bucket(self) -> int | None:
+        return self._slot_state().last_progress_bucket
+
+    @_last_progress_bucket.setter
+    def _last_progress_bucket(self, value: int | None) -> None:
+        self._slot_state().last_progress_bucket = value
+
+    @property
+    def _retain_failed_progress_until(self) -> float:
+        return self._slot_state().retain_failed_progress_until
+
+    @_retain_failed_progress_until.setter
+    def _retain_failed_progress_until(self, value: float) -> None:
+        self._slot_state().retain_failed_progress_until = value
+
+    def _capacity_snapshot(self) -> BenchmarkCapacity:
+        active = []
+        for slot in self._slots.values():
+            if slot.active_agent_id is None or slot.progress is None:
+                continue
+            active.append(
+                ActiveBenchmarkSlot(
+                    slot_id=slot.slot_id,
+                    agent_id=slot.active_agent_id,
+                    bench_version=slot.bench_version,
+                    progress=slot.progress,
+                    healthy=slot.slot_id in self._healthy_slots,
+                )
+            )
+        return BenchmarkCapacity(
+            configured_slots=len(self._slots),
+            healthy_slots=(
+                sorted(self._healthy_slots) if self._admission == "accepting" else []
+            ),
+            admission=self._admission,
+            active=active,
+        )
 
     async def run_once(
         self,
@@ -331,6 +439,11 @@ class ValidatorWorker:
         cadence.
         """
         started = time.monotonic()
+        self._admission = (
+            "draining"
+            if drain_requested is not None and drain_requested.is_set()
+            else "accepting"
+        )
         await self._report_heartbeat("polling")
         write_update_state("working", platform_accepted=self._platform_accepted)
         scored: list[ScoredAgentStat] = []
@@ -339,65 +452,103 @@ class ValidatorWorker:
         scoring_available = await self._scoring_preflight()
         if not scoring_available:
             failed = 1
-        # k=3 pull: request tickets until the platform says 204 (no work for us)
-        # or this sweep's cap is hit. Each ticket pins the dataset all three
-        # validators score, so scores stay comparable for the median.
-        while scoring_available and queue_depth < self._config.queue_limit:
-            if self._new_work_blocked(stop_requested, drain_requested):
-                break
-            try:
-                job = await self._platform.request_job()
-            except PlatformError as e:
-                # Scoring-plane availability must not gate the independent
-                # weight path.  In particular, a platform validation/config
-                # error can otherwise abort every due sweep before the durable
-                # ledger (or its safe empty-ledger burn vector) reaches Pylon.
-                logger.warning(
-                    "job request failed; ending scoring sweep so weights can "
-                    "proceed: %s",
-                    e,
-                )
-                failed += 1
-                break
-            if job is None:
-                break  # 204: no ticket available
-            queue_depth += 1
-            if job.deadline <= datetime.now(UTC):
-                # Already lapsed (the platform will re-open it); don't waste a
-                # full run on a score that would be invalidated as late.
-                logger.warning(
-                    "ticket for agent %s already past deadline %s; skipping",
-                    job.agent_id,
-                    job.deadline.isoformat(),
-                )
-                continue
-            try:
-                report = await self._score_job(job)
-                details = getattr(self._dittobench, "last_details", None)
-                if not isinstance(details, dict):
-                    details = {}
-                scored.append(scored_agent_stat(job.miner_hotkey, report, details))
-            except ValidatorInfrastructureError as e:
-                # Hand the ticket back so the platform reopens the miner
-                # submission for a FRESH lease immediately instead of waiting for
-                # this one to expire. Still end the sweep and back off so we
-                # neither blame the artifact nor immediately claim more work
-                # against the same broken dependency.
-                logger.warning(
-                    "validator scoring infrastructure failed for agent %s; "
-                    "handing ticket back and ending scoring sweep: %s",
-                    job.agent_id,
-                    e,
-                )
-                await self._report_ticket_failed(job, "infrastructure")
-                failed += 1
-                scoring_available = False
-                break
-            except (DittobenchError, PlatformError) as e:
-                logger.warning("scoring agent %s failed: %s", job.agent_id, e)
-                await self._report_ticket_failed(job, "scoring_error")
-                failed += 1
-                continue
+        # Each signed heartbeat slot owns at most one live lease. Sibling slots
+        # execute independently: a sandbox/provider failure drains only that slot
+        # while healthy siblings continue. The shared counter keeps the sweep's
+        # historical queue_limit bound across the whole worker pool.
+        if scoring_available:
+            budget_lock = asyncio.Lock()
+            claimed = 0
+
+            async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
+                nonlocal claimed
+                slot_scored: list[ScoredAgentStat] = []
+                slot_failed = 0
+                slot_claimed = 0
+                token = _CURRENT_SLOT.set(slot_id)
+                try:
+                    while not self._new_work_blocked(stop_requested, drain_requested):
+                        async with budget_lock:
+                            if claimed >= self._config.queue_limit:
+                                break
+                            claimed += 1
+                        try:
+                            job = await self._platform.request_job(slot_id=slot_id)
+                        except PlatformError as error:
+                            async with budget_lock:
+                                claimed -= 1
+                            logger.warning(
+                                "job request failed for %s; slot is isolated: %s",
+                                slot_id,
+                                error,
+                            )
+                            slot_failed += 1
+                            break
+                        if job is None:
+                            async with budget_lock:
+                                claimed -= 1
+                            break
+                        slot_claimed += 1
+                        if job.slot_id != slot_id:
+                            await self._report_ticket_failed(job, "infrastructure")
+                            slot_failed += 1
+                            break
+                        if job.deadline <= datetime.now(UTC):
+                            logger.warning(
+                                "ticket for agent %s already past deadline %s",
+                                job.agent_id,
+                                job.deadline.isoformat(),
+                            )
+                            continue
+                        try:
+                            report = await self._score_job(job)
+                            details = (
+                                report.details
+                                if isinstance(report.details, dict)
+                                else {}
+                            )
+                            slot_scored.append(
+                                scored_agent_stat(job.miner_hotkey, report, details)
+                            )
+                        except ValidatorInfrastructureError as error:
+                            logger.warning(
+                                "validator infrastructure failed for agent %s "
+                                "on %s; sibling slots continue: %s",
+                                job.agent_id,
+                                slot_id,
+                                error,
+                            )
+                            await self._report_ticket_failed(job, "infrastructure")
+                            self._healthy_slots.discard(slot_id)
+                            if any(
+                                code in str(error)
+                                for code in ("sandbox_oom", "sandbox_tmpfs_exhausted")
+                            ):
+                                self._resource_blocked_until[slot_id] = (
+                                    time.monotonic() + _RESOURCE_SLOT_RECOVERY_SECONDS
+                                )
+                            slot_failed += 1
+                            break
+                        except (DittobenchError, PlatformError) as error:
+                            logger.warning(
+                                "scoring agent %s failed on %s: %s",
+                                job.agent_id,
+                                slot_id,
+                                error,
+                            )
+                            await self._report_ticket_failed(job, "scoring_error")
+                            slot_failed += 1
+                    return slot_scored, slot_failed, slot_claimed
+                finally:
+                    _CURRENT_SLOT.reset(token)
+
+            results = await asyncio.gather(
+                *(run_slot(slot_id) for slot_id in sorted(self._healthy_slots))
+            )
+            for slot_scored, slot_failed, slot_claimed in results:
+                scored.extend(slot_scored)
+                failed += slot_failed
+                queue_depth += slot_claimed
         # Score production is platform-lease-bound. In particular, do not infer
         # autonomous re-score work from the public ledger: the score endpoint
         # requires the exact live ticket deadline, and benchmark-version rollout
@@ -435,15 +586,38 @@ class ValidatorWorker:
 
     async def _scoring_preflight(self) -> bool:
         """Functionally probe scorer dependencies before requesting a lease."""
+        scorer_capacity = int(getattr(self._dittobench, "full_run_capacity", 1))
+        if scorer_capacity < len(self._slots):
+            logger.warning(
+                "configured validator capacity %s exceeds scorer capacity %s; "
+                "no ticket will be claimed",
+                len(self._slots),
+                scorer_capacity,
+            )
+            self._healthy_slots.clear()
+            return False
         preflight = getattr(self._dittobench, "preflight", None)
         if preflight is None:
+            self._healthy_slots = {
+                slot_id
+                for slot_id in self._slots
+                if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
+            }
             return True
         try:
             result = preflight()
             if inspect.isawaitable(result):
                 await result
+            # A successful trusted scorer probe is the recovery signal for
+            # capacity dropped by a prior sibling failure or dependency outage.
+            self._healthy_slots = {
+                slot_id
+                for slot_id in self._slots
+                if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
+            }
             return True
         except ValidatorInfrastructureError as e:
+            self._healthy_slots.clear()
             logger.warning(
                 "validator scoring preflight failed; no ticket will be claimed "
                 "this sweep: %s",
@@ -457,15 +631,33 @@ class ValidatorWorker:
         *,
         active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
     ) -> bool:
+        """Serialize all signed heartbeat timestamps and acceptance updates."""
+        async with self._active_heartbeat_lock:
+            return await self._report_heartbeat_unlocked(
+                state, active_snapshot=active_snapshot
+            )
+
+    async def _report_heartbeat_unlocked(
+        self,
+        state: ValidatorRuntimeState,
+        *,
+        active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
+    ) -> bool:
         """Best-effort signed build + runtime report; never gate validator work."""
-        if active_snapshot is None:
-            active_agent_id = self._active_agent_id
-            benchmark_progress = self._benchmark_progress
-        else:
-            active_agent_id, benchmark_progress = active_snapshot
+        del active_snapshot  # v10 always signs one atomic all-slot snapshot.
+        capacity = self._capacity_snapshot()
+        primary = sorted(capacity.active, key=lambda slot: slot.slot_id)
+        active_agent_id = primary[0].agent_id if primary else None
+        benchmark_progress = primary[0].progress if primary else None
+        if primary:
+            state = "running_benchmark"
         if (
-            active_agent_id is None
-            and time.monotonic() < self._retain_failed_progress_until
+            self._admission == "accepting"
+            and active_agent_id is None
+            and any(
+                time.monotonic() < slot.retain_failed_progress_until
+                for slot in self._slots.values()
+            )
         ):
             return True
         try:
@@ -488,6 +680,19 @@ class ValidatorWorker:
                 observed = capability_probe(stack)
                 if inspect.isawaitable(observed):
                     scorer_benchmarks = await observed
+            if int(getattr(self._dittobench, "full_run_capacity", 1)) < len(
+                self._slots
+            ):
+                self._healthy_slots.clear()
+            # The scorer probe above is authoritative for capacity. Rebuild the
+            # signed snapshot after it so a runtime capacity drop is visible in
+            # this heartbeat, not one event later.
+            capacity = self._capacity_snapshot()
+            primary = sorted(capacity.active, key=lambda slot: slot.slot_id)
+            active_agent_id = primary[0].agent_id if primary else None
+            benchmark_progress = primary[0].progress if primary else None
+            if primary:
+                state = "running_benchmark"
             stack = bind_observed_scorer_identity(stack, scorer_benchmarks)
             capabilities = capabilities.model_copy(
                 update={"scorer_benchmarks": scorer_benchmarks}
@@ -522,6 +727,7 @@ class ValidatorWorker:
                 capabilities=capabilities,
                 stack=stack,
                 stack_health=stack_health,
+                benchmark_capacity=capacity,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -536,6 +742,7 @@ class ValidatorWorker:
                 capabilities=capabilities,
                 stack=stack,
                 stack_health=stack_health,
+                benchmark_capacity=capacity,
                 timestamp=timestamp,
                 signature=signature,
             )
@@ -571,9 +778,18 @@ class ValidatorWorker:
         async with self._active_heartbeat_lock:
             active_snapshot = (self._active_agent_id, self._benchmark_progress)
             sent_progress = active_snapshot[1]
-            delivered = await self._report_heartbeat_bounded(
-                "running_benchmark", active_snapshot=active_snapshot
-            )
+            try:
+                delivered = await asyncio.wait_for(
+                    self._report_heartbeat_unlocked(
+                        "running_benchmark", active_snapshot=active_snapshot
+                    ),
+                    timeout=_ACTIVE_TELEMETRY_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "validator progress heartbeat timed out; scoring continues"
+                )
+                delivered = False
             if delivered and sent_progress is not None:
                 self._last_progress_heartbeat_monotonic = time.monotonic()
                 self._last_progress_bucket = self._progress_bucket(sent_progress)
@@ -682,12 +898,16 @@ class ValidatorWorker:
         )
 
     async def _begin_active_ticket(
-        self, agent_id: UUID, ticket_deadline: datetime
+        self,
+        agent_id: UUID,
+        ticket_deadline: datetime,
+        bench_version: int = DEFAULT_BENCH_VERSION,
     ) -> None:
         """Reset progress throttling and publish artifact preparation promptly."""
         self._retain_failed_progress_until = 0.0
         self._active_agent_id = agent_id
         self._active_ticket_deadline = ticket_deadline
+        self._slot_state().bench_version = bench_version
         self._active_run_token = None
         self._benchmark_progress = None
         self._last_progress_heartbeat_monotonic = None
@@ -701,6 +921,7 @@ class ValidatorWorker:
         self._benchmark_progress = None
         self._last_progress_heartbeat_monotonic = None
         self._last_progress_bucket = None
+        self._slot_state().bench_version = DEFAULT_BENCH_VERSION
 
     async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.
@@ -1263,16 +1484,68 @@ class ValidatorWorker:
                 f"re-derive from pinned block hash "
                 f"{job.dataset_seed_block_hash!r}; refusing to score"
             )
-        return await self._evaluate_and_submit(
-            job.agent_id,
-            job.sha256,
-            job.miner_hotkey,
-            seed=job.seed,
-            dataset_sha256=job.dataset_sha256,
-            run_size=job.run_size,
-            bench_version=job.bench_version,
-            ticket_deadline=job.deadline,
+        inference_session_id: str | None = None
+        bench_requires_ticket_inference = (
+            job.bench_version is not None and job.bench_version >= 7
         )
+        fleet_requires_ticket_inference = (
+            getattr(self._config, "inference_proxy_required", False) is True
+        )
+        if job.inference is None and (
+            bench_requires_ticket_inference or fleet_requires_ticket_inference
+        ):
+            raise ValidatorInfrastructureError(
+                "platform inference is required but the ticket carried no capability"
+            )
+        # During the bounded transition, v6 tickets may carry an additive offer
+        # but must retain their existing frozen relay route. V7 always consumes
+        # the offer. Once fleet-wide enforcement is enabled after v6 drains, any
+        # residual legacy ticket also uses platform inference rather than a
+        # validator provider credential.
+        if job.inference is not None and (
+            bench_requires_ticket_inference or fleet_requires_ticket_inference
+        ):
+            broker = await self._dittobench.prepare_inference_session()
+            try:
+                exchange = await self._platform.exchange_inference_grant(
+                    job.inference.grant_id,
+                    broker.broker_public_key,
+                    job.inference.exchange_url,
+                )
+                if (
+                    exchange.grant_id != job.inference.grant_id
+                    or exchange.proxy_url != job.inference.proxy_url
+                    or exchange.expires_at > job.inference.expires_at
+                    or exchange.expires_at > job.deadline
+                ):
+                    raise PlatformError("inference exchange escaped ticket bounds")
+                await self._dittobench.activate_inference_session(
+                    broker,
+                    grant_id=exchange.grant_id,
+                    bearer=exchange.bearer,
+                    proxy_url=exchange.proxy_url,
+                    generation=exchange.generation,
+                    expires_at=exchange.expires_at,
+                )
+            except BaseException:
+                await self._dittobench.cancel_inference_session(broker.session_id)
+                raise
+            inference_session_id = broker.session_id
+        try:
+            return await self._evaluate_and_submit(
+                job.agent_id,
+                job.sha256,
+                job.miner_hotkey,
+                seed=job.seed,
+                dataset_sha256=job.dataset_sha256,
+                run_size=job.run_size,
+                bench_version=job.bench_version,
+                ticket_deadline=job.deadline,
+                inference_session_id=inference_session_id,
+            )
+        finally:
+            if inference_session_id is not None:
+                await self._dittobench.cancel_inference_session(inference_session_id)
 
     async def _evaluate(
         self,
@@ -1320,6 +1593,7 @@ class ValidatorWorker:
         run_size: str | None = None,
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
+        inference_session_id: str | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
         artifact = await self._platform.get_artifact(agent_id)
@@ -1364,8 +1638,9 @@ class ValidatorWorker:
             screened_image_size_bytes=artifact.screened_image_size_bytes,
             screened_image_id=artifact.screened_image_id,
             screened_image_ref=artifact.screened_image_ref,
+            inference_session_id=inference_session_id,
         )
-        details = getattr(self._dittobench, "last_details", None)
+        details = report.details
         bench_version = (
             details.get("bench_version") if isinstance(details, dict) else None
         )
@@ -1487,6 +1762,7 @@ class ValidatorWorker:
         run_size: str | None = None,
         bench_version: int | None = None,
         ticket_deadline: datetime | None = None,
+        inference_session_id: str | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
         path used by the ticket sweep (:meth:`_score_job`)."""
@@ -1501,7 +1777,9 @@ class ValidatorWorker:
             )
             return await self._submit_report(agent_id, miner_hotkey, report)
 
-        await self._begin_active_ticket(agent_id, ticket_deadline)
+        await self._begin_active_ticket(
+            agent_id, ticket_deadline, bench_version or DEFAULT_BENCH_VERSION
+        )
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.create_task(
             self._heartbeat_while_active(heartbeat_stop)
@@ -1516,6 +1794,7 @@ class ValidatorWorker:
                 run_size=run_size,
                 bench_version=bench_version,
                 progress_callback=self._on_dittobench_progress,
+                inference_session_id=inference_session_id,
             )
             await self._publish_benchmark_progress(
                 "finalizing", completed=report.n, total=report.n
@@ -1774,10 +2053,12 @@ class ValidatorWorker:
             await self._sleep_or_stop(stop, 0.05)
         if stop.is_set():
             return
+        self._admission = "draining"
         await self._report_heartbeat("idle")
         write_update_state("drained", platform_accepted=self._platform_accepted)
         await self._wait_for_resume_or_stop(stop, drain_requested)
         if not stop.is_set():
+            self._admission = "accepting"
             write_update_state("ready", platform_accepted=self._platform_accepted)
 
     @staticmethod

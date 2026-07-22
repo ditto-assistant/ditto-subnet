@@ -1226,6 +1226,72 @@
   },
   "ValidatorHeartbeatRequest": {
     "$defs": {
+      "ActiveBenchmarkSlot": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "healthy": {
+            "default": true,
+            "type": "boolean"
+          },
+          "progress": {
+            "$ref": "#/$defs/BenchmarkProgress"
+          },
+          "slot_id": {
+            "pattern": "^slot-[0-7]$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot_id",
+          "agent_id",
+          "bench_version",
+          "progress"
+        ],
+        "type": "object"
+      },
+      "BenchmarkCapacity": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "items": {
+              "$ref": "#/$defs/ActiveBenchmarkSlot"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "admission": {
+            "default": "accepting",
+            "enum": [
+              "accepting",
+              "draining",
+              "paused"
+            ],
+            "type": "string"
+          },
+          "configured_slots": {
+            "default": 1,
+            "maximum": 8,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "healthy_slots": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "BenchmarkProgress": {
         "additionalProperties": false,
         "properties": {
@@ -1502,6 +1568,10 @@
           },
           "stack_updater": {
             "type": "boolean"
+          },
+          "ticket_inference": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
@@ -1746,6 +1816,17 @@
           {
             "format": "uuid",
             "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "benchmark_capacity": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BenchmarkCapacity"
           },
           {
             "type": "null"

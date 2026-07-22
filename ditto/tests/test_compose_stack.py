@@ -115,7 +115,7 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
-    # The scorer reaches the model-relay / embedding forwarders on loopback, so
+    # The scorer reaches the v6 relay / embedding forwarders on loopback, so
     # host.docker.internal must resolve there. The scorer joins sandbox-docker's
     # netns and SHARES its /etc/hosts, so the mapping lives on sandbox-docker (an
     # extra_hosts on the joining dittobench-api service would be ignored).
@@ -125,6 +125,21 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
         in compose["services"]["sandbox-docker"]["extra_hosts"]
     )
     assert env["HARNESS_GATEWAY_URL"] == "http://host.docker.internal:11435"
+    assert env["DITTOBENCH_REQUIRE_TICKET_INFERENCE"] == (
+        "${DITTOBENCH_REQUIRE_TICKET_INFERENCE:-false}"
+    )
+    relay = compose["services"]["model-relay"]
+    assert relay["environment"]["RELAY_PROVIDER"] == "${RELAY_PROVIDER:-chutes}"
+    assert relay["environment"]["RELAY_ENABLE_DEPRECATED_CHUTES"] == (
+        "${RELAY_ENABLE_DEPRECATED_CHUTES:-1}"
+    )
+
+    api = compose["services"]["dittobench-api"]
+    assert api["environment"]["DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES"] == (
+        "${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}"
+    )
+    assert "RELAY_API_KEY" in relay["environment"]
+    assert "model-relay" in service["depends_on"]
 
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
@@ -140,8 +155,12 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "ensure_sandbox_network" in entrypoint
     assert entrypoint.count("ensure_sandbox_network") >= 3
     assert "DITTO-SANDBOX-EGRESS" in entrypoint
-    assert '-d "$gateway" -p tcp --dport 11434 -j ACCEPT' in entrypoint
-    assert '-d "$gateway" -p tcp --dport 11435 -j ACCEPT' in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11434 -j ACCEPT" in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11435 -j ACCEPT" in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11436 -j ACCEPT" in entrypoint
+    assert "-i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS" in entrypoint
+    assert "com.docker.network.bridge.enable_icc=false" in entrypoint
+    assert "-i 'dtj+' -j DITTO-SANDBOX-EGRESS" in entrypoint
     assert "ditto-sandbox-deny" in entrypoint
     assert "-j DROP" in entrypoint
     assert "/var/run/docker.sock" not in COMPOSE_PATH.read_text()
@@ -183,7 +202,7 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert all(character in "0123456789abcdef" for character in checksum)
     # dittobench-api PR #37 was squash-merged at this exact main commit. The
     # pre-merge PR head is not a valid production BuildKit checksum.
-    assert checksum == "a0a0bca0460620cb5dcd381b1802a04567a6c762"
+    assert checksum == "26531b1d4bca9162056cfb82d1c4fcce63b2cdda"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]

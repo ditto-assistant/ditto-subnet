@@ -16,6 +16,10 @@ from uuid import UUID, uuid4
 import httpx
 from pydantic import ValidationError
 
+from ditto.api_models.inference import (
+    InferenceExchangeRequest,
+    InferenceExchangeResponse,
+)
 from ditto.api_models.validator import (
     ArtifactResponse,
     FailJobReason,
@@ -33,6 +37,7 @@ from ditto.api_models.validator import (
 from ditto.validator.errors import PlatformError
 from ditto.validator.signing import (
     sign_artifact_request,
+    sign_inference_exchange,
     sign_job_fail_request,
     sign_job_request,
     sign_ledger_request,
@@ -77,7 +82,7 @@ class PlatformClient:
             )
         return ValidatorHeartbeatResponse.model_validate(resp.json())
 
-    async def request_job(self) -> JobResponse | None:
+    async def request_job(self, slot_id: str | None = None) -> JobResponse | None:
         """Request a scoring ticket (the k=3 pull). ``None`` on 204 (no work).
 
         POST /validator/job issues at most :data:`SCORING_QUORUM` tickets per
@@ -90,6 +95,7 @@ class PlatformClient:
         nonce = uuid4()
         payload = JobRequest(
             validator_hotkey=self._config.validator_hotkey,
+            slot_id=slot_id,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_job_request(
@@ -97,6 +103,7 @@ class PlatformClient:
                 validator_hotkey=self._config.validator_hotkey,
                 nonce=nonce,
                 requested_at=requested_at,
+                slot_id=slot_id,
             ),
         )
         try:
@@ -112,6 +119,45 @@ class PlatformClient:
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return JobResponse.model_validate(resp.json())
+
+    async def exchange_inference_grant(
+        self, grant_id: UUID, broker_public_key: str, exchange_url: str
+    ) -> InferenceExchangeResponse:
+        """Authorize one trusted broker key for the exact live ticket grant."""
+        expected_url = f"{self._base}/api/v1/inference/exchange"
+        if exchange_url.rstrip("/") != expected_url:
+            raise PlatformError("ticket inference exchange URL is not the platform")
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = InferenceExchangeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            grant_id=grant_id,
+            broker_public_key=broker_public_key,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_inference_exchange(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                grant_id=grant_id,
+                broker_public_key=broker_public_key,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        try:
+            response = await self._client.post(
+                expected_url,
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"inference exchange failed: {error}") from error
+        if response.status_code != 200:
+            raise PlatformError(
+                f"inference exchange rejected ({response.status_code}): "
+                f"{response.text[:200]}"
+            )
+        return InferenceExchangeResponse.model_validate(response.json())
 
     async def report_ticket_failed(
         self, job: JobResponse, reason: FailJobReason

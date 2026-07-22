@@ -153,6 +153,27 @@ async def test_submit_rejects_missing_or_unsupported_benchmark_version(
             )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 503])
+async def test_submit_admission_failure_is_validator_infrastructure(
+    status: int,
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, text="unavailable")
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test", run_size="full"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(
+            ValidatorInfrastructureError,
+            match=rf"scorer admission unavailable \({status}\)",
+        ):
+            await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
+                tarball_url="https://example.test/agent.tgz", bench_version=2
+            )
+
+
 @pytest.mark.parametrize(
     ("status", "stage", "expected_counts"),
     [
@@ -549,10 +570,7 @@ async def test_embedding_preflight_recovers_on_next_sweep_probe() -> None:
 
 
 @pytest.mark.asyncio
-async def test_relay_preflight_broken_relay_blocks_ticket_claim() -> None:
-    # The scorer (in sandbox-docker's netns) reports host.docker.internal:11435
-    # unreachable. The validator, off that netns, only learns of it here — and must
-    # not claim a ticket it will fast-fail.
+async def test_preclaim_check_does_not_touch_deprecated_relay() -> None:
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -572,11 +590,8 @@ async def test_relay_preflight_broken_relay_blocks_ticket_claim() -> None:
         return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        with pytest.raises(
-            ValidatorInfrastructureError, match="model_relay_unavailable"
-        ):
-            await DittobenchClient(cast(Any, _preflight_config()), http).preflight()
-    assert "/v1/relay-preflight" in seen
+        await DittobenchClient(cast(Any, _preflight_config()), http).preflight()
+    assert "/v1/relay-preflight" not in seen
 
 
 @pytest.mark.asyncio

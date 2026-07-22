@@ -2,8 +2,9 @@
 set -eu
 
 # Inner sandboxes map host.docker.internal to this daemon's bridge gateway.
-# Keep the model sidecars reachable without exposing their keys or mounting the
-# validator host's Docker socket.
+# During the bounded v6 transition, keep the frozen relay alongside embeddings
+# and the source-bound v7 ticket broker. The relay owns the provider secret;
+# miner containers receive no credential.
 socat \
   TCP-LISTEN:11434,fork,reuseaddr TCP:ollama:11434 &
 socat \
@@ -19,7 +20,8 @@ socat \
 # disappears (a prune, an operator action, a daemon restart), the next call
 # recreates it and re-derives the firewall against the fresh gateway.
 #
-# The DOCKER-USER policy permits only the two local inference forwarders and
+# The DOCKER-USER policy permits only local embeddings, the bounded-transition
+# v6 relay, and the ticket-bound v7 inference broker.
 # replies to established flows; metadata, RFC1918 services, public internet, and
 # direct DNS bypasses are denied. Docker's embedded 127.0.0.11 resolver is
 # handled by dockerd before this forwarding hook. Denials are rate-limited into
@@ -60,6 +62,7 @@ ensure_sandbox_network() {
     docker network create \
       --driver bridge \
       --opt com.docker.network.bridge.name=ditto-sandbox0 \
+      --opt com.docker.network.bridge.enable_icc=false \
       ditto-sandbox >/dev/null || {
       printf 'failed to create ditto-sandbox network; will retry\n' >&2
       return 1
@@ -78,13 +81,29 @@ ensure_sandbox_network() {
   iptables -N DITTO-SANDBOX-EGRESS 2>/dev/null || true
   iptables -F DITTO-SANDBOX-EGRESS
   iptables -A DITTO-SANDBOX-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  iptables -A DITTO-SANDBOX-EGRESS -d "$gateway" -p tcp --dport 11434 -j ACCEPT
-  iptables -A DITTO-SANDBOX-EGRESS -d "$gateway" -p tcp --dport 11435 -j ACCEPT
+  iptables -A DITTO-SANDBOX-EGRESS -m addrtype --dst-type LOCAL -p tcp --dport 11434 -j ACCEPT
+  iptables -A DITTO-SANDBOX-EGRESS -m addrtype --dst-type LOCAL -p tcp --dport 11435 -j ACCEPT
+  iptables -A DITTO-SANDBOX-EGRESS -m addrtype --dst-type LOCAL -p tcp --dport 11436 -j ACCEPT
   iptables -A DITTO-SANDBOX-EGRESS -m limit --limit 12/min --limit-burst 20 \
     -j LOG --log-prefix 'ditto-sandbox-deny ' --log-level warning
   iptables -A DITTO-SANDBOX-EGRESS -j DROP
   while iptables -D DOCKER-USER -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS 2>/dev/null; do :; done
   iptables -I DOCKER-USER 1 -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS
+  # Traffic to this DinD host itself traverses INPUT, not DOCKER-USER. Apply
+  # the same allowlist there so a harness cannot reach dockerd :2375, the
+  # scorer control API :8000, metadata, or sibling host services.
+  while iptables -D INPUT -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS 2>/dev/null; do :; done
+  iptables -I INPUT 1 -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS
+
+  # Concurrent scorer revisions create one ICC-disabled bridge per run with a
+  # random dtj* interface name. The only permitted host destinations remain the
+  # two trusted local endpoints; sibling bridges, metadata, RFC1918 services,
+  # public egress, and direct DNS are denied by the same chain. The wildcard is
+  # an iptables interface-prefix match (trailing '+'), not a shell glob.
+  while iptables -D DOCKER-USER -i 'dtj+' -j DITTO-SANDBOX-EGRESS 2>/dev/null; do :; done
+  iptables -I DOCKER-USER 1 -i 'dtj+' -j DITTO-SANDBOX-EGRESS
+  while iptables -D INPUT -i 'dtj+' -j DITTO-SANDBOX-EGRESS 2>/dev/null; do :; done
+  iptables -I INPUT 1 -i 'dtj+' -j DITTO-SANDBOX-EGRESS
 }
 
 # Submission builds create a steady stream of images and BuildKit cache in the
