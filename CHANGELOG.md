@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.22.0 (2026-07-22)
+
+### Chores
+
+- **docs**: Link the public platform repository
+  ([#215](https://github.com/ditto-assistant/ditto-subnet/pull/215),
+  [`a7fd5f0`](https://github.com/ditto-assistant/ditto-subnet/commit/a7fd5f0e5670166d16637831fdd1af1903b8c1a3))
+
+### Features
+
+- Continually re-benchmark the KOTH top five
+  ([#202](https://github.com/ditto-assistant/ditto-subnet/pull/202),
+  [`c2619a2`](https://github.com/ditto-assistant/ditto-subnet/commit/c2619a28c58520f278aebbe2349db04cc6836f8a))
+
+- Run bounded parallel validator slots
+  ([#211](https://github.com/ditto-assistant/ditto-subnet/pull/211),
+  [`ca2cc99`](https://github.com/ditto-assistant/ditto-subnet/commit/ca2cc9938d9f12135ee04a80c2dfe55437e27b8e))
+
+
 ## v0.21.6 (2026-07-21)
 
 ### Bug Fixes
