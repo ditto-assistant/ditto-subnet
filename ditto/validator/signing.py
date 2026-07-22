@@ -16,6 +16,7 @@ the key.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -249,6 +250,80 @@ def sign_job_fail_request(
             requested_at=requested_at,
         )
     )
+    return signature.hex()
+
+
+def top5_confirmation_job_signing_message(
+    *,
+    validator_hotkey: str,
+    champion_agent_id: UUID,
+    member_agent_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    """Build canonical bytes for one top-5 shared-seed rescore claim.
+
+    Distinct domain tag (``validator-top5-confirmation-job:v1``) from the
+    single-leader confirmation claim, so a signature for one lane can never be
+    replayed into the other.
+    """
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return (
+        "validator-top5-confirmation-job:v1:"
+        f"{validator_hotkey}:{champion_agent_id}:{member_agent_id}:"
+        f"{nonce}:{requested}"
+    ).encode()
+
+
+def sign_top5_confirmation_job_request(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    champion_agent_id: UUID,
+    member_agent_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        top5_confirmation_job_signing_message(
+            validator_hotkey=validator_hotkey,
+            champion_agent_id=champion_agent_id,
+            member_agent_id=member_agent_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def top5_confirmation_score_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    ticket_deadline: datetime,
+    run_id: str,
+    bench_version: int,
+    confirmation_seeds: list[int],
+    confirmation_composites: list[float],
+) -> bytes:
+    """Bind every append-only seed/composite pair into one score receipt."""
+    deadline = ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
+    pairs = json.dumps(
+        list(zip(confirmation_seeds, confirmation_composites, strict=True)),
+        separators=(",", ":"),
+    )
+    return (
+        "validator-top5-confirmation-score:v1:"
+        f"{validator_hotkey}:{agent_id}:{deadline}:{run_id}:"
+        f"{bench_version}:{pairs}"
+    ).encode()
+
+
+def sign_top5_confirmation_score(
+    keypair: Any,
+    **kwargs: Any,
+) -> str:
+    signature: bytes = keypair.sign(top5_confirmation_score_signing_message(**kwargs))
     return signature.hex()
 
 

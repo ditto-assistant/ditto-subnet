@@ -20,7 +20,10 @@ change, mirroring the platform's ledger read.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from ditto.validator.crn import confirmation_seeds
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -232,6 +235,37 @@ def _entry_confirmations(entry: LedgerEntry) -> list[float] | None:
     return out
 
 
+def _median(values: Sequence[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _entry_confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
+    """Collapse append-only confirmation rows to a median composite per seed."""
+    records = getattr(entry, "confirmation_history", None)
+    if not isinstance(records, (list, tuple)) or not records:
+        return None
+    grouped: dict[int, list[float]] = {}
+    for record in records:
+        seed = getattr(record, "seed", None)
+        composite = getattr(record, "composite", None)
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            continue
+        if (
+            not isinstance(composite, (int, float))
+            or not math.isfinite(composite)
+            or not 0.0 <= composite <= 1.0
+        ):
+            continue
+        grouped.setdefault(seed, []).append(float(composite))
+    if not grouped:
+        return None
+    return {seed: _median(values) for seed, values in grouped.items()}
+
+
 def _effective_composite(entry: LedgerEntry) -> float:
     """The composite the dethrone comparison uses: the MEDIAN of the entry's
     per-seed confirmation composites when the ledger surfaces them, else the raw
@@ -239,14 +273,13 @@ def _effective_composite(entry: LedgerEntry) -> float:
     that survives seed-to-seed variance, not one lucky draw (P4). Pure and
     deterministic: an explicit sorted-middle median, no library rounding, so
     every validator computes identical bytes."""
-    vals = _entry_confirmations(entry)
-    if vals is None:
+    history = _entry_confirmation_history(entry)
+    vals = (
+        sorted(history.values()) if history is not None else _entry_confirmations(entry)
+    )
+    if vals is None or len(vals) < 2:
         return entry.composite
-    s = sorted(vals)
-    mid = len(s) // 2
-    if len(s) % 2 == 1:
-        return s[mid]
-    return (s[mid - 1] + s[mid]) / 2.0
+    return _median(vals)
 
 
 def _entry_stderr(entry: LedgerEntry) -> float | None:
@@ -272,6 +305,9 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
     non-negative int seeds with no duplicate; anything else is treated as absent
     (a consensus-safe guard so two validators never pair off a differently-parsed
     map)."""
+    history = _entry_confirmation_history(entry)
+    if history is not None:
+        return history
     comps = _entry_confirmations(entry)
     if comps is None:
         return None
@@ -284,6 +320,75 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
             return None
         out[s] = c
     return out
+
+
+@dataclass(frozen=True)
+class Top5Member:
+    entry: LedgerEntry
+    seeds_to_score: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class Top5ConfirmationPlan:
+    champion: LedgerEntry
+    anchor_seeds: tuple[int, ...]
+    members: tuple[Top5Member, ...]
+
+
+def top5_confirmation_set(
+    entries: Sequence[LedgerEntry],
+    *,
+    current_version: int,
+    margin: float,
+    dethrone_z: float,
+    tail_size: int,
+    baseline_seeds: int,
+    max_seeds: int,
+    catch_up_rate: int = 2,
+) -> Top5ConfirmationPlan | None:
+    """Plan one continual champion-anchored shared-seed top-five round."""
+    scored = [
+        entry
+        for entry in entries
+        if entry.composite > 0.0 and _entry_version(entry) == current_version
+    ]
+    if not scored:
+        return None
+    champion = _champion(scored, margin, dethrone_z)
+    members = [champion, *_tail(scored, champion, tail_size)]
+    cap = max(1, int(max_seeds))
+    full = confirmation_seeds(
+        [str(champion.agent_id)], version=current_version, count=cap
+    )
+    champion_map = _entry_seed_composites(champion) or {}
+    covered = 0
+    for seed in full:
+        if seed not in champion_map:
+            break
+        covered += 1
+    target_depth = min(cap, max(covered + 1, int(baseline_seeds)))
+    anchor = tuple(full[:target_depth])
+
+    planned: list[Top5Member] = []
+    rate = max(1, int(catch_up_rate))
+    for member in members:
+        member_map = _entry_seed_composites(member) or {}
+        missing = [seed for seed in anchor if seed not in member_map]
+        if not missing:
+            continue
+        if member.agent_id == champion.agent_id:
+            seeds_to_score = missing
+        else:
+            member_depth = sum(1 for seed in anchor if seed in member_map)
+            seeds_to_score = (
+                missing if member_depth >= target_depth - 1 else missing[:rate]
+            )
+        planned.append(Top5Member(entry=member, seeds_to_score=tuple(seeds_to_score)))
+    if not planned:
+        return None
+    return Top5ConfirmationPlan(
+        champion=champion, anchor_seeds=anchor, members=tuple(planned)
+    )
 
 
 def _paired_dethrone(

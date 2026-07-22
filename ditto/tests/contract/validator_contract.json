@@ -220,6 +220,44 @@
           "banned"
         ],
         "type": "string"
+      },
+      "ConfirmationScoreRecord": {
+        "properties": {
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed",
+          "composite",
+          "validator_hotkey",
+          "bench_version"
+        ],
+        "type": "object"
       }
     },
     "properties": {
@@ -261,6 +299,20 @@
           {
             "items": {
               "type": "number"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_history": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/ConfirmationScoreRecord"
             },
             "type": "array"
           },
@@ -366,6 +418,44 @@
         ],
         "type": "string"
       },
+      "ConfirmationScoreRecord": {
+        "properties": {
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed",
+          "composite",
+          "validator_hotkey",
+          "bench_version"
+        ],
+        "type": "object"
+      },
       "LedgerEntry": {
         "properties": {
           "agent_id": {
@@ -406,6 +496,20 @@
               {
                 "items": {
                   "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_history": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationScoreRecord"
                 },
                 "type": "array"
               },

@@ -37,6 +37,9 @@ from ditto.validator.signing import (
     sign_job_fail_request,
     sign_job_request,
     sign_score,
+    sign_top5_confirmation_job_request,
+    top5_confirmation_job_signing_message,
+    top5_confirmation_score_signing_message,
 )
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -82,6 +85,26 @@ def test_message_is_canonical_format() -> None:
         == (
             f"{_HOTKEY}:550e8400-e29b-41d4-a716-446655440000:"
             "2026-07-09T12:30:00.000000+00:00:run_1:0.82:8675309"
+        ).encode()
+    )
+
+
+def test_top5_confirmation_score_binds_all_seed_composite_pairs() -> None:
+    message = top5_confirmation_score_signing_message(
+        validator_hotkey=_HOTKEY,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="confirmation-run",
+        bench_version=6,
+        confirmation_seeds=[11, 22],
+        confirmation_composites=[0.7, 0.8],
+    )
+    assert (
+        message
+        == (
+            "validator-top5-confirmation-score:v1:"
+            f"{_HOTKEY}:{_AGENT}:2026-07-09T12:30:00.000000+00:00:"
+            "confirmation-run:6:[[11,0.7],[22,0.8]]"
         ).encode()
     )
 
@@ -285,6 +308,40 @@ def test_job_fail_message_is_canonical_and_binds_the_exact_lease() -> None:
         requested_at=requested_at,
     )
     assert not keypair.verify(other_deadline, bytes.fromhex(signature))
+
+
+def test_top5_confirmation_claim_binds_champion_and_member() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    member = UUID("c9bf9e57-1685-4c89-bafb-ff5af830be8a")
+    nonce = UUID("7f4d1800-4cf1-4a24-8fd5-2e4cd59942ae")
+    requested_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+    signature = sign_top5_confirmation_job_request(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        champion_agent_id=_AGENT,
+        member_agent_id=member,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    message = top5_confirmation_job_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        champion_agent_id=_AGENT,
+        member_agent_id=member,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert keypair.verify(message, bytes.fromhex(signature))
+    # A distinct domain tag from the single-leader claim, so a signature for one
+    # lane cannot be replayed into the other, and champion/member are not swappable.
+    assert message.startswith(b"validator-top5-confirmation-job:v1:")
+    swapped = top5_confirmation_job_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        champion_agent_id=member,
+        member_agent_id=_AGENT,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert not keypair.verify(swapped, bytes.fromhex(signature))
 
 
 def test_artifact_signature_binds_agent_nonce_and_timestamp() -> None:

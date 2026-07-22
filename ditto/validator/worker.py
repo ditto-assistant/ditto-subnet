@@ -73,6 +73,7 @@ from ditto.validator.weights import (
     apply_miner_emission_cap,
     compute_weights,
     contested_confirmation_set,
+    top5_confirmation_set,
 )
 
 if TYPE_CHECKING:
@@ -551,8 +552,16 @@ class ValidatorWorker:
                 queue_depth += slot_claimed
         # Score production is platform-lease-bound. In particular, do not infer
         # autonomous re-score work from the public ledger: the score endpoint
-        # requires the exact live ticket deadline, and benchmark-version rollout
-        # work arrives through request_job() like every other assignment.
+        # requires the exact live ticket deadline. The only autonomous-looking
+        # follow-up below is also platform-leased through the dedicated top-five
+        # claim endpoint and appends evidence without replacing canonical scores.
+        if scoring_available and not self._new_work_blocked(
+            stop_requested, drain_requested
+        ):
+            await self._run_top5_confirmation_lane(
+                stop_requested=stop_requested,
+                drain_requested=drain_requested,
+            )
 
         outcome = _WeightOutcome()
         weights_ran = False
@@ -1047,6 +1056,102 @@ class ValidatorWorker:
                 absent,
             )
         return kept
+
+    async def _run_top5_confirmation_lane(
+        self,
+        *,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
+        """Claim and execute bounded append-only work for the current top five."""
+        try:
+            ledger = await self._platform.get_ledger()
+        except PlatformError as exc:
+            logger.warning("top-five confirmation ledger fetch failed: %s", exc)
+            return
+        plan = top5_confirmation_set(
+            ledger.entries,
+            current_version=self._current_bench_version,
+            margin=self._config.koth_margin,
+            dethrone_z=self._config.koth_dethrone_z,
+            tail_size=self._config.koth_tail_size,
+            baseline_seeds=self._config.koth_confirmation_seeds,
+            max_seeds=self._config.top5_max_confirmation_seeds,
+            catch_up_rate=self._config.top5_catch_up_rate,
+        )
+        if plan is None:
+            return
+        for member in plan.members:
+            if self._new_work_blocked(stop_requested, drain_requested):
+                return
+            entry = member.entry
+            try:
+                job = await self._platform.request_top5_confirmation_job(
+                    champion_agent_id=plan.champion.agent_id,
+                    member_agent_id=entry.agent_id,
+                )
+                report = await self._evaluate_confirmation_report(
+                    entry.agent_id,
+                    entry.sha256,
+                    seeds=member.seeds_to_score,
+                    bench_version=job.bench_version,
+                )
+                if report is None:
+                    continue
+                await self._platform.submit_top5_confirmation_score(
+                    entry.agent_id,
+                    report=report,
+                    ticket_deadline=job.deadline,
+                )
+            except (PlatformError, DittobenchError) as exc:
+                logger.warning(
+                    "top-five confirmation failed champion=%s member=%s: %s",
+                    plan.champion.agent_id,
+                    entry.agent_id,
+                    exc,
+                )
+
+    async def _evaluate_confirmation_report(
+        self,
+        agent_id: UUID,
+        expected_sha256: str,
+        *,
+        seeds: Sequence[int],
+        bench_version: int | None,
+    ) -> ScoreReport | None:
+        """Evaluate fresh seeds and package one signed append-only receipt."""
+        reports: list[ScoreReport] = []
+        for seed in seeds:
+            try:
+                reports.append(
+                    await self._evaluate(
+                        agent_id,
+                        expected_sha256,
+                        seed=seed,
+                        bench_version=bench_version,
+                    )
+                )
+            except (PlatformError, DittobenchError) as exc:
+                logger.warning(
+                    "top-five confirmation seed failed agent=%s seed=%s: %s",
+                    agent_id,
+                    seed,
+                    exc,
+                )
+        if not reports:
+            return None
+        ordered = sorted(reports, key=lambda report: (report.composite, report.seed))
+        representative = ordered[len(ordered) // 2]
+        pairs = sorted((report.seed, report.composite) for report in reports)
+        return representative.model_copy(
+            update={
+                "confirmation_seeds": [seed for seed, _ in pairs],
+                "confirmation_composites": [value for _, value in pairs],
+                "composite_stderr": _pooled_confirmation_stderr(
+                    [value for _, value in pairs], representative.composite_stderr
+                ),
+            }
+        )
 
     async def _rescore_stale_champions(
         self,
