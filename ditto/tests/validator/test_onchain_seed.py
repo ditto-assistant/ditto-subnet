@@ -22,6 +22,7 @@ _HASH = "0x1234abcd" + "ef" * 28
 # Cross-repo pinned vector: derive_seed(_HASH, _AGENT) in the platform repo
 # must equal this exact value (see the platform's test_onchain_seed.py).
 _PINNED = 4688446344444921196
+_VALIDATOR_PINNED = 225366234910597484
 
 
 class TestDeriveSeed:
@@ -40,6 +41,12 @@ class TestDeriveSeed:
         assert derive_seed(_HASH, _AGENT) != derive_seed("0x" + "ab" * 32, _AGENT)
         assert derive_seed(_HASH, _AGENT) != derive_seed(_HASH, _AGENT_B)
 
+    def test_validator_scope_is_stable_and_distinct(self) -> None:
+        seed = derive_seed(_HASH, _AGENT, "validator-a")
+        assert seed == _VALIDATOR_PINNED
+        assert seed == derive_seed(_HASH, _AGENT, "validator-a")
+        assert seed != derive_seed(_HASH, _AGENT, "validator-b")
+
 
 class TestSeedMatches:
     def test_accepts_derived_seed(self) -> None:
@@ -48,6 +55,11 @@ class TestSeedMatches:
     def test_rejects_ground_seed(self) -> None:
         assert not seed_matches(_HASH, _AGENT, _PINNED + 1)
         assert not seed_matches(_HASH, _AGENT_B, _PINNED)
+
+    def test_accepts_validator_scoped_seed(self) -> None:
+        seed = derive_seed(_HASH, _AGENT, "validator-a")
+        assert seed_matches(_HASH, _AGENT, seed, validator_hotkey="validator-a")
+        assert not seed_matches(_HASH, _AGENT, seed, validator_hotkey="validator-b")
 
 
 class TestNormalizeBlockHash:

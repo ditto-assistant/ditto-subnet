@@ -147,6 +147,11 @@ class JobResponse(BaseModel):
         int | None,
         Field(default=None, description="Platform-pinned dataset seed (regenerable)."),
     ] = None
+    seed_scope: Literal["agent", "validator"] = Field(
+        default="agent",
+        description="Inputs used by the on-chain seed derivation. Validator "
+        "scope additionally binds the ticket holder's hotkey.",
+    )
     dataset_sha256: Annotated[
         str | None,
         Field(default=None, description="SHA-256 of the pinned dataset (tamper pin)."),
