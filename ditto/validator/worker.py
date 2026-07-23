@@ -78,6 +78,7 @@ from ditto.validator.weights import (
     apply_miner_emission_cap,
     compute_weights,
     contested_confirmation_set,
+    select_champion,
     top5_confirmation_set,
 )
 
@@ -265,6 +266,7 @@ class _WeightOutcome:
     leaderboard: list[tuple[str, float]] = field(default_factory=list)
     weights: dict[str, float] = field(default_factory=dict)
     submitted: bool = False
+    king_fingerprint: tuple[str, UUID, float, int | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -358,6 +360,10 @@ class ValidatorWorker:
         self._active_heartbeat_lock = asyncio.Lock()
         self._system_metrics = system_metrics
         self._stack_health = stack_health
+        # A locally persisted score can change the king immediately. The weight
+        # loop also polls for receipts from other validators, but this event
+        # removes the local sweep-delay without weakening chain cadence.
+        self._ledger_changed = asyncio.Event()
 
     def _slot_state(self) -> _SlotState:
         return self._slots[_CURRENT_SLOT.get()]
@@ -528,6 +534,7 @@ class ValidatorWorker:
                             continue
                         try:
                             report = await self._score_job(job)
+                            self._ledger_changed.set()
                             details = (
                                 report.details
                                 if isinstance(report.details, dict)
@@ -1083,6 +1090,12 @@ class ValidatorWorker:
             miner_share=self._config.miner_emission_share,
             burn_hotkey=self._config.burn_hotkey,
         )
+        champion = select_champion(
+            registered_entries,
+            margin=self._config.koth_margin,
+            dethrone_z=self._config.koth_dethrone_z,
+        )
+        king_fingerprint = self._king_fingerprint(champion)
         if not miner_weights:
             logger.info(
                 "ledger has no positive scores; routing 100% of miner emission to burn"
@@ -1091,12 +1104,48 @@ class ValidatorWorker:
             # No permit / demonstrably short stake → the chain would reject the
             # submission anyway; skip it (loudly) rather than burn an epoch on a
             # guaranteed rejection.
-            return _WeightOutcome(leaderboard=leaderboard, weights=weights)
+            return _WeightOutcome(
+                leaderboard=leaderboard,
+                weights=weights,
+                king_fingerprint=king_fingerprint,
+            )
         await self._log_commit_reveal_mode()
         submitted = await self._put_weights_with_retry(weights)
         return _WeightOutcome(
-            leaderboard=leaderboard, weights=weights, submitted=submitted
+            leaderboard=leaderboard,
+            weights=weights,
+            submitted=submitted,
+            king_fingerprint=king_fingerprint,
         )
+
+    @staticmethod
+    def _king_fingerprint(
+        champion: LedgerEntry | None,
+    ) -> tuple[str, UUID, float, int | None] | None:
+        if champion is None:
+            return None
+        return (
+            champion.miner_hotkey,
+            champion.agent_id,
+            champion.composite,
+            champion.bench_version,
+        )
+
+    async def _observe_platform_king(
+        self,
+    ) -> tuple[bool, tuple[str, UUID, float, int | None] | None]:
+        """Return ``(available, fingerprint)`` from the verified public ledger."""
+        try:
+            ledger = await self._platform.get_ledger()
+        except PlatformError as e:
+            logger.warning("event-driven king check failed: %s", e)
+            return False, None
+        champion = select_champion(
+            ledger.entries,
+            margin=self._config.koth_margin,
+            dethrone_z=self._config.koth_dethrone_z,
+        )
+        return True, self._king_fingerprint(champion)
 
     async def _registered_ledger_entries(
         self, entries: Sequence[LedgerEntry]
@@ -2390,7 +2439,69 @@ class ValidatorWorker:
             # is reflected without coupling this task to the scoring loop.
             chain_floor = await self._chain_min_epoch_seconds()
             epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
-            await self._sleep_or_stop_or_drain(stop, epoch_seconds, drain_requested)
+            if outcome.submitted:
+                await self._wait_for_king_or_weight_window(
+                    stop,
+                    epoch_seconds=epoch_seconds,
+                    baseline=outcome.king_fingerprint,
+                    drain_requested=drain_requested,
+                )
+            else:
+                # A rejected platform/chain attempt must not spin, but it also
+                # must not suppress a newly signed king for an entire epoch.
+                await self._sleep_or_stop_or_drain(
+                    stop, self._config.sweep_seconds, drain_requested
+                )
+
+    async def _wait_for_king_or_weight_window(
+        self,
+        stop: asyncio.Event,
+        *,
+        epoch_seconds: float,
+        baseline: tuple[str, UUID, float, int | None] | None,
+        drain_requested: asyncio.Event | None,
+    ) -> None:
+        """Watch signed ledger receipts while respecting commit-reveal cadence.
+
+        Local scores wake this loop through ``_ledger_changed``; scores from
+        other validators are observed on the normal sweep poll. A changed king
+        is remembered immediately, but submission remains gated by the chain's
+        LastUpdate/tempo window. This gives the new king the earliest legal
+        commit without generating ``SettingWeightsTooFast`` churn.
+        """
+        observed = baseline
+        # A successful local submission is authoritative even if the RPC has
+        # not indexed LastUpdate yet. Never let a temporarily stale chain read
+        # collapse this guard to zero and create SettingWeightsTooFast churn.
+        local_not_before = time.monotonic() + epoch_seconds
+        while not stop.is_set():
+            if drain_requested is not None and drain_requested.is_set():
+                return
+            chain_delay = await self._seconds_until_weight_window(epoch_seconds)
+            delay = max(chain_delay, local_not_before - time.monotonic())
+            if delay <= 0:
+                return
+            wait_seconds = min(
+                delay,
+                max(1.0, float(self._config.sweep_seconds)),
+            )
+            if self._ledger_changed.is_set():
+                self._ledger_changed.clear()
+            else:
+                await self._sleep_or_stop_or_drain(stop, wait_seconds, drain_requested)
+                if stop.is_set() or (
+                    drain_requested is not None and drain_requested.is_set()
+                ):
+                    return
+            available, current = await self._observe_platform_king()
+            if available and current != observed:
+                logger.info(
+                    "signed king changed from %s to %s; scheduling weights for "
+                    "the earliest legal commit-reveal window",
+                    observed,
+                    current,
+                )
+                observed = current
 
     async def _acknowledge_drain(
         self, stop: asyncio.Event, drain_requested: asyncio.Event

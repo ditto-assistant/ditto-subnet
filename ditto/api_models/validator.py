@@ -888,6 +888,28 @@ class ConfirmationScoreRecord(BaseModel):
     ] = None
 
 
+class LedgerScoreProof(BaseModel):
+    """One validator's complete, independently verifiable score receipt."""
+
+    validator_hotkey: Annotated[str, Field(description="Signing validator hotkey.")]
+    run_id: Annotated[str, Field(description="Signed benchmark run id.")]
+    composite: Annotated[float, Field(ge=0.0, le=1.0)]
+    seed: Annotated[int, Field(description="Signed dataset seed.")]
+    bench_version: Annotated[int | None, Field(default=None, ge=1)] = None
+    ticket_deadline: Annotated[
+        datetime | None,
+        Field(default=None, description="Exact signed lease deadline."),
+    ] = None
+    transcript_sha256: Annotated[
+        str | None,
+        Field(default=None, description="Signed transcript digest, when present."),
+    ] = None
+    signature: Annotated[
+        str | None,
+        Field(default=None, description="Hex sr25519 signature over this receipt."),
+    ] = None
+
+
 class LedgerEntry(BaseModel):
     """One miner's best eligible score, returned by ``GET /scoring/scores``.
 
@@ -954,6 +976,16 @@ class LedgerEntry(BaseModel):
         Field(
             default=None,
             description="Validator's hex sr25519 signature, if stored.",
+        ),
+    ]
+    score_proofs: Annotated[
+        list[LedgerScoreProof],
+        Field(
+            default_factory=list,
+            description=(
+                "All signed validator receipts in the authoritative quorum. "
+                "Validators verify these and recompute the median before weights."
+            ),
         ),
     ]
     composite_stderr: Annotated[

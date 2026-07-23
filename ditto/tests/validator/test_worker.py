@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -119,6 +120,7 @@ def _entry(
         seed=1,
         validator_hotkey=_VALIDATOR_HOTKEY,
         signature="ab" * 64,
+        score_proofs=[],
         status=AgentStatus.SCORED,
     )
 
@@ -695,7 +697,8 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 11
+        assert heartbeat.protocol_version == 12
+        assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
         assert heartbeat.capabilities is not None
@@ -1238,7 +1241,8 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 11
+        assert heartbeat.protocol_version == 12
+        assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
     async def test_collector_failure_degrades_to_unknown_stack_health(self) -> None:
@@ -2846,6 +2850,41 @@ class TestChainCadenceFloor:
 
 
 class TestIndependentWeightLoop:
+    async def test_king_event_never_bypasses_local_commit_reveal_floor(self) -> None:
+        config = _config()
+        config.sweep_seconds = 0.005
+        worker = ValidatorWorker(
+            config=config,
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._ledger_changed.set()
+        worker._seconds_until_weight_window = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+        worker._observe_platform_king = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                True,
+                (
+                    "5Miner" + "x" * 41,
+                    UUID("550e8400-e29b-41d4-a716-446655440000"),
+                    0.9,
+                    4,
+                ),
+            )
+        )
+
+        started = time.monotonic()
+        await worker._wait_for_king_or_weight_window(
+            asyncio.Event(),
+            epoch_seconds=0.03,
+            baseline=None,
+            drain_requested=None,
+        )
+
+        assert time.monotonic() - started >= 0.02
+        worker._observe_platform_king.assert_awaited()
+
     async def test_weights_run_while_scoring_sweep_is_still_busy(self) -> None:
         scoring_started = asyncio.Event()
         release_scoring = asyncio.Event()

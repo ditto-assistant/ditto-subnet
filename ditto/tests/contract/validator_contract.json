@@ -258,6 +258,77 @@
           "bench_version"
         ],
         "type": "object"
+      },
+      "LedgerScoreProof": {
+        "properties": {
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ticket_deadline": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcript_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator_hotkey",
+          "run_id",
+          "composite",
+          "seed"
+        ],
+        "type": "object"
       }
     },
     "properties": {
@@ -349,6 +420,12 @@
       },
       "run_id": {
         "type": "string"
+      },
+      "score_proofs": {
+        "items": {
+          "$ref": "#/$defs/LedgerScoreProof"
+        },
+        "type": "array"
       },
       "seed": {
         "type": "integer"
@@ -547,6 +624,12 @@
           "run_id": {
             "type": "string"
           },
+          "score_proofs": {
+            "items": {
+              "$ref": "#/$defs/LedgerScoreProof"
+            },
+            "type": "array"
+          },
           "seed": {
             "type": "integer"
           },
@@ -594,6 +677,77 @@
           "seed",
           "validator_hotkey",
           "status"
+        ],
+        "type": "object"
+      },
+      "LedgerScoreProof": {
+        "properties": {
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ticket_deadline": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcript_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator_hotkey",
+          "run_id",
+          "composite",
+          "seed"
         ],
         "type": "object"
       }
@@ -1721,6 +1875,10 @@
             "default": null
           },
           "screened_images": {
+            "type": "boolean"
+          },
+          "signed_score_quorum": {
+            "default": false,
             "type": "boolean"
           },
           "source_build_fallback": {

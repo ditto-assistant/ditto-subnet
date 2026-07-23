@@ -253,6 +253,48 @@ async def test_ledger_request_is_fresh_and_signed() -> None:
     assert response.entries == []
 
 
+async def test_ledger_rejects_entry_without_verifiable_quorum_receipts() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "entries": [
+                    {
+                        "miner_hotkey": _HOTKEY,
+                        "agent_id": str(agent_id),
+                        "composite": 0.9,
+                        "n": 114,
+                        "first_seen": datetime.now(UTC).isoformat(),
+                        "sha256": "ab" * 32,
+                        "size_bytes": 1024,
+                        "run_id": "run_1",
+                        "seed": 42,
+                        "validator_hotkey": keypair.ss58_address,
+                        "bench_version": 7,
+                        "signature": "cd" * 64,
+                        "score_proofs": [],
+                        "status": "scored",
+                    }
+                ],
+                "count": 1,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "stale": False,
+                "age_seconds": 0,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformError, match="score proof verification failed"):
+            await PlatformClient(config, http, keypair).get_ledger()  # type: ignore[arg-type]
+
+
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 
 

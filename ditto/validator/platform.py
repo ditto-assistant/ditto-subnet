@@ -44,6 +44,7 @@ from ditto.validator.signing import (
     sign_ledger_request,
     sign_top5_confirmation_job_request,
     sign_top5_confirmation_score,
+    verify_ledger_entry,
 )
 
 if TYPE_CHECKING:
@@ -290,7 +291,17 @@ class PlatformClient:
             raise PlatformError(
                 f"ledger rejected ({resp.status_code}): {resp.text[:200]}"
             )
-        return LedgerResponse.model_validate(resp.json())
+        ledger = LedgerResponse.model_validate(resp.json())
+        invalid = [
+            entry.agent_id for entry in ledger.entries if not verify_ledger_entry(entry)
+        ]
+        if invalid:
+            sample = ", ".join(str(agent_id) for agent_id in invalid[:3])
+            raise PlatformError(
+                "ledger score proof verification failed for "
+                f"{len(invalid)} entr{'y' if len(invalid) == 1 else 'ies'}: {sample}"
+            )
+        return ledger
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
         """Get a presigned tarball URL with fresh proof of hotkey ownership."""

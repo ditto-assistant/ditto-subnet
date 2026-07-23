@@ -245,6 +245,14 @@ def compute_weights(
     return weights
 
 
+def select_champion(
+    entries: Sequence[LedgerEntry], *, margin: float, dethrone_z: float = 0.0
+) -> LedgerEntry | None:
+    """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
+    scored = [e for e in filter_eligible(entries) if e.composite > 0.0]
+    return _champion(scored, margin, dethrone_z) if scored else None
+
+
 def _entry_confirmations(entry: LedgerEntry) -> list[float] | None:
     """The entry's per-seed confirmation composites, or None when the ledger
     does not carry them (prod hardening P4). Read via getattr so the wire model

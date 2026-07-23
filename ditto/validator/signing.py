@@ -45,6 +45,7 @@ from ditto.api_models.validator_capabilities import (
 from ditto.validator.errors import ValidatorConfigError
 
 if TYPE_CHECKING:
+    from ditto.api_models.validator import LedgerEntry, LedgerScoreProof
     from ditto.validator.config import ValidatorConfig
 
 
@@ -135,6 +136,65 @@ def sign_score(
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()
+
+
+def verify_score_proof(*, agent_id: UUID, proof: LedgerScoreProof) -> bool:
+    """Verify one public score receipt against its validator hotkey."""
+    if not proof.signature:
+        return False
+    try:
+        signature = bytes.fromhex(proof.signature)
+        import bittensor
+
+        verifier = bittensor.Keypair(ss58_address=proof.validator_hotkey)
+        message = score_signing_message(
+            validator_hotkey=proof.validator_hotkey,
+            agent_id=agent_id,
+            ticket_deadline=proof.ticket_deadline,
+            run_id=proof.run_id,
+            composite=proof.composite,
+            seed=proof.seed,
+            bench_version=proof.bench_version,
+            transcript_sha256=proof.transcript_sha256,
+        )
+        return bool(verifier.verify(message, signature))
+    except (TypeError, ValueError):
+        return False
+
+
+def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
+    """Verify the quorum receipts and platform-selected lower median.
+
+    The platform is a transport/indexer here, not a score authority: every
+    receipt must verify, validator hotkeys must be unique, and the ledger row
+    must exactly match the deterministic lower-median receipt.
+    """
+    # Historical v2-v6 ledger rows predate quorum receipts. Keep them readable
+    # and weightable during the v7 fleet cutover; v7 is the first contract that
+    # makes signed quorum evidence mandatory.
+    if entry.bench_version is None or entry.bench_version < 7:
+        return True
+
+    proofs = entry.score_proofs
+    if len(proofs) < quorum:
+        return False
+    if len({proof.validator_hotkey for proof in proofs}) != len(proofs):
+        return False
+    if any(proof.bench_version != entry.bench_version for proof in proofs):
+        return False
+    if any(not verify_score_proof(agent_id=entry.agent_id, proof=p) for p in proofs):
+        return False
+
+    ordered = sorted(proofs, key=lambda p: (p.composite, p.validator_hotkey))
+    median = ordered[(len(ordered) - 1) // 2]
+    return (
+        median.composite == entry.composite
+        and median.validator_hotkey == entry.validator_hotkey
+        and median.run_id == entry.run_id
+        and median.seed == entry.seed
+        and median.bench_version == entry.bench_version
+        and median.signature == entry.signature
+    )
 
 
 def job_signing_message(
