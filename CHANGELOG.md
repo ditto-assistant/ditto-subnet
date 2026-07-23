@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.24.0 (2026-07-23)
+
+### Features
+
+- Rebalance KOTH rewards and dethrone hysteresis
+  ([#216](https://github.com/ditto-assistant/ditto-subnet/pull/216),
+  [`491c9b2`](https://github.com/ditto-assistant/ditto-subnet/commit/491c9b2d45384e31792b57bc45959ba4d61d1d19))
+
+
 ## v0.23.1 (2026-07-23)
 
 ### Bug Fixes
