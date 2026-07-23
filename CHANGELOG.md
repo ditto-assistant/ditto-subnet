@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.23.1 (2026-07-23)
+
+### Bug Fixes
+
+- Preserve v6 ticket compatibility
+  ([#222](https://github.com/ditto-assistant/ditto-subnet/pull/222),
+  [`389e4f5`](https://github.com/ditto-assistant/ditto-subnet/commit/389e4f59ca5a83ef8b926ba92c118d5798cd6031))
+
+
 ## v0.23.0 (2026-07-23)
 
 ### Features
