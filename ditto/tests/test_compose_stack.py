@@ -203,7 +203,7 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     # The checksum must remain the exact current main commit. A moving branch
     # paired with a stale checksum makes the documented local Compose build
     # fail before the release materializer can replace the source context.
-    assert checksum == "89b261a5f003721811b5351ffa4fb92b238c33b8"
+    assert checksum == "b45a2d07b2e421fec23859657bd63818c6dcbdf1"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]
