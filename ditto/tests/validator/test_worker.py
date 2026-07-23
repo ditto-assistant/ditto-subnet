@@ -370,6 +370,72 @@ class TestTop5ConfirmationLane:
         assert len(report.confirmation_seeds) == 3
         assert report.confirmation_composites == [0.8, 0.8, 0.8]
 
+    async def test_v7_confirmation_reuses_one_ticket_bound_inference_session(
+        self,
+    ) -> None:
+        entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+            update={"bench_version": 7}
+        )
+        deadline = datetime.now(UTC) + timedelta(hours=3)
+        grant_id = uuid4()
+        offer = InferenceGrantOffer(
+            grant_id=grant_id,
+            exchange_url="https://platform.example/exchange",
+            proxy_url="https://platform.example/inference",
+            allowed_models=["openai/gpt-oss-20b"],
+            request_budget=1203,
+            token_budget=3_000_000,
+            expires_at=deadline,
+            provider="amazon-bedrock",
+            profile_revision="openrouter-amazon-bedrock-gpt-oss-20b-v1",
+        )
+        job = _job(entry.miner_hotkey, deadline=deadline).model_copy(
+            update={
+                "agent_id": entry.agent_id,
+                "bench_version": 7,
+                "inference": offer,
+            }
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[entry])
+        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        dittobench = MagicMock()
+        dittobench.cancel_inference_session = AsyncMock()
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._current_bench_version = 7
+        broker = InferenceBrokerSession(
+            session_id="top5-session",
+            activation_secret="activation",
+            broker_public_key="a" * 43,
+        )
+        worker._activate_ticket_inference = AsyncMock(  # type: ignore[method-assign]
+            return_value=broker
+        )
+
+        async def evaluate(
+            _agent_id: UUID, _sha256: str, *, seed: int, **kwargs: object
+        ) -> ScoreReport:
+            assert kwargs["inference_session_id"] == "top5-session"
+            assert kwargs["inference_grant_id"] == grant_id
+            assert kwargs["inference_slot_id"] == job.slot_id
+            assert kwargs["inference_ticket_deadline"] == deadline
+            return _report(str(seed), 0.8).model_copy(
+                update={"seed": seed, "bench_version": 7}
+            )
+
+        worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
+        await worker._run_top5_confirmation_lane()
+
+        worker._activate_ticket_inference.assert_awaited_once_with(job)
+        assert worker._evaluate.await_count == 3
+        dittobench.cancel_inference_session.assert_awaited_once_with("top5-session")
+        platform.submit_top5_confirmation_score.assert_awaited_once()
+
 
 class TestRunOnce:
     async def test_capacity_mismatch_rejects_work_and_advertises_no_healthy_slots(
@@ -1155,7 +1221,7 @@ class TestRunOnce:
 
         with pytest.raises(
             ValidatorInfrastructureError,
-            match="ticket carried no capability",
+            match="legacy benchmark ticket remained",
         ):
             await worker._score_job(_job("5MinerA" + "x" * 41))
 

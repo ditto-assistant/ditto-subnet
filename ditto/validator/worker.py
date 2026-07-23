@@ -92,6 +92,7 @@ if TYPE_CHECKING:
     from ditto.validator.dittobench import (
         DittobenchClient,
         DittobenchProgressSnapshot,
+        InferenceBrokerSession,
         ProgressCallback,
     )
     from ditto.validator.platform import PlatformClient
@@ -1164,12 +1165,31 @@ class ValidatorWorker:
                     champion_agent_id=plan.champion.agent_id,
                     member_agent_id=entry.agent_id,
                 )
-                report = await self._evaluate_confirmation_report(
-                    entry.agent_id,
-                    entry.sha256,
-                    seeds=member.seeds_to_score,
-                    bench_version=job.bench_version,
-                )
+                broker = await self._activate_ticket_inference(job)
+                try:
+                    report = await self._evaluate_confirmation_report(
+                        entry.agent_id,
+                        entry.sha256,
+                        seeds=member.seeds_to_score,
+                        bench_version=job.bench_version,
+                        inference_session_id=(
+                            broker.session_id if broker is not None else None
+                        ),
+                        inference_grant_id=(
+                            job.inference.grant_id
+                            if broker is not None and job.inference is not None
+                            else None
+                        ),
+                        inference_slot_id=(job.slot_id if broker is not None else None),
+                        inference_ticket_deadline=(
+                            job.deadline if broker is not None else None
+                        ),
+                    )
+                finally:
+                    if broker is not None:
+                        await self._dittobench.cancel_inference_session(
+                            broker.session_id
+                        )
                 if report is None:
                     continue
                 await self._platform.submit_top5_confirmation_score(
@@ -1192,6 +1212,10 @@ class ValidatorWorker:
         *,
         seeds: Sequence[int],
         bench_version: int | None,
+        inference_session_id: str | None = None,
+        inference_grant_id: UUID | None = None,
+        inference_slot_id: str | None = None,
+        inference_ticket_deadline: datetime | None = None,
     ) -> ScoreReport | None:
         """Evaluate fresh seeds and package one signed append-only receipt."""
         reports: list[ScoreReport] = []
@@ -1203,6 +1227,10 @@ class ValidatorWorker:
                         expected_sha256,
                         seed=seed,
                         bench_version=bench_version,
+                        inference_session_id=inference_session_id,
+                        inference_grant_id=inference_grant_id,
+                        inference_slot_id=inference_slot_id,
+                        inference_ticket_deadline=inference_ticket_deadline,
                     )
                 )
             except (PlatformError, DittobenchError) as exc:
@@ -1632,6 +1660,73 @@ class ValidatorWorker:
                 e,
             )
 
+    async def _activate_ticket_inference(
+        self, job: JobResponse
+    ) -> InferenceBrokerSession | None:
+        """Exchange and bind inference for one v7 ticket.
+
+        Legacy tickets must drain before fleet-wide enforcement. They never
+        switch to the mutable platform route because doing so would change the
+        frozen v6 provider and no-think semantics mid-lease.
+        """
+        bench_version = job.bench_version or DEFAULT_BENCH_VERSION
+        if bench_version < 7:
+            if getattr(self._config, "inference_proxy_required", False) is True:
+                raise ValidatorInfrastructureError(
+                    "legacy benchmark ticket remained after platform inference "
+                    "enforcement; drain or expire it before cutover"
+                )
+            return None
+        if job.inference is None:
+            raise ValidatorInfrastructureError(
+                f"benchmark v{bench_version} requires platform inference "
+                "but the ticket carried no capability"
+            )
+
+        broker = await self._dittobench.prepare_inference_session()
+        try:
+            exchange = await self._platform.exchange_inference_grant(
+                job.inference.grant_id,
+                broker.broker_public_key,
+                job.inference.exchange_url,
+            )
+            route_invalid = (
+                exchange.provider is None
+                or exchange.profile_revision is None
+                or exchange.model is None
+                or job.inference.provider is None
+                or job.inference.profile_revision is None
+                or exchange.provider != job.inference.provider
+                or exchange.profile_revision != job.inference.profile_revision
+                or exchange.model not in job.inference.allowed_models
+            )
+            if (
+                exchange.grant_id != job.inference.grant_id
+                or exchange.proxy_url != job.inference.proxy_url
+                or exchange.expires_at > job.inference.expires_at
+                or exchange.expires_at > job.deadline
+                or route_invalid
+            ):
+                raise PlatformError("inference exchange escaped ticket bounds")
+            await self._dittobench.activate_inference_session(
+                broker,
+                grant_id=exchange.grant_id,
+                agent_id=job.agent_id,
+                slot_id=job.slot_id,
+                ticket_deadline=job.deadline,
+                bearer=exchange.bearer,
+                proxy_url=exchange.proxy_url,
+                generation=exchange.generation,
+                expires_at=exchange.expires_at,
+                provider=exchange.provider,
+                profile_revision=exchange.profile_revision,
+                model=exchange.model,
+            )
+        except BaseException:
+            await self._dittobench.cancel_inference_session(broker.session_id)
+            raise
+        return broker
+
     async def _score_job(self, job: JobResponse) -> ScoreReport:
         """Score one issued ticket against its platform-pinned dataset.
 
@@ -1663,78 +1758,13 @@ class ValidatorWorker:
                 f"re-derive from pinned block hash "
                 f"{job.dataset_seed_block_hash!r}; refusing to score"
             )
-        inference_session_id: str | None = None
-        inference_grant_id: UUID | None = None
-        bench_requires_ticket_inference = (
-            job.bench_version is not None and job.bench_version >= 7
+        broker = await self._activate_ticket_inference(job)
+        inference_session_id = broker.session_id if broker is not None else None
+        inference_grant_id = (
+            job.inference.grant_id
+            if broker is not None and job.inference is not None
+            else None
         )
-        fleet_requires_ticket_inference = (
-            getattr(self._config, "inference_proxy_required", False) is True
-        )
-        if job.inference is None and (
-            bench_requires_ticket_inference or fleet_requires_ticket_inference
-        ):
-            benchmark = (
-                f"benchmark v{job.bench_version}"
-                if job.bench_version is not None
-                else "validator configuration"
-            )
-            raise ValidatorInfrastructureError(
-                f"{benchmark} requires platform inference "
-                "but the ticket carried no capability"
-            )
-        # During the bounded transition, v6 tickets may carry an additive offer
-        # but must retain their existing frozen relay route. V7 always consumes
-        # the offer. Once fleet-wide enforcement is enabled after v6 drains, any
-        # residual legacy ticket also uses platform inference rather than a
-        # validator provider credential.
-        if job.inference is not None and (
-            bench_requires_ticket_inference or fleet_requires_ticket_inference
-        ):
-            broker = await self._dittobench.prepare_inference_session()
-            try:
-                exchange = await self._platform.exchange_inference_grant(
-                    job.inference.grant_id,
-                    broker.broker_public_key,
-                    job.inference.exchange_url,
-                )
-                v7_route_invalid = (job.bench_version or 0) >= 7 and (
-                    exchange.provider is None
-                    or exchange.profile_revision is None
-                    or exchange.model is None
-                    or job.inference.provider is None
-                    or job.inference.profile_revision is None
-                    or exchange.provider != job.inference.provider
-                    or exchange.profile_revision != job.inference.profile_revision
-                    or exchange.model not in job.inference.allowed_models
-                )
-                if (
-                    exchange.grant_id != job.inference.grant_id
-                    or exchange.proxy_url != job.inference.proxy_url
-                    or exchange.expires_at > job.inference.expires_at
-                    or exchange.expires_at > job.deadline
-                    or v7_route_invalid
-                ):
-                    raise PlatformError("inference exchange escaped ticket bounds")
-                await self._dittobench.activate_inference_session(
-                    broker,
-                    grant_id=exchange.grant_id,
-                    agent_id=job.agent_id,
-                    slot_id=job.slot_id,
-                    ticket_deadline=job.deadline,
-                    bearer=exchange.bearer,
-                    proxy_url=exchange.proxy_url,
-                    generation=exchange.generation,
-                    expires_at=exchange.expires_at,
-                    provider=exchange.provider,
-                    profile_revision=exchange.profile_revision,
-                    model=exchange.model,
-                )
-            except BaseException:
-                await self._dittobench.cancel_inference_session(broker.session_id)
-                raise
-            inference_session_id = broker.session_id
-            inference_grant_id = job.inference.grant_id
         try:
             return await self._evaluate_and_submit(
                 job.agent_id,
@@ -1752,8 +1782,8 @@ class ValidatorWorker:
                 ),
             )
         finally:
-            if inference_session_id is not None:
-                await self._dittobench.cancel_inference_session(inference_session_id)
+            if broker is not None:
+                await self._dittobench.cancel_inference_session(broker.session_id)
 
     async def _evaluate(
         self,
@@ -1764,6 +1794,10 @@ class ValidatorWorker:
         dataset_sha256: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
+        inference_session_id: str | None = None,
+        inference_grant_id: UUID | None = None,
+        inference_slot_id: str | None = None,
+        inference_ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Run an unticketed re-score with generic, agent-free heartbeats.
 
@@ -1785,6 +1819,10 @@ class ValidatorWorker:
                 dataset_sha256=dataset_sha256,
                 run_size=run_size,
                 bench_version=bench_version,
+                inference_session_id=inference_session_id,
+                inference_grant_id=inference_grant_id,
+                inference_slot_id=inference_slot_id,
+                inference_ticket_deadline=inference_ticket_deadline,
             )
         finally:
             heartbeat_stop.set()

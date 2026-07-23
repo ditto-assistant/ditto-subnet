@@ -864,3 +864,22 @@ def test_protocol_v10_heartbeat_binds_all_slot_capacity() -> None:
         raise AssertionError("v9 must reject an unsigned capacity extension")
     except ValueError as error:
         assert "v10" in str(error)
+
+
+def test_protocol_v11_heartbeat_uses_the_platform_v11_domain() -> None:
+    """Keep protocol 11 signatures in the platform verifier's domain."""
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 11
+    capacity = BenchmarkCapacity(configured_slots=2, healthy_slots=["slot-0", "slot-1"])
+
+    message = heartbeat_signing_message(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+    )
+
+    assert message.startswith(b"ditto-validator-heartbeat:v11:")
+    assert b":11:" in message

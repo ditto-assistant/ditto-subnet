@@ -413,8 +413,9 @@ def heartbeat_signing_message(
             raise ValueError("heartbeat protocol v10+ requires scorer capabilities")
         if benchmark_capacity is None:
             raise ValueError("heartbeat protocol v10+ requires benchmark capacity")
+        signing_revision = "v11" if protocol_version >= 11 else "v10"
         return (
-            "ditto-validator-heartbeat:v10:"
+            f"ditto-validator-heartbeat:{signing_revision}:"
             f"{validator_hotkey}:{software_version}:{protocol_version}:"
             f"{code_digest}:{state}:{active_agent_id or ''}:"
             f"{system_metrics_signing_token(system_metrics)}:"
