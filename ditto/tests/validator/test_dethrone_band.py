@@ -17,6 +17,7 @@ import pytest
 
 from ditto.validator.weights import (
     _beats,
+    _dethrone_band_scale,
     _effective_composite,
     _entry_confirmations,
     _entry_seed_composites,
@@ -78,6 +79,85 @@ class TestEntryStderr:
         assert _entry_stderr(_e("a", 0.5, stderr=float("nan"))) is None
         assert _entry_stderr(_e("a", 0.5, stderr=float("inf"))) is None
         assert _entry_stderr(_e("a", 0.5, stderr=-0.01)) is None
+
+
+class TestVersionedHighScoreBandDecay:
+    def test_pre_v6_band_is_byte_identical(self) -> None:
+        champion = _e("champ", 0.95, bench_version=5)
+        challenger = _e("chall", 0.956, bench_version=5, minutes=1)
+
+        assert _dethrone_band_scale(challenger, champion, 0.95) == 1.0
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is False
+
+    def test_mixed_version_comparison_keeps_legacy_band(self) -> None:
+        champion = _e("champ", 0.95, bench_version=6)
+        challenger = _e("chall", 0.956, bench_version=5, minutes=1)
+
+        assert _dethrone_band_scale(challenger, champion, 0.95) == 1.0
+
+    def test_v6_below_decay_start_keeps_full_band(self) -> None:
+        champion = _e("champ", 0.60, bench_version=6)
+        challenger = _e("chall", 0.606, bench_version=6, minutes=1)
+
+        assert _dethrone_band_scale(challenger, champion, 0.60) == 1.0
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is False
+
+    @pytest.mark.parametrize("bench_version", [6, 7, 8])
+    def test_v6_and_later_decay_the_band_near_the_ceiling(
+        self, bench_version: int
+    ) -> None:
+        champion = _e("champ", 0.95, bench_version=bench_version)
+        challenger = _e("chall", 0.954, bench_version=bench_version, minutes=1)
+
+        expected_scale = math.exp(-2.0 * (0.95 - 0.60))
+        assert _dethrone_band_scale(challenger, champion, 0.95) == pytest.approx(
+            expected_scale
+        )
+        assert 0.954 - 0.95 < 0.007
+        assert 0.007 * expected_scale < 0.954 - 0.95
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is True
+
+    def test_v6_decay_applies_to_the_statistical_band(self) -> None:
+        champion = _e("champ", 0.95, stderr=0.01, bench_version=6)
+        challenger = _e("chall", 0.962, stderr=0.01, bench_version=6, minutes=1)
+        legacy_statistical_band = 1.64 * math.sqrt(2 * 0.01**2)
+
+        assert legacy_statistical_band > 0.962 - 0.95
+        assert legacy_statistical_band * math.exp(-0.7) < 0.962 - 0.95
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=1.64) is True
+
+    def test_v6_decay_applies_to_the_paired_seed_band(self) -> None:
+        champion = _e(
+            "champ",
+            0.95,
+            bench_version=6,
+            confirmations=[0.94, 0.95, 0.96],
+            seeds=[10, 20, 30],
+        )
+        challenger = _e(
+            "chall",
+            0.96,
+            bench_version=6,
+            confirmations=[0.93, 0.96, 0.985],
+            seeds=[10, 20, 30],
+            minutes=1,
+        )
+        paired = _paired_dethrone(challenger, champion, 1.64)
+
+        assert paired is not None
+        lead, champion_reference, standard_error = paired
+        legacy_band = 1.64 * standard_error
+        assert lead < legacy_band
+        assert lead > legacy_band * math.exp(-2.0 * (champion_reference - 0.60))
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=1.64) is True
+
+    def test_decay_is_bounded_at_a_perfect_score(self) -> None:
+        champion = _e("champ", 1.2, bench_version=7)
+        challenger = _e("chall", 1.3, bench_version=7, minutes=1)
+
+        assert _dethrone_band_scale(challenger, champion, 1.2) == pytest.approx(
+            math.exp(-2.0 * (1.0 - 0.60))
+        )
 
 
 class TestTop5ConfirmationSet:

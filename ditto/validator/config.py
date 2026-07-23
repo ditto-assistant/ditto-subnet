@@ -28,6 +28,11 @@ from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
 # while the statistical band below separately protects against measurement noise.
 # Keep this frozen across validators because it changes the deterministic KOTH fold.
 KOTH_MARGIN = 0.007  # absolute composite-point dethrone hysteresis
+# Bench v6 and later shrink the entire dethrone band smoothly as the incumbent
+# approaches a perfect score. Legacy or mixed-version comparisons stay unchanged.
+KOTH_BAND_DECAY_MIN_BENCH_VERSION = 6
+KOTH_BAND_DECAY_START_COMPOSITE = 0.60
+KOTH_BAND_DECAY_RATE = 2.0
 KOTH_TAIL_SIZE = 4  # ranked runners-up after the champion
 KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
