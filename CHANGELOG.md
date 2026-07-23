@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.25.2 (2026-07-23)
+
+### Bug Fixes
+
+- Advance validator slots after sandbox OOM
+  ([#223](https://github.com/ditto-assistant/ditto-subnet/pull/223),
+  [`f94e76e`](https://github.com/ditto-assistant/ditto-subnet/commit/f94e76e7404cfdc8e6de2817952afd87ba948112))
+
+
 ## v0.25.1 (2026-07-23)
 
 ### Bug Fixes
