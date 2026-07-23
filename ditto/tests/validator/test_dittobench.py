@@ -218,9 +218,8 @@ async def test_v7_capability_propagates_exact_calibration_identity() -> None:
         dittobench_capabilities_timeout_seconds=1,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        observed = await DittobenchClient(  # type: ignore[arg-type]
-            config, http
-        ).scorer_benchmark_capability(_stack())
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
 
     assert observed.supported_bench_versions == (2, 3, 4, 5, 6, 7)
     assert observed.v7_calibration is not None
