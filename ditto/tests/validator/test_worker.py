@@ -2076,6 +2076,36 @@ class TestRunOnce:
         await worker.run_once()
 
         dittobench.score_tarball.assert_awaited_once()
+
+    async def test_validator_scoped_seed_ticket_is_scored(self) -> None:
+        agent_id = uuid4()
+        block_hash = "0x" + "56" * 32
+        validator_hotkey = _config().validator_hotkey
+        job = _job("5MinerA" + "x" * 41).model_copy(
+            update={
+                "agent_id": agent_id,
+                "dataset_seed_block_hash": block_hash,
+                "seed_scope": "validator",
+                "seed": derive_seed(block_hash, agent_id, validator_hotkey),
+            }
+        )
+        platform = _platform_with_ledger(
+            jobs=[job], ledger=[_entry("5MinerA" + "x" * 41, 0.9)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.9))
+        keypair = MagicMock(sign=MagicMock(return_value=b"\x01" * 64))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(put_weights=AsyncMock()),
+            keypair=keypair,
+        )
+
+        await worker.run_once()
+
+        dittobench.score_tarball.assert_awaited_once()
         platform.submit_score.assert_awaited_once()
 
     async def test_lapsed_ticket_is_skipped_unscored(self) -> None:

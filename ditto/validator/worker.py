@@ -1751,7 +1751,16 @@ class ValidatorWorker:
         if (
             job.seed is not None
             and job.dataset_seed_block_hash
-            and not seed_matches(job.dataset_seed_block_hash, job.agent_id, job.seed)
+            and not seed_matches(
+                job.dataset_seed_block_hash,
+                job.agent_id,
+                job.seed,
+                validator_hotkey=(
+                    self._config.validator_hotkey
+                    if job.seed_scope == "validator"
+                    else None
+                ),
+            )
         ):
             raise PlatformError(
                 f"ticket seed {job.seed} for agent {job.agent_id} does not "
