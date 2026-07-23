@@ -31,6 +31,13 @@ The root Docker Compose stack starts six services:
 | `ollama` | Serves the embedding model used for memory scoring. |
 | `pylon` | Submits weights with the validator wallet. |
 
+During the v7 transition, `ollama` remains required for backwards-compatible
+v2-v6 work. A v7 ticket instead routes the same locked 768-dimensional embed
+operation through `dittobench-api` to the platform-owned OpenRouter profile;
+the functional hosted-vector preflight runs after ticket exchange and before
+the miner container starts. No OpenRouter credential is installed on the
+validator.
+
 The validator is stateless: the queue and score ledger live on the platform,
 and Pylon keeps in-flight weight state in a named volume. The platform screens
 every submission before it reaches validators and ships a verified pre-built

@@ -103,12 +103,18 @@ def _parse_v7_calibration(payload: object) -> V7InferenceCalibration | None:
 
 
 def _is_embedding_infrastructure_failure(error: str) -> bool:
-    """Identify scorer failures from the validator-owned Ollama route."""
+    """Identify legacy scorer failures from a validator-owned embedding route.
+
+    Kept only for the bounded mixed-version rollout. New scorers emit the
+    structured ``embedding_provider_unavailable`` failure code below.
+    """
     normalized = error.lower()
     return (
         "host.docker.internal:11434" in normalized
         or "ollama embed request" in normalized
         or ("ollama" in normalized and "embedding" in normalized)
+        or "embedding service unavailable" in normalized
+        or "embedding provider timed out" in normalized
     )
 
 
@@ -124,6 +130,10 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # upstream provider degraded mid-run). Also validator-side infrastructure, so
     # back off instead of failing the agent and re-leasing it in a loop.
     "model_relay_unavailable",
+    # The platform-owned hosted embedding route failed or could not prove
+    # complete delivery. The scorer fails closed and the validator retries the
+    # whole ticket later; the agent must never receive a score for this attempt.
+    "embedding_provider_unavailable",
 }
 
 
