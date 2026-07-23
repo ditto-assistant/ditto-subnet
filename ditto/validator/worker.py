@@ -2061,7 +2061,9 @@ class ValidatorWorker:
                 inference_session_id=inference_session_id,
                 inference_grant_id=inference_grant_id,
                 inference_slot_id=inference_slot_id,
-                inference_ticket_deadline=ticket_deadline,
+                inference_ticket_deadline=(
+                    ticket_deadline if inference_session_id is not None else None
+                ),
             )
             await self._publish_benchmark_progress(
                 "finalizing", completed=report.n, total=report.n
