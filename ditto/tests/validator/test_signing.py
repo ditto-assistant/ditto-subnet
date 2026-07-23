@@ -14,8 +14,8 @@ from uuid import UUID
 
 import bittensor
 
-from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
@@ -902,7 +902,7 @@ def _signed_ledger_entry(*, tamper_median: bool = False) -> LedgerEntry:
             run_id=run_id,
             composite=composite,
             seed=i,
-            bench_version=4,
+            bench_version=7,
             transcript_sha256="cd" * 32,
         )
         proofs.append(
@@ -911,7 +911,7 @@ def _signed_ledger_entry(*, tamper_median: bool = False) -> LedgerEntry:
                 run_id=run_id,
                 composite=composite,
                 seed=i,
-                bench_version=4,
+                bench_version=7,
                 ticket_deadline=_DEADLINE,
                 transcript_sha256="cd" * 32,
                 signature=signature,
@@ -949,3 +949,15 @@ def test_ledger_entry_rejects_tampered_receipt() -> None:
     proofs = list(entry.score_proofs)
     proofs[0] = proofs[0].model_copy(update={"composite": 0.41})
     assert not verify_ledger_entry(entry.model_copy(update={"score_proofs": proofs}))
+
+
+def test_legacy_unsigned_ledger_entry_remains_valid() -> None:
+    entry = _signed_ledger_entry().model_copy(
+        update={"bench_version": 6, "score_proofs": [], "signature": None}
+    )
+    assert verify_ledger_entry(entry)
+
+
+def test_v7_ledger_entry_requires_signed_quorum() -> None:
+    entry = _signed_ledger_entry().model_copy(update={"score_proofs": []})
+    assert not verify_ledger_entry(entry)

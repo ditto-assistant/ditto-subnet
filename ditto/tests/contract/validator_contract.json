@@ -1874,6 +1874,10 @@
           "screened_images": {
             "type": "boolean"
           },
+          "signed_score_quorum": {
+            "default": false,
+            "type": "boolean"
+          },
           "source_build_fallback": {
             "type": "boolean"
           },

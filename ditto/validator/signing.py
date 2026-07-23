@@ -169,6 +169,12 @@ def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
     receipt must verify, validator hotkeys must be unique, and the ledger row
     must exactly match the deterministic lower-median receipt.
     """
+    # Historical v2-v6 ledger rows predate quorum receipts. Keep them readable
+    # and weightable during the v7 fleet cutover; v7 is the first contract that
+    # makes signed quorum evidence mandatory.
+    if entry.bench_version is None or entry.bench_version < 7:
+        return True
+
     proofs = entry.score_proofs
     if len(proofs) < quorum:
         return False

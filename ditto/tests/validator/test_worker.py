@@ -697,7 +697,8 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 11
+        assert heartbeat.protocol_version == 12
+        assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
         assert heartbeat.capabilities is not None
@@ -1240,7 +1241,8 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 11
+        assert heartbeat.protocol_version == 12
+        assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
     async def test_collector_failure_degrades_to_unknown_stack_health(self) -> None:

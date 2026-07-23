@@ -174,6 +174,7 @@ def validator_capabilities_and_stack() -> tuple[
             "VALIDATOR_SANDBOX_EGRESS_RESTRICTED", default=False
         ),
         ticket_inference=True,
+        signed_score_quorum=True,
         executor_isolation=cast(
             ExecutorIsolation,
             os.environ.get("VALIDATOR_EXECUTOR_ISOLATION", "unknown"),

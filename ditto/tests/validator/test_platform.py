@@ -273,7 +273,7 @@ async def test_ledger_rejects_entry_without_verifiable_quorum_receipts() -> None
                         "run_id": "run_1",
                         "seed": 42,
                         "validator_hotkey": keypair.ss58_address,
-                        "bench_version": 4,
+                        "bench_version": 7,
                         "signature": "cd" * 64,
                         "score_proofs": [],
                         "status": "scored",

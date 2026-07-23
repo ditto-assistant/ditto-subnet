@@ -78,8 +78,8 @@ from ditto.validator.weights import (
     apply_miner_emission_cap,
     compute_weights,
     contested_confirmation_set,
-    top5_confirmation_set,
     select_champion,
+    top5_confirmation_set,
 )
 
 if TYPE_CHECKING:
