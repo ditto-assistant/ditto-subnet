@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.26.0 (2026-07-23)
+
+### Features
+
+- Verify signed kings and react to changes
+  ([#188](https://github.com/ditto-assistant/ditto-subnet/pull/188),
+  [`de1f8f0`](https://github.com/ditto-assistant/ditto-subnet/commit/de1f8f0b907115b9b0c40e861ea4f4bf98017bbe))
+
+
 ## v0.25.3 (2026-07-23)
 
 ### Bug Fixes
