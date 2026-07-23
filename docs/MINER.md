@@ -161,13 +161,13 @@ result.
   equally to the composite; bounded efficiency, consistency, and integrity
   checks can reduce it.
 - Each miner competes with its highest eligible score. A challenger dethrones
-  the incumbent only after clearing the greater of a fixed 0.005 composite-point
+  the incumbent only after clearing the greater of a fixed 0.007 composite-point
   hysteresis and the statistical error band; a near-miss is settled by re-scoring
   both agents on shared seeds rather than dataset luck.
-- The champion receives 90% of competitive weight; the next four distinct
-  miners split 10%. The competitive vector receives 100% of available miner
-  emission — nothing is burned while eligible miners exist. With no eligible
-  miners, 100% is burned.
+- Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
+  and next four distinct miners, respectively. The competitive vector receives
+  100% of available miner emission — nothing is burned while eligible miners
+  exist. With no eligible miners, 100% is burned.
 
 Scores, signatures, and each run's graded transcript are published so results
 can be independently checked: regenerate the dataset from the published seed,

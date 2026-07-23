@@ -3,11 +3,11 @@
 The incentive mechanism (``docs/VALIDATOR.md``): the reigning
 all-time-high holder is the **champion** and takes ~all emissions; a challenger
 only dethrones it by beating its score by a fixed **composite-point
-hysteresis** (default 0.005);
+hysteresis** (default 0.007);
 ties and sub-margin gains keep the incumbent, so **first-to-submit wins** and a
 downloaded copy — which at best ties — never earns. A small **participation
-tail** (default 10% over the next few miners) keeps the subnet populated without
-reopening the copy hole.
+tail** (35% distributed by rank over the next four miners) keeps the subnet
+populated without reopening the copy hole.
 
 This is a *deterministic* fold over the platform's
 best-score-per-payment-coldkey ledger
@@ -145,7 +145,7 @@ def compute_weights(
     *,
     margin: float,
     tail_size: int,
-    champion_share: float,
+    rank_shares: Sequence[float],
     dethrone_z: float = 0.0,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
@@ -163,8 +163,9 @@ def compute_weights(
     statistical band ``dethrone_z * sqrt(se_c² + se_champ²)`` — so a challenger
     inside the measurement noise cannot flip the crown. With no stderr the
     band is exactly ``margin`` composite points. The
-    champion gets ``champion_share``; the next ``tail_size`` miners by composite
-    split ``1 - champion_share`` equally.
+    The champion and next ``tail_size`` miners receive the corresponding frozen
+    ``rank_shares`` in order. Pylon normalizes a short recipient prefix, so only
+    these ratios matter when fewer than five eligible miners exist.
 
     The platform first selects one authoritative row per agent, then one best
     eligible generation per payment-time coldkey, and the whole ledger
@@ -198,17 +199,17 @@ def compute_weights(
     # Order-independent of when each agent happened to be scored — only creation
     # order matters.
     champion = _champion(scored, margin, dethrone_z)
-    weights: dict[str, float] = {champion.miner_hotkey: champion_share}
+    if len(rank_shares) != tail_size + 1:
+        raise ValueError("rank_shares must contain champion plus tail_size entries")
+    if any(not math.isfinite(share) or share <= 0.0 for share in rank_shares):
+        raise ValueError("rank_shares must contain only finite positive values")
+    if not math.isclose(sum(rank_shares), 1.0, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError("rank_shares must sum to 1")
 
-    # Tail: the next distinct miners by composite (highest first), excluding the
-    # champion, split the remaining share equally.
-    tail_pool = 1.0 - champion_share
-    if tail_size > 0 and tail_pool > 0.0:
-        runners_up = _tail(scored, champion, tail_size)
-        if runners_up:
-            per_miner = tail_pool / len(runners_up)
-            for e in runners_up:
-                weights[e.miner_hotkey] = per_miner
+    recipients = [champion, *_tail(scored, champion, tail_size)]
+    weights = {
+        entry.miner_hotkey: rank_shares[index] for index, entry in enumerate(recipients)
+    }
 
     return weights
 

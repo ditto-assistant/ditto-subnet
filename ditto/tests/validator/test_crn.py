@@ -93,7 +93,7 @@ def _cfg() -> Any:
     cfg.netuid = 3
     cfg.koth_margin = 0.01
     cfg.koth_tail_size = 4
-    cfg.koth_champion_share = 0.9
+    cfg.koth_rank_shares = (0.65, 0.14, 0.10, 0.07, 0.04)
     cfg.koth_dethrone_z = 1.64
     cfg.koth_confirmation_seeds = 3
     cfg.miner_emission_share = 1.0

@@ -192,10 +192,10 @@ class TestBeats:
 
     def test_fixed_margin_does_not_grow_into_a_ceiling_lock(self) -> None:
         champ = _e("champ", 0.930, minutes=0)
-        # The production 0.005-point hysteresis lets a real 0.006 improvement
+        # The production 0.007-point hysteresis lets a real 0.008 improvement
         # contend near the ceiling. The old 2% relative rule required 0.0186.
-        assert not _beats(_e("tie", 0.935, minutes=1), champ, 0.005, 0.0)
-        assert _beats(_e("better", 0.936, minutes=1), champ, 0.005, 0.0)
+        assert not _beats(_e("tie", 0.937, minutes=1), champ, 0.007, 0.0)
+        assert _beats(_e("better", 0.938, minutes=1), champ, 0.007, 0.0)
 
     def test_statistical_band_blocks_a_sub_uncertainty_lead(self) -> None:
         champ = _champ()  # stderr 0.03
@@ -238,7 +238,7 @@ class TestComputeWeightsWithBand:
             _e("champ", 0.80, stderr=0.03, minutes=0),
             _e("chal", 0.85, stderr=0.03, minutes=1),
         ]
-        w = compute_weights(entries, margin=0.04, tail_size=0, champion_share=1.0)
+        w = compute_weights(entries, margin=0.04, tail_size=0, rank_shares=(1.0,))
         assert w == {"chal": pytest.approx(1.0)}  # 0.05 lead > flat 0.04
 
     def test_band_keeps_incumbent_under_uncertainty(self) -> None:
@@ -249,7 +249,7 @@ class TestComputeWeightsWithBand:
         # Same entries, now with the statistical band active: the 0.05 lead is
         # inside the ~0.0696 band, so the incumbent keeps the crown.
         w = compute_weights(
-            entries, margin=0.04, tail_size=0, champion_share=1.0, dethrone_z=1.64
+            entries, margin=0.04, tail_size=0, rank_shares=(1.0,), dethrone_z=1.64
         )
         assert w == {"champ": pytest.approx(1.0)}
 
@@ -259,7 +259,7 @@ class TestComputeWeightsWithBand:
             _e("chal", 0.90, stderr=0.03, minutes=1),
         ]
         w = compute_weights(
-            entries, margin=0.04, tail_size=0, champion_share=1.0, dethrone_z=1.64
+            entries, margin=0.04, tail_size=0, rank_shares=(1.0,), dethrone_z=1.64
         )
         assert w == {"chal": pytest.approx(1.0)}
 
@@ -270,9 +270,9 @@ class TestComputeWeightsWithBand:
             _e("champ", 0.80, minutes=0),
             _e("chal", 0.85, minutes=1),
         ]
-        base = compute_weights(entries, margin=0.04, tail_size=0, champion_share=1.0)
+        base = compute_weights(entries, margin=0.04, tail_size=0, rank_shares=(1.0,))
         withz = compute_weights(
-            entries, margin=0.04, tail_size=0, champion_share=1.0, dethrone_z=1.64
+            entries, margin=0.04, tail_size=0, rank_shares=(1.0,), dethrone_z=1.64
         )
         assert base == withz == {"chal": pytest.approx(1.0)}
 
@@ -285,7 +285,7 @@ class TestComputeWeightsWithConfirmations:
             _e("champ", 0.80, confirmations=[0.80, 0.79, 0.81], minutes=0),
             _e("chal", 0.90, confirmations=[0.90, 0.70, 0.72], minutes=1),
         ]
-        w = compute_weights(entries, margin=0.05, tail_size=0, champion_share=1.0)
+        w = compute_weights(entries, margin=0.05, tail_size=0, rank_shares=(1.0,))
         assert w == {"champ": pytest.approx(1.0)}
 
     def test_median_over_seeds_allows_a_replicated_dethrone(self) -> None:
@@ -293,7 +293,7 @@ class TestComputeWeightsWithConfirmations:
             _e("champ", 0.80, confirmations=[0.80, 0.79, 0.81], minutes=0),
             _e("chal", 0.90, confirmations=[0.90, 0.88, 0.92], minutes=1),
         ]
-        w = compute_weights(entries, margin=0.05, tail_size=0, champion_share=1.0)
+        w = compute_weights(entries, margin=0.05, tail_size=0, rank_shares=(1.0,))
         assert w == {"chal": pytest.approx(1.0)}
 
 

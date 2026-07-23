@@ -121,9 +121,13 @@ def _entry(
     )
 
 
-# Mixed value types (float margin/share, int tail_size), so type as Any to
-# unpack cleanly into compute_weights' int/float params under `mypy ditto/`.
-_KOTH: dict[str, Any] = {"margin": 0.01, "tail_size": 4, "champion_share": 0.9}
+# Mixed value types (float margin, int tail_size, tuple shares), so type as Any
+# to unpack cleanly into compute_weights' parameters under `mypy ditto/`.
+_KOTH: dict[str, Any] = {
+    "margin": 0.01,
+    "tail_size": 4,
+    "rank_shares": (0.65, 0.14, 0.10, 0.07, 0.04),
+}
 
 
 class TestComputeWeights:
@@ -135,7 +139,7 @@ class TestComputeWeights:
 
     def test_single_miner_takes_all(self) -> None:
         # No runners-up: the champion is the whole vector.
-        assert compute_weights([_entry("a", 0.8)], **_KOTH) == {"a": 0.9}
+        assert compute_weights([_entry("a", 0.8)], **_KOTH) == {"a": 0.65}
 
     def test_champion_and_tail_split(self) -> None:
         entries = [
@@ -144,42 +148,77 @@ class TestComputeWeights:
             _entry("r2", 0.50, first_seen=_T0 + timedelta(minutes=2)),
         ]
         w = compute_weights(entries, **_KOTH)
-        assert w["champ"] == pytest.approx(0.9)
-        # 0.1 split over the two runners-up.
-        assert w["r1"] == pytest.approx(0.05)
-        assert w["r2"] == pytest.approx(0.05)
+        assert w["champ"] == pytest.approx(0.65)
+        assert w["r1"] == pytest.approx(0.14)
+        assert w["r2"] == pytest.approx(0.10)
+
+    def test_full_emission_set_uses_ranked_distribution(self) -> None:
+        entries = [
+            _entry(
+                f"m{i}",
+                0.90 - i * 0.01,
+                first_seen=_T0 + timedelta(minutes=i),
+            )
+            for i in range(5)
+        ]
+        assert compute_weights(entries, **_KOTH) == pytest.approx(
+            {"m0": 0.65, "m1": 0.14, "m2": 0.10, "m3": 0.07, "m4": 0.04}
+        )
+
+    @pytest.mark.parametrize(
+        "rank_shares",
+        [
+            (),
+            (0.65,),
+            (0.65, 0.14, 0.10, 0.07, 0.0),
+            (0.65, 0.14, float("nan"), 0.07, 0.04),
+            (0.65, 0.14, 0.10, 0.07, 0.03),
+        ],
+    )
+    def test_rejects_invalid_rank_distribution(
+        self, rank_shares: tuple[float, ...]
+    ) -> None:
+        with pytest.raises(ValueError):
+            compute_weights(
+                [_entry("champ", 0.9)],
+                margin=0.01,
+                tail_size=4,
+                rank_shares=rank_shares,
+            )
 
     def test_sub_margin_challenger_does_not_dethrone(self) -> None:
-        # 'first' created earlier; 'second' beats it but by less than 1% => the
-        # incumbent (first-seen) keeps the crown.
+        # 'first' created earlier; 'second' beats it by less than the fixed 0.01
+        # composite-point margin, so the incumbent keeps the crown.
         first = _entry("first", 0.800, first_seen=_T0)
         second = _entry("second", 0.805, first_seen=_T0 + timedelta(minutes=1))
         w = compute_weights([first, second], **_KOTH)
-        assert w["first"] == pytest.approx(0.9)
-        assert w["second"] == pytest.approx(0.1)
+        assert w["first"] == pytest.approx(0.65)
+        assert w["second"] == pytest.approx(0.14)
 
     def test_over_margin_challenger_dethrones(self) -> None:
         first = _entry("first", 0.80, first_seen=_T0)
         second = _entry("second", 0.90, first_seen=_T0 + timedelta(minutes=1))
         w = compute_weights([first, second], **_KOTH)
-        assert w["second"] == pytest.approx(0.9)
-        assert w["first"] == pytest.approx(0.1)
+        assert w["second"] == pytest.approx(0.65)
+        assert w["first"] == pytest.approx(0.14)
 
     def test_scoring_order_independent(self) -> None:
         # Same entries in a different list order must crown the same champion:
         # the fold sorts by first_seen, not input order.
         a = _entry("a", 0.80, first_seen=_T0)
         b = _entry("b", 0.807, first_seen=_T0 + timedelta(minutes=1))
-        c = _entry("c", 0.81, first_seen=_T0 + timedelta(minutes=2))
+        c = _entry("c", 0.811, first_seen=_T0 + timedelta(minutes=2))
         forward = compute_weights([a, b, c], **_KOTH)
         shuffled = compute_weights([c, a, b], **_KOTH)
         assert forward == shuffled
-        # a=0.80 -> b 0.807 !> 0.808 (no) -> c 0.81 > 0.808 (yes) => champ c.
-        assert forward["c"] == pytest.approx(0.9)
+        # a=0.80 -> b 0.807 !> 0.81 (no) -> c 0.811 > 0.81 (yes) => champ c.
+        assert forward["c"] == pytest.approx(0.65)
 
     def test_tail_smaller_than_available(self) -> None:
         entries = [_entry(f"m{i}", 0.9 - i * 0.1, first_seen=_T0) for i in range(6)]
-        w = compute_weights(entries, margin=0.01, tail_size=2, champion_share=0.9)
+        w = compute_weights(
+            entries, margin=0.01, tail_size=2, rank_shares=(0.65, 0.21, 0.14)
+        )
         # 1 champion + exactly 2 tail miners = 3 non-zero weights.
         assert len(w) == 3
 
@@ -273,7 +312,7 @@ def _config() -> MagicMock:
     cfg.netuid = 3
     cfg.koth_margin = 0.01
     cfg.koth_tail_size = 4
-    cfg.koth_champion_share = 0.9
+    cfg.koth_rank_shares = (0.65, 0.14, 0.10, 0.07, 0.04)
     cfg.koth_dethrone_z = 1.64
     cfg.koth_confirmation_seeds = 3
     cfg.top5_max_confirmation_seeds = 16

@@ -26,9 +26,9 @@ class TestKothConfig:
         cfg = parse_validator_config_from_env()
         # Consensus-critical mechanism values are frozen in code (the KOTH_*
         # constants), not env, so every validator folds identically.
-        assert cfg.koth_margin == 0.005
+        assert cfg.koth_margin == 0.007
         assert cfg.koth_tail_size == 4
-        assert cfg.koth_champion_share == 0.9
+        assert cfg.koth_rank_shares == (0.65, 0.14, 0.10, 0.07, 0.04)
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
         assert cfg.miner_emission_share == 1.0
@@ -47,6 +47,7 @@ class TestKothConfig:
             "VALIDATOR_KOTH_MARGIN",
             "VALIDATOR_KOTH_TAIL_SIZE",
             "VALIDATOR_KOTH_CHAMPION_SHARE",
+            "VALIDATOR_KOTH_RANK_SHARES",
             "VALIDATOR_KOTH_DETHRONE_Z",
             "VALIDATOR_KOTH_CONFIRMATION_SEEDS",
             "VALIDATOR_MINER_EMISSION_SHARE",
@@ -54,9 +55,9 @@ class TestKothConfig:
         ):
             monkeypatch.setenv(var, "999")
         cfg = parse_validator_config_from_env()
-        assert cfg.koth_margin == 0.005
+        assert cfg.koth_margin == 0.007
         assert cfg.koth_tail_size == 4
-        assert cfg.koth_champion_share == 0.9
+        assert cfg.koth_rank_shares == (0.65, 0.14, 0.10, 0.07, 0.04)
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
         assert cfg.miner_emission_share == 1.0

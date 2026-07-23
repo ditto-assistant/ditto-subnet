@@ -27,9 +27,9 @@ from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
 # Margin: the flat dethrone gate protects the incumbent from negligible gains,
 # while the statistical band below separately protects against measurement noise.
 # Keep this frozen across validators because it changes the deterministic KOTH fold.
-KOTH_MARGIN = 0.005  # absolute composite-point dethrone hysteresis
-KOTH_TAIL_SIZE = 4  # runners-up after the champion that split the tail
-KOTH_CHAMPION_SHARE = 0.9  # champion weight share (90% champion / 10% tail)
+KOTH_MARGIN = 0.007  # absolute composite-point dethrone hysteresis
+KOTH_TAIL_SIZE = 4  # ranked runners-up after the champion
+KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
 TOP5_MAX_CONFIRMATION_SEEDS = 16
@@ -149,22 +149,21 @@ class ValidatorConfig:
     surface. A ``ws://`` endpoint targets a specific node."""
 
     # --- Incentive mechanism (KOTH + ATH gate). margin / tail_size /
-    # champion_share / dethrone_z / confirmation_seeds are all set from the frozen
+    # rank_shares / dethrone_z / confirmation_seeds are all set from the frozen
     # KOTH_* module constants above, not from env. ---
     koth_margin: float
     """Absolute composite-point lead required to dethrone the incumbent.
 
-    ``0.005`` means a challenger becomes champion only if its composite exceeds
-    the incumbent's by more than 0.005 points. Ties + sub-margin gains keep the
+    ``0.007`` means a challenger becomes champion only if its composite exceeds
+    the incumbent's by more than 0.007 points. Ties + sub-margin gains keep the
     incumbent (first-seen wins), which is what makes a copy unprofitable without
     giving high-scoring incumbents a growing percentage-based moat."""
 
     koth_tail_size: int
     """How many runners-up (after the champion) split the participation tail."""
 
-    koth_champion_share: float
-    """Fraction of weight the ATH champion receives; the rest splits over the
-    tail. ``0.9`` = 90% champion / 10% tail."""
+    koth_rank_shares: tuple[float, ...]
+    """Frozen rank shares for champion then runners-up: 65/14/10/7/4."""
 
     koth_dethrone_z: float
     """z-multiplier for the **statistical** half of the dethroning band. A
@@ -405,7 +404,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         subtensor_network=subtensor_network,
         koth_margin=KOTH_MARGIN,
         koth_tail_size=KOTH_TAIL_SIZE,
-        koth_champion_share=KOTH_CHAMPION_SHARE,
+        koth_rank_shares=KOTH_RANK_SHARES,
         koth_dethrone_z=KOTH_DETHRONE_Z,
         koth_confirmation_seeds=KOTH_CONFIRMATION_SEEDS,
         top5_max_confirmation_seeds=TOP5_MAX_CONFIRMATION_SEEDS,
