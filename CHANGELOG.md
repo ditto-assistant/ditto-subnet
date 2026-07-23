@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.25.0 (2026-07-23)
+
+### Features
+
+- Decay high-score dethrone bands from bench v6
+  ([#225](https://github.com/ditto-assistant/ditto-subnet/pull/225),
+  [`995a73e`](https://github.com/ditto-assistant/ditto-subnet/commit/995a73e0b3a7c5886ff37b351a11e53bb7416ffa))
+
+
 ## v0.24.1 (2026-07-23)
 
 ### Bug Fixes
