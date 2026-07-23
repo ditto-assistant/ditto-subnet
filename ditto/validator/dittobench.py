@@ -263,10 +263,12 @@ class DittobenchClient:
     ) -> ScorerBenchmarkCapability:
         """Observe scorer support and bind post-v2 claims to signed stack identity.
 
-        Legacy 404s, malformed replies, timeouts, source mismatches, and any
-        advertised version outside :data:`_SUPPORTED_BENCH_VERSIONS` all fail
-        closed to v2. A heartbeat must never infer a post-v2 version merely from
-        the validator package or Compose configuration.
+        Legacy 404s, malformed replies, timeouts, and source mismatches all fail
+        closed to v2. A newer scorer may advertise future benchmark versions;
+        report only the intersection this validator knows how to drive so a
+        forward-compatible rollout stays healthy without claiming unsupported
+        work. Unknown versions at or below this validator's current maximum are
+        still malformed and fail closed.
         """
         legacy = ScorerBenchmarkCapability(
             status="legacy_v2", supported_bench_versions=(2,)
@@ -317,10 +319,21 @@ class DittobenchClient:
             return ScorerBenchmarkCapability(
                 status="unreachable", supported_bench_versions=(2,)
             )
-        observed_versions = tuple(sorted(set(versions)))
+        advertised_versions = tuple(sorted(set(versions)))
         if any(
-            version not in _SUPPORTED_BENCH_VERSIONS for version in observed_versions
+            version not in _SUPPORTED_BENCH_VERSIONS
+            and version <= _SUPPORTED_BENCH_VERSIONS[-1]
+            for version in advertised_versions
         ):
+            return ScorerBenchmarkCapability(
+                status="unreachable", supported_bench_versions=(2,)
+            )
+        observed_versions = tuple(
+            version
+            for version in advertised_versions
+            if version in _SUPPORTED_BENCH_VERSIONS
+        )
+        if not observed_versions:
             return ScorerBenchmarkCapability(
                 status="unreachable", supported_bench_versions=(2,)
             )

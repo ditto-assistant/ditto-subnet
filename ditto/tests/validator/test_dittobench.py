@@ -62,12 +62,18 @@ def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
         # would stall the in-flight rollout for the whole subnet.
         (200, _REVISION, [2, 3, 4], "fresh_verified", (2, 3, 4)),
         (200, _REVISION, [4], "fresh_verified", (4,)),
-        # Keep the deployed v6 scorer capability fresh. Reject only versions
-        # beyond the validator's explicit allowlist.
+        # Keep the deployed v6 scorer capability fresh.
         (200, _REVISION, [2, 3, 4, 5, 6], "fresh_verified", (2, 3, 4, 5, 6)),
         (200, _REVISION, [5], "fresh_verified", (5,)),
         (200, _REVISION, [6], "fresh_verified", (6,)),
-        (200, _REVISION, [2, 3, 4, 5, 6, 7], "unreachable", (2,)),
+        # A scorer may roll forward first. Preserve the mutually supported
+        # versions without claiming that this validator can drive v7.
+        (200, _REVISION, [2, 3, 4, 5, 6, 7], "fresh_verified", (2, 3, 4, 5, 6)),
+        # Unknown historical/gap versions remain malformed rather than being
+        # silently projected away.
+        (200, _REVISION, [1, 2, 3, 4, 5, 6], "unreachable", (2,)),
+        # A future-only scorer has no mutually supported contract.
+        (200, _REVISION, [7], "unreachable", (2,)),
         (200, "cd" * 20, [2, 3, 4], "identity_mismatch", (2,)),
         (404, _REVISION, [2, 3], "legacy_v2", (2,)),
         (503, _REVISION, [2, 3], "unreachable", (2,)),
@@ -102,6 +108,33 @@ async def test_secretless_scorer_capability_is_provenance_bound(
         )
     assert observed.status == expected_status
     assert observed.supported_bench_versions == expected_versions
+
+
+@pytest.mark.asyncio
+async def test_future_scorer_version_preserves_negotiated_run_capacity() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.22.0",
+                "source_revision": _REVISION,
+                "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+                "full_run_capacity": 2,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6)
+    assert client.full_run_capacity == 2
 
 
 @pytest.mark.asyncio
