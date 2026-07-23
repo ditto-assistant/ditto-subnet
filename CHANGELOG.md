@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.22.1 (2026-07-23)
+
+### Bug Fixes
+
+- Negotiate scorer benchmark version overlap
+  ([#219](https://github.com/ditto-assistant/ditto-subnet/pull/219),
+  [`0a1ca37`](https://github.com/ditto-assistant/ditto-subnet/commit/0a1ca3747745d60b4cbd4e6c71892158fd0a1f53))
+
+
 ## v0.22.0 (2026-07-22)
 
 ### Chores
