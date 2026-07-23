@@ -1292,6 +1292,46 @@ class TestRunOnce:
         assert score_call is not None
         assert score_call.kwargs["inference_session_id"] is None
 
+    async def test_v6_ticket_deadline_is_not_forwarded_as_inference_identity(
+        self,
+    ) -> None:
+        deadline = datetime.now(UTC) + timedelta(hours=1)
+        job = _job("5MinerA" + "x" * 41, deadline=deadline).model_copy(
+            update={
+                "bench_version": 6,
+                "minimum_screening_policy_version": 9,
+                "requires_screened_image": True,
+            }
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        artifact = platform.get_artifact.return_value.model_copy(
+            update={
+                "agent_id": job.agent_id,
+                "bench_version": 6,
+                "screening_policy_version": 9,
+            }
+        )
+        platform.get_artifact = AsyncMock(return_value=artifact)
+        dittobench = MagicMock()
+        dittobench.prepare_inference_session = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            return_value=_report("run-v6", 0.9).model_copy(update={"bench_version": 6})
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker._score_job(job)
+
+        score = dittobench.score_tarball.await_args.kwargs
+        assert score["inference_session_id"] is None
+        assert score["inference_ticket_deadline"] is None
+        dittobench.prepare_inference_session.assert_not_awaited()
+
     @pytest.mark.parametrize("missing_identity", ["ticket", "exchange"])
     async def test_v7_rejects_legacy_inference_route_identity(
         self, missing_identity: str
