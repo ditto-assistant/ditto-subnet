@@ -24,7 +24,11 @@ from ditto.validator.dittobench import (
     InferenceBrokerSession,
     safe_progress_snapshot,
 )
-from ditto.validator.errors import DittobenchError, ValidatorInfrastructureError
+from ditto.validator.errors import (
+    DittobenchError,
+    SandboxOomError,
+    ValidatorInfrastructureError,
+)
 
 _REVISION = "ab" * 20
 
@@ -886,7 +890,11 @@ async def test_sandbox_resource_failure_is_retryable_infrastructure(
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        with pytest.raises(ValidatorInfrastructureError, match=code) as caught:
+        expected_error = (
+            SandboxOomError if code == "sandbox_oom" else ValidatorInfrastructureError
+        )
+        expected_message = "memory allowance" if code == "sandbox_oom" else code
+        with pytest.raises(expected_error, match=expected_message) as caught:
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
                 "run-1", expected_bench_version=3
             )

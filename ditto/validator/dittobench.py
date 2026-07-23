@@ -36,7 +36,11 @@ from ditto.api_models.validator_capabilities import (
     V7InferenceCalibration,
     ValidatorStackIdentity,
 )
-from ditto.validator.errors import DittobenchError, ValidatorInfrastructureError
+from ditto.validator.errors import (
+    DittobenchError,
+    SandboxOomError,
+    ValidatorInfrastructureError,
+)
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -831,6 +835,10 @@ class DittobenchClient:
                 if status == _FAILED:
                     error = str(data.get("error", "unknown"))
                     infrastructure_code = _sandbox_infrastructure_failure_code(data)
+                    if infrastructure_code == "sandbox_oom":
+                        raise SandboxOomError(
+                            f"run {run_id} exhausted the sandbox memory allowance"
+                        )
                     if infrastructure_code is not None:
                         raise ValidatorInfrastructureError(
                             f"run {run_id} reported validator infrastructure "

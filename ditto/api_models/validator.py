@@ -58,7 +58,7 @@ ValidatorRuntimeState = Literal[
 # ticket back before its deadline. Deliberately narrow: it never carries the
 # miner's error detail, only whether the fault was the validator's own scoring
 # infrastructure or an ordinary scoring failure.
-FailJobReason = Literal["infrastructure", "scoring_error"]
+FailJobReason = Literal["infrastructure", "scoring_error", "sandbox_oom"]
 
 
 class JobRequest(BaseModel):

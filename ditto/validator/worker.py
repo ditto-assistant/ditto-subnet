@@ -46,6 +46,7 @@ from ditto.validator.crn import confirmation_seeds
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
+    SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
 )
@@ -535,6 +536,16 @@ class ValidatorWorker:
                             slot_scored.append(
                                 scored_agent_stat(job.miner_hotkey, report, details)
                             )
+                        except SandboxOomError as error:
+                            logger.warning(
+                                "sandbox out of memory for agent %s on %s; "
+                                "deferring harness and continuing: %s",
+                                job.agent_id,
+                                slot_id,
+                                error,
+                            )
+                            await self._report_ticket_failed(job, "sandbox_oom")
+                            slot_failed += 1
                         except ValidatorInfrastructureError as error:
                             logger.warning(
                                 "validator infrastructure failed for agent %s "
