@@ -417,7 +417,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         miner_emission_share=MINER_EMISSION_SHARE,
         burn_hotkey=burn_hotkey,
         min_stake_tao=min_stake_tao,
-        sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "120")),
+        sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "30")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),
         queue_limit=int(os.environ.get("VALIDATOR_QUEUE_LIMIT", "50")),
         dittobench_poll_seconds=float(

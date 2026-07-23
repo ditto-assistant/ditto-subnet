@@ -34,7 +34,7 @@ class TestKothConfig:
         assert cfg.miner_emission_share == 1.0
         assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
         # Cadence knobs stay env-driven, with these defaults.
-        assert cfg.sweep_seconds == 120
+        assert cfg.sweep_seconds == 30
         assert cfg.epoch_seconds == 3600
         assert cfg.dittobench_timeout_seconds == 4500
         assert cfg.embed_preflight_timeout_seconds == 5
