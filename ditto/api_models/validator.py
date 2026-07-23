@@ -121,6 +121,14 @@ class Top5ConfirmationJobRequest(BaseModel):
         return value
 
 
+class ConfirmationDatasetPin(BaseModel):
+    """One platform-generated dataset used by a continual confirmation lease."""
+
+    seed: Annotated[int, Field(ge=0)]
+    dataset_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    run_size: Annotated[str, Field(min_length=1)]
+
+
 class JobResponse(BaseModel):
     """Returned by ``POST /validator/job`` when a ticket is issued.
 
@@ -172,6 +180,10 @@ class JobResponse(BaseModel):
         int | None, Field(default=None, ge=0)
     ] = None
     requires_screened_image: bool | None = None
+    confirmation_datasets: list[ConfirmationDatasetPin] = Field(
+        default_factory=list,
+        description="Exact shared-seed datasets pinned for a continual retest lease.",
+    )
     inference: InferenceGrantOffer | None = None
     dataset_seed_block: Annotated[
         int | None,

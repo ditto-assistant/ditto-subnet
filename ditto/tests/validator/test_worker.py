@@ -18,6 +18,7 @@ from ditto.api_models.inference import InferenceExchangeResponse, InferenceGrant
 from ditto.api_models.stack_health import ValidatorComponentHealth
 from ditto.api_models.validator import (
     ArtifactResponse,
+    ConfirmationDatasetPin,
     FailJobResponse,
     JobResponse,
     LedgerEntry,
@@ -433,6 +434,18 @@ class TestTop5ConfirmationLane:
                 "agent_id": entry.agent_id,
                 "bench_version": 7,
                 "inference": offer,
+                "confirmation_datasets": [
+                    ConfirmationDatasetPin(
+                        seed=seed,
+                        dataset_sha256=hashlib.sha256(str(seed).encode()).hexdigest(),
+                        run_size="full",
+                    )
+                    for seed in worker_mod.confirmation_seeds(
+                        [str(entry.agent_id)],
+                        version=7,
+                        count=3,
+                    )
+                ],
             }
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
@@ -463,6 +476,12 @@ class TestTop5ConfirmationLane:
             assert kwargs["inference_grant_id"] == grant_id
             assert kwargs["inference_slot_id"] == job.slot_id
             assert kwargs["inference_ticket_deadline"] == deadline
+            assert (
+                kwargs["dataset_sha256"]
+                == hashlib.sha256(str(seed).encode()).hexdigest()
+            )
+            assert kwargs["run_size"] == "full"
+            assert kwargs["progress_callback"] == worker._on_dittobench_progress
             return _report(str(seed), 0.8).model_copy(
                 update={"seed": seed, "bench_version": 7}
             )
@@ -474,6 +493,34 @@ class TestTop5ConfirmationLane:
         assert worker._evaluate.await_count == 3
         dittobench.cancel_inference_session.assert_awaited_once_with("top5-session")
         platform.submit_top5_confirmation_score.assert_awaited_once()
+
+    async def test_v7_rejects_unpinned_confirmation_lease_before_scoring(
+        self,
+    ) -> None:
+        entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+            update={"bench_version": 7}
+        )
+        job = _job(entry.miner_hotkey).model_copy(
+            update={"agent_id": entry.agent_id, "bench_version": 7}
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[entry])
+        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._current_bench_version = 7
+        worker._evaluate = AsyncMock()  # type: ignore[method-assign]
+
+        await worker._run_top5_confirmation_lane()
+
+        worker._evaluate.assert_not_awaited()
+        platform.report_ticket_failed.assert_awaited_once()
+        assert platform.report_ticket_failed.await_args.args == (job, "infrastructure")
+        platform.submit_top5_confirmation_score.assert_not_awaited()
 
 
 class TestRunOnce:
@@ -586,6 +633,28 @@ class TestRunOnce:
         platform.get_ledger.assert_awaited_once()
         platform.request_top5_confirmation_job.assert_awaited_once()
         confirm_and_submit.assert_not_awaited()
+
+    async def test_canonical_queue_work_defers_continual_retests(self) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(
+            jobs=[job], ledger=[_entry("5MinerB" + "x" * 41, 0.9)]
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run", 0.7))
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(set_weights=False)
+
+        assert outcome.queue_depth == 1
+        platform.submit_score.assert_awaited_once()
+        platform.get_ledger.assert_not_awaited()
+        platform.request_top5_confirmation_job.assert_not_awaited()
 
     async def test_scores_queue_and_sets_weights_from_ledger(self) -> None:
         job = _job("5MinerA" + "x" * 41)
@@ -2529,8 +2598,8 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once()
 
     async def test_set_weights_false_scores_without_touching_weights(self) -> None:
-        # The scoring-only sweep may inspect the ledger for the separately
-        # leased top-five lane, but it never submits chain weights.
+        # Canonical work consumes this sweep, so the lower-priority top-five
+        # lane is not inspected and chain weights remain untouched.
         job = _job("5MinerA" + "x" * 41)
         ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
         platform = _platform_with_ledger(jobs=[job], ledger=ledger)
@@ -2551,7 +2620,7 @@ class TestRunOnce:
         n = await worker.run_once(set_weights=False)
         assert n.queue_depth == 1
         assert platform.submit_score.await_count == 1
-        platform.get_ledger.assert_awaited_once()
+        platform.get_ledger.assert_not_awaited()
         chain.put_weights.assert_not_awaited()
 
     async def test_one_agent_failure_does_not_block_weights(self) -> None:

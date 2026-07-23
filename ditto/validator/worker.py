@@ -34,7 +34,11 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     BenchmarkProgressStage,
 )
-from ditto.api_models.validator import ValidatorHeartbeatRequest, ValidatorRuntimeState
+from ditto.api_models.validator import (
+    ConfirmationDatasetPin,
+    ValidatorHeartbeatRequest,
+    ValidatorRuntimeState,
+)
 from ditto.api_models.validator_capabilities import ScorerBenchmarkCapability
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
@@ -575,8 +579,13 @@ class ValidatorWorker:
         # requires the exact live ticket deadline. The only autonomous-looking
         # follow-up below is also platform-leased through the dedicated top-five
         # claim endpoint and appends evidence without replacing canonical scores.
-        if scoring_available and not self._new_work_blocked(
-            stop_requested, drain_requested
+        # Continual top-five confirmation is strictly spare-capacity work. If
+        # this sweep claimed even one canonical quorum job, let the ordinary
+        # queue keep the validator until a later sweep proves it is empty.
+        if (
+            scoring_available
+            and queue_depth == 0
+            and not self._new_work_blocked(stop_requested, drain_requested)
         ):
             await self._run_top5_confirmation_lane(
                 stop_requested=stop_requested,
@@ -1160,17 +1169,53 @@ class ValidatorWorker:
             if self._new_work_blocked(stop_requested, drain_requested):
                 return
             entry = member.entry
+            job = None
             try:
                 job = await self._platform.request_top5_confirmation_job(
                     champion_agent_id=plan.champion.agent_id,
                     member_agent_id=entry.agent_id,
+                )
+                expected_seeds = tuple(member.seeds_to_score)
+                received_seeds = tuple(
+                    dataset.seed for dataset in job.confirmation_datasets
+                )
+                if (
+                    job.bench_version is not None
+                    and job.bench_version >= 3
+                    and received_seeds != expected_seeds
+                ):
+                    logger.warning(
+                        "top-five confirmation dataset contract mismatch "
+                        "agent=%s expected=%s received=%s",
+                        entry.agent_id,
+                        expected_seeds,
+                        received_seeds,
+                    )
+                    await self._report_ticket_failed(job, "infrastructure")
+                    continue
+                datasets = (
+                    job.confirmation_datasets
+                    if job.confirmation_datasets
+                    else [
+                        ConfirmationDatasetPin(
+                            seed=seed,
+                            dataset_sha256="0" * 64,
+                            run_size="full",
+                        )
+                        for seed in expected_seeds
+                    ]
+                )
+                await self._begin_active_ticket(
+                    job.agent_id,
+                    job.deadline,
+                    job.bench_version or DEFAULT_BENCH_VERSION,
                 )
                 broker = await self._activate_ticket_inference(job)
                 try:
                     report = await self._evaluate_confirmation_report(
                         entry.agent_id,
                         entry.sha256,
-                        seeds=member.seeds_to_score,
+                        datasets=datasets,
                         bench_version=job.bench_version,
                         inference_session_id=(
                             broker.session_id if broker is not None else None
@@ -1191,6 +1236,7 @@ class ValidatorWorker:
                             broker.session_id
                         )
                 if report is None:
+                    await self._report_ticket_failed(job, "scoring_error")
                     continue
                 await self._platform.submit_top5_confirmation_score(
                     entry.agent_id,
@@ -1204,13 +1250,19 @@ class ValidatorWorker:
                     entry.agent_id,
                     exc,
                 )
+                if job is not None:
+                    await self._report_ticket_failed(job, "infrastructure")
+            finally:
+                if self._active_agent_id == entry.agent_id:
+                    self._clear_active_ticket()
+                    await self._report_heartbeat("polling")
 
     async def _evaluate_confirmation_report(
         self,
         agent_id: UUID,
         expected_sha256: str,
         *,
-        seeds: Sequence[int],
+        datasets: Sequence[ConfirmationDatasetPin],
         bench_version: int | None,
         inference_session_id: str | None = None,
         inference_grant_id: UUID | None = None,
@@ -1219,14 +1271,25 @@ class ValidatorWorker:
     ) -> ScoreReport | None:
         """Evaluate fresh seeds and package one signed append-only receipt."""
         reports: list[ScoreReport] = []
-        for seed in seeds:
+        for dataset in datasets:
             try:
                 reports.append(
                     await self._evaluate(
                         agent_id,
                         expected_sha256,
-                        seed=seed,
+                        seed=dataset.seed,
+                        dataset_sha256=(
+                            dataset.dataset_sha256
+                            if bench_version is not None and bench_version >= 3
+                            else None
+                        ),
+                        run_size=(
+                            dataset.run_size
+                            if bench_version is not None and bench_version >= 3
+                            else None
+                        ),
                         bench_version=bench_version,
+                        progress_callback=self._on_dittobench_progress,
                         inference_session_id=inference_session_id,
                         inference_grant_id=inference_grant_id,
                         inference_slot_id=inference_slot_id,
@@ -1237,7 +1300,7 @@ class ValidatorWorker:
                 logger.warning(
                     "top-five confirmation seed failed agent=%s seed=%s: %s",
                     agent_id,
-                    seed,
+                    dataset.seed,
                     exc,
                 )
         if not reports:
@@ -1803,18 +1866,19 @@ class ValidatorWorker:
         dataset_sha256: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
+        progress_callback: ProgressCallback | None = None,
         inference_session_id: str | None = None,
         inference_grant_id: UUID | None = None,
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
-        """Run an unticketed re-score with generic, agent-free heartbeats.
+        """Run one re-score while managing its benchmark heartbeat.
 
         ``seed`` pins the dataset seed. ``dataset_sha256`` (from the ticket)
         selects the canonical /v1/score path, where the engine regenerates that
-        exact dataset and fails on a hash mismatch (tamper-evidence). The re-score
-        sweep passes a common ``seed`` (CRN) but no ``dataset_sha256`` (its
-        comparison is across a fresh common dataset, not a platform-pinned one)."""
+        exact dataset and fails on a hash mismatch (tamper-evidence). Historical
+        unticketed sweeps may pass a common ``seed`` (CRN) without a dataset hash.
+        """
         await self._report_heartbeat("running_benchmark")
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.create_task(
@@ -1828,6 +1892,7 @@ class ValidatorWorker:
                 dataset_sha256=dataset_sha256,
                 run_size=run_size,
                 bench_version=bench_version,
+                progress_callback=progress_callback,
                 inference_session_id=inference_session_id,
                 inference_grant_id=inference_grant_id,
                 inference_slot_id=inference_slot_id,
@@ -1836,7 +1901,9 @@ class ValidatorWorker:
         finally:
             heartbeat_stop.set()
             await heartbeat_task
-            await self._report_heartbeat("polling")
+            await self._report_heartbeat(
+                "running_benchmark" if self._active_agent_id == agent_id else "polling"
+            )
 
     async def _evaluate_artifact(
         self,
