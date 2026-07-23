@@ -1,4 +1,4 @@
-"""Signed bounded benchmark-slot capacity for heartbeat protocol v10."""
+"""Signed bounded benchmark-slot capacity for heartbeat protocol v10+."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ class BenchmarkCapacity(BaseModel):
 
 
 def benchmark_capacity_signing_token(capacity: BenchmarkCapacity | None) -> str:
-    """Return one length-prefixed canonical JSON token for protocol v10."""
+    """Return one length-prefixed canonical JSON token for protocol v10+."""
     if capacity is None:
         return "0:"
     encoded = json.dumps(

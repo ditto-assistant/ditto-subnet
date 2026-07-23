@@ -317,7 +317,9 @@ class ValidatorHeartbeatRequest(BaseModel):
         BenchmarkCapacity | None,
         Field(
             default=None,
-            description="Signed bounded slot capacity and progress under protocol v10.",
+            description=(
+                "Signed bounded slot capacity and progress under protocol v10+."
+            ),
         ),
     ] = None
     timestamp: Annotated[
@@ -378,7 +380,7 @@ class ValidatorHeartbeatRequest(BaseModel):
             )
         if self.protocol_version >= 10:
             if self.benchmark_capacity is None:
-                raise ValueError("heartbeat protocol v10 requires benchmark capacity")
+                raise ValueError("heartbeat protocol v10+ requires benchmark capacity")
             primary = (
                 sorted(self.benchmark_capacity.active, key=lambda slot: slot.slot_id)[0]
                 if self.benchmark_capacity.active
@@ -390,7 +392,7 @@ class ValidatorHeartbeatRequest(BaseModel):
                     or self.benchmark_progress is not None
                 ):
                     raise ValueError(
-                        "idle v10 capacity cannot carry legacy active work"
+                        "idle v10+ capacity cannot carry legacy active work"
                     )
             elif (
                 self.state != "running_benchmark"
@@ -398,10 +400,10 @@ class ValidatorHeartbeatRequest(BaseModel):
                 or self.benchmark_progress != primary.progress
             ):
                 raise ValueError(
-                    "v10 legacy active fields must mirror the first active slot"
+                    "v10+ legacy active fields must mirror the first active slot"
                 )
         elif self.benchmark_capacity is not None:
-            raise ValueError("benchmark capacity requires heartbeat protocol v10")
+            raise ValueError("benchmark capacity requires heartbeat protocol v10+")
         return self
 
 

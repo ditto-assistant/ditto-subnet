@@ -92,6 +92,7 @@ if TYPE_CHECKING:
     from ditto.validator.dittobench import (
         DittobenchClient,
         DittobenchProgressSnapshot,
+        InferenceBrokerSession,
         ProgressCallback,
     )
     from ditto.validator.platform import PlatformClient
@@ -119,10 +120,10 @@ _RATE_LIMIT_MARKERS = ("rate limit", "ratelimit", "too fast", "toofast")
 
 # Keep a validator visibly online throughout a long full benchmark. This is a
 # protocol cadence, not an operator tuning knob.
-_ACTIVE_HEARTBEAT_SECONDS = 30.0
+_ACTIVE_HEARTBEAT_SECONDS = 10.0
 # OpenRouter shortens case latency, so publish aggregate count motion promptly.
 # Stage transitions still publish immediately.
-_PROGRESS_UPDATE_SECONDS = 15.0
+_PROGRESS_UPDATE_SECONDS = 5.0
 # Active ticket work must never wait on the platform client's normal HTTP timeout.
 _ACTIVE_TELEMETRY_TIMEOUT_SECONDS = 2.0
 # Keep a successfully reported generic failure visible through at least one
@@ -139,6 +140,20 @@ _PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
     "submitting_result": 5,
     "failed_retrying": 6,
 }
+
+
+class _HeartbeatClock:
+    """Injectable wall clock for deterministic heartbeat rate-limit tests."""
+
+    def time(self) -> float:
+        return time.time()
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+
+def _new_heartbeat_clock() -> _HeartbeatClock:
+    return _HeartbeatClock()
 
 
 def _is_rate_limit_error(error: Exception) -> bool:
@@ -287,6 +302,7 @@ class ValidatorWorker:
         telemetry: ValidatorTelemetry | None = None,
         system_metrics: SystemMetricsCollector | None = None,
         stack_health: StackHealthCollector | None = None,
+        heartbeat_clock: _HeartbeatClock | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -311,6 +327,10 @@ class ValidatorWorker:
         # anything yet never mistakes the whole ledger for stale.
         self._current_bench_version = DEFAULT_BENCH_VERSION
         self._last_heartbeat_timestamp = 0
+        self._heartbeat_clock = heartbeat_clock or _new_heartbeat_clock()
+        self._pending_heartbeat_state: ValidatorRuntimeState | None = None
+        self._pending_heartbeat_progress: dict[str, BenchmarkProgress] = {}
+        self._coalesced_heartbeat_task: asyncio.Task[bool] | None = None
         self._platform_accepted = False
         # Cooperative updater drains are acknowledged only after both the
         # independent scoring and weight loops have finished their current
@@ -640,11 +660,70 @@ class ValidatorWorker:
         *,
         active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
     ) -> bool:
-        """Serialize all signed heartbeat timestamps and acceptance updates."""
+        """Coalesce callers and send at most once per wall-clock second."""
+        slot_id = _CURRENT_SLOT.get()
+        sent_progress = active_snapshot[1] if active_snapshot is not None else None
         async with self._active_heartbeat_lock:
-            return await self._report_heartbeat_unlocked(
-                state, active_snapshot=active_snapshot
-            )
+            if (
+                self._coalesced_heartbeat_task is None
+                and int(self._heartbeat_clock.time()) > self._last_heartbeat_timestamp
+            ):
+                delivered = await self._report_heartbeat_unlocked(state)
+                if delivered and sent_progress is not None:
+                    self._record_delivered_progress(slot_id, sent_progress)
+                return delivered
+            self._pending_heartbeat_state = state
+            if sent_progress is not None:
+                self._pending_heartbeat_progress[slot_id] = sent_progress
+            if self._coalesced_heartbeat_task is None:
+                self._coalesced_heartbeat_task = asyncio.create_task(
+                    self._flush_coalesced_heartbeat(),
+                    name="validator-heartbeat-coalescer",
+                )
+            task = self._coalesced_heartbeat_task
+        # Bounded callers may time out without cancelling the shared flush for
+        # another slot. The next snapshot contains every slot's latest state.
+        return await asyncio.shield(task)
+
+    async def _flush_coalesced_heartbeat(self) -> bool:
+        """Wait for the next wall second, then publish the newest snapshot."""
+        try:
+            while True:
+                delay = (
+                    self._last_heartbeat_timestamp + 1 - self._heartbeat_clock.time()
+                )
+                if delay > 0:
+                    await self._heartbeat_clock.sleep(delay)
+                async with self._active_heartbeat_lock:
+                    if (
+                        int(self._heartbeat_clock.time())
+                        <= self._last_heartbeat_timestamp
+                    ):
+                        continue
+                    state = self._pending_heartbeat_state or "idle"
+                    self._pending_heartbeat_state = None
+                    sent_progress = self._pending_heartbeat_progress
+                    self._pending_heartbeat_progress = {}
+                    try:
+                        delivered = await self._report_heartbeat_unlocked(state)
+                        if delivered:
+                            for slot_id, progress in sent_progress.items():
+                                self._record_delivered_progress(slot_id, progress)
+                        return delivered
+                    finally:
+                        self._coalesced_heartbeat_task = None
+        except BaseException:
+            async with self._active_heartbeat_lock:
+                if self._coalesced_heartbeat_task is asyncio.current_task():
+                    self._coalesced_heartbeat_task = None
+            raise
+
+    def _record_delivered_progress(
+        self, slot_id: str, progress: BenchmarkProgress
+    ) -> None:
+        slot = self._slots[slot_id]
+        slot.last_progress_heartbeat_monotonic = time.monotonic()
+        slot.last_progress_bucket = self._progress_bucket(progress)
 
     async def _report_heartbeat_unlocked(
         self,
@@ -653,7 +732,7 @@ class ValidatorWorker:
         active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
     ) -> bool:
         """Best-effort signed build + runtime report; never gate validator work."""
-        del active_snapshot  # v10 always signs one atomic all-slot snapshot.
+        del active_snapshot  # v10+ always signs one atomic all-slot snapshot.
         capacity = self._capacity_snapshot()
         primary = sorted(capacity.active, key=lambda slot: slot.slot_id)
         active_agent_id = primary[0].agent_id if primary else None
@@ -671,7 +750,9 @@ class ValidatorWorker:
             return True
         try:
             build = validator_build_info()
-            timestamp = max(int(time.time()), self._last_heartbeat_timestamp + 1)
+            timestamp = int(self._heartbeat_clock.time())
+            if timestamp <= self._last_heartbeat_timestamp:
+                raise RuntimeError("heartbeat wall-clock rate limit was bypassed")
             self._last_heartbeat_timestamp = timestamp
             system_metrics = (
                 self._system_metrics.collect()
@@ -784,25 +865,19 @@ class ValidatorWorker:
 
     async def _emit_active_heartbeat(self) -> bool:
         """Attempt one active heartbeat and remember its aggregate progress."""
-        async with self._active_heartbeat_lock:
-            active_snapshot = (self._active_agent_id, self._benchmark_progress)
-            sent_progress = active_snapshot[1]
-            try:
-                delivered = await asyncio.wait_for(
-                    self._report_heartbeat_unlocked(
-                        "running_benchmark", active_snapshot=active_snapshot
-                    ),
-                    timeout=_ACTIVE_TELEMETRY_TIMEOUT_SECONDS,
-                )
-            except TimeoutError:
-                logger.warning(
-                    "validator progress heartbeat timed out; scoring continues"
-                )
-                delivered = False
-            if delivered and sent_progress is not None:
-                self._last_progress_heartbeat_monotonic = time.monotonic()
-                self._last_progress_bucket = self._progress_bucket(sent_progress)
-            return delivered
+        sent_progress = self._benchmark_progress
+        active_snapshot = (self._active_agent_id, sent_progress)
+        try:
+            delivered = await asyncio.wait_for(
+                self._report_heartbeat(
+                    "running_benchmark", active_snapshot=active_snapshot
+                ),
+                timeout=_ACTIVE_TELEMETRY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("validator progress heartbeat timed out; scoring continues")
+            delivered = False
+        return delivered
 
     async def _report_heartbeat_bounded(
         self,
@@ -1090,12 +1165,31 @@ class ValidatorWorker:
                     champion_agent_id=plan.champion.agent_id,
                     member_agent_id=entry.agent_id,
                 )
-                report = await self._evaluate_confirmation_report(
-                    entry.agent_id,
-                    entry.sha256,
-                    seeds=member.seeds_to_score,
-                    bench_version=job.bench_version,
-                )
+                broker = await self._activate_ticket_inference(job)
+                try:
+                    report = await self._evaluate_confirmation_report(
+                        entry.agent_id,
+                        entry.sha256,
+                        seeds=member.seeds_to_score,
+                        bench_version=job.bench_version,
+                        inference_session_id=(
+                            broker.session_id if broker is not None else None
+                        ),
+                        inference_grant_id=(
+                            job.inference.grant_id
+                            if broker is not None and job.inference is not None
+                            else None
+                        ),
+                        inference_slot_id=(job.slot_id if broker is not None else None),
+                        inference_ticket_deadline=(
+                            job.deadline if broker is not None else None
+                        ),
+                    )
+                finally:
+                    if broker is not None:
+                        await self._dittobench.cancel_inference_session(
+                            broker.session_id
+                        )
                 if report is None:
                     continue
                 await self._platform.submit_top5_confirmation_score(
@@ -1118,6 +1212,10 @@ class ValidatorWorker:
         *,
         seeds: Sequence[int],
         bench_version: int | None,
+        inference_session_id: str | None = None,
+        inference_grant_id: UUID | None = None,
+        inference_slot_id: str | None = None,
+        inference_ticket_deadline: datetime | None = None,
     ) -> ScoreReport | None:
         """Evaluate fresh seeds and package one signed append-only receipt."""
         reports: list[ScoreReport] = []
@@ -1129,6 +1227,10 @@ class ValidatorWorker:
                         expected_sha256,
                         seed=seed,
                         bench_version=bench_version,
+                        inference_session_id=inference_session_id,
+                        inference_grant_id=inference_grant_id,
+                        inference_slot_id=inference_slot_id,
+                        inference_ticket_deadline=inference_ticket_deadline,
                     )
                 )
             except (PlatformError, DittobenchError) as exc:
@@ -1558,6 +1660,73 @@ class ValidatorWorker:
                 e,
             )
 
+    async def _activate_ticket_inference(
+        self, job: JobResponse
+    ) -> InferenceBrokerSession | None:
+        """Exchange and bind inference for one v7 ticket.
+
+        Legacy tickets must drain before fleet-wide enforcement. They never
+        switch to the mutable platform route because doing so would change the
+        frozen v6 provider and no-think semantics mid-lease.
+        """
+        bench_version = job.bench_version or DEFAULT_BENCH_VERSION
+        if bench_version < 7:
+            if getattr(self._config, "inference_proxy_required", False) is True:
+                raise ValidatorInfrastructureError(
+                    "legacy benchmark ticket remained after platform inference "
+                    "enforcement; drain or expire it before cutover"
+                )
+            return None
+        if job.inference is None:
+            raise ValidatorInfrastructureError(
+                f"benchmark v{bench_version} requires platform inference "
+                "but the ticket carried no capability"
+            )
+
+        broker = await self._dittobench.prepare_inference_session()
+        try:
+            exchange = await self._platform.exchange_inference_grant(
+                job.inference.grant_id,
+                broker.broker_public_key,
+                job.inference.exchange_url,
+            )
+            route_invalid = (
+                exchange.provider is None
+                or exchange.profile_revision is None
+                or exchange.model is None
+                or job.inference.provider is None
+                or job.inference.profile_revision is None
+                or exchange.provider != job.inference.provider
+                or exchange.profile_revision != job.inference.profile_revision
+                or exchange.model not in job.inference.allowed_models
+            )
+            if (
+                exchange.grant_id != job.inference.grant_id
+                or exchange.proxy_url != job.inference.proxy_url
+                or exchange.expires_at > job.inference.expires_at
+                or exchange.expires_at > job.deadline
+                or route_invalid
+            ):
+                raise PlatformError("inference exchange escaped ticket bounds")
+            await self._dittobench.activate_inference_session(
+                broker,
+                grant_id=exchange.grant_id,
+                agent_id=job.agent_id,
+                slot_id=job.slot_id,
+                ticket_deadline=job.deadline,
+                bearer=exchange.bearer,
+                proxy_url=exchange.proxy_url,
+                generation=exchange.generation,
+                expires_at=exchange.expires_at,
+                provider=exchange.provider,
+                profile_revision=exchange.profile_revision,
+                model=exchange.model,
+            )
+        except BaseException:
+            await self._dittobench.cancel_inference_session(broker.session_id)
+            raise
+        return broker
+
     async def _score_job(self, job: JobResponse) -> ScoreReport:
         """Score one issued ticket against its platform-pinned dataset.
 
@@ -1589,53 +1758,13 @@ class ValidatorWorker:
                 f"re-derive from pinned block hash "
                 f"{job.dataset_seed_block_hash!r}; refusing to score"
             )
-        inference_session_id: str | None = None
-        bench_requires_ticket_inference = (
-            job.bench_version is not None and job.bench_version >= 7
+        broker = await self._activate_ticket_inference(job)
+        inference_session_id = broker.session_id if broker is not None else None
+        inference_grant_id = (
+            job.inference.grant_id
+            if broker is not None and job.inference is not None
+            else None
         )
-        fleet_requires_ticket_inference = (
-            getattr(self._config, "inference_proxy_required", False) is True
-        )
-        if job.inference is None and (
-            bench_requires_ticket_inference or fleet_requires_ticket_inference
-        ):
-            raise ValidatorInfrastructureError(
-                "platform inference is required but the ticket carried no capability"
-            )
-        # During the bounded transition, v6 tickets may carry an additive offer
-        # but must retain their existing frozen relay route. V7 always consumes
-        # the offer. Once fleet-wide enforcement is enabled after v6 drains, any
-        # residual legacy ticket also uses platform inference rather than a
-        # validator provider credential.
-        if job.inference is not None and (
-            bench_requires_ticket_inference or fleet_requires_ticket_inference
-        ):
-            broker = await self._dittobench.prepare_inference_session()
-            try:
-                exchange = await self._platform.exchange_inference_grant(
-                    job.inference.grant_id,
-                    broker.broker_public_key,
-                    job.inference.exchange_url,
-                )
-                if (
-                    exchange.grant_id != job.inference.grant_id
-                    or exchange.proxy_url != job.inference.proxy_url
-                    or exchange.expires_at > job.inference.expires_at
-                    or exchange.expires_at > job.deadline
-                ):
-                    raise PlatformError("inference exchange escaped ticket bounds")
-                await self._dittobench.activate_inference_session(
-                    broker,
-                    grant_id=exchange.grant_id,
-                    bearer=exchange.bearer,
-                    proxy_url=exchange.proxy_url,
-                    generation=exchange.generation,
-                    expires_at=exchange.expires_at,
-                )
-            except BaseException:
-                await self._dittobench.cancel_inference_session(broker.session_id)
-                raise
-            inference_session_id = broker.session_id
         try:
             return await self._evaluate_and_submit(
                 job.agent_id,
@@ -1647,10 +1776,14 @@ class ValidatorWorker:
                 bench_version=job.bench_version,
                 ticket_deadline=job.deadline,
                 inference_session_id=inference_session_id,
+                inference_grant_id=inference_grant_id,
+                inference_slot_id=(
+                    job.slot_id if inference_session_id is not None else None
+                ),
             )
         finally:
-            if inference_session_id is not None:
-                await self._dittobench.cancel_inference_session(inference_session_id)
+            if broker is not None:
+                await self._dittobench.cancel_inference_session(broker.session_id)
 
     async def _evaluate(
         self,
@@ -1661,6 +1794,10 @@ class ValidatorWorker:
         dataset_sha256: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
+        inference_session_id: str | None = None,
+        inference_grant_id: UUID | None = None,
+        inference_slot_id: str | None = None,
+        inference_ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Run an unticketed re-score with generic, agent-free heartbeats.
 
@@ -1682,6 +1819,10 @@ class ValidatorWorker:
                 dataset_sha256=dataset_sha256,
                 run_size=run_size,
                 bench_version=bench_version,
+                inference_session_id=inference_session_id,
+                inference_grant_id=inference_grant_id,
+                inference_slot_id=inference_slot_id,
+                inference_ticket_deadline=inference_ticket_deadline,
             )
         finally:
             heartbeat_stop.set()
@@ -1699,6 +1840,9 @@ class ValidatorWorker:
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
         inference_session_id: str | None = None,
+        inference_grant_id: UUID | None = None,
+        inference_slot_id: str | None = None,
+        inference_ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
         artifact = await self._platform.get_artifact(agent_id)
@@ -1744,6 +1888,10 @@ class ValidatorWorker:
             screened_image_id=artifact.screened_image_id,
             screened_image_ref=artifact.screened_image_ref,
             inference_session_id=inference_session_id,
+            inference_grant_id=inference_grant_id,
+            inference_agent_id=agent_id if inference_session_id is not None else None,
+            inference_slot_id=inference_slot_id,
+            inference_ticket_deadline=inference_ticket_deadline,
         )
         details = report.details
         bench_version = (
@@ -1868,6 +2016,8 @@ class ValidatorWorker:
         bench_version: int | None = None,
         ticket_deadline: datetime | None = None,
         inference_session_id: str | None = None,
+        inference_grant_id: UUID | None = None,
+        inference_slot_id: str | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
         path used by the ticket sweep (:meth:`_score_job`)."""
@@ -1900,6 +2050,9 @@ class ValidatorWorker:
                 bench_version=bench_version,
                 progress_callback=self._on_dittobench_progress,
                 inference_session_id=inference_session_id,
+                inference_grant_id=inference_grant_id,
+                inference_slot_id=inference_slot_id,
+                inference_ticket_deadline=ticket_deadline,
             )
             await self._publish_benchmark_progress(
                 "finalizing", completed=report.n, total=report.n

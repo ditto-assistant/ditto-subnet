@@ -403,18 +403,19 @@ def heartbeat_signing_message(
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
-        raise ValueError("benchmark capacity requires heartbeat protocol v10")
+        raise ValueError("benchmark capacity requires heartbeat protocol v10+")
     if protocol_version >= 10:
         if capabilities is None or stack is None or stack_health is None:
             raise ValueError(
-                "heartbeat protocol v10 requires identity and stack health"
+                "heartbeat protocol v10+ requires identity and stack health"
             )
         if capabilities.scorer_benchmarks is None:
-            raise ValueError("heartbeat protocol v10 requires scorer capabilities")
+            raise ValueError("heartbeat protocol v10+ requires scorer capabilities")
         if benchmark_capacity is None:
-            raise ValueError("heartbeat protocol v10 requires benchmark capacity")
+            raise ValueError("heartbeat protocol v10+ requires benchmark capacity")
+        signing_revision = "v11" if protocol_version >= 11 else "v10"
         return (
-            "ditto-validator-heartbeat:v10:"
+            f"ditto-validator-heartbeat:{signing_revision}:"
             f"{validator_hotkey}:{software_version}:{protocol_version}:"
             f"{code_digest}:{state}:{active_agent_id or ''}:"
             f"{system_metrics_signing_token(system_metrics)}:"

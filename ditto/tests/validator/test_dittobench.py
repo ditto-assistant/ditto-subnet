@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import UUID
 
 import httpx
 import pytest
@@ -19,11 +21,52 @@ from ditto.api_models.validator_capabilities import (
 from ditto.validator.dittobench import (
     DittobenchClient,
     DittobenchProgressSnapshot,
+    InferenceBrokerSession,
     safe_progress_snapshot,
 )
 from ditto.validator.errors import DittobenchError, ValidatorInfrastructureError
 
 _REVISION = "ab" * 20
+
+
+@pytest.mark.asyncio
+async def test_activate_inference_session_binds_dynamic_route_to_trusted_broker() -> (
+    None
+):
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"active": True})
+
+    config = SimpleNamespace(dittobench_api_url="http://dittobench.test")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        await client.activate_inference_session(
+            InferenceBrokerSession(
+                session_id="session",
+                activation_secret="activation",
+                broker_public_key="public",
+            ),
+            grant_id=UUID("00000000-0000-0000-0000-000000000001"),
+            agent_id=UUID("00000000-0000-0000-0000-000000000002"),
+            slot_id="slot-3",
+            ticket_deadline=datetime(2026, 7, 21, 22, 0, tzinfo=UTC),
+            bearer="platform-bearer-never-forwarded",
+            proxy_url="https://platform.example/api/v1/inference/chat/completions",
+            generation=1,
+            expires_at=datetime.now(UTC) + timedelta(minutes=1),
+            provider="WandB",
+            profile_revision="openrouter-route-wandb-v1",
+            model="openai/gpt-oss-20b",
+        )
+
+    assert captured["provider"] == "WandB"
+    assert captured["profile_revision"] == "openrouter-route-wandb-v1"
+    assert captured["model"] == "openai/gpt-oss-20b"
+    assert captured["agent_id"] == "00000000-0000-0000-0000-000000000002"
+    assert captured["slot_id"] == "slot-3"
+    assert captured["ticket_deadline"] == "2026-07-21T22:00:00+00:00"
 
 
 def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
@@ -66,14 +109,16 @@ def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
         (200, _REVISION, [2, 3, 4, 5, 6], "fresh_verified", (2, 3, 4, 5, 6)),
         (200, _REVISION, [5], "fresh_verified", (5,)),
         (200, _REVISION, [6], "fresh_verified", (6,)),
-        # A scorer may roll forward first. Preserve the mutually supported
-        # versions without claiming that this validator can drive v7.
+        # v7 stays dark unless the scorer also supplies its reviewed manifest
+        # digest and exact provider/profile/model route identities.
         (200, _REVISION, [2, 3, 4, 5, 6, 7], "fresh_verified", (2, 3, 4, 5, 6)),
-        # Unknown historical/gap versions remain malformed rather than being
-        # silently projected away.
+        # Project away unknown future contracts while preserving the versions
+        # this validator and scorer can safely negotiate.
+        (200, _REVISION, [2, 3, 4, 5, 6, 7, 8], "fresh_verified", (2, 3, 4, 5, 6)),
+        # Unknown historical/gap versions remain malformed.
         (200, _REVISION, [1, 2, 3, 4, 5, 6], "unreachable", (2,)),
         # A future-only scorer has no mutually supported contract.
-        (200, _REVISION, [7], "unreachable", (2,)),
+        (200, _REVISION, [8], "unreachable", (2,)),
         (200, "cd" * 20, [2, 3, 4], "identity_mismatch", (2,)),
         (404, _REVISION, [2, 3], "legacy_v2", (2,)),
         (503, _REVISION, [2, 3], "unreachable", (2,)),
@@ -118,7 +163,7 @@ async def test_future_scorer_version_preserves_negotiated_run_capacity() -> None
             json={
                 "software_version": "0.22.0",
                 "source_revision": _REVISION,
-                "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+                "supported_bench_versions": [2, 3, 4, 5, 6, 7, 8],
                 "full_run_capacity": 2,
             },
         )
@@ -138,7 +183,55 @@ async def test_future_scorer_version_preserves_negotiated_run_capacity() -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [3, 4, 5, 6])
+async def test_v7_capability_propagates_exact_calibration_identity() -> None:
+    routes = [
+        {
+            "provider": "wandb",
+            "profile_revision": "openrouter-wandb-gpt-oss-20b-v1",
+            "model": "openai/gpt-oss-20b",
+        },
+        {
+            "provider": "amazon-bedrock",
+            "profile_revision": "openrouter-amazon-bedrock-gpt-oss-20b-v1",
+            "model": "openai/gpt-oss-20b",
+        },
+    ]
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "1.2.3",
+                "source_revision": _REVISION,
+                "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+                "full_run_capacity": 2,
+                "v7_calibration": {
+                    "manifest_sha256": "12" * 32,
+                    "supported_routes": routes,
+                },
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6, 7)
+    assert observed.v7_calibration is not None
+    assert observed.v7_calibration.manifest_sha256 == "12" * 32
+    assert [route.provider for route in observed.v7_calibration.supported_routes] == [
+        "amazon-bedrock",
+        "wandb",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bench_version", [3, 4, 5, 6, 7])
 async def test_v3_plus_uses_versioned_route_and_binds_request(
     bench_version: int,
 ) -> None:
@@ -170,7 +263,7 @@ async def test_v3_plus_uses_versioned_route_and_binds_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [None, 0, 1, 7])
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 8])
 async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     bench_version: int | None,
 ) -> None:
@@ -286,6 +379,78 @@ async def test_submit_does_not_forward_model_provider_credentials() -> None:
         "tarball_url": "https://example.test/agent.tgz",
         "run_size": "full",
     }
+
+
+@pytest.mark.asyncio
+async def test_v7_submit_echoes_exact_ticket_inference_identity() -> None:
+    request_body: dict[str, object] = {}
+    request_path = ""
+    grant_id = UUID("00000000-0000-0000-0000-000000000001")
+    agent_id = UUID("00000000-0000-0000-0000-000000000002")
+    deadline = datetime(2026, 7, 21, 22, 0, tzinfo=UTC)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_path
+        request_path = request.url.path
+        request_body.update(json.loads(request.content))
+        return httpx.Response(202, json={"run_id": "run-v7"})
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        run_size="full",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        await client._submit(
+            tarball_url="https://example.test/agent.tgz",
+            bench_version=7,
+            seed=1,
+            dataset_sha256="12" * 32,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="34" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "56" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
+            inference_session_id="session-v7",
+            inference_grant_id=grant_id,
+            inference_agent_id=agent_id,
+            inference_slot_id="slot-3",
+            inference_ticket_deadline=deadline,
+        )
+
+    assert request_path == "/v2/score"
+    assert request_body["inference_session_id"] == "session-v7"
+    assert request_body["inference_grant_id"] == str(grant_id)
+    assert request_body["inference_agent_id"] == str(agent_id)
+    assert request_body["inference_slot_id"] == "slot-3"
+    assert request_body["inference_ticket_deadline"] == deadline.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_v7_submit_rejects_incomplete_ticket_inference_identity() -> None:
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        run_size="full",
+    )
+    async with httpx.AsyncClient() as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(DittobenchError, match="identity must be complete"):
+            await client._submit(
+                tarball_url="https://example.test/agent.tgz",
+                bench_version=7,
+                dataset_sha256="12" * 32,
+                screened_image_url="https://example.test/image.tar",
+                screened_image_sha256="34" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "56" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
+                inference_session_id="session-v7",
+                inference_grant_id=UUID("00000000-0000-0000-0000-000000000001"),
+            )
 
 
 @pytest.mark.asyncio
@@ -500,7 +665,7 @@ async def test_v3_plus_poll_returns_version_bound_report(bench_version: int) -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 7])
+@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 8])
 async def test_poll_rejects_missing_or_unsupported_expected_version(
     expected_bench_version: int | None,
 ) -> None:

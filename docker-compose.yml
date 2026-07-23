@@ -1,6 +1,6 @@
 # Complete SN118 validator stack. Configure the root .env, then run:
 #   ./scripts/validator-compose.sh up -d
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=26531b1d4bca9162056cfb82d1c4fcce63b2cdda}
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=89b261a5f003721811b5351ffa4fb92b238c33b8}
 
 services:
   pylon:
@@ -163,7 +163,7 @@ services:
       # broader private-harness URL bypass disabled.
       DITTOBENCH_ALLOW_SCREENED_IMAGES: "1"
       DITTOBENCH_SOFTWARE_VERSION: ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
-      DITTOBENCH_SOURCE_SHA: 26531b1d4bca9162056cfb82d1c4fcce63b2cdda
+      DITTOBENCH_SOURCE_SHA: 89b261a5f003721811b5351ffa4fb92b238c33b8
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
@@ -196,7 +196,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "10"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "11"
     restart: unless-stopped
     stop_grace_period: 80m
     labels:
@@ -211,7 +211,7 @@ services:
       # host.docker.internal:11434. The worker probes it before claiming a lease.
       VALIDATOR_EMBED_PREFLIGHT_URL: http://sandbox-docker:11434/api/embed
       VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS: "5"
-      # Heartbeat v10 per-component health probes. Private-network URLs only —
+      # Heartbeat v10+ per-component health probes. Private-network URLs only —
       # they are configuration, never part of the public payload. The sandbox
       # probe exercises the same harness-facing forwarder listener that inner
       # sandboxes reach as host.docker.internal:11434.
@@ -229,7 +229,7 @@ services:
       VALIDATOR_SWEEP_SECONDS: "120"
       VALIDATOR_EPOCH_SECONDS: "3600"
       VALIDATOR_QUEUE_LIMIT: "50"
-      # Heartbeat v10 advertises every active slot. The scorer independently
+      # Heartbeat v10+ advertises every active slot. The scorer independently
       # publishes the same bound and the worker fails closed on mismatch.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
       # V7 tickets fail closed without platform inference regardless of this
@@ -249,9 +249,9 @@ services:
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:26531b1d4bca9162056cfb82d1c4fcce63b2cdda
+      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:89b261a5f003721811b5351ffa4fb92b238c33b8
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:26531b1d4bca9162056cfb82d1c4fcce63b2cdda
+      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:89b261a5f003721811b5351ffa4fb92b238c33b8
       VALIDATOR_STACK_COMPONENT_PYLON: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
       VALIDATOR_STACK_COMPONENT_OLLAMA: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}

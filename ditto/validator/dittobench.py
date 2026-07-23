@@ -31,7 +31,9 @@ from ditto.api_models.benchmark_progress import (
 )
 from ditto.api_models.validator import ScoreReport
 from ditto.api_models.validator_capabilities import (
+    InferenceCalibrationRoute,
     ScorerBenchmarkCapability,
+    V7InferenceCalibration,
     ValidatorStackIdentity,
 )
 from ditto.validator.errors import DittobenchError, ValidatorInfrastructureError
@@ -64,8 +66,36 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # rather than scored blind. Versions >= 3 share one scorer contract (/v2/score,
 # pinned dataset, policy-9 screened image), so version-specific behaviour is
 # expressed as ``>= _SCREENED_IMAGE_BENCH_VERSION`` rather than per-version arms.
-_SUPPORTED_BENCH_VERSIONS = (2, 3, 4, 5, 6)
+_SUPPORTED_BENCH_VERSIONS = (2, 3, 4, 5, 6, 7)
 _SCREENED_IMAGE_BENCH_VERSION = 3
+
+
+def _parse_v7_calibration(payload: object) -> V7InferenceCalibration | None:
+    """Parse the scorer's exact reviewed manifest identity, or fail closed."""
+    if not isinstance(payload, dict):
+        return None
+    raw_routes = payload.get("supported_routes")
+    if not isinstance(raw_routes, list) or not raw_routes:
+        return None
+    try:
+        routes = tuple(
+            sorted(
+                (
+                    InferenceCalibrationRoute.model_validate(route)
+                    for route in raw_routes
+                ),
+                key=lambda route: (
+                    route.provider,
+                    route.profile_revision,
+                    route.model,
+                ),
+            )
+        )
+        return V7InferenceCalibration.model_validate(
+            {**payload, "supported_routes": routes}
+        )
+    except ValueError:
+        return None
 
 
 def _is_embedding_infrastructure_failure(error: str) -> bool:
@@ -225,24 +255,40 @@ class DittobenchClient:
         session: InferenceBrokerSession,
         *,
         grant_id: UUID,
+        agent_id: UUID,
+        slot_id: str,
+        ticket_deadline: datetime,
         bearer: str,
         proxy_url: str,
         generation: int,
         expires_at: datetime,
+        provider: str | None,
+        profile_revision: str | None,
+        model: str | None,
     ) -> None:
         """Deliver the platform capability directly to the trusted broker."""
         try:
+            activation: dict[str, object] = {
+                "activation_secret": session.activation_secret,
+                "grant_id": str(grant_id),
+                "agent_id": str(agent_id),
+                "slot_id": slot_id,
+                "ticket_deadline": ticket_deadline.isoformat(),
+                "bearer": bearer,
+                "proxy_url": proxy_url,
+                "generation": generation,
+                "expires_at": expires_at.isoformat(),
+            }
+            if provider is not None:
+                activation["provider"] = provider
+            if profile_revision is not None:
+                activation["profile_revision"] = profile_revision
+            if model is not None:
+                activation["model"] = model
             response = await self._client.post(
                 f"{self._config.dittobench_api_url}/v1/inference/session/"
                 f"{session.session_id}/activate",
-                json={
-                    "activation_secret": session.activation_secret,
-                    "grant_id": str(grant_id),
-                    "bearer": bearer,
-                    "proxy_url": proxy_url,
-                    "generation": generation,
-                    "expires_at": expires_at.isoformat(),
-                },
+                json=activation,
             )
         except httpx.HTTPError as error:
             raise ValidatorInfrastructureError(
@@ -337,6 +383,17 @@ class DittobenchClient:
             return ScorerBenchmarkCapability(
                 status="unreachable", supported_bench_versions=(2,)
             )
+        v7_calibration = _parse_v7_calibration(payload.get("v7_calibration"))
+        if 7 in observed_versions and v7_calibration is None:
+            observed_versions = tuple(
+                version for version in observed_versions if version != 7
+            )
+            if not observed_versions:
+                return ScorerBenchmarkCapability(
+                    status="unreachable", supported_bench_versions=(2,)
+                )
+        elif 7 not in observed_versions:
+            v7_calibration = None
         expected_revision = stack.components.dittobench_api.source_revision
         if source_revision != expected_revision:
             return ScorerBenchmarkCapability(
@@ -354,6 +411,7 @@ class DittobenchClient:
                 observed_at=int(time.time()),
                 software_version=software_version,
                 source_revision=source_revision,
+                v7_calibration=v7_calibration,
             )
         except ValueError:
             return ScorerBenchmarkCapability(
@@ -469,6 +527,10 @@ class DittobenchClient:
         screened_image_id: str | None = None,
         screened_image_ref: str | None = None,
         inference_session_id: str | None = None,
+        inference_grant_id: UUID | None = None,
+        inference_agent_id: UUID | None = None,
+        inference_slot_id: str | None = None,
+        inference_ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
@@ -506,6 +568,10 @@ class DittobenchClient:
             screened_image_id=screened_image_id,
             screened_image_ref=screened_image_ref,
             inference_session_id=inference_session_id,
+            inference_grant_id=inference_grant_id,
+            inference_agent_id=inference_agent_id,
+            inference_slot_id=inference_slot_id,
+            inference_ticket_deadline=inference_ticket_deadline,
         )
         return await self._poll(
             run_id,
@@ -545,6 +611,10 @@ class DittobenchClient:
         screened_image_id: str | None = None,
         screened_image_ref: str | None = None,
         inference_session_id: str | None = None,
+        inference_grant_id: UUID | None = None,
+        inference_agent_id: UUID | None = None,
+        inference_slot_id: str | None = None,
+        inference_ticket_deadline: datetime | None = None,
     ) -> str:
         if bench_version is None or bench_version not in _SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
@@ -588,8 +658,37 @@ class DittobenchClient:
             )
         if seed is not None:
             body["seed"] = seed
+        inference_identity = (
+            inference_grant_id,
+            inference_agent_id,
+            inference_slot_id,
+            inference_ticket_deadline,
+        )
         if inference_session_id is not None:
             body["inference_session_id"] = inference_session_id
+            if any(value is not None for value in inference_identity):
+                if any(value is None for value in inference_identity):
+                    raise DittobenchError("ticket inference identity must be complete")
+                body.update(
+                    {
+                        "inference_grant_id": str(inference_grant_id),
+                        "inference_agent_id": str(inference_agent_id),
+                        "inference_slot_id": inference_slot_id,
+                        "inference_ticket_deadline": (
+                            inference_ticket_deadline.isoformat()
+                            if inference_ticket_deadline is not None
+                            else None
+                        ),
+                    }
+                )
+            elif bench_version >= 7:
+                raise DittobenchError(
+                    f"benchmark v{bench_version} requires ticket inference identity"
+                )
+        elif any(value is not None for value in inference_identity):
+            raise DittobenchError(
+                "ticket inference identity requires an inference session"
+            )
         # Canonical validator path: pin the dataset so the engine fails on a
         # regenerated-hash mismatch. Otherwise the practice/re-score path.
         if bench_version >= _SCREENED_IMAGE_BENCH_VERSION:

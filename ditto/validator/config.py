@@ -82,7 +82,7 @@ class ValidatorConfig:
     Enabled via ``VALIDATOR_DITTOBENCH_MOCK``."""
 
     benchmark_capacity: int
-    """Bounded concurrent scoring slots advertised by heartbeat v10.
+    """Bounded concurrent scoring slots advertised by heartbeat v10+.
 
     Defaults to one for compatibility and is capped at eight by the wire
     contract. This must not exceed dittobench-api's full-run capacity.
