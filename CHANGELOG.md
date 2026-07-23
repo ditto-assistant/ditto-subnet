@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.25.3 (2026-07-23)
+
+### Bug Fixes
+
+- Poll for benchmark jobs every 30 seconds
+  ([#227](https://github.com/ditto-assistant/ditto-subnet/pull/227),
+  [`01d467b`](https://github.com/ditto-assistant/ditto-subnet/commit/01d467b65de73fcbea2c9bad43cac1e86224a28f))
+
+
 ## v0.25.2 (2026-07-23)
 
 ### Bug Fixes
