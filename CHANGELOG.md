@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.25.1 (2026-07-23)
+
+### Bug Fixes
+
+- Consume pinned continual retest datasets
+  ([#226](https://github.com/ditto-assistant/ditto-subnet/pull/226),
+  [`89aaeb6`](https://github.com/ditto-assistant/ditto-subnet/commit/89aaeb657439adba443113270e9cc1bffe7d9f91))
+
+
 ## v0.25.0 (2026-07-23)
 
 ### Features
