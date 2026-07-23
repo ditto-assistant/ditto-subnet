@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.23.0 (2026-07-23)
+
+### Features
+
+- Run benchmark v7 on ticket-bound routes
+  ([#214](https://github.com/ditto-assistant/ditto-subnet/pull/214),
+  [`88fed20`](https://github.com/ditto-assistant/ditto-subnet/commit/88fed20e062795d3f1998c4b6f0fbdb723cec379))
+
+- Verify validator-scoped dataset seeds
+  ([#220](https://github.com/ditto-assistant/ditto-subnet/pull/220),
+  [`b63ee22`](https://github.com/ditto-assistant/ditto-subnet/commit/b63ee22670dda0d08193ca50971c6af665b8816c))
+
+
 ## v0.22.1 (2026-07-23)
 
 ### Bug Fixes
