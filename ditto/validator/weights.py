@@ -2,8 +2,7 @@
 
 The incentive mechanism (``docs/VALIDATOR.md``): the reigning
 all-time-high holder is the **champion** and takes ~all emissions; a challenger
-only dethrones it by beating its score by a fixed **composite-point
-hysteresis** (default 0.007);
+only dethrones it by clearing a versioned **composite-point indifference band**;
 ties and sub-margin gains keep the incumbent, so **first-to-submit wins** and a
 downloaded copy — which at best ties — never earns. A small **participation
 tail** (35% distributed by rank over the next four miners) keeps the subnet
@@ -24,6 +23,11 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ditto.validator.config import (
+    KOTH_BAND_DECAY_MIN_BENCH_VERSION,
+    KOTH_BAND_DECAY_RATE,
+    KOTH_BAND_DECAY_START_COMPOSITE,
+)
 from ditto.validator.crn import confirmation_seeds
 
 if TYPE_CHECKING:
@@ -100,6 +104,33 @@ def _entry_version(entry: LedgerEntry) -> int:
     and until then this is a safe no-op)."""
     v = getattr(entry, "bench_version", None)
     return v if isinstance(v, int) and v > 0 else DEFAULT_BENCH_VERSION
+
+
+def _dethrone_band_scale(
+    challenger: LedgerEntry, champion: LedgerEntry, champion_composite: float
+) -> float:
+    """Return the versioned high-score scale applied to the dethrone band.
+
+    Bench v6 and later progressively shrink the full indifference band once the
+    incumbent exceeds ``KOTH_BAND_DECAY_START_COMPOSITE``.  This keeps the crown
+    movable near the benchmark ceiling, where a fixed uncertainty band consumes
+    an increasingly large fraction of the remaining attainable score.  The
+    exponent is bounded at a perfect score so malformed out-of-range ledger data
+    cannot collapse the band toward zero.
+
+    Both entries must explicitly opt into the v6+ rule.  Missing or pre-v6
+    versions retain the legacy band byte-for-byte, which keeps historical folds
+    and mixed-version rollout data safe.
+    """
+    comparison_version = min(_entry_version(challenger), _entry_version(champion))
+    if comparison_version < KOTH_BAND_DECAY_MIN_BENCH_VERSION:
+        return 1.0
+    bounded_champion = min(
+        max(champion_composite, KOTH_BAND_DECAY_START_COMPOSITE), 1.0
+    )
+    return math.exp(
+        -KOTH_BAND_DECAY_RATE * (bounded_champion - KOTH_BAND_DECAY_START_COMPOSITE)
+    )
 
 
 def max_bench_version(entries: Sequence[LedgerEntry]) -> int:
@@ -458,7 +489,8 @@ def _beats(
     paired = _paired_dethrone(challenger, champion, dethrone_z)
     if paired is not None:
         mean_diff, champ_ref, se_diff = paired
-        band = max(margin, dethrone_z * se_diff)
+        base_band = max(margin, dethrone_z * se_diff)
+        band = base_band * _dethrone_band_scale(challenger, champion, champ_ref)
         return champ_ref + mean_diff > champ_ref + band
 
     chall = _effective_composite(challenger)
@@ -471,6 +503,7 @@ def _beats(
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
+    band *= _dethrone_band_scale(challenger, champion, champ)
     # Compare scores against the threshold rather than subtracting first. For
     # decimal wire values such as 0.935 and 0.930, subtraction can round an exact
     # 0.005 boundary infinitesimally upward and incorrectly defeat first-seen.
@@ -542,7 +575,9 @@ def _unpaired_band(
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
-    return band
+    return band * _dethrone_band_scale(
+        challenger, champion, _effective_composite(champion)
+    )
 
 
 def _entry_has_seeds(entry: LedgerEntry, seeds: Sequence[int]) -> bool:
