@@ -24,6 +24,16 @@ class ValidatorInfrastructureError(DittobenchError):
     """
 
 
+class SandboxOomError(DittobenchError):
+    """The miner sandbox exceeded its bounded memory allowance.
+
+    This is an artifact-specific terminal attempt outcome, not evidence that
+    the validator's shared infrastructure is unhealthy. The worker hands the
+    lease back as ``sandbox_oom`` and continues with another harness without
+    disabling the execution slot.
+    """
+
+
 class PlatformError(ValidatorError):
     """Raised when a platform ``/validator/*`` call fails."""
 

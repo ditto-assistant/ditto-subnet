@@ -40,6 +40,7 @@ from ditto.validator.dittobench import (
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
+    SandboxOomError,
     ValidatorInfrastructureError,
 )
 from ditto.validator.onchain_seed import derive_seed
@@ -958,6 +959,32 @@ class TestRunOnce:
         failed_job, reason = platform.report_ticket_failed.await_args.args
         assert failed_job is jobs[0]
         assert reason == "scoring_error"
+
+    async def test_sandbox_oom_defers_harness_without_disabling_slot(self) -> None:
+        jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=[SandboxOomError("memory allowance"), _report("run-b", 0.7)]
+        )
+        dittobench.last_details = {}
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(set_weights=False)
+
+        assert outcome.queue_depth == 2
+        assert platform.request_job.await_count == 3
+        platform.report_ticket_failed.assert_awaited_once_with(jobs[0], "sandbox_oom")
+        assert "slot-0" in worker._healthy_slots
+        assert "slot-0" not in worker._resource_blocked_until
+        platform.submit_score.assert_awaited_once()
 
     async def test_ticket_hand_back_failure_never_crashes_the_sweep(self) -> None:
         jobs = [_job("5MinerA" + "x" * 41)]
