@@ -28,7 +28,11 @@ from ditto.validator.weights import (
 from ditto.validator.worker import ValidatorWorker
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
-_KOTH: dict[str, Any] = {"margin": 0.01, "tail_size": 4, "champion_share": 0.9}
+_KOTH: dict[str, Any] = {
+    "margin": 0.01,
+    "tail_size": 4,
+    "rank_shares": (0.65, 0.14, 0.10, 0.07, 0.04),
+}
 
 
 def _e(
@@ -78,7 +82,7 @@ class TestEligibilityFilter:
         ]
         w = compute_weights(entries, **_KOTH)
         assert "smoke" not in w
-        assert w["full"] == pytest.approx(0.9)
+        assert w["full"] == pytest.approx(0.65)
 
 
 class TestVersionFilter:
@@ -106,7 +110,7 @@ class TestVersionFilter:
             _e("v3_runner", 0.40, version=3, minutes=2),
         ]
         w = compute_weights(entries, **_KOTH)
-        assert w["v2_fallback"] == pytest.approx(0.9)
+        assert w["v2_fallback"] == pytest.approx(0.65)
         assert "v3_champ" in w
         assert "v3_runner" in w
 
@@ -163,7 +167,7 @@ def _worker() -> Any:
     cfg.netuid = 3
     cfg.koth_margin = 0.01
     cfg.koth_tail_size = 4
-    cfg.koth_champion_share = 0.9
+    cfg.koth_rank_shares = (0.65, 0.14, 0.10, 0.07, 0.04)
     cfg.koth_dethrone_z = 1.64
     cfg.koth_confirmation_seeds = 3
     cfg.miner_emission_share = 1.0

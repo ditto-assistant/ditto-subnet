@@ -1055,7 +1055,7 @@ class ValidatorWorker:
             registered_entries,
             margin=self._config.koth_margin,
             tail_size=self._config.koth_tail_size,
-            champion_share=self._config.koth_champion_share,
+            rank_shares=self._config.koth_rank_shares,
             dethrone_z=self._config.koth_dethrone_z,
         )
         weights = apply_miner_emission_cap(
