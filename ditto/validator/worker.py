@@ -1242,13 +1242,21 @@ class ValidatorWorker:
                 if (
                     job.bench_version is not None
                     and job.bench_version >= 3
-                    and received_seeds != expected_seeds
+                    and not received_seeds
                 ):
                     logger.warning(
-                        "top-five confirmation dataset contract mismatch "
-                        "agent=%s expected=%s received=%s",
+                        "top-five confirmation dataset contract missing pins "
+                        "agent=%s local_plan=%s",
                         entry.agent_id,
                         expected_seeds,
+                    )
+                    await self._report_ticket_failed(job, "infrastructure")
+                    continue
+                if len(received_seeds) != len(set(received_seeds)):
+                    logger.warning(
+                        "top-five confirmation dataset contract contains duplicate "
+                        "pins agent=%s received=%s",
+                        entry.agent_id,
                         received_seeds,
                     )
                     await self._report_ticket_failed(job, "infrastructure")

@@ -446,7 +446,7 @@ class TestTop5ConfirmationLane:
                     for seed in worker_mod.confirmation_seeds(
                         [str(entry.agent_id)],
                         version=7,
-                        count=3,
+                        count=1,
                     )
                 ],
             }
@@ -493,7 +493,7 @@ class TestTop5ConfirmationLane:
         await worker._run_top5_confirmation_lane()
 
         worker._activate_ticket_inference.assert_awaited_once_with(job)
-        assert worker._evaluate.await_count == 3
+        assert worker._evaluate.await_count == 1
         dittobench.cancel_inference_session.assert_awaited_once_with("top5-session")
         platform.submit_top5_confirmation_score.assert_awaited_once()
 
@@ -697,7 +697,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 12
+        assert heartbeat.protocol_version == 13
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
@@ -1241,7 +1241,7 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 12
+        assert heartbeat.protocol_version == 13
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
