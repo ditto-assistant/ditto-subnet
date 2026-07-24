@@ -34,6 +34,7 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     HotkeyAgentNotFoundError,
     PreCheckRejectedError,
+    SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
 )
@@ -51,13 +52,20 @@ def make_client(handler) -> ApiClient:  # type: ignore[no-untyped-def]
     return client
 
 
-def _envelope_response(status: int, code: int, message: str) -> httpx.Response:
+def _envelope_response(
+    status: int,
+    code: int,
+    message: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
     return httpx.Response(
         status_code=status,
         json={
             "error_code": code,
             "message": message,
         },
+        headers=headers,
     )
 
 
@@ -212,6 +220,24 @@ class TestUploadAgent:
 
         with make_client(handler) as client, pytest.raises(TransientApiError):
             client.post_upload_agent(**self._kwargs())
+
+    def test_submission_cooldown_exposes_retry_delay(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return _envelope_response(
+                429,
+                1105,
+                "owner coldkey may submit again at 2026-07-24T12:30:00Z",
+                headers={"Retry-After": "1800"},
+            )
+
+        with (
+            make_client(handler) as client,
+            pytest.raises(SubmissionCooldownError) as info,
+        ):
+            client.post_upload_agent(**self._kwargs())
+
+        assert info.value.retry_after_seconds == 1800
+        assert "2026-07-24T12:30:00Z" in str(info.value)
 
 
 class TestAgentStatus:

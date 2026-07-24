@@ -213,6 +213,18 @@ class TransientApiError(ApiResponseError):
     pass
 
 
+class SubmissionCooldownError(TransientApiError):
+    """Raised when the owner coldkey's one-hour submission cooldown is active.
+
+    This is safe to retry later with the same finalized payment proof, but the
+    short generic transient retry loop must not hammer the endpoint meanwhile.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: int | None) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message)
+
+
 class UploadAgentRejectedError(ApiResponseError):
     """Raised when ``/upload/agent`` returns non-2xx after payment was made.
 
