@@ -309,13 +309,37 @@ def _entry_confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
 
 
 def _effective_composite(entry: LedgerEntry) -> float:
-    """The composite the dethrone comparison uses: the MEDIAN of the entry's
-    per-seed confirmation composites when the ledger surfaces them, else the raw
-    single-run composite. Multi-seed medians make a crown flip require a lead
-    that survives seed-to-seed variance, not one lucky draw (P4). Pure and
-    deterministic: an explicit sorted-middle median, no library rounding, so
-    every validator computes identical bytes."""
+    """Return the platform-activated continual score used by the weight fold.
+
+    Protocol v14 starts with the three signed quorum observations and, after a
+    full top-five cohort wave completes, appends exactly one per-seed aggregate.
+    The arithmetic mean therefore moves up or down one completed wave at a time.
+    The platform filters partial waves before serving ``confirmation_history``.
+
+    Before the platform sends the additive activation marker, retain the legacy
+    confirmation median byte-for-byte. This makes the client-first v14 rollout
+    inert until the full fleet is upgraded and the platform contract deploys.
+    """
     history = _entry_confirmation_history(entry)
+    if getattr(entry, "continual_aggregate_method", None) == "mean_after_quorum":
+        proofs = getattr(entry, "score_proofs", None)
+        if isinstance(proofs, (list, tuple)) and len(proofs) == 3 and history:
+            quorum: list[float] = []
+            for proof in proofs:
+                value = getattr(proof, "composite", None)
+                if (
+                    not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or not 0.0 <= value <= 1.0
+                ):
+                    quorum = []
+                    break
+                quorum.append(float(value))
+            if len(quorum) == 3:
+                waves = [history[seed] for seed in sorted(history)]
+                samples = [*quorum, *waves]
+                return math.fsum(samples) / len(samples)
+
     vals = (
         sorted(history.values()) if history is not None else _entry_confirmations(entry)
     )
@@ -538,7 +562,7 @@ def _tail(
     """The next ``tail_size`` distinct miners by composite, excluding the champion."""
     return sorted(
         (e for e in entries if e.miner_hotkey != champion.miner_hotkey),
-        key=lambda e: (-e.composite, e.first_seen, e.agent_id),
+        key=lambda e: (-_effective_composite(e), e.first_seen, e.agent_id),
     )[:tail_size]
 
 

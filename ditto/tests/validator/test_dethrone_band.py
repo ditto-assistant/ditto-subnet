@@ -38,6 +38,9 @@ def _e(
     stderr: float | None = None,
     confirmations: list[float] | None = None,
     seeds: list[int] | None = None,
+    quorum_scores: list[float] | None = None,
+    wave_scores: dict[int, list[float]] | None = None,
+    continual_method: str | None = None,
     bench_version: int | None = None,
     minutes: int = 0,
 ) -> Any:
@@ -58,6 +61,16 @@ def _e(
         ns.confirmation_composites = confirmations
     if seeds is not None:
         ns.confirmation_seeds = seeds
+    if quorum_scores is not None:
+        ns.score_proofs = [SimpleNamespace(composite=value) for value in quorum_scores]
+    if wave_scores is not None:
+        ns.confirmation_history = [
+            SimpleNamespace(seed=seed, composite=value)
+            for seed, values in wave_scores.items()
+            for value in values
+        ]
+    if continual_method is not None:
+        ns.continual_aggregate_method = continual_method
     if bench_version is not None:
         ns.bench_version = bench_version
     return ns
@@ -243,6 +256,29 @@ class TestEffectiveComposite:
         assert _effective_composite(
             _e("a", 0.9, confirmations=[0.9, 0.5, 0.7, 0.6])
         ) == pytest.approx((0.6 + 0.7) / 2)
+
+    def test_protocol_v14_marker_means_quorum_scores_and_completed_waves(self) -> None:
+        entry = _e(
+            "a",
+            0.8,
+            quorum_scores=[0.7, 0.8, 0.9],
+            wave_scores={10: [0.5, 0.7, 0.6], 20: [1.0, 0.8, 0.9]},
+            continual_method="mean_after_quorum",
+        )
+
+        # Per-wave validator medians are 0.6 and 0.9; the current score is the
+        # mean of the original three observations plus those two full waves.
+        assert _effective_composite(entry) == pytest.approx(0.78)
+
+    def test_no_activation_marker_preserves_legacy_wave_median(self) -> None:
+        entry = _e(
+            "a",
+            0.8,
+            quorum_scores=[0.7, 0.8, 0.9],
+            wave_scores={10: [0.5, 0.7, 0.6], 20: [1.0, 0.8, 0.9]},
+        )
+
+        assert _effective_composite(entry) == pytest.approx(0.75)
 
 
 class TestBeatsWithConfirmations:
