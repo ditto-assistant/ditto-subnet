@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.27.0 (2026-07-24)
+
+### Features
+
+- Support single-seed top-five retest waves
+  ([#240](https://github.com/ditto-assistant/ditto-subnet/pull/240),
+  [`1a5e30c`](https://github.com/ditto-assistant/ditto-subnet/commit/1a5e30cdde42cafef5b574c908cc7b9869ded1db))
+
+
 ## v0.26.0 (2026-07-23)
 
 ### Features
