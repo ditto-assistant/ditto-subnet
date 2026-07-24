@@ -1,0 +1,84 @@
+# Depot CI Migration
+# Source: .github/workflows/ci.yml
+#
+# Changes made:
+# - Changed runs-on from "blacksmith-4vcpu-ubuntu-2404" to "depot-ubuntu-latest" throughout
+
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  compose-config:
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compose-version: "v2.40.3"
+            compose-sha256: dba9d98e1ba5bfe11d88c99b9bd32fc4a0624a30fafe68eea34d61a3e42fd372
+          - compose-version: "v5.1.2"
+            compose-sha256: c372e512a36e67716b0b3a1264ccdc461dec7a7beff601b81f7c5fb008e3511e
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Docker Compose ${{ matrix.compose-version }}
+        env:
+          COMPOSE_VERSION: ${{ matrix.compose-version }}
+          COMPOSE_SHA256: ${{ matrix.compose-sha256 }}
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-x86_64" \
+            --output /tmp/docker-compose
+          echo "$COMPOSE_SHA256  /tmp/docker-compose" | sha256sum --check --strict
+          chmod +x /tmp/docker-compose
+          test "$(/tmp/docker-compose version --short)" = "${COMPOSE_VERSION#v}"
+      - name: Validate production Compose model
+        run: |
+          /tmp/docker-compose --env-file .env.example \
+            --project-directory . -f docker-compose.yml config --quiet
+      # `config` only PARSES the model — it never asks the daemon to create the
+      # containers, so it accepts options the daemon rejects at deploy time. A
+      # container that joins another's network namespace (network_mode:
+      # service:/container:) cannot carry its own network identity. v0.19.1
+      # shipped extra_hosts on such a service, passed this job green, and was
+      # un-deployable on the whole fleet. The exact daemon conflict set + its
+      # rationale (and unit tests) live in scripts/check_netns_incompatible.py.
+      - name: Reject network-namespace-incompatible service options
+        run: |
+          /tmp/docker-compose --env-file .env.example \
+            --project-directory . -f docker-compose.yml config --format json \
+            >/tmp/resolved-compose.json
+          python3 scripts/check_netns_incompatible.py /tmp/resolved-compose.json
+  lint-and-test:
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: ruff format check
+        run: uv run ruff format --check .
+      - name: ruff check
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy ditto/
+      - name: pytest
+        run: uv run pytest
+      - name: Validator updater integration tests
+        run: uv run pytest -m integration ditto/tests/test_validator_auto_update.py
