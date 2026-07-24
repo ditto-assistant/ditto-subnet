@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.29.1 (2026-07-24)
+
+### Bug Fixes
+
+- Retry hosted embedding outages ([#239](https://github.com/ditto-assistant/ditto-subnet/pull/239),
+  [`f47e3c4`](https://github.com/ditto-assistant/ditto-subnet/commit/f47e3c4663bb1700b59930108d5c81112e4f731f))
+
+
 ## v0.29.0 (2026-07-24)
 
 ### Features
