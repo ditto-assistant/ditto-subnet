@@ -857,6 +857,26 @@ async def test_ollama_run_failure_is_retryable_infrastructure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": (
+                    "seeding haystack wave 2 failed: embedding service unavailable"
+                ),
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError, match="embedding"):
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=7
+            )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "code",
     [
@@ -864,6 +884,7 @@ async def test_ollama_run_failure_is_retryable_infrastructure() -> None:
         "sandbox_tmpfs_exhausted",
         "sandbox_network_unavailable",
         "model_relay_unavailable",
+        "embedding_provider_unavailable",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(
