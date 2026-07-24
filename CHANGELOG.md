@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.28.0 (2026-07-24)
+
+### Chores
+
+- **skills**: Add GitHub Stacks workflow
+  ([#241](https://github.com/ditto-assistant/ditto-subnet/pull/241),
+  [`1eff7af`](https://github.com/ditto-assistant/ditto-subnet/commit/1eff7af6757f45118946968a7385687799aeb3ae))
+
+### Features
+
+- **miner**: Handle coldkey submission cooldown
+  ([#242](https://github.com/ditto-assistant/ditto-subnet/pull/242),
+  [`2b1ff67`](https://github.com/ditto-assistant/ditto-subnet/commit/2b1ff67916f7a37deceb9979d9224163016f0459))
+
+
 ## v0.27.0 (2026-07-24)
 
 ### Features
