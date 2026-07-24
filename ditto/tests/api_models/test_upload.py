@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -84,6 +85,15 @@ class TestUploadCheckResponse:
         assert r.ok is False
         assert r.error_codes == [1100, 1101]
         assert len(r.messages) == 2
+
+    def test_cooldown_retry_at_parses_as_utc_datetime(self):
+        r = UploadCheckResponse(
+            ok=False,
+            error_codes=[1105],
+            messages=["cooldown active"],
+            retry_at="2026-07-24T12:30:00Z",
+        )
+        assert r.retry_at == datetime(2026, 7, 24, 12, 30, tzinfo=UTC)
 
 
 class TestUploadAgentResponse:

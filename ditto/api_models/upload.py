@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -68,6 +69,9 @@ class UploadCheckResponse(BaseModel):
 
     messages: list[str]
     """Parallel array of human-readable failure reasons. Empty when ``ok``."""
+
+    retry_at: datetime | None = None
+    """UTC timestamp when an owner coldkey blocked by cooldown may retry."""
 
 
 class UploadAgentResponse(BaseModel):

@@ -30,12 +30,13 @@ from ditto.api_models import (
     UploadCheckResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
-from ditto.miner_cli.commands.upload import run
+from ditto.miner_cli.commands.upload import _post_upload_with_retries, run
 from ditto.miner_cli.errors import (
     ApiResponseError,
     PaymentCancelledError,
     PaymentFinalizationTimeoutError,
     PaymentSubmissionError,
+    SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
 )
@@ -405,6 +406,29 @@ class TestUploadHappyPath:
         } == {receipt}
         sleep.assert_called_once_with(1.0)
         assert "retrying in 1s" in capsys.readouterr().err
+
+    def test_submission_cooldown_skips_short_retry_loop(self, good_tar: Path) -> None:
+        client = MagicMock()
+        client.post_upload_agent.side_effect = SubmissionCooldownError(
+            "owner coldkey may submit again later", retry_after_seconds=1800
+        )
+
+        with (
+            patch("ditto.miner_cli.commands.upload.time.sleep") as sleep,
+            pytest.raises(SubmissionCooldownError),
+        ):
+            _post_upload_with_retries(
+                client=client,
+                tar_path=good_tar,
+                hotkey=HOTKEY,
+                sha256="ab" * 32,
+                name="alpha",
+                signature="cd" * 64,
+                payment=_payment_receipt(),
+            )
+
+        client.post_upload_agent.assert_called_once()
+        sleep.assert_not_called()
 
 
 def _peek_uuid_from_stdout(response):  # type: ignore[no-untyped-def]

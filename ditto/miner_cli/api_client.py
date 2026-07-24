@@ -39,6 +39,7 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     HotkeyAgentNotFoundError,
     PreCheckRejectedError,
+    SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
 )
@@ -57,6 +58,7 @@ DEFAULT_TIMEOUT_S = 60.0
 # api_models contract tests (next PR after this one) will catch it.
 _ERROR_CODE_AGENT_NOT_FOUND = 1200
 _ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
+_ERROR_CODE_SUBMISSION_COOLDOWN = 1105
 
 # Safe post-payment retry set. These statuses conventionally represent a
 # transient request, capacity, gateway, or service failure. Other 4xx responses
@@ -214,6 +216,22 @@ class ApiClient:
             files=files,
             data=data,
         )
+        envelope = _safe_envelope(response)
+        if (
+            response.status_code == 429
+            and envelope.get("error_code") == _ERROR_CODE_SUBMISSION_COOLDOWN
+        ):
+            retry_after_raw = response.headers.get("Retry-After")
+            try:
+                retry_after = (
+                    int(retry_after_raw) if retry_after_raw is not None else None
+                )
+            except ValueError:
+                retry_after = None
+            raise SubmissionCooldownError(
+                _format_error(response, prefix="upload-agent"),
+                retry_after_seconds=retry_after,
+            )
         if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
             raise TransientApiError(_format_error(response, prefix="upload-agent"))
         if response.status_code != 200:

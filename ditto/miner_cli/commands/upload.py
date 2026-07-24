@@ -40,6 +40,7 @@ from ditto.miner_cli.errors import (
     PaymentFinalizationTimeoutError,
     PaymentSubmissionError,
     PreCheckRejectedError,
+    SubmissionCooldownError,
     TarStructureError,
     TransientApiError,
     UploadAgentRejectedError,
@@ -439,6 +440,11 @@ def _post_upload_with_retries(
                     signature=signature,
                     payment=payment,
                 )
+        except SubmissionCooldownError:
+            # The server supplied the actual eligibility time. Preserve the
+            # finalized proof and let the miner retry then; 1/2/4-second retries
+            # cannot make progress against a one-hour gate.
+            raise
         except TransientApiError:
             if attempt == len(_UPLOAD_RETRY_DELAYS_S):
                 raise
