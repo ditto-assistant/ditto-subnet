@@ -1,0 +1,24 @@
+# Depot CI Migration
+# Source: .github/workflows/conventional-pr.yml
+#
+# Changes made:
+# - Changed runs-on from "blacksmith-4vcpu-ubuntu-2404" to "depot-ubuntu-latest" in job "title"
+
+name: Conventional PR title
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  title:
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    steps:
+      - name: Require a release-aware squash title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ ! "$PR_TITLE" =~ ^(fix|feat|chore)(\([^\)]+\))?\!?:\ .+ ]]; then
+            echo "PR titles must start with fix:, feat:, or chore: (optional scope and ! are supported)."
+            exit 1
+          fi
