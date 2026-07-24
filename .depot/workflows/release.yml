@@ -1,0 +1,576 @@
+# Depot CI Migration
+# Source: .github/workflows/release.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed runs-on from "blacksmith-4vcpu-ubuntu-2404" to "depot-ubuntu-latest" throughout
+# - Changed runs-on from "blacksmith-4vcpu-ubuntu-2404-arm" to "depot-ubuntu-latest" in job "smoke-validator-arm64"
+
+name: Release
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+# Shared, non-secret release constants. Hoisted to workflow scope so the parallel
+# build/assemble jobs share one definition instead of copy-pasting them.
+env:
+  VALIDATOR_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-validator
+  SANDBOX_DOCKER_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker
+  DITTOBENCH_API_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-sandbox
+  MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
+  STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
+  PYLON_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+  OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
+  COMPATIBILITY_EPOCH: "2"
+  UPDATE_PROTOCOL: "1"
+  HEARTBEAT_PROTOCOL: "13"
+  COMPOSE_SCHEMA: "1"
+jobs:
+  release:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: write
+    outputs:
+      released: ${{ steps.semantic-release.outputs.released || 'false' }}
+      version: ${{ steps.semantic-release.outputs.version }}
+      tag: ${{ steps.semantic-release.outputs.tag }}
+      commit_sha: ${{ steps.semantic-release.outputs.commit_sha }}
+    steps:
+      - name: Check out the merged commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - name: Pin the release branch to the tested merge
+        run: git reset --hard "${{ github.sha }}"
+      - name: Configure the release committer
+        run: |
+          git config user.name github-actions
+          git config user.email actions@users.noreply.github.com
+      # The code already reported 0.1.0 before release automation existed.
+      # Anchor that historical version to the parent of this first release-aware
+      # merge so the setup feature itself advances the project to 0.2.0.
+      - name: Bootstrap the existing v0.1.0 baseline
+        run: |
+          if ! git tag --list 'v[0-9]*' | grep -q .; then
+            release_setup_commit=$(git log --diff-filter=A --format=%H -- \
+              .depot/workflows/release.yml | tail -1)
+            baseline_commit=$(git rev-parse "${release_setup_commit}^")
+            git tag --annotate v0.1.0 "$baseline_commit" \
+              --message "Ditto Subnet v0.1.0"
+            git push origin v0.1.0
+          fi
+      - name: Version, tag, and create the GitHub release
+        id: semantic-release
+        uses: python-semantic-release/python-semantic-release@8f4d8c4e3e4fcd2b8df16444b148aa49920cc4d3
+        with:
+          github_token: ${{ secrets.RELEASE_TOKEN }}
+          git_committer_name: github-actions
+          git_committer_email: actions@users.noreply.github.com
+  # ---------------------------------------------------------------------------
+  # Fan-out: independent verification + the four first-party image builds all run
+  # in parallel off the release commit. Release commits use [skip ci], so each
+  # re-derives from the exact published source rather than trusting a prior run.
+  # ---------------------------------------------------------------------------
+  verify-source:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+      - name: Verify the exact release source
+        run: |
+          uv sync --locked --group dev
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy ditto/
+          uv run pytest
+          uv run pytest -m integration ditto/tests/test_validator_auto_update.py
+  build-validator:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.validator.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+      - name: Set up QEMU for both release platforms
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish the validator index
+        id: validator
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            DITTO_VERSION=${{ needs.release.outputs.version }}
+            DITTO_REVISION=${{ needs.release.outputs.commit_sha }}
+            VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
+            VALIDATOR_HEARTBEAT_PROTOCOL=${{ env.HEARTBEAT_PROTOCOL }}
+          tags: |
+            ${{ env.VALIDATOR_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+  build-sandbox-docker:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.sandbox-docker.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+      - name: Set up QEMU for both release platforms
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish the sandbox daemon index
+        id: sandbox-docker
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: Dockerfile.sandbox-docker
+          platforms: linux/amd64,linux/arm64
+          push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/ditto-assistant/ditto-subnet
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.release.outputs.commit_sha }}
+            io.heyditto.validator.stack-service=sandbox-docker
+          tags: |
+            ${{ env.SANDBOX_DOCKER_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+  build-dittobench:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      revision: ${{ steps.dittobench-source.outputs.revision }}
+      scorer_digest: ${{ steps.dittobench-api.outputs.digest }}
+      relay_digest: ${{ steps.model-relay.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+      - name: Materialize the reviewed dittobench-api source
+        id: dittobench-source
+        run: |
+          context="$(
+            grep -Eo \
+              'https://github\.com/ditto-assistant/dittobench-api\.git\?ref=refs/heads/main&checksum=[0-9a-f]{40}' \
+              docker-compose.yml | sort -u
+          )"
+          test -n "$context"
+          test "$(wc -l <<<"$context" | tr -d ' ')" = 1
+          revision="${context##*checksum=}"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git clone --quiet --filter=blob:none \
+            https://github.com/ditto-assistant/dittobench-api.git \
+            "$RUNNER_TEMP/dittobench-source"
+          git -C "$RUNNER_TEMP/dittobench-source" cat-file -e "$revision^{commit}"
+          git -C "$RUNNER_TEMP/dittobench-source" merge-base --is-ancestor \
+            "$revision" origin/main
+          git -C "$RUNNER_TEMP/dittobench-source" checkout --quiet --detach "$revision"
+          test -z "$(git -C "$RUNNER_TEMP/dittobench-source" status --porcelain)"
+          printf 'revision=%s\n' "$revision" >>"$GITHUB_OUTPUT"
+      - name: Set up the scorer toolchain
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: ${{ runner.temp }}/dittobench-source/go.sum
+      - name: Verify the exact dittobench-api source
+        working-directory: ${{ runner.temp }}/dittobench-source
+        run: go test ./...
+      - name: Set up QEMU for both release platforms
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish the scorer index
+        id: dittobench-api
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: ${{ runner.temp }}/dittobench-source
+          file: ${{ runner.temp }}/dittobench-source/Dockerfile
+          target: sandbox
+          platforms: linux/amd64,linux/arm64
+          push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
+            io.heyditto.validator.stack-version=${{ needs.release.outputs.version }}
+            io.heyditto.validator.stack-revision=${{ needs.release.outputs.commit_sha }}
+            io.heyditto.validator.stack-service=dittobench-api
+          tags: |
+            ${{ env.DITTOBENCH_API_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+      - name: Build and publish the model relay index
+        id: model-relay
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: ${{ runner.temp }}/dittobench-source
+          file: ${{ runner.temp }}/dittobench-source/Dockerfile
+          target: relay
+          platforms: linux/amd64,linux/arm64
+          push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
+            io.heyditto.validator.stack-version=${{ needs.release.outputs.version }}
+            io.heyditto.validator.stack-revision=${{ needs.release.outputs.commit_sha }}
+            io.heyditto.validator.stack-service=model-relay
+          tags: |
+            ${{ env.MODEL_RELAY_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+  # ---------------------------------------------------------------------------
+  # Fan-in: every component image exists and the source re-verified. Authenticate
+  # each index, smoke the amd64 validator, render the digest-bound bundle, and
+  # build + sign the immutable stack descriptor.
+  # ---------------------------------------------------------------------------
+  assemble-stack:
+    needs:
+      - release
+      - verify-source
+      - build-validator
+      - build-sandbox-docker
+      - build-dittobench
+    if: needs.release.outputs.released == 'true'
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      validator_digest: ${{ needs.build-validator.outputs.digest }}
+      stack_digest: ${{ steps.stack.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+      # The render script (build-stack-release.py) imports PyYAML, so the project
+      # env must be synced here — the full source re-verification that used to
+      # sync it now runs in the parallel verify-source job.
+      - name: Sync the project environment
+        run: uv sync --locked --group dev
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Verify every first-party multi-platform index
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+          DITTOBENCH_REVISION: ${{ needs.build-dittobench.outputs.revision }}
+        run: |
+          declare -A artifacts=(
+            ["$VALIDATOR_REPOSITORY"]="${{ needs.build-validator.outputs.digest }}"
+            ["$SANDBOX_DOCKER_REPOSITORY"]="${{ needs.build-sandbox-docker.outputs.digest }}"
+            ["$DITTOBENCH_API_REPOSITORY"]="${{ needs.build-dittobench.outputs.scorer_digest }}"
+            ["$MODEL_RELAY_REPOSITORY"]="${{ needs.build-dittobench.outputs.relay_digest }}"
+          )
+          declare -A sources=(
+            ["$VALIDATOR_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
+            ["$SANDBOX_DOCKER_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
+            ["$DITTOBENCH_API_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
+            ["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
+          )
+          declare -A revisions=(
+            ["$VALIDATOR_REPOSITORY"]="$REVISION"
+            ["$SANDBOX_DOCKER_REPOSITORY"]="$REVISION"
+            ["$DITTOBENCH_API_REPOSITORY"]="$DITTOBENCH_REVISION"
+            ["$MODEL_RELAY_REPOSITORY"]="$DITTOBENCH_REVISION"
+          )
+          declare -A services=(
+            ["$SANDBOX_DOCKER_REPOSITORY"]="sandbox-docker"
+            ["$DITTOBENCH_API_REPOSITORY"]="dittobench-api"
+            ["$MODEL_RELAY_REPOSITORY"]="model-relay"
+          )
+          for repository in "${!artifacts[@]}"; do
+            digest="${artifacts[$repository]}"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            raw="$(docker buildx imagetools inspect --raw "$repository@$digest")"
+            for architecture in amd64 arm64; do
+              jq -e --arg architecture "$architecture" \
+                '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture)] | length == 1' \
+                <<<"$raw" >/dev/null
+            done
+            amd64_digest="$(
+              jq -er \
+                '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("expected one amd64 manifest") end' \
+                <<<"$raw"
+            )"
+            child="$repository@$amd64_digest"
+            docker pull --platform linux/amd64 "$child"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$child")" = "${sources[$repository]}"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$child")" = "$VERSION"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$child")" = "${revisions[$repository]}"
+            if [ "$repository" = "$VALIDATOR_REPOSITORY" ]; then
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator-service" }}' "$child")" = "true"
+            else
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-service" }}' "$child")" = "${services[$repository]}"
+            fi
+            if [ "$repository" = "$DITTOBENCH_API_REPOSITORY" ] || \
+              [ "$repository" = "$MODEL_RELAY_REPOSITORY" ]; then
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-version" }}' "$child")" = "$VERSION"
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-revision" }}' "$child")" = "$REVISION"
+            fi
+          done
+      - name: Smoke-test the amd64 validator artifact by exact child digest
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+          VALIDATOR_DIGEST: ${{ needs.build-validator.outputs.digest }}
+        run: |
+          raw="$(
+            docker buildx imagetools inspect --raw \
+              "$VALIDATOR_REPOSITORY@$VALIDATOR_DIGEST"
+          )"
+          child_digest="$(
+            jq -er \
+              '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("expected one child manifest") end' \
+              <<<"$raw"
+          )"
+          exact="$VALIDATOR_REPOSITORY@$child_digest"
+          volume="ditto-validator-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-amd64"
+          docker pull --platform linux/amd64 "$exact"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$exact")" = "$COMPATIBILITY_EPOCH"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$exact")" = "$HEARTBEAT_PROTOCOL"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
+          docker volume create "$volume"
+          trap 'docker volume rm -f "$volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm --platform linux/amd64 --read-only --tmpfs /tmp \
+            --cap-drop ALL --cap-add DAC_READ_SEARCH \
+            --mount "type=volume,source=$volume,target=/var/lib/ditto-validator-update" \
+            --env UV_CACHE_DIR=/tmp/uv-cache \
+            --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
+            --entrypoint uv "$exact" run --no-sync python -c \
+            'from ditto.validator.update_control import bootstrap_should_start_drained as s, mark_bootstrap_resumed as m; assert s(True); assert m(); assert not s(True)'
+          docker volume rm "$volume"
+          trap - EXIT
+      - name: Render the digest-bound stack bundle
+        run: |
+          uv run python scripts/build-stack-release.py \
+            --compose docker-compose.yml \
+            --output build/stack-release \
+            --version "${{ needs.release.outputs.version }}" \
+            --revision "${{ needs.release.outputs.commit_sha }}" \
+            --dittobench-revision "${{ needs.build-dittobench.outputs.revision }}" \
+            --compatibility-epoch "$COMPATIBILITY_EPOCH" \
+            --update-protocol "$UPDATE_PROTOCOL" \
+            --heartbeat-protocol "$HEARTBEAT_PROTOCOL" \
+            --compose-schema "$COMPOSE_SCHEMA" \
+            --validator-image "$VALIDATOR_REPOSITORY@${{ needs.build-validator.outputs.digest }}" \
+            --sandbox-docker-image "$SANDBOX_DOCKER_REPOSITORY@${{ needs.build-sandbox-docker.outputs.digest }}" \
+            --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@${{ needs.build-dittobench.outputs.scorer_digest }}" \
+            --model-relay-image "$MODEL_RELAY_REPOSITORY@${{ needs.build-dittobench.outputs.relay_digest }}" \
+            --pylon-image "$PYLON_IMAGE" \
+            --ollama-image "$OLLAMA_IMAGE"
+          test "$(grep -c '^' build/stack-release/manifest.env)" = 14
+          ! grep -qE '(^|[[:space:]])build:' build/stack-release/compose.yml
+      - name: Build and publish the immutable stack descriptor
+        id: stack
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: Dockerfile.stack-release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            DITTO_VERSION=${{ needs.release.outputs.version }}
+            DITTO_REVISION=${{ needs.release.outputs.commit_sha }}
+            VALIDATOR_COMPATIBILITY_EPOCH=${{ env.COMPATIBILITY_EPOCH }}
+            VALIDATOR_UPDATE_PROTOCOL=${{ env.UPDATE_PROTOCOL }}
+            VALIDATOR_COMPOSE_SCHEMA=${{ env.COMPOSE_SCHEMA }}
+          tags: |
+            ${{ env.STACK_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+      - name: Smoke-test and authenticate the exact stack descriptor
+        env:
+          STACK_DIGEST: ${{ steps.stack.outputs.digest }}
+        run: |
+          [[ "$STACK_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          exact="$STACK_REPOSITORY@$STACK_DIGEST"
+          raw="$(docker buildx imagetools inspect --raw "$exact")"
+          for platform in linux/amd64 linux/arm64; do
+            architecture="${platform#linux/}"
+            child_digest="$(
+              jq -er --arg architecture "$architecture" \
+                '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture)] | if length == 1 then .[0].digest else error("expected one child manifest") end' \
+                <<<"$raw"
+            )"
+            child_exact="$STACK_REPOSITORY@$child_digest"
+            container="ditto-stack-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${platform#linux/}"
+            docker pull --platform "$platform" "$child_exact"
+            test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-release" }}' "$child_exact")" = "true"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$child_exact")" = "${{ needs.release.outputs.version }}"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$child_exact")" = "${{ needs.release.outputs.commit_sha }}"
+            docker create --platform "$platform" --name "$container" "$child_exact"
+            trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+            docker cp "$container:/release/." "build/stack-smoke-${platform#linux/}"
+            cmp build/stack-release/manifest.env "build/stack-smoke-${platform#linux/}/manifest.env"
+            cmp build/stack-release/compose.yml "build/stack-smoke-${platform#linux/}/compose.yml"
+            docker rm "$container"
+            trap - EXIT
+          done
+          cosign sign --yes "$exact"
+          cosign verify \
+            --certificate-identity-regexp \
+              '^https://github.com/ditto-assistant/ditto-subnet/.github/workflows/release.yml@refs/heads/main$' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$exact" >/dev/null
+  smoke-validator-arm64:
+    needs: [release, build-validator]
+    if: needs.release.outputs.released == 'true'
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404-arm. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Smoke-test the arm64 validator artifact by exact child digest
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+          VALIDATOR_DIGEST: ${{ needs.build-validator.outputs.digest }}
+        run: |
+          raw="$(
+            docker buildx imagetools inspect --raw \
+              "$VALIDATOR_REPOSITORY@$VALIDATOR_DIGEST"
+          )"
+          child_digest="$(
+            jq -er \
+              '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | if length == 1 then .[0].digest else error("expected one child manifest") end' \
+              <<<"$raw"
+          )"
+          exact="$VALIDATOR_REPOSITORY@$child_digest"
+          volume="ditto-validator-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-arm64"
+          docker pull --platform linux/arm64 "$exact"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compatibility-epoch" }}' "$exact")" = "$COMPATIBILITY_EPOCH"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.heartbeat-protocol" }}' "$exact")" = "$HEARTBEAT_PROTOCOL"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
+          docker volume create "$volume"
+          trap 'docker volume rm -f "$volume" >/dev/null 2>&1 || true' EXIT
+          docker run --rm --platform linux/arm64 --read-only --tmpfs /tmp \
+            --cap-drop ALL --cap-add DAC_READ_SEARCH \
+            --mount "type=volume,source=$volume,target=/var/lib/ditto-validator-update" \
+            --env UV_CACHE_DIR=/tmp/uv-cache \
+            --env VALIDATOR_BOOTSTRAP_TOKEN=release-smoke \
+            --entrypoint uv "$exact" run --no-sync python -c \
+            'from ditto.validator.update_control import bootstrap_should_start_drained as s, mark_bootstrap_resumed as m; assert s(True); assert m(); assert not s(True)'
+          docker volume rm "$volume"
+          trap - EXIT
+  promote-stack-release:
+    needs: [release, assemble-stack, smoke-validator-arm64]
+    if: needs.release.outputs.released == 'true'
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The mutable discovery tag advances only after every immutable component
+      # exists, both architecture-specific validator smoke tests pass, the bundle was extracted
+      # on both platforms, and its digest was authenticated.
+      - name: Promote only the authenticated stack descriptor
+        env:
+          STACK_DIGEST: ${{ needs.assemble-stack.outputs.stack_digest }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          source="$STACK_REPOSITORY@$STACK_DIGEST"
+          docker buildx imagetools create \
+            --tag "$STACK_REPOSITORY:$RELEASE_TAG" \
+            --tag "$STACK_REPOSITORY:compat-$COMPATIBILITY_EPOCH" \
+            "$source"
+          for tag in "$RELEASE_TAG" "compat-$COMPATIBILITY_EPOCH"; do
+            promoted="$(
+              docker buildx imagetools inspect "$STACK_REPOSITORY:$tag" \
+                --format '{{json .Manifest}}' | jq -r .digest
+            )"
+            test "$promoted" = "$STACK_DIGEST"
+          done

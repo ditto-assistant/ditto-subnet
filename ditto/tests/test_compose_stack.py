@@ -11,7 +11,7 @@ COMPOSE_PATH = Path(__file__).parents[2] / "docker-compose.yml"
 COMPOSE_WRAPPER_PATH = Path(__file__).parents[2] / "scripts/validator-compose.sh"
 SANDBOX_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile.sandbox-docker"
 DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
-RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
+RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".depot/workflows/release.yml"
 INSTALLER_PATH = Path(__file__).parents[2] / "scripts/install-validator-auto-update.sh"
 
 
