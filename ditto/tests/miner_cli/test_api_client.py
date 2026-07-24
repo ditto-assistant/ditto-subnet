@@ -159,6 +159,7 @@ class TestUploadAgent:
                 block_number=42,
                 extrinsic_index=3,
             ),
+            "admission_token": UUID("22222222-2222-2222-2222-222222222222"),
         }
 
     def test_multipart_shape_matches_server_form_fields(self) -> None:
@@ -183,6 +184,7 @@ class TestUploadAgent:
             result = client.post_upload_agent(**self._kwargs())
 
         assert "multipart/form-data" in captured["content_type"]
+        assert b"22222222-2222-2222-2222-222222222222" in captured["body"]
 
         body_str = captured["body"].decode("latin-1")
         # Every Form() field name must appear as a multipart part name.

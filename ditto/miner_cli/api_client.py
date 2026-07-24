@@ -188,6 +188,7 @@ class ApiClient:
         name: str,
         signature: str,
         payment: PaymentReceipt,
+        admission_token: UUID,
     ) -> UploadAgentResponse:
         """Submit the tarball + payment proof.
 
@@ -209,6 +210,7 @@ class ApiClient:
             "payment_block_hash": payment.block_hash,
             "payment_block_number": str(payment.block_number),
             "payment_extrinsic_index": str(payment.extrinsic_index),
+            "admission_token": str(admission_token),
         }
         response = self._request(
             "POST",

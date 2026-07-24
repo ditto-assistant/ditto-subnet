@@ -52,6 +52,9 @@ class UploadCheckRequest(BaseModel):
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
     """Hex sr25519 signature over ``f"{hotkey}:{sha256}"``."""
 
+    reserve_submission_slot: bool = False
+    """Ask the platform to reserve eligibility before any payment is sent."""
+
 
 class UploadCheckResponse(BaseModel):
     """Returned by ``POST /upload/check``.
@@ -72,6 +75,15 @@ class UploadCheckResponse(BaseModel):
 
     retry_at: datetime | None = None
     """UTC timestamp when an owner coldkey blocked by cooldown may retry."""
+
+    admission_token: UUID | None = None
+    """Opaque pre-payment reservation consumed by the matching upload."""
+
+    admission_expires_at: datetime | None = None
+    """UTC expiry of :attr:`admission_token`."""
+
+    cooldown_seconds: Annotated[int, Field(ge=60, le=86400)] | None = None
+    """Platform-controlled owner cooldown used for this decision."""
 
 
 class UploadAgentResponse(BaseModel):

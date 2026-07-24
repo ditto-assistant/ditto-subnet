@@ -100,10 +100,12 @@ uv run ditto --network finney upload \
   --hotkey default
 ```
 
-The CLI runs preflight, checks eligibility and live pricing, asks for
-confirmation, pays on chain, signs the artifact digest, uploads the archive,
-and prints the agent ID. Use `-y` only when automation is intended to accept the
-live fee without an interactive confirmation.
+The CLI runs preflight and obtains a short-lived platform admission reservation
+before it displays pricing or sends payment. This makes the owner cooldown and
+concurrent submissions fail before funds move. It then asks for confirmation,
+pays on chain, uploads the signed archive, and prints the agent ID. Use `-y`
+only when automation is intended to accept the live fee without an interactive
+confirmation.
 
 The CLI saves a finalized payment proof locally before uploading and retries
 short-lived gateway and service failures automatically. If every attempt fails,
@@ -130,6 +132,9 @@ All three recovery flags are required together. The proof is single-use and
 bound to the authenticated artifact; an exact retry returns the original agent
 ID if the first response was lost. Never run a normal upload merely to recover
 from a post-payment error, because that would submit a second transfer.
+Recovery still obtains a fresh admission reservation. If the platform reports a
+cooldown, wait until its exact UTC retry time and rerun the same recovery
+command; the existing proof remains reusable and no new transfer is sent.
 
 ## Track your submission
 

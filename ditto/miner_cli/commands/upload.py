@@ -28,6 +28,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from uuid import UUID
 
 from ditto.api_models import UploadAgentResponse, UploadCheckRequest
 from ditto.miner_cli.api_client import ApiClient
@@ -254,6 +255,7 @@ def _run_upload(
                 sha256=preflight.sha256,
                 file_size_bytes=preflight.file_size_bytes,
                 signature=signature_hex,
+                reserve_submission_slot=True,
             )
         )
         if not check_response.ok:
@@ -264,6 +266,13 @@ def _run_upload(
             raise PreCheckRejectedError(
                 f"pre-check rejected: codes={check_response.error_codes}"
             )
+        if check_response.admission_token is None:
+            raise PreCheckRejectedError(
+                "platform did not reserve a pre-payment submission slot; "
+                "no payment was sent. The platform rollout may still be in "
+                "progress; retry shortly."
+            )
+        admission_token = check_response.admission_token
 
         # Step 5: verify the payment coldkey owns the claimed hotkey. This is
         # intentionally before pricing/confirmation and is never bypassed by
@@ -339,6 +348,7 @@ def _run_upload(
                 name=agent_name,
                 signature=signature_hex,
                 payment=receipt,
+                admission_token=admission_token,
             )
         except ApiResponseError:
             # Money is on chain. Any post-payment API failure (server
@@ -426,6 +436,7 @@ def _post_upload_with_retries(
     name: str,
     signature: str,
     payment: PaymentReceipt,
+    admission_token: UUID,
 ) -> UploadAgentResponse:
     """Retry only transient post-payment failures with the same proof."""
     for attempt in range(len(_UPLOAD_RETRY_DELAYS_S) + 1):
@@ -439,6 +450,7 @@ def _post_upload_with_retries(
                     name=name,
                     signature=signature,
                     payment=payment,
+                    admission_token=admission_token,
                 )
         except SubmissionCooldownError:
             # The server supplied the actual eligibility time. Preserve the

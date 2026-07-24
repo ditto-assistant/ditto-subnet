@@ -18,6 +18,7 @@ Invariants pinned:
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -110,7 +111,14 @@ def _bad_preflight() -> PreflightResult:
 
 
 def _ok_check() -> UploadCheckResponse:
-    return UploadCheckResponse(ok=True, error_codes=[], messages=[])
+    return UploadCheckResponse(
+        ok=True,
+        error_codes=[],
+        messages=[],
+        admission_token=uuid4(),
+        admission_expires_at=datetime(2026, 7, 24, 20, 0, tzinfo=UTC),
+        cooldown_seconds=3600,
+    )
 
 
 def _rejected_check() -> UploadCheckResponse:
@@ -425,6 +433,7 @@ class TestUploadHappyPath:
                 name="alpha",
                 signature="cd" * 64,
                 payment=_payment_receipt(),
+                admission_token=uuid4(),
             )
 
         client.post_upload_agent.assert_called_once()
@@ -505,6 +514,41 @@ class TestUploadFailurePaths:
         client.get_eval_pricing.assert_not_called()
         # Per-code message surfaced to stderr.
         assert "1100" in capsys.readouterr().err
+
+    def test_missing_admission_token_fails_closed_before_payment(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.return_value = UploadCheckResponse(
+            ok=True, error_codes=[], messages=[]
+        )
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar))
+
+        assert rc == 1
+        pay.assert_not_called()
+        client.get_eval_pricing.assert_not_called()
+        assert "no payment was sent" in capsys.readouterr().err.lower()
 
     def test_signer_mismatch_exits_one_before_pricing_confirm_or_payment(
         self, good_tar: Path, capsys: pytest.CaptureFixture[str]
