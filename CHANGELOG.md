@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.29.0 (2026-07-24)
+
+### Features
+
+- Fold completed retest waves into miner scores
+  ([#244](https://github.com/ditto-assistant/ditto-subnet/pull/244),
+  [`34e4a1e`](https://github.com/ditto-assistant/ditto-subnet/commit/34e4a1ee7cd855efdda34f33127cc912b2fc4d83))
+
+
 ## v0.28.0 (2026-07-24)
 
 ### Chores
