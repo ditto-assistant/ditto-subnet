@@ -1047,6 +1047,14 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    continual_aggregate_method: Literal["mean_after_quorum"] | None = Field(
+        default=None,
+        description=(
+            "Platform activation marker for protocol v14+. When present, the "
+            "weight fold uses the arithmetic mean of the three signed quorum "
+            "scores plus one aggregate per completed continual cohort wave."
+        ),
+    )
     status: Annotated[
         AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
     ]

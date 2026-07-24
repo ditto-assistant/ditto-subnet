@@ -407,6 +407,18 @@
         ],
         "default": null
       },
+      "continual_aggregate_method": {
+        "anyOf": [
+          {
+            "const": "mean_after_quorum",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "first_seen": {
         "format": "date-time",
         "type": "string"
@@ -603,6 +615,18 @@
                   "type": "integer"
                 },
                 "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "continual_aggregate_method": {
+            "anyOf": [
+              {
+                "const": "mean_after_quorum",
+                "type": "string"
               },
               {
                 "type": "null"
