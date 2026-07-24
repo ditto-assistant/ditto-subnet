@@ -555,7 +555,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # The mutable discovery tag advances only after every immutable component
-      # exists, both native validator smoke tests pass, the bundle was extracted
+      # exists, both architecture-specific validator smoke tests pass, the bundle was extracted
       # on both platforms, and its digest was authenticated.
       - name: Promote only the authenticated stack descriptor
         env:

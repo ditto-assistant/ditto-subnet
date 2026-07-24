@@ -5,8 +5,8 @@ import yaml
 
 from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 
-RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
-CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
+RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".depot/workflows/release.yml"
+CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".depot/workflows/ci.yml"
 PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
 
 
@@ -46,7 +46,7 @@ def test_public_screener_dependency_needs_no_private_authentication() -> None:
         assert "insteadOf" not in text
 
 
-def test_validator_release_smokes_each_architecture_natively_before_promotion() -> None:
+def test_validator_release_smokes_each_architecture_before_promotion() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
 
@@ -54,13 +54,10 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
     # jobs read it from there instead of each declaring its own copy.
     assert workflow["env"]["HEARTBEAT_PROTOCOL"] == str(HEARTBEAT_PROTOCOL_VERSION)
 
-    # The amd64 validator is smoke-tested natively inside assemble-stack (which
-    # runs on the x86 fan-in runner); the arm64 validator is smoke-tested on a
-    # native arm runner in parallel. Neither smoke relies on emulation.
-    assert jobs["assemble-stack"]["runs-on"] == "blacksmith-4vcpu-ubuntu-2404"
-    assert (
-        jobs["smoke-validator-arm64"]["runs-on"] == "blacksmith-4vcpu-ubuntu-2404-arm"
-    )
+    # Depot CI currently provides x86_64 sandboxes. Each job still pulls and
+    # executes the exact architecture-specific child image before promotion.
+    assert jobs["assemble-stack"]["runs-on"] == "depot-ubuntu-latest"
+    assert jobs["smoke-validator-arm64"]["runs-on"] == "depot-ubuntu-latest"
     amd64_smoke = _step(
         jobs["assemble-stack"]["steps"],
         "Smoke-test the amd64 validator artifact by exact child digest",
@@ -69,7 +66,7 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
         jobs["smoke-validator-arm64"]["steps"],
         "Smoke-test the arm64 validator artifact by exact child digest",
     )
-    # Each native smoke authenticates the arch it actually runs on and asserts
+    # Each platform smoke authenticates the requested child and asserts
     # the heartbeat-protocol label matches the release constant.
     assert "--platform linux/amd64" in amd64_smoke["run"]
     assert "--platform linux/arm64" in arm64_smoke["run"]
@@ -92,7 +89,7 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
     assert 'cosign sign --yes "$exact"' in sign_step["run"]
 
     # The mutable discovery tag is promoted only after the descriptor is
-    # assembled + signed (assemble-stack) AND both native validator smokes pass
+    # assembled + signed (assemble-stack) AND both validator smokes pass
     # (the amd64 smoke gates assemble-stack; the arm64 smoke gates directly).
     assert jobs["promote-stack-release"]["needs"] == [
         "release",
