@@ -33,6 +33,9 @@ from ditto.api_models.validator import ScoreReport
 from ditto.api_models.validator_capabilities import (
     InferenceCalibrationRoute,
     ScorerBenchmarkCapability,
+    ScorerLivenessProbe,
+    ScorerProbeOutcome,
+    ScorerProbeReason,
     V7InferenceCalibration,
     ValidatorStackIdentity,
 )
@@ -291,6 +294,13 @@ class DittobenchClient:
         # be read. Latched so the warning is one per transition, not one per
         # heartbeat, and cleared as soon as a readable calibration arrives.
         self._v7_calibration_rejected = False
+        # Liveness evidence for the heartbeat: when the scorer last answered
+        # with a capability document this validator could read whole, and how
+        # many probes have failed to get one since. Process-local by design —
+        # after a restart the validator knows nothing about the past and says
+        # so, rather than carrying a claim it cannot support.
+        self._scorer_last_served_at: int | None = None
+        self._scorer_probe_failures = 0
 
     def take_transcript(self, run_id: str) -> bytes | None:
         """Consume the verified transcript belonging to exactly ``run_id``."""
@@ -391,6 +401,38 @@ class DittobenchClient:
                 headers=self._control_headers(),
             )
 
+    def _record_scorer_probe(
+        self,
+        outcome: ScorerProbeOutcome,
+        *,
+        observed_at: int,
+        http_status: int | None = None,
+        reason: ScorerProbeReason | None = None,
+    ) -> ScorerLivenessProbe:
+        """Fold one probe result into the liveness this heartbeat reports.
+
+        ``last_served_at`` advances only on a fully readable document. A reply
+        the validator had to narrow is evidence the scorer is answering, not
+        evidence it is serving what it claims — the difference that made a whole
+        fleet look healthy while it had silently lost the active benchmark.
+
+        ``not_probed`` is neither: mock mode observes nothing, so it neither
+        counts a failure nor claims service.
+        """
+        if outcome == "served":
+            self._scorer_probe_failures = 0
+            self._scorer_last_served_at = observed_at
+        elif outcome != "not_probed":
+            self._scorer_probe_failures += 1
+        return ScorerLivenessProbe(
+            outcome=outcome,
+            observed_at=observed_at,
+            http_status=http_status,
+            reason=reason,
+            last_served_at=self._scorer_last_served_at,
+            consecutive_failures=self._scorer_probe_failures,
+        )
+
     async def scorer_benchmark_capability(
         self, stack: ValidatorStackIdentity
     ) -> ScorerBenchmarkCapability:
@@ -415,11 +457,15 @@ class DittobenchClient:
         drops to v2, and shows up degraded instead of silently scoring on an old
         scorer.
         """
-        legacy = ScorerBenchmarkCapability(
-            status="legacy_v2", supported_bench_versions=(2,)
-        )
+        observed_at = int(time.time())
         if self._config.dittobench_mock:
-            return legacy
+            # Local plumbing mode performs no observation. Reporting one would
+            # be an invention, so it reports that none was made.
+            return ScorerBenchmarkCapability(
+                status="legacy_v2",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe("not_probed", observed_at=observed_at),
+            )
         self.full_run_capacity = 1
         try:
             response = await self._client.get(
@@ -428,23 +474,65 @@ class DittobenchClient:
                     self._config, "dittobench_capabilities_timeout_seconds", 3.0
                 ),
             )
-        except httpx.HTTPError:
+        except httpx.HTTPError as error:
+            # A deadline and a refused connection are both "no answer", but they
+            # are different faults with different fixes: one is a wedged scorer,
+            # the other is a scorer that is not listening at all.
             return ScorerBenchmarkCapability(
-                status="unreachable", supported_bench_versions=(2,)
+                status="unreachable",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "timeout"
+                    if isinstance(error, httpx.TimeoutException)
+                    else "connect_error",
+                    observed_at=observed_at,
+                ),
             )
         if response.status_code == 404:
-            return legacy
+            # A genuine pre-capabilities scorer answers exactly this way, and so
+            # does a sidecar that never mounted the route. The status stays
+            # legacy_v2 -- fail closed either way -- but the probe now carries
+            # the evidence that tells the two apart.
+            return ScorerBenchmarkCapability(
+                status="legacy_v2",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "http_error", observed_at=observed_at, http_status=404
+                ),
+            )
         if response.status_code != 200:
             return ScorerBenchmarkCapability(
-                status="unreachable", supported_bench_versions=(2,)
+                status="unreachable",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "http_error",
+                    observed_at=observed_at,
+                    http_status=response.status_code,
+                ),
             )
         try:
             payload = response.json()
         except ValueError:
-            payload = None
+            return ScorerBenchmarkCapability(
+                status="unreachable",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "unreadable",
+                    observed_at=observed_at,
+                    http_status=200,
+                    reason="invalid_json",
+                ),
+            )
         if not isinstance(payload, dict):
             return ScorerBenchmarkCapability(
-                status="unreachable", supported_bench_versions=(2,)
+                status="unreachable",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "unreadable",
+                    observed_at=observed_at,
+                    http_status=200,
+                    reason="malformed_capabilities",
+                ),
             )
         software_version = payload.get("software_version")
         source_revision = payload.get("source_revision")
@@ -462,7 +550,14 @@ class DittobenchClient:
             or not 1 <= full_run_capacity <= 8
         ):
             return ScorerBenchmarkCapability(
-                status="unreachable", supported_bench_versions=(2,)
+                status="unreachable",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "unreadable",
+                    observed_at=observed_at,
+                    http_status=200,
+                    reason="malformed_capabilities",
+                ),
             )
         advertised_versions = tuple(sorted(set(versions)))
         if any(
@@ -471,7 +566,14 @@ class DittobenchClient:
             for version in advertised_versions
         ):
             return ScorerBenchmarkCapability(
-                status="unreachable", supported_bench_versions=(2,)
+                status="unreachable",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "unreadable",
+                    observed_at=observed_at,
+                    http_status=200,
+                    reason="unsupported_bench_version",
+                ),
             )
         observed_versions = tuple(
             version
@@ -480,8 +582,19 @@ class DittobenchClient:
         )
         if not observed_versions:
             return ScorerBenchmarkCapability(
-                status="unreachable", supported_bench_versions=(2,)
+                status="unreachable",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "unreadable",
+                    observed_at=observed_at,
+                    http_status=200,
+                    reason="unsupported_bench_version",
+                ),
             )
+        # Set when the reply was readable but this validator had to narrow it.
+        # The advertisement below then reports less than the scorer offered, and
+        # the probe says so instead of reading as a clean success.
+        narrowed: ScorerProbeReason | None = None
         v7_calibration = _parse_v7_calibration(payload.get("v7_calibration"))
         if 7 in observed_versions and v7_calibration is None:
             # Dropping v7 is the correct fail-closed action, but doing it
@@ -489,12 +602,20 @@ class DittobenchClient:
             # while every other signal stayed green. Say so, once per
             # transition, and name the keys we actually saw.
             self._log_v7_calibration_rejected(payload.get("v7_calibration"))
+            narrowed = "calibration_unreadable"
             observed_versions = tuple(
                 version for version in observed_versions if version != 7
             )
             if not observed_versions:
                 return ScorerBenchmarkCapability(
-                    status="unreachable", supported_bench_versions=(2,)
+                    status="unreachable",
+                    supported_bench_versions=(2,),
+                    probe=self._record_scorer_probe(
+                        "unreadable",
+                        observed_at=observed_at,
+                        http_status=200,
+                        reason="calibration_unreadable",
+                    ),
                 )
         elif 7 not in observed_versions:
             v7_calibration = None
@@ -518,9 +639,15 @@ class DittobenchClient:
             return ScorerBenchmarkCapability(
                 status="identity_mismatch",
                 supported_bench_versions=(2,),
-                observed_at=int(time.time()),
+                observed_at=observed_at,
                 software_version=software_version,
                 source_revision=source_revision,
+                probe=self._record_scorer_probe(
+                    "served_degraded",
+                    observed_at=observed_at,
+                    http_status=200,
+                    reason="identity_mismatch",
+                ),
             )
         self._log_scorer_identity_fault(
             None,
@@ -535,14 +662,30 @@ class DittobenchClient:
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
                 supported_bench_versions=observed_versions,
-                observed_at=int(time.time()),
+                observed_at=observed_at,
                 software_version=software_version,
                 source_revision=source_revision,
                 v7_calibration=v7_calibration,
+                probe=self._record_scorer_probe(
+                    "served_degraded" if narrowed else "served",
+                    observed_at=observed_at,
+                    http_status=200,
+                    reason=narrowed,
+                ),
             )
         except ValueError:
+            # Defensive: every constraint above is already satisfied here. If a
+            # future one is not, the reply was not usable after all, so report
+            # that rather than a capability nothing verified.
             return ScorerBenchmarkCapability(
-                status="unreachable", supported_bench_versions=(2,)
+                status="unreachable",
+                supported_bench_versions=(2,),
+                probe=self._record_scorer_probe(
+                    "unreadable",
+                    observed_at=observed_at,
+                    http_status=200,
+                    reason="malformed_capabilities",
+                ),
             )
 
     def _log_v7_calibration_rejected(self, calibration: object) -> None:

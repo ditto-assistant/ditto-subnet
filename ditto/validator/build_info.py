@@ -9,7 +9,13 @@ from pathlib import Path
 
 from ditto import __version__
 
-HEARTBEAT_PROTOCOL_VERSION = 14
+# v15 adds ``capabilities.scorer_benchmarks.probe``: the evidence behind the
+# scorer status rather than the conclusion drawn from it. The signing bytes are
+# unchanged (the v11 domain still applies and the field is omitted when absent),
+# so the bump exists so the platform can tell a validator that cannot report
+# probe evidence from one that reported none. The platform must ship v15
+# awareness before validators send it: its heartbeat models forbid extras.
+HEARTBEAT_PROTOCOL_VERSION = 15
 
 
 @dataclass(frozen=True)

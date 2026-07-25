@@ -27,6 +27,98 @@ SupportedBenchVersions = Annotated[
 ]
 
 
+# What the validator's ``/v1/capabilities`` probe actually did, as opposed to
+# what the validator concluded from it. ``ScorerBenchmarkStatus`` is the
+# conclusion; two very different scorers reach the same conclusion.
+#
+# ``served``           a capability document this validator read in full.
+# ``served_degraded``  a readable document, part of which was rejected -- so the
+#                      advertisement is narrower than what the scorer offered.
+# ``http_error``       the scorer answered with a status this validator cannot
+#                      use. ``http_status`` says which (404 on a sidecar that
+#                      never mounted the route, 401 on a mis-scoped token).
+# ``unreadable``       HTTP 200 whose body is not a usable capability document.
+# ``timeout``          no answer inside the probe deadline.
+# ``connect_error``    the transport never completed: refused, reset, DNS, TLS.
+# ``not_probed``       no observation was attempted (mock/plumbing mode). Never
+#                      evidence of health -- evidence that there is no evidence.
+ScorerProbeOutcome = Literal[
+    "served",
+    "served_degraded",
+    "http_error",
+    "unreadable",
+    "timeout",
+    "connect_error",
+    "not_probed",
+]
+
+# Why a readable answer was still not fully usable. Present only for the two
+# outcomes that read a body and rejected some of it.
+ScorerProbeReason = Literal[
+    "invalid_json",
+    "malformed_capabilities",
+    "unsupported_bench_version",
+    "calibration_unreadable",
+    "identity_mismatch",
+]
+
+_PROBE_SERVING = frozenset({"served", "served_degraded"})
+_PROBE_ANSWERED = frozenset({"served", "served_degraded", "http_error", "unreadable"})
+_PROBE_READ_A_BODY = frozenset({"served", "served_degraded", "unreadable"})
+_PROBE_REASONED = frozenset({"served_degraded", "unreadable"})
+
+
+class ScorerLivenessProbe(BaseModel):
+    """Evidence that the scorer is *serving*, not merely running.
+
+    ``ScorerBenchmarkCapability`` reports the conclusion the validator drew from
+    its ``/v1/capabilities`` probe. This reports the observation behind it.
+    Without it the two failures that matter are indistinguishable on the wire,
+    because both leave every identity field null: a scorer whose sidecar 404s
+    the route entirely, and a scorer that answered with a document this
+    validator could not use. Both collapse to ``legacy_v2``/``unreachable`` with
+    nulls, so an operator cannot tell a dead sidecar from a shape drift.
+
+    ``consecutive_failures`` and ``last_served_at`` are counted by the reporting
+    process, so they restart with it. That is the honest reading: after a
+    restart the validator has no evidence about the past, and reports none.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: ScorerProbeOutcome
+    observed_at: Annotated[int, Field(ge=0)]
+    http_status: Annotated[int | None, Field(ge=100, le=599)] = None
+    reason: ScorerProbeReason | None = None
+    last_served_at: Annotated[int | None, Field(ge=0)] = None
+    consecutive_failures: Annotated[int, Field(ge=0, le=2**31 - 1)] = 0
+
+    @model_validator(mode="after")
+    def evidence_matches_outcome(self) -> ScorerLivenessProbe:
+        if (self.outcome in _PROBE_ANSWERED) != (self.http_status is not None):
+            raise ValueError(
+                "a scorer probe reports an HTTP status exactly when it got an answer"
+            )
+        if self.outcome in _PROBE_READ_A_BODY and self.http_status != 200:
+            raise ValueError("a scorer probe that read a body must have received 200")
+        if self.outcome == "http_error" and self.http_status == 200:
+            raise ValueError("HTTP 200 is not an HTTP error")
+        if (self.outcome in _PROBE_REASONED) != (self.reason is not None):
+            raise ValueError(
+                "a degraded or unreadable scorer probe must name its reason"
+            )
+        if self.last_served_at is not None and self.last_served_at > self.observed_at:
+            raise ValueError("the scorer cannot have served after it was observed")
+        if self.outcome == "served":
+            # The point of the whole field: "it served" must be unable to
+            # coexist with evidence that it did not.
+            if self.consecutive_failures:
+                raise ValueError("a serving scorer has no outstanding probe failures")
+            if self.last_served_at != self.observed_at:
+                raise ValueError("a serving probe last served at its own observation")
+        return self
+
+
 class InferenceCalibrationRoute(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -63,6 +155,10 @@ class ScorerBenchmarkCapability(BaseModel):
     software_version: Annotated[str | None, Field(pattern=_VERSION_PATTERN)] = None
     source_revision: Annotated[str | None, Field(pattern=_REVISION_PATTERN)] = None
     v7_calibration: V7InferenceCalibration | None = None
+    # Additive and optional so a validator that predates heartbeat protocol v15
+    # produces the exact same signing bytes it always did. Absent means "this
+    # validator cannot report probe evidence", never "the probe succeeded".
+    probe: ScorerLivenessProbe | None = None
 
     @model_validator(mode="after")
     def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
@@ -88,6 +184,21 @@ class ScorerBenchmarkCapability(BaseModel):
             )
         if (7 in versions) != (self.v7_calibration is not None):
             raise ValueError("v7 support requires exact inference calibration identity")
+        # When probe evidence is present it must agree with the conclusion. A
+        # green scorer status that no probe actually observed is the exact shape
+        # of both outages this field exists to make impossible.
+        if self.probe is not None:
+            if (
+                self.status == "fresh_verified"
+                and self.probe.outcome not in _PROBE_SERVING
+            ):
+                raise ValueError("a fresh verified scorer must have served its probe")
+            if self.status == "identity_mismatch" and (
+                self.probe.reason != "identity_mismatch"
+            ):
+                raise ValueError("an identity mismatch must be named by the probe")
+            if self.status == "unreachable" and self.probe.outcome == "served":
+                raise ValueError("an unreachable scorer cannot have served its probe")
         return self
 
 

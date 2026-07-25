@@ -39,7 +39,10 @@ from ditto.api_models.validator import (
     ValidatorHeartbeatRequest,
     ValidatorRuntimeState,
 )
-from ditto.api_models.validator_capabilities import ScorerBenchmarkCapability
+from ditto.api_models.validator_capabilities import (
+    ScorerBenchmarkCapability,
+    ScorerLivenessProbe,
+)
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
 from ditto.validator.crn import confirmation_seeds
@@ -790,8 +793,14 @@ class ValidatorWorker:
             capability_probe = getattr(
                 self._dittobench, "scorer_benchmark_capability", None
             )
+            # No probe ran (no dittobench client is wired up). The heartbeat
+            # says exactly that rather than omitting the field, so "this
+            # validator observed nothing" stays distinguishable from "this
+            # validator is too old to observe anything".
             scorer_benchmarks = ScorerBenchmarkCapability(
-                status="legacy_v2", supported_bench_versions=(2,)
+                status="legacy_v2",
+                supported_bench_versions=(2,),
+                probe=ScorerLivenessProbe(outcome="not_probed", observed_at=timestamp),
             )
             if capability_probe is not None:
                 observed = capability_probe(stack)

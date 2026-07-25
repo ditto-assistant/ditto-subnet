@@ -7,7 +7,7 @@ import hashlib
 import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -697,7 +697,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 14
+        assert heartbeat.protocol_version == 15
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
@@ -1241,9 +1241,34 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 14
+        assert heartbeat.protocol_version == 15
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
+
+    async def test_heartbeat_carries_probe_evidence_or_says_it_has_none(self) -> None:
+        """A v15 heartbeat never leaves the scorer's liveness simply unstated.
+
+        A worker with no scorer client observes nothing, which is a real and
+        reportable finding. Silently omitting the field would make it
+        indistinguishable from an older validator that cannot report one.
+        """
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=cast(Any, SimpleNamespace()),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert await worker._report_heartbeat("idle") is True
+        heartbeat = platform.submit_heartbeat.await_args.args[0]
+        assert heartbeat.protocol_version == 15
+        assert heartbeat.capabilities is not None
+        scorer = heartbeat.capabilities.scorer_benchmarks
+        assert scorer is not None and scorer.probe is not None
+        assert scorer.probe.outcome == "not_probed"
+        assert scorer.probe.last_served_at is None
 
     async def test_collector_failure_degrades_to_unknown_stack_health(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])

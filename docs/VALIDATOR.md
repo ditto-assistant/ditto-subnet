@@ -248,6 +248,37 @@ git pull --ff-only
 The validator logs `scorer identity verified` once the rebuilt scorer answers.
 Then re-enable the updater.
 
+### Scorer liveness
+
+A running scorer container is not a serving scorer. From heartbeat protocol 15
+the validator reports what its `/v1/capabilities` probe actually did, alongside
+the conclusion it drew, under `capabilities.scorer_benchmarks.probe`:
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `served` (a document read in full), `served_degraded` (readable, part rejected), `http_error`, `unreadable` (200 with an unusable body), `timeout`, `connect_error`, `not_probed` |
+| `observed_at` | when this probe ran |
+| `http_status` | the status the scorer answered with, when it answered |
+| `reason` | why a readable reply was still not fully usable |
+| `last_served_at` | when the scorer last answered with a fully readable document |
+| `consecutive_failures` | probes since the last fully readable document |
+
+`last_served_at` and `consecutive_failures` are counted by the running validator
+process and reset when it restarts, so a fresh process reports no history rather
+than a history it cannot support.
+
+This exists because the status alone cannot distinguish two very different
+scorers. A sidecar that 404s `/v1/capabilities` and a genuine pre-capabilities
+scorer both produce `status: legacy_v2` with every identity field null; the
+probe shows `http_error` / `404` for the first. A scorer whose capability
+document is only partly readable still produces `status: fresh_verified`; the
+probe shows `served_degraded` and names the field that was rejected.
+
+On the platform's fleet view a validator whose probe reports no usable answer
+reads `health: critical` with `scorer_liveness: not_serving`. Its `admission`
+is unchanged: the validator keeps taking work, which is why the condition needs
+to be visible.
+
 ### Troubleshooting
 
 - **GHCR pull fails:** confirm outbound access to `ghcr.io` and that `compat-2`
@@ -263,6 +294,13 @@ Then re-enable the updater.
 - **Logs show `transcript publication failed`:** the accepted score already
   stands. Check `dittobench-api` health and platform reachability so future
   runs publish their transcripts.
+- **The fleet view shows `Scorer down` / `scorer_liveness: not_serving`:** the
+  validator's `/v1/capabilities` probe got no usable answer. Read
+  `capabilities.scorer_benchmarks.probe`: `connect_error` means nothing is
+  listening, `timeout` means the scorer is wedged, and an `http_error` with
+  `404` means the container is up but never mounted the route (check that the
+  `dittobench-api` image matches the pin rather than restarting the validator).
+  See [Scorer liveness](#scorer-liveness).
 - **Logs show `scorer_image_stale` or `scorer_revision_mismatch`:** the running
   scorer is not the pinned `dittobench-api` revision. See
   [Stale scorer image](#stale-scorer-image). Restarting the validator does not

@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from ditto.api_models.validator_capabilities import (
+    ScorerBenchmarkCapability,
     ValidatorComponentIdentity,
     ValidatorStackComponents,
     ValidatorStackIdentity,
@@ -427,6 +428,249 @@ async def test_unreadable_calibration_is_reported_not_silently_dropped() -> None
     assert observed.supported_bench_versions == (2, 3, 4, 5, 6)
     assert observed.v7_calibration is None
     assert client._v7_calibration_rejected is True
+
+
+# --- Scorer liveness probe (heartbeat protocol v15) -------------------------
+#
+# The status above is the conclusion the validator drew. These cover the
+# evidence behind it, because the conclusion alone could not tell a dead
+# sidecar from an old one, or a narrowed advertisement from a clean success.
+
+
+def _probe_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+        scorer_require_binary_provenance=True,
+    )
+
+
+async def _observe(
+    handler: object, *, revision: str | None = None, times: int = 1
+) -> ScorerBenchmarkCapability:
+    """Run the capability probe ``times`` times against one handler."""
+    revision = revision or cast(str, _LIVE_CAPABILITIES["source_revision"])
+    transport = httpx.MockTransport(cast(Any, handler))
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = DittobenchClient(_probe_config(), http)  # type: ignore[arg-type]
+        for _ in range(times):
+            observed = await client.scorer_benchmark_capability(_stack(revision))
+    return observed
+
+
+@pytest.mark.asyncio
+async def test_a_sidecar_that_404s_is_not_mistaken_for_an_old_scorer() -> None:
+    """The TAO.com outage.
+
+    Its dittobench-api answered 404 on ``/v1/capabilities``, which is also
+    exactly what a genuine pre-capabilities scorer answers. The validator
+    reported ``legacy_v2`` with every identity field null and kept taking
+    leases. The status still fails closed the same way; what is new is that the
+    heartbeat now carries what the request actually did.
+    """
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    observed = await _observe(handler, times=3)
+
+    assert observed.status == "legacy_v2"
+    assert observed.probe is not None
+    assert observed.probe.outcome == "http_error"
+    assert observed.probe.http_status == 404
+    assert observed.probe.reason is None
+    # It has never once served, and it has now failed three probes running.
+    assert observed.probe.last_served_at is None
+    assert observed.probe.consecutive_failures == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "outcome"),
+    [
+        pytest.param(
+            httpx.ConnectError("connection refused"), "connect_error", id="refused"
+        ),
+        pytest.param(
+            httpx.ReadTimeout("deadline exceeded"), "timeout", id="wedged-and-silent"
+        ),
+    ],
+)
+async def test_no_answer_at_all_says_which_kind_of_no_answer(
+    error: httpx.HTTPError, outcome: str
+) -> None:
+    """Different faults, different fixes: nothing listening vs. wedged."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise error
+
+    observed = await _observe(handler)
+
+    assert observed.status == "unreachable"
+    assert observed.probe is not None
+    assert observed.probe.outcome == outcome
+    assert observed.probe.http_status is None
+    assert observed.probe.consecutive_failures == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        pytest.param("not json at all", "invalid_json", id="not-json"),
+        pytest.param("[]", "malformed_capabilities", id="json-but-not-a-document"),
+        pytest.param(
+            json.dumps({**_LIVE_CAPABILITIES, "source_revision": "nope"}),
+            "malformed_capabilities",
+            id="off-pattern-identity",
+        ),
+        pytest.param(
+            json.dumps({**_LIVE_CAPABILITIES, "supported_bench_versions": [1, 2, 3]}),
+            "unsupported_bench_version",
+            id="unknown-version-in-range",
+        ),
+    ],
+)
+async def test_an_answer_this_validator_cannot_use_says_why(
+    body: str, reason: str
+) -> None:
+    """A 200 is not evidence of service; being able to read it is."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body.encode())
+
+    observed = await _observe(handler)
+
+    assert observed.status == "unreachable"
+    assert observed.probe is not None
+    assert observed.probe.outcome == "unreadable"
+    assert observed.probe.http_status == 200
+    assert observed.probe.reason == reason
+
+
+@pytest.mark.asyncio
+async def test_an_extra_descriptive_field_still_reads_as_fully_served() -> None:
+    """The regression that would have caught the v7 outage.
+
+    The live scorer's capability document carries a ``provenance`` key the
+    validator does not sign. Reading around it is the fix that landed in #248;
+    this pins the reporting half. An unknown field must not narrow the
+    advertisement, and it must not make the probe look like anything other than
+    a clean, fully readable answer.
+    """
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                **_LIVE_CAPABILITIES,
+                "measured_at": "2026-07-25T01:32:00Z",
+                "v7_calibration": {
+                    **cast(dict, _LIVE_CAPABILITIES["v7_calibration"]),
+                    "provenance": "reviewed-measured",
+                    "measured_tokens_per_second": 42,
+                },
+            },
+        )
+
+    observed = await _observe(handler)
+
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6, 7)
+    assert observed.probe is not None
+    assert observed.probe.outcome == "served"
+    assert observed.probe.reason is None
+    assert observed.probe.consecutive_failures == 0
+    assert observed.probe.last_served_at == observed.probe.observed_at
+
+
+@pytest.mark.asyncio
+async def test_a_narrowed_advertisement_never_reads_as_a_clean_success() -> None:
+    """The other half of the v7 outage: green status, missing capability.
+
+    Every other signal stayed healthy while v7 quietly vanished fleet-wide.
+    Now the same heartbeat reports that the reply was only partly readable, and
+    names the part.
+    """
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                **_LIVE_CAPABILITIES,
+                "v7_calibration": {"manifest_sha256": "not-a-digest"},
+            },
+        )
+
+    observed = await _observe(handler)
+
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6)
+    assert observed.probe is not None
+    assert observed.probe.outcome == "served_degraded"
+    assert observed.probe.reason == "calibration_unreadable"
+    # It answered, but it has never served a document this validator could read
+    # whole, so it must not claim to have.
+    assert observed.probe.last_served_at is None
+    assert observed.probe.consecutive_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_a_stale_scorer_image_is_named_by_the_probe_too() -> None:
+    """An identity mismatch is a scorer that answers and is still the wrong one."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_LIVE_CAPABILITIES)
+
+    observed = await _observe(handler, revision="cd" * 20)
+
+    assert observed.status == "identity_mismatch"
+    assert observed.probe is not None
+    assert observed.probe.outcome == "served_degraded"
+    assert observed.probe.reason == "identity_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_recovery_clears_the_failure_run_and_records_the_service() -> None:
+    """An operator watching for the fix needs to see the counter reset."""
+    replies = iter([404, 404, 200])
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        status = next(replies)
+        if status != 200:
+            return httpx.Response(status, json={"detail": "Not Found"})
+        return httpx.Response(200, json=_LIVE_CAPABILITIES)
+
+    observed = await _observe(handler, times=3)
+
+    assert observed.status == "fresh_verified"
+    assert observed.probe is not None
+    assert observed.probe.outcome == "served"
+    assert observed.probe.consecutive_failures == 0
+    assert observed.probe.last_served_at == observed.probe.observed_at
+
+
+@pytest.mark.asyncio
+async def test_mock_mode_reports_that_it_observed_nothing() -> None:
+    """Plumbing mode must never manufacture evidence of a healthy scorer."""
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=True,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(cast(Any, lambda _: httpx.Response(500)))
+    ) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "legacy_v2"
+    assert observed.probe is not None
+    assert observed.probe.outcome == "not_probed"
+    assert observed.probe.http_status is None
+    assert observed.probe.last_served_at is None
+    assert observed.probe.consecutive_failures == 0
 
 
 @pytest.mark.asyncio

@@ -12,10 +12,12 @@ from ditto.api_models.validator import ValidatorHeartbeatRequest
 from ditto.api_models.validator_capabilities import (
     ComponentProvenance,
     ScorerBenchmarkCapability,
+    ScorerLivenessProbe,
     ValidatorCapabilities,
     ValidatorComponentIdentity,
     ValidatorStackComponents,
     ValidatorStackIdentity,
+    validator_identity_signing_token,
 )
 
 _DIGEST = "sha256:" + "12" * 32
@@ -258,3 +260,83 @@ def test_scorer_capability_gating_is_independent_of_stack_health() -> None:
         scorer_claim["supported_bench_versions"] = advertised
         with pytest.raises(ValidationError):
             ValidatorHeartbeatRequest.model_validate_json(json.dumps(unverified))
+
+
+def test_a_scorer_probe_cannot_report_evidence_it_does_not_have() -> None:
+    """The probe is evidence, so it must not be able to contradict itself.
+
+    Both incidents behind heartbeat v15 looked identical on the wire: a status
+    with every identity field null. The probe is what separates them, which is
+    only worth anything if a broken scorer cannot describe itself as a working
+    one.
+    """
+    served = ScorerLivenessProbe(
+        outcome="served",
+        observed_at=1_784_020_800,
+        http_status=200,
+        last_served_at=1_784_020_800,
+    )
+    assert served.consecutive_failures == 0
+
+    with pytest.raises(ValidationError, match="no outstanding probe failures"):
+        ScorerLivenessProbe(
+            outcome="served",
+            observed_at=1_784_020_800,
+            http_status=200,
+            last_served_at=1_784_020_800,
+            consecutive_failures=2,
+        )
+    with pytest.raises(ValidationError, match="exactly when it got an answer"):
+        ScorerLivenessProbe(
+            outcome="connect_error", observed_at=1_784_020_800, http_status=502
+        )
+    with pytest.raises(ValidationError, match="must name its reason"):
+        ScorerLivenessProbe(
+            outcome="served_degraded",
+            observed_at=1_784_020_800,
+            http_status=200,
+            consecutive_failures=1,
+        )
+    with pytest.raises(ValidationError, match="must have served its probe"):
+        ScorerBenchmarkCapability(
+            status="fresh_verified",
+            supported_bench_versions=(2, 3),
+            observed_at=1,
+            software_version="1.2.3",
+            source_revision=_REVISION,
+            probe=ScorerLivenessProbe(
+                outcome="timeout",
+                observed_at=1_784_020_800,
+                consecutive_failures=1,
+            ),
+        )
+
+
+def test_a_validator_without_probe_evidence_signs_the_legacy_bytes() -> None:
+    """The cross-repo compatibility guarantee for the additive v15 field.
+
+    The heartbeat is signed and the platform's models forbid extras, so an
+    additive field that shifted the canonical token would reject every existing
+    reporter. Absence has to serialize to exactly nothing.
+    """
+    payload = json.loads(_V7_VECTOR.read_text())
+    capabilities = ValidatorCapabilities.model_validate(
+        payload["request"]["capabilities"]
+    )
+    stack = ValidatorStackIdentity.model_validate(payload["request"]["stack"])
+
+    assert capabilities.scorer_benchmarks is None
+    assert (
+        validator_identity_signing_token(capabilities, stack)
+        in payload["expected_message_utf8"]
+    )
+
+    without_probe = ScorerBenchmarkCapability(
+        status="fresh_verified",
+        supported_bench_versions=(2, 3),
+        observed_at=1,
+        software_version="1.2.3",
+        source_revision=_REVISION,
+    )
+    assert without_probe.probe is None
+    assert "probe" not in without_probe.model_dump(mode="json", exclude_none=True)
