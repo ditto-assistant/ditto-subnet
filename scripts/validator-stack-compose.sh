@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Execute the immutable Compose model carried by a validated validator-stack
 # descriptor. This is intentionally separate from validator-compose.sh: local
-# source builds and the legacy validator-only updater keep their old boundary.
+# source builds keep their own boundary and their verified build context.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

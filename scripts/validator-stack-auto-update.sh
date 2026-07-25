@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Transactionally update the complete validator Compose stack from an immutable
-# descriptor image. The legacy validator-only updater remains available for
-# operators who have not completed supervised stack adoption.
+# descriptor image. Hosts that have not completed supervised stack adoption
+# stay on their existing supervised Compose deployment until they migrate.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -548,7 +548,7 @@ trap 'cleanup $?' EXIT; trap 'exit 143' INT TERM
 recover_transaction
 if [ "$mode" = recover ]; then log "recovery complete"; exit 0; fi
 if is_true "$(setting VALIDATOR_AUTO_UPDATE false)"; then
-  die "disable the legacy validator-only updater before using full-stack managed mode"
+  die "the retired validator-only updater is still enabled: stop ditto-validator-auto-update.timer and remove VALIDATOR_AUTO_UPDATE from .env"
 fi
 if [ "$mode" = adopt ]; then
   is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)" && die "disable the stack timer before supervised adoption"

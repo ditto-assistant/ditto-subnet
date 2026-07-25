@@ -26,7 +26,7 @@ PATH="$service_path" command -v cosign >/dev/null 2>&1 || \
 [ -f "$ROOT_DIR/.env" ] || die "create $ROOT_DIR/.env first"
 grep -Eq '^VALIDATOR_STACK_AUTO_UPDATE=(true|1|yes)$' "$ROOT_DIR/.env" || die "set VALIDATOR_STACK_AUTO_UPDATE=true only after supervised stack adoption"
 if grep -Eq '^VALIDATOR_AUTO_UPDATE=(true|1|yes)$' "$ROOT_DIR/.env"; then
-  die "disable the legacy validator-only updater before enabling full-stack updates"
+  die "the retired validator-only updater is still enabled: stop ditto-validator-auto-update.timer and remove VALIDATOR_AUTO_UPDATE from .env"
 fi
 service_user="${DITTO_VALIDATOR_UPDATE_USER:-${SUDO_USER:-}}"
 [ -n "$service_user" ] && [ "$service_user" != root ] || die "set DITTO_VALIDATOR_UPDATE_USER to the non-root Docker operator"

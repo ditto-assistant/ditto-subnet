@@ -88,5 +88,8 @@ jobs:
       - name: pytest
         run: uv run pytest
 
-      - name: Validator updater integration tests
-        run: uv run pytest -m integration ditto/tests/test_validator_auto_update.py
+      - name: Compose wrapper and stack updater integration tests
+        run: |
+          uv run pytest -m integration \
+            ditto/tests/test_validator_compose.py \
+            ditto/tests/test_validator_stack_auto_update.py

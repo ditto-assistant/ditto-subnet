@@ -34,8 +34,9 @@ services, then run `migrate <descriptor-digest>` — or `adopt
 <descriptor-digest>` only when all six running services already match the
 descriptor. Both require a fresh platform-accepted heartbeat and record the
 installed stack atomically. Never substitute a mutable tag for the digest, and
-enable the timer only after `status` looks right. A validator-only
-`managed-image.env` is not a full-stack adoption record.
+enable the timer only after `status` looks right. A `managed-image.env` left
+behind by the retired validator-only updater is not a full-stack adoption
+record.
 
 If `migrate` fails before a drain is reported and `status` shows no
 transaction, the old stack was not touched: leave it running and capture the

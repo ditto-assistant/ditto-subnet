@@ -109,7 +109,9 @@ jobs:
           uv run ruff check .
           uv run mypy ditto/
           uv run pytest
-          uv run pytest -m integration ditto/tests/test_validator_auto_update.py
+          uv run pytest -m integration \
+            ditto/tests/test_validator_compose.py \
+            ditto/tests/test_validator_stack_auto_update.py
 
   build-validator:
     needs: release
