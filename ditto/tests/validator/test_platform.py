@@ -437,3 +437,34 @@ async def test_submit_transcript_rejection_raises_platform_error() -> None:
         platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
         with pytest.raises(PlatformError, match="transcript rejected"):
             await platform.submit_transcript(agent_id, run_id="run_1", body=b"{}")
+
+
+def test_exchange_accepts_the_split_inference_host_and_nothing_else() -> None:
+    """The platform may serve its inference plane on its own public hostname.
+
+    DITTO_INFERENCE_PUBLIC_BASE_URL is independent of the API host a validator
+    posts jobs and scores to. Both are allowlisted; anything else is refused, so
+    a hostile ticket still cannot redirect a grant exchange.
+    """
+    import asyncio
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        platform_inference_base_url="https://inference.test",
+        validator_hotkey="5Test",
+        http_timeout_seconds=5.0,
+    )
+    client = PlatformClient.__new__(PlatformClient)
+    client._config = config
+    client._base = config.platform_api_url.rstrip("/")
+    client._inference_base = config.platform_inference_base_url.rstrip("/")
+
+    for hostile in (
+        "https://attacker.example/api/v1/inference/exchange",
+        "https://platform.test.attacker.example/api/v1/inference/exchange",
+        "https://inference.test/api/v1/inference/exchange/../../evil",
+    ):
+        with pytest.raises(PlatformError, match="not the platform"):
+            asyncio.run(client.exchange_inference_grant(uuid4(), "key", hostile))

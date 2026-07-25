@@ -67,6 +67,9 @@ class PlatformClient:
         self._client = client
         self._keypair = keypair
         self._base = config.platform_api_url.rstrip("/")
+        self._inference_base = (
+            getattr(config, "platform_inference_base_url", "") or config.platform_api_url
+        ).rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
 
     async def submit_heartbeat(
@@ -128,8 +131,17 @@ class PlatformClient:
         self, grant_id: UUID, broker_public_key: str, exchange_url: str
     ) -> InferenceExchangeResponse:
         """Authorize one trusted broker key for the exact live ticket grant."""
-        expected_url = f"{self._base}/api/v1/inference/exchange"
-        if exchange_url.rstrip("/") != expected_url:
+        # The platform may serve its inference plane on a different public
+        # hostname than the API host this validator posts jobs and scores to
+        # (DITTO_INFERENCE_PUBLIC_BASE_URL vs the API base). Accept either, and
+        # nothing else: this stays a two-entry allowlist, so a malicious ticket
+        # still cannot point a grant exchange at a host of its choosing.
+        permitted = {
+            f"{base}/api/v1/inference/exchange"
+            for base in (self._base, self._inference_base)
+        }
+        verified_url = exchange_url.rstrip("/")
+        if verified_url not in permitted:
             raise PlatformError("ticket inference exchange URL is not the platform")
         requested_at = datetime.now(UTC)
         nonce = uuid4()
@@ -150,7 +162,7 @@ class PlatformClient:
         )
         try:
             response = await self._client.post(
-                expected_url,
+                verified_url,
                 headers=self._headers,
                 json=payload.model_dump(mode="json"),
             )

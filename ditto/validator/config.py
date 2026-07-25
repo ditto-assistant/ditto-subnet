@@ -263,6 +263,16 @@ class ValidatorConfig:
     scorer stamps its revision at build time; leave it off for an older pin,
     which could never satisfy it."""
 
+    platform_inference_base_url: str = ""
+    """Base URL the platform mints ticket inference URLs from.
+
+    The platform serves its inference plane under its own public hostname
+    (``DITTO_INFERENCE_PUBLIC_BASE_URL``), which need not equal the API host a
+    validator posts jobs and scores to. When set, it joins ``platform_api_url``
+    in a two-entry allowlist for a ticket's exchange URL, so a malicious ticket
+    still cannot redirect a grant exchange to a host of its choosing. Empty
+    means "same host as the API", which is the historical behaviour."""
+
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""
         return bool(self.wallet_name and self.wallet_hotkey)
@@ -405,10 +415,15 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             f"VALIDATOR_MIN_STAKE_TAO must be a finite number >= 0, got {min_stake_tao}"
         )
 
+    platform_api_url = _require(
+        "VALIDATOR_PLATFORM_API_URL",
+        os.environ.get("VALIDATOR_PLATFORM_API_URL", "http://localhost:8000"),
+    )
     config = ValidatorConfig(
-        platform_api_url=_require(
-            "VALIDATOR_PLATFORM_API_URL",
-            os.environ.get("VALIDATOR_PLATFORM_API_URL", "http://localhost:8000"),
+        platform_api_url=platform_api_url,
+        platform_inference_base_url=(
+            os.environ.get("VALIDATOR_PLATFORM_INFERENCE_BASE_URL", "").strip()
+            or platform_api_url
         ),
         dittobench_api_url=dittobench_api_url,
         dittobench_capabilities_timeout_seconds=capabilities_timeout_seconds,

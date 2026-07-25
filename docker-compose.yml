@@ -307,6 +307,11 @@ services:
       # V7 tickets fail closed without platform inference regardless of this
       # flag. Leave fleet-wide enforcement dark until v6 has drained.
       VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-false}
+      # The platform serves its inference plane under its own public hostname
+      # (DITTO_INFERENCE_PUBLIC_BASE_URL), which need not equal the API host
+      # above. A ticket's exchange URL must match one of the two exactly.
+      # Leave unset when both live on the same host.
+      VALIDATOR_PLATFORM_INFERENCE_BASE_URL: ${VALIDATOR_PLATFORM_INFERENCE_BASE_URL:-}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"
