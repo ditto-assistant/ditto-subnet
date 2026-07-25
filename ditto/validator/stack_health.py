@@ -305,6 +305,22 @@ class StackHealthCollector:
         )
 
     async def _probe_ollama(self) -> ValidatorComponentHealth:
+        """Observe this host's local embedding lane. Stays ``required``.
+
+        Deliberate, and not an oversight now that a dead Ollama no longer blocks
+        v7 claims (see ``_LOCAL_EMBEDDING_BENCH_VERSIONS`` in
+        :mod:`ditto.validator.dittobench`). ``required`` is a *reporting* flag:
+        the platform reads it only to roll a non-healthy component into a fleet
+        ``warning`` badge with an ``ollama: unreachable`` label. It has no effect
+        on ticket issuance, which is decided by the advertised bench versions.
+
+        So keeping it ``True`` is what makes "Ollama is down but this validator
+        is still serving" *visible* rather than silent. Flipping it to ``False``
+        would erase the only operator-facing signal that this host can no longer
+        drive v2-v6 -- while buying nothing, because it was never the thing
+        blocking work. A dead lane is a real degradation; it is simply not a
+        dead scorer, and the fleet view already distinguishes the two.
+        """
         url = self._config.embed_preflight_url
         if not url:
             return _unknown_component()

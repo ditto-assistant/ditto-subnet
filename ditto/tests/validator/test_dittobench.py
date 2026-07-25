@@ -23,6 +23,7 @@ from ditto.validator.dittobench import (
     DittobenchClient,
     DittobenchProgressSnapshot,
     InferenceBrokerSession,
+    LocalEmbeddingLane,
     _parse_v7_calibration,
     safe_progress_snapshot,
 )
@@ -1738,3 +1739,194 @@ async def test_poll_without_transcript_keeps_legacy_shape() -> None:
 
     assert report.details == {"bench_version": 2}
     assert client.last_transcript is None
+
+
+# ---------------------------------------------------------------------------
+# The local embedding lane is a capability, not a global gate.
+#
+# Every test below exists because a validator whose own Ollama container died
+# was excluded from benchmark v7 -- the only version being scored -- for a
+# dependency a v7 run never opens a socket to. The lane must narrow what the
+# validator offers, not stop it from working.
+# ---------------------------------------------------------------------------
+
+
+_LIVE_REVISION = cast(str, _LIVE_CAPABILITIES["source_revision"])
+
+
+def _lane_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        dittobench_mock=False,
+        dittobench_api_url="http://dittobench.test",
+        dittobench_capabilities_timeout_seconds=1,
+        embed_preflight_url="http://sandbox-docker:11434/api/embed",
+        embed_preflight_timeout_seconds=5.0,
+        scorer_require_binary_provenance=True,
+    )
+
+
+def _dead_lane_transport() -> httpx.MockTransport:
+    """Capabilities answer normally; the local embedding lane refuses."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/embed":
+            return httpx.Response(503, text="ollama container is not running")
+        return httpx.Response(200, json=_LIVE_CAPABILITIES)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_dead_local_lane_still_claims_hosted_lane_tickets() -> None:
+    """The regression this whole change exists for.
+
+    A host with a dead Ollama and a scorer offering v7 must keep claiming
+    tickets. Before this, preflight raised and the sweep claimed nothing at all.
+    """
+    async with httpx.AsyncClient(transport=_dead_lane_transport()) as http:
+        client = DittobenchClient(cast(Any, _lane_config()), http)
+        await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+        await client.preflight()
+
+    assert client.local_embedding_lane.status == "unavailable"
+    assert client.local_embedding_lane.detail is not None
+    assert "503" in client.local_embedding_lane.detail
+
+
+@pytest.mark.asyncio
+async def test_dead_local_lane_narrows_the_advertisement_to_the_hosted_lane() -> None:
+    """The validator offers only what it can actually drive -- so the platform
+    never issues a v2-v6 ticket this host would fail."""
+    async with httpx.AsyncClient(transport=_dead_lane_transport()) as http:
+        client = DittobenchClient(cast(Any, _lane_config()), http)
+        # First sweep observes the full offer; the lane has not been probed yet.
+        first = await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+        assert first.supported_bench_versions == (2, 3, 4, 5, 6, 7)
+        await client.preflight()
+        second = await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+
+    assert second.status == "fresh_verified"
+    assert second.supported_bench_versions == (7,)
+    # Narrowing must not disturb the v7 identity the platform gates v7 on.
+    assert second.v7_calibration is not None
+    # The scorer served its document in full; the narrowing is this host's
+    # limitation, not the scorer's, and the liveness probe must not say
+    # otherwise.
+    assert second.probe is not None
+    assert second.probe.outcome == "served"
+
+
+@pytest.mark.asyncio
+async def test_dead_local_lane_blocks_the_sweep_when_only_v2_v6_is_offered() -> None:
+    """The pre-existing behaviour, preserved exactly where it is still correct.
+
+    A scorer with no hosted-lane version has nothing this host can serve, so the
+    sweep must claim nothing rather than claim work it will fail.
+    """
+    legacy = dict(_LIVE_CAPABILITIES)
+    legacy["supported_bench_versions"] = [2, 3, 4, 5, 6]
+    legacy.pop("v7_calibration")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/embed":
+            return httpx.Response(503, text="ollama container is not running")
+        return httpx.Response(200, json=legacy)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _lane_config()), http)
+        observed = await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+        assert observed.supported_bench_versions == (2, 3, 4, 5, 6)
+        with pytest.raises(ValidatorInfrastructureError, match="no benchmark version"):
+            await client.preflight()
+        # Nothing is servable, but the advertisement must still describe the
+        # scorer honestly rather than collapse to an invented empty capability.
+        again = await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+
+    assert again.supported_bench_versions == (2, 3, 4, 5, 6)
+
+
+@pytest.mark.asyncio
+async def test_dead_local_lane_before_any_advertisement_fails_closed() -> None:
+    """No observation yet is not evidence that v7 is servable."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="ollama container is not running")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _lane_config()), http)
+        with pytest.raises(ValidatorInfrastructureError, match="no benchmark version"):
+            await client.preflight()
+
+
+@pytest.mark.asyncio
+async def test_healthy_local_lane_narrows_nothing() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/embed":
+            return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
+        return httpx.Response(200, json=_LIVE_CAPABILITIES)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _lane_config()), http)
+        await client.preflight()
+        observed = await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+
+    assert client.local_embedding_lane.status == "healthy"
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6, 7)
+
+
+@pytest.mark.asyncio
+async def test_recovered_local_lane_restores_the_full_advertisement() -> None:
+    embeds = [
+        httpx.Response(503, text="ollama container is not running"),
+        httpx.Response(200, json={"embeddings": [[0.1, 0.2]]}),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/embed":
+            return embeds.pop(0)
+        return httpx.Response(200, json=_LIVE_CAPABILITIES)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _lane_config()), http)
+        await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+        await client.preflight()
+        narrowed = await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+        assert narrowed.supported_bench_versions == (7,)
+        await client.preflight()
+        restored = await client.scorer_benchmark_capability(_stack(_LIVE_REVISION))
+
+    assert client.local_embedding_lane.status == "healthy"
+    assert restored.supported_bench_versions == (2, 3, 4, 5, 6, 7)
+
+
+@pytest.mark.asyncio
+async def test_a_stale_v2_v6_ticket_is_infrastructure_not_a_miner_failure() -> None:
+    """Defence in depth for the one sweep of lag in the advertisement.
+
+    The platform may still hold a heartbeat sent before the lane died. Scoring
+    such a ticket on this host would fail on a dead container, so it must be
+    returned as infrastructure -- never charged to the miner as a zero.
+    """
+    config = _lane_config()
+    config.dittobench_mock = True
+    async with httpx.AsyncClient() as http:
+        client = DittobenchClient(cast(Any, config), http)
+        client.local_embedding_lane = LocalEmbeddingLane(
+            status="unavailable", detail="ollama container is not running"
+        )
+        with pytest.raises(ValidatorInfrastructureError, match="local embedding lane"):
+            await client.score_tarball(tarball_url="http://t", bench_version=6)
+        # The version that does not need the lane is unaffected.
+        await client.score_tarball(tarball_url="http://t", bench_version=7)
+
+
+def test_lane_support_is_declared_per_version_not_as_a_boolean() -> None:
+    dead = LocalEmbeddingLane(status="unavailable", detail="down")
+    healthy = LocalEmbeddingLane(status="healthy")
+    unknown = LocalEmbeddingLane()
+
+    assert [dead.supports(v) for v in (2, 3, 4, 5, 6)] == [False] * 5
+    assert dead.supports(7)
+    assert all(healthy.supports(v) for v in range(2, 8))
+    # Absence of evidence is not evidence of a dead lane.
+    assert all(unknown.supports(v) for v in range(2, 8))
