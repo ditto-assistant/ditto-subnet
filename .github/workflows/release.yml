@@ -276,6 +276,13 @@ jobs:
           target: sandbox
           platforms: linux/amd64,linux/arm64
           push: true
+          # Stamp the identity INTO the image. A released scorer must be able to
+          # report what it was compiled from rather than what its environment
+          # asserts, so a container recreated against a cached image cannot
+          # inherit a newer release's identity.
+          build-args: |
+            DITTOBENCH_SOURCE_SHA=${{ steps.dittobench-source.outputs.revision }}
+            DITTOBENCH_SOFTWARE_VERSION=${{ needs.release.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
@@ -295,6 +302,9 @@ jobs:
           target: relay
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            DITTOBENCH_SOURCE_SHA=${{ steps.dittobench-source.outputs.revision }}
+            DITTOBENCH_SOFTWARE_VERSION=${{ needs.release.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
             org.opencontainers.image.version=${{ needs.release.outputs.version }}

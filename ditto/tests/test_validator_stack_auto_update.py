@@ -118,7 +118,14 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         "COMPOSE_SCHEMA": "1",
         **_images(),
     }
-    assert "x-dittobench-build-context" not in compose
+    # Every build-time extension is dropped: a managed release pulls signed
+    # digests and never builds, so a source pin left behind could only mislead.
+    for extension in (
+        "x-dittobench-build-context",
+        "x-dittobench-revision",
+        "x-dittobench-software-version",
+    ):
+        assert extension not in compose
     for service, image_key in SERVICE_IMAGE_KEYS.items():
         rendered = compose["services"][service]
         assert rendered["image"] == manifest[image_key]

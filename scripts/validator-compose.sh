@@ -244,4 +244,42 @@ fi
 export DITTOBENCH_BUILD_CONTEXT="$checkout"
 printf 'using dittobench-api %s with Docker Compose %s\n' \
   "$checksum" "$compose_version" >&2
+
+# Compose reuses an already-built scorer image whenever one exists. A stack
+# update therefore recreates dittobench-api with the NEW pinned environment
+# while the OLD binary keeps running: the scorer then asserts a revision it was
+# not built from, the validator's identity check passes, and the fleet silently
+# serves an outdated benchmark set. Rebuild for real — and replace the running
+# containers — whenever the pinned revision differs from the one last built
+# here. The marker is keyed on the pin, so an unchanged pin never pays for a
+# rebuild and a routine restart stays fast and independent of the network.
+mkdir -p "$STATE_DIR"
+built_revision_file="$STATE_DIR/dittobench-built-revision"
+built_revision=""
+if [ -f "$built_revision_file" ] && [ ! -L "$built_revision_file" ]; then
+  built_revision="$(awk 'NF { print; exit }' "$built_revision_file")"
+fi
+if [ "$built_revision" != "$checksum" ]; then
+  printf 'pinned dittobench-api revision changed (%s -> %s); rebuilding the scorer and relay\n' \
+    "${built_revision:-none}" "$checksum" >&2
+  docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" \
+    build --pull dittobench-api model-relay || \
+    die "could not rebuild dittobench-api/model-relay at pinned revision $checksum"
+  # A freshly built image only matters once it is the image that RUNS. Recreate
+  # the two containers when they already exist, so a targeted command such as
+  # `up --no-deps ditto-subnet` cannot leave the previous scorer serving. A
+  # stack that is not up yet needs nothing here: its first `up` starts them
+  # from the image just built.
+  running="$(
+    docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" \
+      ps --all -q dittobench-api model-relay 2>/dev/null || true
+  )"
+  if [ -n "$running" ]; then
+    docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" \
+      up -d --no-deps --no-build dittobench-api model-relay || \
+      die "could not restart dittobench-api/model-relay on the rebuilt image"
+  fi
+  printf '%s\n' "$checksum" > "$built_revision_file"
+fi
+
 exec docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" "$@"

@@ -414,6 +414,32 @@ class TestScorerMapping:
             health = await collector.collect(stack=_stack(), scorer=scorer)
         assert health.dittobench_api.health == expected
 
+    async def test_stale_image_is_visible_even_though_it_claims_the_pin(
+        self,
+    ) -> None:
+        """A stale scorer reports the PINNED revision, not a different one.
+
+        Its identity claim therefore looks correct field-by-field; only the
+        capability probe can tell. The component must still land on
+        ``identity_mismatch`` — never ``healthy`` — so the dashboard shows a
+        degraded validator instead of a fully green one that cannot score the
+        active benchmark.
+        """
+        stale = ScorerBenchmarkCapability(
+            status="identity_mismatch",
+            supported_bench_versions=(2,),
+            observed_at=1_784_020_800,
+            software_version="0.29.3",
+            source_revision=_REV,
+        )
+        async with _client(_all_up_handler()) as client:
+            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
+            health = await collector.collect(stack=_stack(), scorer=stale)
+
+        assert health.dittobench_api.health == "identity_mismatch"
+        assert health.dittobench_api.observed_identity is not None
+        assert health.dittobench_api.observed_identity.source_revision == _REV
+
 
 class TestFallback:
     def test_fallback_claims_only_the_reporter(self) -> None:

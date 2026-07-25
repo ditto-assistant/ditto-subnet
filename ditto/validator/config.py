@@ -241,6 +241,17 @@ class ValidatorConfig:
     http_timeout_seconds: float
     """Per-request timeout for platform + dittobench HTTP calls."""
 
+    scorer_require_binary_provenance: bool = False
+    """Whether the pinned scorer revision must prove its identity from its binary.
+
+    Committed next to the dittobench-api pin in ``docker-compose.yml`` and moved
+    with it (``VALIDATOR_SCORER_REQUIRE_BINARY_PROVENANCE``). An environment
+    variable states what an operator believes is running; only a value linked
+    into the binary states what *is* running, and the two diverge precisely when
+    a container is recreated against a cached image. Enable it for a pin whose
+    scorer stamps its revision at build time; leave it off for an older pin,
+    which could never satisfy it."""
+
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""
         return bool(self.wallet_name and self.wallet_hotkey)
@@ -348,6 +359,13 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             "VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS must be in (0, 10]"
         )
 
+    # Committed beside the dittobench-api pin, so it moves with the pin instead
+    # of being an operator tuning knob.
+    scorer_require_binary_provenance = (
+        os.environ.get("VALIDATOR_SCORER_REQUIRE_BINARY_PROVENANCE", "").lower()
+        in _truthy
+    )
+
     # One Pylon token guards both the open-access reads and the identity write, so
     # the worker uses it for the permit self-check and for put_weights.
     pylon_identity_name = os.environ.get("PYLON_IDENTITY_NAME", "")
@@ -429,6 +447,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         http_timeout_seconds=float(
             os.environ.get("VALIDATOR_HTTP_TIMEOUT_SECONDS", "30")
         ),
+        scorer_require_binary_provenance=scorer_require_binary_provenance,
     )
     if not config.signing_source_present():
         raise ValidatorConfigError(

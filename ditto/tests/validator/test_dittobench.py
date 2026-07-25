@@ -234,6 +234,182 @@ async def test_v7_capability_propagates_exact_calibration_identity() -> None:
     ]
 
 
+_V7_CALIBRATION = {
+    "manifest_sha256": "12" * 32,
+    "supported_routes": [
+        {
+            "provider": "wandb",
+            "profile_revision": "openrouter-wandb-gpt-oss-20b-v1",
+            "model": "openai/gpt-oss-20b",
+        }
+    ],
+}
+
+# What a correctly built scorer at the pinned revision answers: the revision is
+# compiled in, and it says so.
+_STAMPED = {
+    "software_version": "0.29.4",
+    "source_revision": _REVISION,
+    "source_revision_origin": "binary",
+    "source_revision_mismatch": False,
+    "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+    "v7_calibration": _V7_CALIBRATION,
+}
+
+
+def _capability_client(
+    payload: dict[str, Any], *, require_binary_provenance: bool = True
+) -> tuple[DittobenchClient, httpx.AsyncClient]:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+        scorer_require_binary_provenance=require_binary_provenance,
+    )
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return DittobenchClient(config, http), http  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_environment_asserted_revision_from_a_stamping_pin_is_stale() -> None:
+    """The live v0.29.3 incident, in the shape the fleet is stuck in today.
+
+    A container recreated against a cached image gets the new pin's
+    ``DITTOBENCH_SOURCE_SHA`` immediately while the old binary keeps running, so
+    the revision matches the pin exactly and the old check passed. The pinned
+    revision compiles its identity in, so an answer that is only asserted by the
+    environment cannot have come from it.
+    """
+    client, http = _capability_client(
+        {
+            "software_version": "0.29.3",
+            "source_revision": _REVISION,
+            "supported_bench_versions": [2, 3, 4, 5, 6],
+        }
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "identity_mismatch"
+    assert observed.supported_bench_versions == (2,)
+    # The claimed identity still travels, so an operator sees exactly what the
+    # scorer said about itself.
+    assert observed.source_revision == _REVISION
+    assert observed.software_version == "0.29.3"
+    assert client.scorer_identity_fault == "scorer_image_stale"
+    # A scorer that cannot prove what it is never contributes its capacity claim.
+    assert client.full_run_capacity == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_env_provenance_is_stale_for_the_same_reason() -> None:
+    """A silently mistyped ``-X`` produces an unstamped binary reporting "env".
+
+    That is indistinguishable from an unrebuilt image and must be treated the
+    same way, not waved through because the field was present.
+    """
+    client, http = _capability_client({**_STAMPED, "source_revision_origin": "env"})
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "identity_mismatch"
+    assert client.scorer_identity_fault == "scorer_image_stale"
+
+
+@pytest.mark.asyncio
+async def test_binary_derived_revision_matching_the_pin_is_verified() -> None:
+    client, http = _capability_client({**_STAMPED, "full_run_capacity": 2})
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6, 7)
+    assert observed.v7_calibration is not None
+    assert client.scorer_identity_fault is None
+    assert client.full_run_capacity == 2
+
+
+@pytest.mark.asyncio
+async def test_a_pin_that_cannot_stamp_keeps_the_previous_behaviour() -> None:
+    """The requirement is committed beside the pin and must move with it.
+
+    A pin whose scorer predates build-time stamping could never satisfy the
+    check, so enforcing it there would degrade every validator on the subnet
+    over a revision that is in fact correct.
+    """
+    client, http = _capability_client(
+        {
+            "software_version": "0.29.3",
+            "source_revision": _REVISION,
+            "supported_bench_versions": [2, 3, 4, 5, 6],
+        },
+        require_binary_provenance=False,
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6)
+    assert client.scorer_identity_fault is None
+
+
+@pytest.mark.asyncio
+async def test_self_reported_binary_environment_disagreement_is_stale() -> None:
+    """The scorer reports that its binary and its environment disagreed.
+
+    A stale deployment by the scorer's own admission, even though the compiled
+    revision it reports matches the pin. ``source_revision_mismatch`` is always
+    emitted by a scorer new enough to have an opinion, so ``False`` is never
+    ambiguous with an older scorer that omits it.
+    """
+    client, http = _capability_client({**_STAMPED, "source_revision_mismatch": True})
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "identity_mismatch"
+    assert observed.supported_bench_versions == (2,)
+    assert client.scorer_identity_fault == "scorer_image_stale"
+
+
+@pytest.mark.asyncio
+async def test_plain_revision_disagreement_is_reported_separately() -> None:
+    client, http = _capability_client({**_STAMPED, "source_revision": "cd" * 20})
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "identity_mismatch"
+    assert client.scorer_identity_fault == "scorer_revision_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_recovered_scorer_clears_the_reported_fault() -> None:
+    """An operator watching for the fix must see the fault clear, not latch."""
+    client, stale_http = _capability_client(
+        {
+            "software_version": "0.29.3",
+            "source_revision": _REVISION,
+            "supported_bench_versions": [2, 3, 4, 5, 6],
+        }
+    )
+    async with stale_http:
+        stale = await client.scorer_benchmark_capability(_stack())
+    assert stale.status == "identity_mismatch"
+    assert client.scorer_identity_fault == "scorer_image_stale"
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_STAMPED)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as rebuilt:
+        client._client = rebuilt
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "fresh_verified"
+    assert client.scorer_identity_fault is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bench_version", [3, 4, 5, 6, 7])
 async def test_v3_plus_uses_versioned_route_and_binds_request(

@@ -199,6 +199,55 @@ re-enable the timer. If a sidecar fails, the validator remains drained: repair
 and verify the sidecars, then run `./scripts/validator-auto-update.sh recover`
 while the timer stays disabled.
 
+### Stale scorer image
+
+`docker compose up` reuses an image whenever one already exists. When the
+reviewed `dittobench-api` pin in `docker-compose.yml` moves, a plain `up`
+therefore recreates the scorer container with the **new** pin's environment on
+top of the **old** binary. The scorer then reports a source revision it was
+never built from, the validator's identity check passes, and the validator
+silently serves an outdated benchmark set — it stops advertising the active
+benchmark version, so submissions needing k=3 quorum hang instead of failing.
+
+Two things prevent that now.
+
+1. `scripts/validator-compose.sh` records the revision it last built. When a
+   command that can start containers runs against a **different** pin, it forces
+   `docker compose build --pull dittobench-api model-relay` and replaces those
+   two containers before running your command. An unchanged pin does nothing, so
+   restarts stay fast and work without network access. A failed rebuild stops
+   the command instead of starting the previous image.
+2. The validator refuses to call a scorer verified unless its identity is
+   proven by the running binary. `dittobench-api` links its revision in at build
+   time and reports where the value came from (`source_revision_origin`), plus
+   whether the binary and the environment disagreed
+   (`source_revision_mismatch`). With
+   `VALIDATOR_SCORER_REQUIRE_BINARY_PROVENANCE=1` — committed next to the pin,
+   because only a pin whose scorer stamps itself can satisfy it — a revision
+   that is merely asserted by the environment is treated as an unrebuilt image.
+   That is exactly the evidence that lied during the incident.
+
+A validator in that state logs `scorer_image_stale`, reports
+`capabilities.scorer_benchmarks.status = identity_mismatch` and
+`stack_health.dittobench_api.health = identity_mismatch`, and advertises
+benchmark v2 only. It keeps heartbeating and never crash-loops, so the fault is
+visible on the dashboard rather than hidden behind a green validator.
+
+To repair it, rebuild the scorer from the pin during a supervised window with no
+live lease:
+
+```sh
+sed -i 's/^VALIDATOR_AUTO_UPDATE=.*/VALIDATOR_AUTO_UPDATE=false/' .env
+sudo systemctl disable --now ditto-validator-auto-update.timer
+git pull --ff-only
+./scripts/validator-compose.sh config --quiet
+./scripts/validator-auto-update.sh reconcile-sidecars
+./scripts/validator-compose.sh logs --since 10m ditto-subnet
+```
+
+The validator logs `scorer identity verified` once the rebuilt scorer answers.
+Then re-enable the updater.
+
 ### Troubleshooting
 
 - **GHCR pull fails:** confirm outbound access to `ghcr.io` and that `compat-2`
@@ -214,6 +263,10 @@ while the timer stays disabled.
 - **Logs show `transcript publication failed`:** the accepted score already
   stands. Check `dittobench-api` health and platform reachability so future
   runs publish their transcripts.
+- **Logs show `scorer_image_stale` or `scorer_revision_mismatch`:** the running
+  scorer is not the pinned `dittobench-api` revision. See
+  [Stale scorer image](#stale-scorer-image). Restarting the validator does not
+  help — the scorer image itself must be rebuilt from the pin.
 - **Updater reports a transaction:** keep the timer disabled, verify the
   validator and all sidecars, then use `recover`.
 - **Host rebooted:** verify Docker is enabled and active, then check Compose
@@ -388,7 +441,9 @@ lease: `git pull --ff-only`, then the same three commands.
 
 The wrapper builds `dittobench-api` from the exact reviewed commit pinned in
 `docker-compose.yml` and refuses a checksum that is not in that repository's
-`main` history.
+`main` history. When the pin has moved since the last build it rebuilds and
+replaces the scorer and relay containers first, so `up` can never start a cached
+image against a newer pin — see [Stale scorer image](#stale-scorer-image).
 
 For local code work outside Compose:
 

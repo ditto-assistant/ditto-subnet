@@ -125,7 +125,12 @@ def main() -> None:
     if remaining_builds:
         raise ValueError(f"managed compose still contains builds: {remaining_builds}")
 
+    # Build-time extensions describe how a source stack is built. A managed
+    # release only ever pulls signed digests, so drop them rather than ship a
+    # pin that nothing in the rendered model consults.
     compose.pop("x-dittobench-build-context", None)
+    compose.pop("x-dittobench-revision", None)
+    compose.pop("x-dittobench-software-version", None)
     args.output.mkdir(parents=True, exist_ok=True)
     rendered_compose = yaml.safe_dump(compose, sort_keys=False, width=1000)
     for key, image in images.items():

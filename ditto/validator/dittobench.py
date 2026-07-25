@@ -73,6 +73,23 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 _SUPPORTED_BENCH_VERSIONS = (2, 3, 4, 5, 6, 7)
 _SCREENED_IMAGE_BENCH_VERSION = 3
 
+# Scorer identity faults. Both degrade the validator to benchmark v2 and both
+# surface as an ``identity_mismatch`` scorer status in the heartbeat; the names
+# exist so an operator can tell the two causes apart in logs and telemetry.
+#
+# ``scorer_revision_mismatch``: the scorer reports a different revision than the
+# committed pin — the ordinary, already-detectable case.
+# ``scorer_image_stale``: the scorer reports the pinned revision but is not
+# running it. Either it says so itself (binary and environment disagree) or it
+# cannot serve the benchmark version its pinned revision is known to support.
+_SCORER_REVISION_MISMATCH = "scorer_revision_mismatch"
+_SCORER_IMAGE_STALE = "scorer_image_stale"
+
+# ``source_revision_origin`` value meaning the revision was compiled into the
+# running binary. Any other value — including its absence on an older scorer —
+# means the revision is only asserted by the process environment.
+_ORIGIN_BINARY = "binary"
+
 
 def _parse_v7_calibration(payload: object) -> V7InferenceCalibration | None:
     """Parse the scorer's exact reviewed manifest identity, or fail closed."""
@@ -235,6 +252,12 @@ class DittobenchClient:
             if getattr(config, "dittobench_mock", False)
             else 1
         )
+        # Why the scorer's running identity could not be verified, or ``None``
+        # while it verifies. Read by telemetry and by the log de-duplication
+        # below; the heartbeat carries the same finding as an
+        # ``identity_mismatch`` scorer status.
+        self.scorer_identity_fault: str | None = None
+        self._scorer_identity_fault_logged: str | None = None
 
     def take_transcript(self, run_id: str) -> bytes | None:
         """Consume the verified transcript belonging to exactly ``run_id``."""
@@ -329,6 +352,18 @@ class DittobenchClient:
         forward-compatible rollout stays healthy without claiming unsupported
         work. Unknown versions at or below this validator's current maximum are
         still malformed and fail closed.
+
+        The revision the scorer reports is only trustworthy when it is a
+        property of the running binary. ``source_revision_origin`` says which it
+        is, and ``source_revision_mismatch`` reports that the binary and the
+        environment disagreed — the signature of a container recreated against a
+        cached image. When the claim is merely environment-asserted, the
+        capability set the scorer actually serves is the remaining evidence: a
+        scorer that cannot advertise the version its pinned revision is known to
+        support is not running that revision. Either way the result is a
+        *reported* mismatch, never a crash: the validator keeps heartbeating,
+        drops to v2, and shows up degraded instead of silently scoring on an old
+        scorer.
         """
         legacy = ScorerBenchmarkCapability(
             status="legacy_v2", supported_bench_versions=(2,)
@@ -409,7 +444,20 @@ class DittobenchClient:
         elif 7 not in observed_versions:
             v7_calibration = None
         expected_revision = stack.components.dittobench_api.source_revision
-        if source_revision != expected_revision:
+        fault = self._scorer_identity_fault(
+            payload,
+            source_revision=source_revision,
+            expected_revision=expected_revision,
+        )
+        if fault is not None:
+            self._log_scorer_identity_fault(
+                fault,
+                source_revision=source_revision,
+                expected_revision=expected_revision,
+                software_version=software_version,
+                observed_versions=observed_versions,
+                origin=payload.get("source_revision_origin"),
+            )
             return ScorerBenchmarkCapability(
                 status="identity_mismatch",
                 supported_bench_versions=(2,),
@@ -417,6 +465,14 @@ class DittobenchClient:
                 software_version=software_version,
                 source_revision=source_revision,
             )
+        self._log_scorer_identity_fault(
+            None,
+            source_revision=source_revision,
+            expected_revision=expected_revision,
+            software_version=software_version,
+            observed_versions=observed_versions,
+            origin=payload.get("source_revision_origin"),
+        )
         self.full_run_capacity = full_run_capacity
         try:
             return ScorerBenchmarkCapability(
@@ -431,6 +487,86 @@ class DittobenchClient:
             return ScorerBenchmarkCapability(
                 status="unreachable", supported_bench_versions=(2,)
             )
+
+    def _scorer_identity_fault(
+        self,
+        payload: dict[str, object],
+        *,
+        source_revision: str,
+        expected_revision: str | None,
+    ) -> str | None:
+        """Name why the running scorer is not the pinned one, or ``None``.
+
+        Strongest evidence first. A revision that differs from the pin is a
+        plain mismatch. A scorer reporting that its binary and its environment
+        named different commits is a stale image by its own admission. A
+        revision compiled into the running binary and equal to the pin is proof
+        and ends the check. Anything else is an assertion by the environment,
+        which is exactly what lied during the v0.29.3 incident — so when the pin
+        is one that stamps its identity at build time, an unstamped answer means
+        the running image is not that pin.
+        """
+        if source_revision != expected_revision:
+            return _SCORER_REVISION_MISMATCH
+        # Always emitted by a scorer new enough to have an opinion, so ``False``
+        # is never ambiguous with an older scorer that omits it.
+        if payload.get("source_revision_mismatch") is True:
+            return _SCORER_IMAGE_STALE
+        if payload.get("source_revision_origin") == _ORIGIN_BINARY:
+            return None
+        # Absent (older scorer) or "env" (nothing was linked in, including the
+        # case where a mistyped -X silently produced an unstamped binary). Both
+        # mean the same thing: this is not provably the pinned revision.
+        return (
+            _SCORER_IMAGE_STALE
+            if getattr(self._config, "scorer_require_binary_provenance", False)
+            else None
+        )
+
+    def _log_scorer_identity_fault(
+        self,
+        fault: str | None,
+        *,
+        source_revision: str,
+        expected_revision: str | None,
+        software_version: str,
+        observed_versions: tuple[int, ...],
+        origin: object,
+    ) -> None:
+        """Surface an identity fault once per transition, never once per sweep.
+
+        The scorer capability probe runs on every heartbeat, so an unconditional
+        warning would bury the change itself in repetition. Recovery is logged
+        too: an operator watching for the fix needs to see it clear.
+        """
+        self.scorer_identity_fault = fault
+        if fault == self._scorer_identity_fault_logged:
+            return
+        self._scorer_identity_fault_logged = fault
+        if fault is None:
+            logger.info(
+                "scorer identity verified: revision=%s (provenance=%s) "
+                "version=%s bench=%s",
+                source_revision,
+                origin if isinstance(origin, str) else "unstamped",
+                software_version,
+                list(observed_versions),
+            )
+            return
+        logger.error(
+            "%s: the running scorer is not the pinned dittobench-api revision "
+            "(reported revision=%s with provenance=%s, pinned revision=%s, "
+            "reported version=%s, advertised bench versions=%s). The validator "
+            "is degraded and will advertise benchmark v2 only until the scorer "
+            "image is rebuilt from the pin; restarting the validator will not "
+            "help. See docs/VALIDATOR.md, 'Stale scorer image'.",
+            fault,
+            source_revision,
+            origin if isinstance(origin, str) else "unstamped",
+            expected_revision,
+            software_version,
+            list(observed_versions),
+        )
 
     async def preflight(self) -> None:
         """Verify the functional embedding route before claiming a ticket.

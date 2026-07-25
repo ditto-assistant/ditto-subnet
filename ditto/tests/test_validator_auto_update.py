@@ -294,15 +294,28 @@ if args == ["compose", "version", "--short"]:
 elif args == ["info"] or args == ["buildx", "version"]:
     pass
 elif args[:1] == ["compose"]:
-    with open(os.environ["FAKE_COMPOSE_CAPTURE"], "w") as handle:
-        json.dump(
-            {
-                "args": args,
-                "image": os.environ.get("DITTO_SUBNET_IMAGE"),
-                "wallets_dir": os.environ.get("DITTO_BITTENSOR_WALLETS_DIR"),
-            },
-            handle,
-        )
+    # Every `docker compose` invocation is a separate process, so accumulate
+    # them. `args` stays the LAST call for the assertions that only care about
+    # the command the wrapper finally exec'd.
+    capture = os.environ["FAKE_COMPOSE_CAPTURE"]
+    try:
+        with open(capture) as handle:
+            recorded = json.load(handle)
+    except (OSError, ValueError):
+        recorded = {"calls": []}
+    entry = {
+        "args": args,
+        "image": os.environ.get("DITTO_SUBNET_IMAGE"),
+        "wallets_dir": os.environ.get("DITTO_BITTENSOR_WALLETS_DIR"),
+    }
+    recorded["calls"].append(entry)
+    recorded.update(entry)
+    with open(capture, "w") as handle:
+        json.dump(recorded, handle)
+    if "build" in args and os.environ.get("FAKE_COMPOSE_BUILD_FAIL") == "true":
+        raise SystemExit(1)
+    if "ps" in args:
+        sys.stdout.write(os.environ.get("FAKE_COMPOSE_PS_OUTPUT", ""))
 else:
     raise SystemExit("unhandled wrapper docker command: " + repr(args))
 """
@@ -663,6 +676,126 @@ def test_compose_wrapper_allows_exact_unmerged_ref_only_for_local_smoke(
         check=False,
     )
     assert allowed.returncode == 0, allowed.stderr
+
+
+def _compose_calls(capture: Path) -> list[list[str]]:
+    return [call["args"] for call in json.loads(capture.read_text())["calls"]]
+
+
+def _built_revision_marker(env: dict[str, str]) -> Path:
+    return Path(env["DITTO_VALIDATOR_UPDATE_STATE_DIR"]) / "dittobench-built-revision"
+
+
+def test_stack_update_rebuilds_and_replaces_a_stale_scorer_image(
+    tmp_path: Path,
+) -> None:
+    """The v0.29.3 failure: `up` reused the cached scorer image.
+
+    Compose recreated dittobench-api with the new pin's environment and kept the
+    old binary, so the scorer advertised a revision it was not built from. A pin
+    the host has never built must therefore force a real `build --pull` AND
+    replace the running containers, not just re-render their environment.
+    """
+    env, capture, _ = _wrapper_env(tmp_path)
+    env["FAKE_COMPOSE_PS_OUTPUT"] = "scorer-container\nrelay-container\n"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "up", "-d"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = _compose_calls(capture)
+    build = next(call for call in calls if "build" in call)
+    assert build[-4:] == ["build", "--pull", "dittobench-api", "model-relay"]
+    recreate = next(call for call in calls if "--no-deps" in call)
+    assert recreate[-6:] == [
+        "up",
+        "-d",
+        "--no-deps",
+        "--no-build",
+        "dittobench-api",
+        "model-relay",
+    ]
+    # The operator's own command still runs, and it runs last.
+    assert calls[-1][-2:] == ["up", "-d"]
+    assert (
+        _built_revision_marker(env).read_text().strip()
+        == env["FAKE_DITTOBENCH_CHECKSUM"]
+    )
+
+
+def test_unchanged_pin_starts_the_stack_without_a_rebuild(tmp_path: Path) -> None:
+    """A no-op restart must stay fast and independent of the network.
+
+    Restarts are routine — after a host reboot, after every legacy updater
+    tick — so keying the rebuild on the pin rather than on "did we run `up`"
+    is what keeps this fix from becoming a rebuild on every restart.
+    """
+    env, capture, _ = _wrapper_env(tmp_path)
+    _built_revision_marker(env).write_text(f"{env['FAKE_DITTOBENCH_CHECKSUM']}\n")
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "up", "-d"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = _compose_calls(capture)
+    assert not any("build" in call for call in calls)
+    assert len(calls) == 1
+    assert calls[0][-2:] == ["up", "-d"]
+
+
+def test_scorer_rebuild_failure_stops_the_stack_command(tmp_path: Path) -> None:
+    """Never fall through to `up` on a failed rebuild.
+
+    Continuing would start the very thing this change exists to prevent: the
+    previous scorer image, wearing the new pin's environment.
+    """
+    env, capture, _ = _wrapper_env(tmp_path)
+    env["FAKE_COMPOSE_BUILD_FAIL"] = "true"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "up", "-d"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "could not rebuild dittobench-api" in result.stderr
+    assert [call for call in _compose_calls(capture) if call[-2:] == ["up", "-d"]] == []
+    # An unwritten marker keeps the next attempt honest.
+    assert not _built_revision_marker(env).exists()
+
+
+def test_read_only_commands_never_trigger_a_rebuild(tmp_path: Path) -> None:
+    env, capture, _ = _wrapper_env(tmp_path)
+
+    for command in (["ps"], ["logs", "--since", "10m", "ditto-subnet"]):
+        result = subprocess.run(
+            [str(COMPOSE_WRAPPER), *command],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
+    assert not any("build" in call for call in _compose_calls(capture))
+    assert not _built_revision_marker(env).exists()
 
 
 def test_managed_compose_blocks_broad_mutation_and_image_override(

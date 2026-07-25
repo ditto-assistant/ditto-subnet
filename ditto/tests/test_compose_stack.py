@@ -203,7 +203,7 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     # The checksum must remain the exact current main commit. A moving branch
     # paired with a stale checksum makes the documented local Compose build
     # fail before the release materializer can replace the source context.
-    assert checksum == "001d3aa28ef3089322a26870563cb2247afdb0e2"
+    assert checksum == "ecfac4cf15fbf46a5965677eaf0a9393d0f06cd8"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]
@@ -218,7 +218,12 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     )
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
     assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == checksum
+    # One anchor definition plus the build-context default. Everything else that
+    # names the revision aliases the anchor or carries the `source:` prefix, so
+    # no copy of the revision can drift away from the build context.
     assert raw_compose.count(checksum) == 4
+    assert f"x-dittobench-revision: &dittobench-revision {checksum}" in raw_compose
+    assert "DITTOBENCH_SOURCE_SHA: *dittobench-revision" in raw_compose
     wrapper = COMPOSE_WRAPPER_PATH.read_text()
     assert 'git -C "$checkout" fetch' in wrapper
     assert 'context_override="${DITTOBENCH_BUILD_CONTEXT:-}"' in wrapper
@@ -227,6 +232,73 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert "DITTOBENCH_ALLOW_UNMERGED_SMOKE:-false" in wrapper
     assert "SUBTENSOR_NETWORK:-finney" in wrapper
     assert "materialize_context=false" in wrapper
+
+
+def test_scorer_identity_is_stamped_into_the_image_it_is_built_from() -> None:
+    """The revision the scorer reports must be a property of the build.
+
+    v0.29.3 shipped ``DITTOBENCH_SOURCE_SHA`` as an environment value only, so
+    `docker compose up -d` recreated the scorer with the new pin's environment
+    while reusing the cached image: the scorer asserted a revision it had never
+    been compiled from and the validator's identity check happily passed.
+    """
+    raw_compose = COMPOSE_PATH.read_text()
+    compose = yaml.safe_load(raw_compose)
+    checksum = compose["x-dittobench-revision"]
+    software_version = compose["x-dittobench-software-version"]
+
+    for service in ("dittobench-api", "model-relay"):
+        build_args = compose["services"][service]["build"]["args"]
+        assert build_args["DITTOBENCH_SOURCE_SHA"] == checksum
+        assert build_args["DITTOBENCH_SOFTWARE_VERSION"] == software_version
+
+    # The environment fallback must come from the same anchor as the build
+    # argument, so the two can never name different commits.
+    scorer_environment = compose["services"]["dittobench-api"]["environment"]
+    assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == checksum
+    assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == software_version
+
+    # Published release images must be stamped too. A managed stack pulls them
+    # by digest and never builds, so if the release build skipped the arguments
+    # the whole managed fleet would report environment-asserted provenance.
+    workflow = RELEASE_WORKFLOW_PATH.read_text()
+    assert (
+        workflow.count(
+            "DITTOBENCH_SOURCE_SHA=${{ steps.dittobench-source.outputs.revision }}"
+        )
+        == 2
+    )
+    assert (
+        workflow.count(
+            "DITTOBENCH_SOFTWARE_VERSION=${{ needs.release.outputs.version }}"
+        )
+        == 2
+    )
+
+
+def test_stack_update_rebuilds_the_scorer_only_when_the_pin_moves() -> None:
+    wrapper = COMPOSE_WRAPPER_PATH.read_text()
+
+    # Keyed on the pin: a changed pin forces a real build + a container
+    # replacement, and an unchanged pin costs nothing.
+    assert 'built_revision_file="$STATE_DIR/dittobench-built-revision"' in wrapper
+    assert 'if [ "$built_revision" != "$checksum" ]; then' in wrapper
+    assert "build --pull dittobench-api model-relay" in wrapper
+    assert "up -d --no-deps --no-build dittobench-api model-relay" in wrapper
+    assert 'printf \'%s\\n\' "$checksum" > "$built_revision_file"' in wrapper
+
+
+def test_validator_requires_binary_provenance_from_the_pinned_scorer() -> None:
+    """The requirement is committed beside the pin and moves with it.
+
+    The pinned dittobench-api revision links its identity into the binary, so
+    the validator can insist on compiled-in evidence instead of trusting an
+    environment variable that a recreated container makes say anything.
+    """
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    environment = compose["services"]["ditto-subnet"]["environment"]
+
+    assert environment["VALIDATOR_SCORER_REQUIRE_BINARY_PROVENANCE"] == "1"
 
 
 def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
