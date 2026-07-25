@@ -1055,6 +1055,36 @@ class LedgerEntry(BaseModel):
             "scores plus one aggregate per completed continual cohort wave."
         ),
     )
+    efficiency_bonus: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=0.1,
+            description=(
+                "Frozen platform-side relative token-efficiency bonus fraction "
+                "for this entry (bench_version >= 7). Populated only while the "
+                "platform's DITTO_EFFICIENCY_BONUS_FOLD_ENABLED flag is on; "
+                "absent otherwise so existing folds are byte-identical. "
+                "Advisory until the subnet's weight fold ships a consensus "
+                "change that consumes it — a validator must never fold this "
+                "field unilaterally."
+            ),
+        ),
+    ] = None
+    effective_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.1,
+            description=(
+                "composite * (1 + efficiency_bonus), the platform-side ranking "
+                "score with the frozen bonus applied. Additive-optional, gated "
+                "with efficiency_bonus; the signed composite is never modified."
+            ),
+        ),
+    ] = None
     status: Annotated[
         AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
     ]

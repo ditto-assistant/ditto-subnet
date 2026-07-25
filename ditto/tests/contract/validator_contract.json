@@ -419,6 +419,32 @@
         ],
         "default": null
       },
+      "effective_composite": {
+        "anyOf": [
+          {
+            "maximum": 1.1,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "efficiency_bonus": {
+        "anyOf": [
+          {
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "first_seen": {
         "format": "date-time",
         "type": "string"
@@ -627,6 +653,32 @@
               {
                 "const": "mean_after_quorum",
                 "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "effective_composite": {
+            "anyOf": [
+              {
+                "maximum": 1.1,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "efficiency_bonus": {
+            "anyOf": [
+              {
+                "maximum": 0.1,
+                "minimum": 0.0,
+                "type": "number"
               },
               {
                 "type": "null"
