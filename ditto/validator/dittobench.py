@@ -90,19 +90,45 @@ _SCORER_IMAGE_STALE = "scorer_image_stale"
 # means the revision is only asserted by the process environment.
 _ORIGIN_BINARY = "binary"
 
+# The exact per-route identity the validator signs. The scorer may describe a
+# route with more than this; anything outside these three fields is not part of
+# the identity and must never decide whether v7 is advertised.
+_ROUTE_IDENTITY_FIELDS = ("provider", "profile_revision", "model")
+
 
 def _parse_v7_calibration(payload: object) -> V7InferenceCalibration | None:
-    """Parse the scorer's exact reviewed manifest identity, or fail closed."""
+    """Read the scorer's exact reviewed manifest identity, or fail closed.
+
+    Only the fields the validator actually signs are read, and they are read by
+    name. The scorer's capability document is a *superset* of the signed
+    identity: it also carries descriptive metadata — ``provenance`` today — that
+    has no field in the heartbeat model, and that model forbids extras because
+    its bytes are signed.
+
+    Copying the whole object into it therefore meant that any new descriptive
+    key silently disabled v7 for the entire fleet. That is exactly what
+    happened: the scorer began reporting ``"provenance": "reviewed-measured"``
+    alongside a perfectly valid manifest, this returned ``None``, v7 was
+    stripped from the advertisement, and the validator still reported the scorer
+    ``fresh_verified`` and ``healthy`` because every identity field matched.
+
+    Projection keeps the binding exact — an unparseable or incomplete identity
+    still fails closed — while leaving the scorer free to describe itself.
+    """
     if not isinstance(payload, dict):
         return None
     raw_routes = payload.get("supported_routes")
     if not isinstance(raw_routes, list) or not raw_routes:
         return None
+    if not all(isinstance(route, dict) for route in raw_routes):
+        return None
     try:
         routes = tuple(
             sorted(
                 (
-                    InferenceCalibrationRoute.model_validate(route)
+                    InferenceCalibrationRoute.model_validate(
+                        {field: route.get(field) for field in _ROUTE_IDENTITY_FIELDS}
+                    )
                     for route in raw_routes
                 ),
                 key=lambda route: (
@@ -113,7 +139,10 @@ def _parse_v7_calibration(payload: object) -> V7InferenceCalibration | None:
             )
         )
         return V7InferenceCalibration.model_validate(
-            {**payload, "supported_routes": routes}
+            {
+                "manifest_sha256": payload.get("manifest_sha256"),
+                "supported_routes": routes,
+            }
         )
     except ValueError:
         return None
@@ -258,6 +287,10 @@ class DittobenchClient:
         # ``identity_mismatch`` scorer status.
         self.scorer_identity_fault: str | None = None
         self._scorer_identity_fault_logged: str | None = None
+        # Whether the scorer offered v7 but its calibration identity could not
+        # be read. Latched so the warning is one per transition, not one per
+        # heartbeat, and cleared as soon as a readable calibration arrives.
+        self._v7_calibration_rejected = False
 
     def take_transcript(self, run_id: str) -> bytes | None:
         """Consume the verified transcript belonging to exactly ``run_id``."""
@@ -434,6 +467,11 @@ class DittobenchClient:
             )
         v7_calibration = _parse_v7_calibration(payload.get("v7_calibration"))
         if 7 in observed_versions and v7_calibration is None:
+            # Dropping v7 is the correct fail-closed action, but doing it
+            # quietly is how a whole fleet stopped advertising the active bench
+            # while every other signal stayed green. Say so, once per
+            # transition, and name the keys we actually saw.
+            self._log_v7_calibration_rejected(payload.get("v7_calibration"))
             observed_versions = tuple(
                 version for version in observed_versions if version != 7
             )
@@ -443,6 +481,8 @@ class DittobenchClient:
                 )
         elif 7 not in observed_versions:
             v7_calibration = None
+        else:
+            self._v7_calibration_rejected = False
         expected_revision = stack.components.dittobench_api.source_revision
         fault = self._scorer_identity_fault(
             payload,
@@ -487,6 +527,26 @@ class DittobenchClient:
             return ScorerBenchmarkCapability(
                 status="unreachable", supported_bench_versions=(2,)
             )
+
+    def _log_v7_calibration_rejected(self, calibration: object) -> None:
+        """Report that the scorer offered v7 but its identity was unreadable.
+
+        Only field *names* are logged. The values are public identity, but the
+        names are what an operator needs to see a shape drift between the
+        scorer and this validator, which is the failure this exists to catch.
+        """
+        if self._v7_calibration_rejected:
+            return
+        self._v7_calibration_rejected = True
+        keys = sorted(calibration) if isinstance(calibration, dict) else None
+        logger.error(
+            "scorer advertises benchmark v7 but its calibration identity could "
+            "not be read; v7 will NOT be advertised (calibration fields=%s, "
+            "expected exactly manifest_sha256 + supported_routes with "
+            "provider/profile_revision/model). This validator cannot take v7 "
+            "work until the shapes agree.",
+            keys,
+        )
 
     def _scorer_identity_fault(
         self,

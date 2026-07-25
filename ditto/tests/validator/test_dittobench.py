@@ -22,6 +22,7 @@ from ditto.validator.dittobench import (
     DittobenchClient,
     DittobenchProgressSnapshot,
     InferenceBrokerSession,
+    _parse_v7_calibration,
     safe_progress_snapshot,
 )
 from ditto.validator.errors import (
@@ -184,6 +185,149 @@ async def test_future_scorer_version_preserves_negotiated_run_capacity() -> None
     assert observed.status == "fresh_verified"
     assert observed.supported_bench_versions == (2, 3, 4, 5, 6)
     assert client.full_run_capacity == 2
+
+
+# Verbatim `/v1/capabilities` body from the released v0.29.4 scorer image
+# (ghcr.io/ditto-assistant/dittobench-api-sandbox@sha256:194e92de42f5…), built
+# from dittobench-api ecfac4cf. Copied exactly: the whole outage was a shape
+# drift between this document and the validator's reader, so a hand-written
+# approximation of it would not have caught the bug and will not catch the next
+# one.
+_LIVE_CAPABILITIES: dict[str, Any] = {
+    "software_version": "0.29.4",
+    "source_revision": "ecfac4cf15fbf46a5965677eaf0a9393d0f06cd8",
+    "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+    "full_run_capacity": 1,
+    "memory_phase_capacity": 1,
+    "v7_calibration": {
+        "manifest_sha256": (
+            "b8c11eff829c4c85b4b1af4f95135e4b5c26da01c8b88f72f726dca26d03d9a7"
+        ),
+        "supported_routes": [
+            {
+                "provider": "openrouter",
+                "profile_revision": "openrouter-route-a471cd87ae7df5b9-v1",
+                "model": "openai/gpt-oss-20b",
+            }
+        ],
+        "provenance": "reviewed-measured",
+    },
+    "source_revision_origin": "binary",
+    "source_revision_mismatch": False,
+    "software_version_origin": "binary",
+}
+
+
+@pytest.mark.asyncio
+async def test_live_released_scorer_advertises_v7() -> None:
+    """The launch blocker, reproduced from the exact payload the fleet serves.
+
+    Both managed validators ran precisely this scorer — correct digest, correct
+    revision, binary-stamped — and still advertised only [2,3,4,5,6] while
+    reporting ``fresh_verified`` and ``healthy``. The reader copied the whole
+    ``v7_calibration`` object into a signed model that forbids extras, so the
+    scorer's descriptive ``provenance`` key silently disabled v7 fleet-wide.
+    """
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_LIVE_CAPABILITIES)
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+        scorer_require_binary_provenance=True,
+    )
+    revision = _LIVE_CAPABILITIES["source_revision"]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack(revision))
+
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6, 7)
+    assert observed.v7_calibration is not None
+    assert observed.v7_calibration.manifest_sha256 == (
+        "b8c11eff829c4c85b4b1af4f95135e4b5c26da01c8b88f72f726dca26d03d9a7"
+    )
+    assert client.scorer_identity_fault is None
+
+
+def test_descriptive_calibration_metadata_never_disables_v7() -> None:
+    """Only the signed identity is read; the rest is the scorer's business.
+
+    The scorer's capability document is a superset of the identity the
+    validator signs. A field it adds to describe itself must not be able to
+    take the whole fleet off the active benchmark.
+    """
+    live = _LIVE_CAPABILITIES["v7_calibration"]
+    parsed = _parse_v7_calibration(live)
+    assert parsed is not None
+    assert parsed.manifest_sha256 == live["manifest_sha256"]
+
+    # A future descriptive key, and a future descriptive key on a route, must
+    # both be ignored rather than fail the whole advertisement.
+    widened = {
+        **live,
+        "measured_at": "2026-07-25T01:32:00Z",
+        "supported_routes": [
+            {**live["supported_routes"][0], "measured_tokens_per_second": 42}
+        ],
+    }
+    assert _parse_v7_calibration(widened) == parsed
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        pytest.param({"supported_routes": []}, id="no-routes"),
+        pytest.param({"manifest_sha256": "not-a-digest"}, id="bad-manifest"),
+        pytest.param({"manifest_sha256": None}, id="missing-manifest"),
+        pytest.param(
+            {"supported_routes": [{"provider": "openrouter"}]}, id="partial-route"
+        ),
+        pytest.param({"supported_routes": ["openrouter"]}, id="route-not-an-object"),
+    ],
+)
+def test_incomplete_calibration_identity_still_fails_closed(
+    broken: dict[str, Any],
+) -> None:
+    """Projection must not become permissiveness.
+
+    Every field the validator signs is still required, and still required to be
+    well formed; only fields it does not sign are ignored.
+    """
+    assert _parse_v7_calibration(
+        {**_LIVE_CAPABILITIES["v7_calibration"], **broken}
+    ) is (None)
+
+
+@pytest.mark.asyncio
+async def test_unreadable_calibration_is_reported_not_silently_dropped() -> None:
+    """Dropping v7 is correct; dropping it quietly is what hid this for hours."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                **_LIVE_CAPABILITIES,
+                "v7_calibration": {"manifest_sha256": "not-a-digest"},
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+        scorer_require_binary_provenance=True,
+    )
+    revision = _LIVE_CAPABILITIES["source_revision"]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack(revision))
+
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6)
+    assert observed.v7_calibration is None
+    assert client._v7_calibration_rejected is True
 
 
 @pytest.mark.asyncio
