@@ -457,7 +457,7 @@ def test_exchange_accepts_the_split_inference_host_and_nothing_else() -> None:
         http_timeout_seconds=5.0,
     )
     client = PlatformClient.__new__(PlatformClient)
-    client._config = config
+    client._config = cast(Any, config)
     client._base = config.platform_api_url.rstrip("/")
     client._inference_base = config.platform_inference_base_url.rstrip("/")
 
