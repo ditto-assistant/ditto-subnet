@@ -530,3 +530,37 @@ def test_installer_repairs_private_updater_state_ownership() -> None:
     assert 'chown -R "$service_user:$service_group" "$state_dir"' in installer
     assert 'find "$state_dir" -type d -exec chmod 0700 {} +' in installer
     assert 'find "$state_dir" -type f -exec chmod 0600 {} +' in installer
+
+
+def test_hosted_v7_parallelism_is_tunable_without_widening_the_local_ollama_lane() -> (
+    None
+):
+    """The two lanes must stay independently controllable, and only one may widen.
+
+    Bench versions 2-6 embed against the single Ollama container this compose
+    file starts; v7 bypasses it for the hosted route (dittobench-api #93). The
+    hazard this pins is an operator who wants more v7 parallelism reaching for
+    the memory-phase knob, which would serialise nothing and hammer Ollama.
+    """
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    env = compose["services"]["dittobench-api"]["environment"]
+
+    # The local lane keeps its own anchor and its default of one.
+    assert env["DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES"] == (
+        "${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}"
+    )
+
+    # The hosted knobs are exposed, under distinct anchors, and default to
+    # empty so the scorer image's own shipped defaults govern. An empty value
+    # is read as unset by envIntDefault, so this can never pin them to zero.
+    assert env["DITTOBENCH_V7_CASE_CONCURRENCY"] == "${VALIDATOR_V7_CASE_CONCURRENCY:-}"
+    assert env["DITTOBENCH_V7_EMBEDDING_CONCURRENCY"] == (
+        "${VALIDATOR_V7_EMBEDDING_CONCURRENCY:-}"
+    )
+
+    anchors = {
+        env["DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES"],
+        env["DITTOBENCH_V7_CASE_CONCURRENCY"],
+        env["DITTOBENCH_V7_EMBEDDING_CONCURRENCY"],
+    }
+    assert len(anchors) == 3, "hosted and local concurrency share an anchor"
