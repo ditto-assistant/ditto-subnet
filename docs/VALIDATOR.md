@@ -267,6 +267,17 @@ Then re-enable the updater.
   scorer is not the pinned `dittobench-api` revision. See
   [Stale scorer image](#stale-scorer-image). Restarting the validator does not
   help — the scorer image itself must be rebuilt from the pin.
+- **v7 tickets fail immediately with `reason=infrastructure`, scorer logs show
+  `inference control plane unavailable` (401):** the scorer and the validator
+  disagree about the inference control token. The scorer joins
+  `sandbox-docker`'s network namespace while the validator stays on the Compose
+  bridge, so the validator is never a loopback peer and must present
+  `DITTOBENCH_BROKER_CONTROL_TOKEN` as a bearer. Both values come from one
+  Compose anchor and have a working default, so this only appears when the two
+  services run from different Compose revisions — recreate `dittobench-api`
+  and `ditto-subnet` from the same checkout/release. If you set
+  `DITTOBENCH_BROKER_CONTROL_TOKEN` yourself, both services must be recreated
+  after changing it.
 - **Updater reports a transaction:** keep the timer disabled, verify the
   validator and all sidecars, then use `recover`.
 - **Host rebooted:** verify Docker is enabled and active, then check Compose

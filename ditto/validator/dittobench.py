@@ -296,11 +296,26 @@ class DittobenchClient:
         """Consume the verified transcript belonging to exactly ``run_id``."""
         return self._transcripts.pop(run_id, None)
 
+    def _control_headers(self) -> dict[str, str]:
+        """Authorize this validator on the scorer's inference control plane.
+
+        The scorer admits ``/v1/inference/session*`` from a loopback peer or a
+        matching bearer. It joins sandbox-docker's network namespace while this
+        worker stays on the Compose bridge, so the call always arrives from a
+        private-bridge address and the bearer is the only thing that can
+        authorize it. Sent on the control plane alone — the shared
+        ``httpx.AsyncClient`` also talks to the platform, so this must never
+        become a client-wide default header.
+        """
+        token = str(getattr(self._config, "dittobench_control_token", "") or "")
+        return {"Authorization": f"Bearer {token}"} if token else {}
+
     async def prepare_inference_session(self) -> InferenceBrokerSession:
         """Create a trusted memory-only broker key before claiming provider access."""
         try:
             response = await self._client.post(
-                f"{self._config.dittobench_api_url}/v1/inference/session"
+                f"{self._config.dittobench_api_url}/v1/inference/session",
+                headers=self._control_headers(),
             )
         except httpx.HTTPError as error:
             raise ValidatorInfrastructureError(
@@ -359,6 +374,7 @@ class DittobenchClient:
                 f"{self._config.dittobench_api_url}/v1/inference/session/"
                 f"{session.session_id}/activate",
                 json=activation,
+                headers=self._control_headers(),
             )
         except httpx.HTTPError as error:
             raise ValidatorInfrastructureError(
@@ -371,7 +387,8 @@ class DittobenchClient:
         """Best-effort deletion for pre-run failures and completed sessions."""
         with contextlib.suppress(httpx.HTTPError):
             await self._client.delete(
-                f"{self._config.dittobench_api_url}/v1/inference/session/{session_id}"
+                f"{self._config.dittobench_api_url}/v1/inference/session/{session_id}",
+                headers=self._control_headers(),
             )
 
     async def scorer_benchmark_capability(

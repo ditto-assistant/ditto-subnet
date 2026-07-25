@@ -80,6 +80,33 @@ def test_scorer_capability_probe_needs_no_operator_secret() -> None:
     )
 
 
+def test_inference_control_plane_shares_one_self_supplied_token() -> None:
+    """The validator can only reach the scorer's control plane with a bearer.
+
+    dittobench-api joins sandbox-docker's network namespace; the validator does
+    not, so its ``/v1/inference/session`` call arrives from the Compose bridge
+    and never on loopback. v0.29.5 shipped with the token unset on both sides,
+    which 401'd every v7 activation. Both sides must therefore carry the SAME
+    value, and it must have a default: validators auto-update without an
+    operator ever touching the host, so a fix that needs a hand-set secret
+    would never take effect.
+    """
+    services = yaml.safe_load(COMPOSE_PATH.read_text())["services"]
+    scorer = services["dittobench-api"]["environment"][
+        "DITTOBENCH_BROKER_CONTROL_TOKEN"
+    ]
+    validator = services["ditto-subnet"]["environment"][
+        "VALIDATOR_DITTOBENCH_CONTROL_TOKEN"
+    ]
+
+    assert scorer == validator
+    # One interpolation with a non-empty default: operator-overridable, but
+    # never empty on an untouched host.
+    assert scorer.startswith("${DITTOBENCH_BROKER_CONTROL_TOKEN:-")
+    assert scorer.endswith("}")
+    assert len(scorer.removeprefix("${DITTOBENCH_BROKER_CONTROL_TOKEN:-")[:-1]) >= 16
+
+
 def test_scorer_allows_only_verified_screened_image_downloads() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     environment = compose["services"]["dittobench-api"]["environment"]

@@ -74,6 +74,105 @@ async def test_activate_inference_session_binds_dynamic_route_to_trusted_broker(
     assert captured["ticket_deadline"] == "2026-07-21T22:00:00+00:00"
 
 
+def _control_plane_handler(
+    expected_token: str, seen: list[tuple[str, str, str | None]]
+) -> object:
+    """Emulate the scorer's ``controlAuthorized`` for a non-loopback peer.
+
+    dittobench-api admits ``/v1/inference/session*`` when the peer is loopback
+    OR presents the configured bearer. The scorer joins sandbox-docker's
+    network namespace while the validator stays on the Compose bridge, so in
+    production the peer is never loopback: the bearer is the only path. This
+    handler therefore refuses loopback outright and answers 401 exactly like
+    the scorer does.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        authorization = request.headers.get("Authorization")
+        seen.append((request.method, request.url.path, authorization))
+        if authorization != f"Bearer {expected_token}":
+            return httpx.Response(
+                401, json={"error": "inference control plane unavailable"}
+            )
+        if request.url.path.endswith("/activate"):
+            return httpx.Response(200, json={"active": True})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(
+            201,
+            json={
+                "session_id": "session",
+                "activation_secret": "activation",
+                "broker_public_key": "public",
+            },
+        )
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_inference_control_plane_authorizes_with_the_scorer_token() -> None:
+    """Every control-plane call must carry the shared scorer control token.
+
+    Without it the v7 activation path dies at ``prepare`` with the scorer's 401
+    and the ticket is reported failed with ``reason=infrastructure`` — the
+    v0.29.5 rollout outage. The regression case below is that exact shape.
+    """
+    seen: list[tuple[str, str, str | None]] = []
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_control_token="stack-control-token",
+    )
+    transport = httpx.MockTransport(
+        cast(Any, _control_plane_handler("stack-control-token", seen))
+    )
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        session = await client.prepare_inference_session()
+        await client.activate_inference_session(
+            session,
+            grant_id=UUID("00000000-0000-0000-0000-000000000001"),
+            agent_id=UUID("00000000-0000-0000-0000-000000000002"),
+            slot_id="slot-3",
+            ticket_deadline=datetime(2026, 7, 21, 22, 0, tzinfo=UTC),
+            bearer="platform-bearer-never-forwarded",
+            proxy_url="https://platform.example/api/v1/inference/chat/completions",
+            generation=1,
+            expires_at=datetime.now(UTC) + timedelta(minutes=1),
+            provider="WandB",
+            profile_revision="openrouter-route-wandb-v1",
+            model="openai/gpt-oss-20b",
+        )
+        await client.cancel_inference_session(session.session_id)
+
+    assert session.session_id == "session"
+    assert [(method, path) for method, path, _ in seen] == [
+        ("POST", "/v1/inference/session"),
+        ("POST", "/v1/inference/session/session/activate"),
+        ("DELETE", "/v1/inference/session/session"),
+    ]
+    assert {authorization for _, _, authorization in seen} == {
+        "Bearer stack-control-token"
+    }
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_control_token_is_rejected_by_the_scorer() -> None:
+    seen: list[tuple[str, str, str | None]] = []
+    config = SimpleNamespace(dittobench_api_url="http://dittobench.test")
+    transport = httpx.MockTransport(
+        cast(Any, _control_plane_handler("stack-control-token", seen))
+    )
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(
+            ValidatorInfrastructureError, match="inference broker preparation rejected"
+        ):
+            await client.prepare_inference_session()
+
+    assert seen == [("POST", "/v1/inference/session", None)]
+
+
 def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
     component = lambda rev=None: ValidatorComponentIdentity(  # noqa: E731
         source_revision=rev or _REVISION,

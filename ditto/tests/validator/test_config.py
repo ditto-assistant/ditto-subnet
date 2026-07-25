@@ -159,6 +159,22 @@ class TestRequiredConfig:
         with pytest.raises(ValidatorConfigError):
             parse_validator_config_from_env()
 
+    def test_dittobench_control_token_is_read_and_trimmed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_DITTOBENCH_CONTROL_TOKEN", "  scorer-token \n")
+        assert (
+            parse_validator_config_from_env().dittobench_control_token == "scorer-token"
+        )
+
+    def test_dittobench_control_token_defaults_to_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_DITTOBENCH_CONTROL_TOKEN", raising=False)
+        assert parse_validator_config_from_env().dittobench_control_token == ""
+
     @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "bad"])
     def test_embed_preflight_timeout_must_be_positive_finite(
         self, monkeypatch: pytest.MonkeyPatch, value: str

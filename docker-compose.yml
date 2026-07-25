@@ -9,6 +9,19 @@
 x-dittobench-revision: &dittobench-revision ecfac4cf15fbf46a5965677eaf0a9393d0f06cd8
 x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=ecfac4cf15fbf46a5965677eaf0a9393d0f06cd8}
 x-dittobench-software-version: &dittobench-software-version ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
+# Shared secret for the validator -> scorer inference control plane
+# (POST/DELETE /v1/inference/session*). The scorer joins sandbox-docker's
+# network namespace while the validator stays on the Compose bridge, so a
+# control call arrives from a 172.x peer and NEVER on loopback: without this
+# token every v7 ticket dies at `prepare` with 401 "inference control plane
+# unavailable". One anchor feeds both sides so they can never drift apart.
+# The default keeps already-deployed validators working with no operator
+# action; the control plane is not miner-reachable (the sandbox INPUT chain
+# admits only 11434/11435/11436, never the scorer API port 8000), so this
+# token separates the control plane from the rest of the private Compose
+# network rather than from untrusted harness code. Operators who want a
+# per-host secret set DITTOBENCH_BROKER_CONTROL_TOKEN in .env.
+x-broker-control-token: &broker-control-token ${DITTOBENCH_BROKER_CONTROL_TOKEN:-ditto-sn118-stack-broker-control}
 
 services:
   pylon:
@@ -197,6 +210,9 @@ services:
       # global enforcement switch dark so in-flight/retried v6 tickets retain
       # their frozen relay path during the bounded transition.
       DITTOBENCH_REQUIRE_TICKET_INFERENCE: ${DITTOBENCH_REQUIRE_TICKET_INFERENCE:-false}
+      # Authorizes the validator's session prepare/activate/cancel calls. Same
+      # anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the validator.
+      DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
     read_only: true
     tmpfs:
       - /tmp
@@ -232,6 +248,10 @@ services:
       VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
       VALIDATOR_DITTOBENCH_API_URL: http://sandbox-docker:8000
       VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS: "3"
+      # Presented as `Authorization: Bearer` on the inference control plane
+      # only. Same anchor as the scorer's DITTOBENCH_BROKER_CONTROL_TOKEN; it
+      # is never sent to the platform, Pylon, or any other host.
+      VALIDATOR_DITTOBENCH_CONTROL_TOKEN: *broker-control-token
       # The PINNED scorer revision links its identity into the binary, so the
       # only acceptable answer from /v1/capabilities is a binary-derived
       # revision. An environment-asserted revision from this pin means the

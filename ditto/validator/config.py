@@ -77,6 +77,17 @@ class ValidatorConfig:
     dittobench_capabilities_timeout_seconds: float
     """Hard timeout for scorer runtime-capability discovery."""
 
+    dittobench_control_token: str
+    """Shared secret for the scorer's inference control plane.
+
+    The scorer authorizes ``/v1/inference/session*`` for a loopback peer or a
+    matching ``Authorization: Bearer``. It joins sandbox-docker's network
+    namespace while this worker stays on the Compose bridge, so the validator
+    is never a loopback peer and the bearer is the only path that works. Empty
+    only for mock/local runs against a scorer that has no token configured.
+    Sent to ``dittobench_api_url`` and nowhere else; never logged.
+    """
+
     run_size: str
     """dittobench run size: ``small`` | ``medium`` | ``full``."""
 
@@ -401,6 +412,9 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         ),
         dittobench_api_url=dittobench_api_url,
         dittobench_capabilities_timeout_seconds=capabilities_timeout_seconds,
+        dittobench_control_token=os.environ.get(
+            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN", ""
+        ).strip(),
         run_size=run_size,
         dittobench_mock=dittobench_mock,
         benchmark_capacity=int(os.environ.get("VALIDATOR_BENCHMARK_CAPACITY", "1")),
