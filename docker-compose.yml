@@ -310,8 +310,13 @@ services:
       # The platform serves its inference plane under its own public hostname
       # (DITTO_INFERENCE_PUBLIC_BASE_URL), which need not equal the API host
       # above. A ticket's exchange URL must match one of the two exactly.
-      # Leave unset when both live on the same host.
-      VALIDATOR_PLATFORM_INFERENCE_BASE_URL: ${VALIDATOR_PLATFORM_INFERENCE_BASE_URL:-}
+      # Production mints https://dittobench.ai, so that is the default here:
+      # shipping this empty makes the allowlist a no-op and the validator
+      # refuses every v7 ticket with "exchange URL is not the platform".
+      # Override only when pointing at an environment that mints another host
+      # (e.g. dev); it must stay byte-identical to that platform's
+      # DITTO_INFERENCE_PUBLIC_BASE_URL.
+      VALIDATOR_PLATFORM_INFERENCE_BASE_URL: ${VALIDATOR_PLATFORM_INFERENCE_BASE_URL:-https://dittobench.ai}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "4500"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"
