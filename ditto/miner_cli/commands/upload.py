@@ -64,7 +64,7 @@ from ditto.miner_cli.wallet import load_wallet
 logger = logging.getLogger(__name__)
 
 _BLOCK_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
-_UPLOAD_RETRY_DELAYS_S = (1.0, 2.0, 4.0, 8.0)
+_UPLOAD_RETRY_DELAYS_S = (2.0, 4.0, 8.0, 16.0, 30.0, 30.0)
 
 
 def add_subparser(
@@ -358,8 +358,15 @@ def _run_upload(
             # subclasses AND the bare transport-wrapped errors raised by
             # api_client._request.
             print(
-                f"\nupload failed after payment. "
-                f"Keep this proof for support:\n"
+                f"\nupload could not be confirmed after payment. "
+                f"Your finalized payment was saved and can be reused.\n"
+                f"Run the same upload command again; the CLI will reuse this "
+                f"proof and will not send another transfer.\n"
+                f"If the saved proof is unavailable, rerun with:\n"
+                f"  --payment-block-hash {receipt.block_hash} "
+                f"--payment-block-number {receipt.block_number} "
+                f"--payment-extrinsic-index {receipt.extrinsic_index}\n"
+                f"Payment proof:\n"
                 f"  block_hash:       {receipt.block_hash}\n"
                 f"  block_number:     {receipt.block_number}\n"
                 f"  extrinsic_index:  {receipt.extrinsic_index}",
@@ -438,7 +445,7 @@ def _post_upload_with_retries(
     payment: PaymentReceipt,
     admission_token: UUID,
 ) -> UploadAgentResponse:
-    """Retry only transient post-payment failures with the same proof."""
+    """Retry transient post-payment failures with the same proof and archive."""
     for attempt in range(len(_UPLOAD_RETRY_DELAYS_S) + 1):
         try:
             with tar_path.open("rb") as tar_fh:

@@ -412,8 +412,8 @@ class TestUploadHappyPath:
         assert {
             call.kwargs["payment"] for call in client.post_upload_agent.call_args_list
         } == {receipt}
-        sleep.assert_called_once_with(1.0)
-        assert "retrying in 1s" in capsys.readouterr().err
+        sleep.assert_called_once_with(2.0)
+        assert "retrying in 2s" in capsys.readouterr().err
 
     def test_submission_cooldown_skips_short_retry_loop(self, good_tar: Path) -> None:
         client = MagicMock()
@@ -816,8 +816,8 @@ class TestUploadFailurePaths:
         """API goes down between payment and /upload/agent: connect-refused
         bubbles up as a generic ApiResponseError (not the specific
         UploadAgentRejectedError). The proof tuple must STILL surface so
-        the miner has it for support; money is on chain regardless of
-        whether the API rejected or was unreachable."""
+        the miner can retry without paying again; money is on chain regardless
+        of whether the API rejected or was unreachable."""
         client = MagicMock()
         client.post_upload_check.return_value = _ok_check()
         client.get_eval_pricing.return_value = _pricing()
@@ -861,6 +861,9 @@ class TestUploadFailurePaths:
         assert receipt.block_hash in err
         assert str(receipt.block_number) in err
         assert str(receipt.extrinsic_index) in err
+        assert "Run the same upload command again" in err
+        assert "will not send another transfer" in err
+        assert "--payment-block-hash" in err
 
 
 class TestUploadWireCorrectness:

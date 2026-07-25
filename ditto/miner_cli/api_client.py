@@ -47,10 +47,13 @@ from ditto.miner_cli.models import PaymentReceipt
 
 logger = logging.getLogger(__name__)
 
-# Default per-request timeout. Upload is the longest call (tar streaming)
-# but the server-side payment verification is bounded by a few Pylon
-# round trips, so a 60s ceiling covers normal-case latency comfortably.
+# Default per-request timeout for short control-plane calls.
 DEFAULT_TIMEOUT_S = 60.0
+
+# Paid uploads stream the archive and then perform several chain, storage, and
+# fingerprint operations. Give that endpoint substantially more room without
+# making every CLI request wait this long during an outage.
+UPLOAD_TIMEOUT_S = 180.0
 
 # Envelope error codes from ditto.api_server.middleware.error_envelope.
 # Imported by literal value so the CLI does not depend on api_server at
@@ -217,6 +220,7 @@ class ApiClient:
             "/api/v1/upload/agent",
             files=files,
             data=data,
+            timeout=UPLOAD_TIMEOUT_S,
         )
         envelope = _safe_envelope(response)
         if (

@@ -171,6 +171,7 @@ class TestUploadAgent:
             captured["url"] = str(request.url)
             captured["content_type"] = request.headers.get("content-type", "")
             captured["body"] = request.content
+            captured["timeout"] = request.extensions["timeout"]
             return httpx.Response(
                 200,
                 json={
@@ -184,6 +185,7 @@ class TestUploadAgent:
             result = client.post_upload_agent(**self._kwargs())
 
         assert "multipart/form-data" in captured["content_type"]
+        assert captured["timeout"]["read"] == 180.0
         assert b"22222222-2222-2222-2222-222222222222" in captured["body"]
 
         body_str = captured["body"].decode("latin-1")
