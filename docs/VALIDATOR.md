@@ -43,10 +43,13 @@ and Pylon keeps in-flight weight state in a named volume. The platform screens
 every submission before it reaches validators and ships a verified pre-built
 Docker image with it, so your host normally does not compile miner code.
 
-The scorer admits one full run at a time by default, and every miner container runs with
-strict CPU, memory, PID, capability, seccomp, and egress limits. Do not
-increase `VALIDATOR_BENCHMARK_CAPACITY` until the host has passed the bounded
-parallel resource and sibling-isolation checks.
+Every miner container runs with strict CPU, memory, PID, capability, seccomp,
+and egress limits. The stack advertises four full-run slots and the platform
+decides how many of them actually receive tickets, so the concurrency your host
+runs is an operator setting on the platform (default two), not a value you edit
+here. Lower `VALIDATOR_BENCHMARK_CAPACITY` only if your host is below the
+documented 16 GB RAM / 80 GB disk; each concurrent run adds a miner sandbox with
+a 3 GiB memory cap plus its own image and writable layer.
 
 ## Requirements
 
@@ -83,7 +86,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_NAME` | Coldkey directory under `~/.bittensor/wallets`. |
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
-| `VALIDATOR_BENCHMARK_CAPACITY` | Healthy full-run slots; leave at `1` until parallel rollout approval. |
+| `VALIDATOR_BENCHMARK_CAPACITY` | Full-run slots this host advertises. Leave unset to take the compose default of `4`; the platform caps how many are used. |
 | `RELAY_PROVIDER` / `RELAY_API_KEY` | Existing frozen v6 route only; retain during transition. |
 | `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Leave `false` until v6 drains; v7 is independently fail-closed. |
 | `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Leave `false` until v6 drains; v7 is independently fail-closed. |
@@ -439,8 +442,10 @@ host identity.
 Heartbeat protocol 10 adds authoritative bounded capacity: configured and
 healthy slot ids, admission state, and privacy-safe progress for every active
 benchmark. Active heartbeats refresh every 30 seconds, with changed aggregate
-question counts eligible every 15 seconds. Capacity defaults to one; draining
-or paused validators advertise no healthy slots and receive no new work.
+question counts eligible every 15 seconds. The stack advertises four slots by
+default and the platform's operator cap decides how many receive tickets;
+draining or paused validators advertise no healthy slots and receive no new
+work.
 
 ### Per-component stack health
 

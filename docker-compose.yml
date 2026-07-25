@@ -204,11 +204,17 @@ services:
       DITTOBENCH_SOURCE_SHA: *dittobench-revision
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
-      DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
-      # Deliberately still 1. This bounds the LOCAL Ollama lane that bench
-      # versions 2-6 embed against — one container per host, genuinely scarce.
-      # v7 bypasses it entirely (dittobench-api #93), so widening the hosted
-      # lane below must never be answered by widening this one.
+      # Scorer-side run capacity. Rides the same variable as the validator's
+      # advertised slot count so the two can never disagree: the worker fails
+      # closed (claims nothing at all) when the scorer advertises fewer full-run
+      # slots than the worker has configured. The compose default is the
+      # production value; the platform's operator cap decides how many of these
+      # slots actually receive tickets.
+      DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-4}
+      # Deliberately still 1. This bounds the frozen *local Ollama* embedding
+      # lane, which only v2-v6 use; hosted v7 embeddings bypass it entirely and
+      # are serialized per ticket instead. Raising it would add concurrent load
+      # to the single shared ollama container for no v7 benefit.
       DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES: ${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}
       # Hosted v7 parallelism. Both default inside the scorer image to the
       # values dittobench-api#104 ships (4 cases, 8 concurrent embeddings per
@@ -323,7 +329,15 @@ services:
       VALIDATOR_QUEUE_LIMIT: "50"
       # Heartbeat v10+ advertises every active slot. The scorer independently
       # publishes the same bound and the worker fails closed on mismatch.
-      VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-1}
+      #
+      # This is the CAPABILITY the host offers, not the concurrency it will run.
+      # How many of these slots actually receive tickets is decided by the
+      # platform's validator-slot cap (an append-only revision setting changed
+      # from backroom, default 2), so concurrency can be raised gradually and
+      # reverted instantly without a release. Advertising 4 here is what gives
+      # the operator room to ramp above 2 without shipping a new stack; idle
+      # slots cost nothing but two extra 204 polls per sweep.
+      VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-4}
       # V7 tickets fail closed without platform inference regardless of this
       # flag. Leave fleet-wide enforcement dark until v6 has drained.
       VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-false}

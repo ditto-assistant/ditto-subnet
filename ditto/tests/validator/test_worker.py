@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, get_args
 from unittest.mock import AsyncMock, MagicMock
@@ -60,6 +62,25 @@ from ditto.validator.worker import ValidatorWorker
 _VALIDATOR_HOTKEY = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
 _BURN_HOTKEY = "5Burn" + "x" * 43
 _T0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+
+
+def _compose_default_benchmark_capacity() -> int:
+    """Read the shipped slot default out of docker-compose.yml.
+
+    Deriving it here rather than restating it keeps the slot tests honest: the
+    fleet runs the compose default, so a default that drifts away from the
+    behaviour these tests assert is exactly the regression worth catching.
+    """
+    compose = Path(__file__).parents[3] / "docker-compose.yml"
+    pattern = re.compile(
+        r"VALIDATOR_BENCHMARK_CAPACITY:\s*\$\{VALIDATOR_BENCHMARK_CAPACITY:-(\d+)\}"
+    )
+    match = pattern.search(compose.read_text())
+    assert match is not None, "compose must ship a VALIDATOR_BENCHMARK_CAPACITY default"
+    return int(match.group(1))
+
+
+_COMPOSE_DEFAULT_BENCHMARK_CAPACITY = _compose_default_benchmark_capacity()
 
 
 class _ImmediateHeartbeatClock:
@@ -530,12 +551,20 @@ class TestTop5ConfirmationLane:
 
 
 class TestRunOnce:
-    async def test_capacity_mismatch_rejects_work_and_advertises_no_healthy_slots(
+    async def test_capacity_mismatch_narrows_to_the_scorer_rather_than_stopping(
         self,
     ) -> None:
+        """A worker ahead of its scorer runs the scorer's slots, not zero.
+
+        The two capacities ride one Compose variable and disagree only while a
+        targeted update has refreshed the worker but not yet the scorer.
+        Refusing all work there would idle a validator the three-hotkey quorum
+        cannot spare; claiming past the scorer would only earn a 429.
+        """
         platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(return_value=None)
         config = _config()
-        config.benchmark_capacity = 2
+        config.benchmark_capacity = 4
         dittobench = MagicMock()
         dittobench.full_run_capacity = 1
         worker = ValidatorWorker(
@@ -548,11 +577,42 @@ class TestRunOnce:
 
         await worker.run_once(set_weights=False)
 
-        platform.request_job.assert_not_awaited()
+        # Exactly the scorer's capacity is polled, from the lowest ordinal up.
+        assert platform.request_job.await_count == 1
+        assert platform.request_job.await_args.kwargs["slot_id"] == "slot-0"
+        advertised = [
+            call.args[0].benchmark_capacity
+            for call in platform.submit_heartbeat.await_args_list
+        ]
+        assert all(capacity is not None for capacity in advertised)
+        # Capacity is still reported honestly, but no heartbeat ever offers more
+        # healthy slots than the scorer can actually run.
+        assert {capacity.configured_slots for capacity in advertised} == {4}
+        assert max(len(capacity.healthy_slots) for capacity in advertised) == 1
+        assert ["slot-0"] in [capacity.healthy_slots for capacity in advertised]
+
+    async def test_scorer_capacity_never_raises_beyond_configured_slots(self) -> None:
+        """A scorer offering more than the host configured changes nothing."""
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(return_value=None)
+        config = _config()
+        config.benchmark_capacity = 2
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 8
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
         final = platform.submit_heartbeat.await_args_list[-1].args[0]
         assert final.benchmark_capacity is not None
         assert final.benchmark_capacity.configured_slots == 2
-        assert final.benchmark_capacity.healthy_slots == []
+        assert final.benchmark_capacity.healthy_slots == ["slot-0", "slot-1"]
 
     async def test_parallel_slots_overlap_and_isolate_sibling_failure(
         self, monkeypatch: pytest.MonkeyPatch
@@ -610,6 +670,151 @@ class TestRunOnce:
         assert platform.report_ticket_failed.await_count == 1
         assert "slot-0" not in worker._healthy_slots
         assert "slot-1" in worker._healthy_slots
+
+    async def test_compose_default_capacity_allocates_dense_slot_ids(self) -> None:
+        """The shipped compose default must produce four usable, dense slots.
+
+        The platform addresses slots by ordinal (``slot-0``..``slot-N``) when it
+        applies its operator cap, so a sparse or renamed slot set would silently
+        lose capacity.
+        """
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        # Every slot polls independently, so the empty queue must answer each of
+        # them rather than a single scripted call.
+        platform.request_job = AsyncMock(return_value=None)
+        config = _config()
+        config.benchmark_capacity = _COMPOSE_DEFAULT_BENCHMARK_CAPACITY
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = _COMPOSE_DEFAULT_BENCHMARK_CAPACITY
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        expected = [f"slot-{index}" for index in range(4)]
+        assert sorted(worker._slots) == expected
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.configured_slots == 4
+        assert final.benchmark_capacity.healthy_slots == expected
+        assert final.benchmark_capacity.admission == "accepting"
+        # Every advertised slot polls, so a platform-side cap can decline the
+        # ones it does not want used.
+        assert platform.request_job.await_count == 4
+
+    async def test_platform_capping_slots_is_not_an_error(self) -> None:
+        """A 204 on the capped slots must leave the worker healthy.
+
+        The platform's operator cap declines high ordinals by returning no job.
+        That is a normal empty queue, not a slot failure: the slot must stay
+        healthy and advertised so raising the cap needs no validator restart.
+        """
+        served: JobResponse | None = _job("5MinerA" + "x" * 41, slot_id="slot-0")
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            # Platform cap of one: only the lowest ordinal is ever served, and
+            # the queue drains after that one job.
+            nonlocal served
+            if slot_id != "slot-0":
+                return None
+            job, served = served, None
+            return job
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 4
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 4
+        dittobench.score_tarball = AsyncMock(return_value=_report("run-0", 0.7))
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(set_weights=False)
+
+        assert outcome.queue_depth == 1
+        assert worker._healthy_slots == {f"slot-{index}" for index in range(4)}
+        platform.report_ticket_failed.assert_not_awaited()
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.configured_slots == 4
+
+    async def test_concurrent_slots_keep_per_slot_state_isolated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Four overlapping runs must not leak agent identity between slots.
+
+        Per-slot state is held in a ``contextvars`` slot map, so a regression to
+        shared worker state would cross-assign agents to leases and corrupt the
+        signed per-slot progress the platform stores.
+        """
+        jobs = {
+            f"slot-{index}": _job(f"5Miner{index}" + "x" * 41, slot_id=f"slot-{index}")
+            for index in range(4)
+        }
+        claimed: set[str] = set()
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            if slot_id in claimed:
+                return None
+            claimed.add(slot_id)
+            return jobs[slot_id]
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 4
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 4
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        all_started = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        max_active = 0
+        observed: dict[str, UUID | None] = {}
+
+        async def score(job: JobResponse) -> ScoreReport:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            # Write through the contextvar-backed property from four overlapping
+            # tasks, then read it back after every sibling has also written.
+            worker._active_agent_id = job.agent_id
+            if active == 4:
+                all_started.set()
+            await release.wait()
+            observed[job.slot_id] = worker._active_agent_id
+            active -= 1
+            return _report(f"run-{job.slot_id}", 0.8)
+
+        monkeypatch.setattr(worker, "_score_job", score)
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        assert max_active == 4
+        release.set()
+        outcome = await sweep
+
+        assert outcome.queue_depth == 4
+        # Each slot read back its own agent, not the last writer's.
+        assert observed == {slot_id: jobs[slot_id].agent_id for slot_id in jobs}
+        assert len(set(observed.values())) == 4
+        platform.report_ticket_failed.assert_not_awaited()
 
     async def test_idle_sweep_does_not_create_unticketed_rescore_work(
         self, monkeypatch: pytest.MonkeyPatch

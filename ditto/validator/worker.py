@@ -647,25 +647,43 @@ class ValidatorWorker:
         await self._report_heartbeat("idle")
         return _SweepOutcome(queue_depth=queue_depth, weights_ran=weights_ran)
 
-    async def _scoring_preflight(self) -> bool:
-        """Functionally probe scorer dependencies before requesting a lease."""
+    def _available_slots(self) -> set[str]:
+        """Slots this sweep may claim on: unblocked, and within scorer capacity.
+
+        The scorer's advertised full-run capacity is a hard ceiling -- claiming
+        past it only earns a 429 from a saturated run-slot channel. The two
+        values ride one Compose variable, so they agree on a stack that was
+        recreated together; they can disagree only while a targeted update has
+        refreshed the worker but not yet the scorer.
+
+        That window is why this narrows instead of refusing. Both are true
+        bounds, so the smaller one is the safe answer, and a worker that
+        advertises more slots than its scorer can serve degrades to the scorer's
+        number rather than stopping. Refusing outright would turn a transient
+        update ordering into a validator that scores nothing at all, and a
+        three-validator quorum cannot spare one.
+        """
         scorer_capacity = int(getattr(self._dittobench, "full_run_capacity", 1))
+        unblocked = sorted(
+            slot_id
+            for slot_id in self._slots
+            if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
+        )
         if scorer_capacity < len(self._slots):
             logger.warning(
                 "configured validator capacity %s exceeds scorer capacity %s; "
-                "no ticket will be claimed",
+                "running the scorer's %s slot(s) until the stack agrees",
                 len(self._slots),
                 scorer_capacity,
+                scorer_capacity,
             )
-            self._healthy_slots.clear()
-            return False
+        return set(unblocked[:scorer_capacity])
+
+    async def _scoring_preflight(self) -> bool:
+        """Functionally probe scorer dependencies before requesting a lease."""
         preflight = getattr(self._dittobench, "preflight", None)
         if preflight is None:
-            self._healthy_slots = {
-                slot_id
-                for slot_id in self._slots
-                if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
-            }
+            self._healthy_slots = self._available_slots()
             return True
         try:
             result = preflight()
@@ -673,11 +691,7 @@ class ValidatorWorker:
                 await result
             # A successful trusted scorer probe is the recovery signal for
             # capacity dropped by a prior sibling failure or dependency outage.
-            self._healthy_slots = {
-                slot_id
-                for slot_id in self._slots
-                if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
-            }
+            self._healthy_slots = self._available_slots()
             return True
         except ValidatorInfrastructureError as e:
             self._healthy_slots.clear()
@@ -810,10 +824,11 @@ class ValidatorWorker:
                 observed = capability_probe(stack)
                 if inspect.isawaitable(observed):
                     scorer_benchmarks = await observed
-            if int(getattr(self._dittobench, "full_run_capacity", 1)) < len(
-                self._slots
-            ):
-                self._healthy_slots.clear()
+            # The freshly probed scorer capacity is a ceiling, not a kill
+            # switch: narrow the advertisement to what the scorer can serve so a
+            # worker briefly ahead of its scorer keeps offering the slots that
+            # do work. See :meth:`_available_slots`.
+            self._healthy_slots &= self._available_slots()
             # The scorer probe above is authoritative for capacity. Rebuild the
             # signed snapshot after it so a runtime capacity drop is visible in
             # this heartbeat, not one event later.

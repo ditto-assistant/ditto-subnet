@@ -15,6 +15,16 @@ RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.y
 INSTALLER_PATH = Path(__file__).parents[2] / "scripts/install-validator-auto-update.sh"
 
 
+def _compose_default(expression: str) -> str:
+    """Return the ``:-`` fallback baked into a ``${VAR:-default}`` expression.
+
+    The fleet runs the compose default, so a knob whose default is empty ships
+    as a no-op. Tests assert on this value, never on a `.env.example` line.
+    """
+    _, _, remainder = expression.partition(":-")
+    return remainder.rstrip("}")
+
+
 def test_ollama_is_pinned_with_functional_embedding_healthcheck() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     ollama = compose["services"]["ollama"]
@@ -165,6 +175,20 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert api["environment"]["DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES"] == (
         "${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}"
     )
+    # The worker fails closed and claims nothing at all when the scorer
+    # advertises fewer full-run slots than the worker configured, so these two
+    # must ride the same variable with the same default. A host that sets
+    # nothing must land on the production value, not on the old behaviour.
+    assert api["environment"]["DITTOBENCH_MAX_CONCURRENT_RUNS"] == (
+        "${VALIDATOR_BENCHMARK_CAPACITY:-4}"
+    )
+    worker_env = compose["services"]["ditto-subnet"]["environment"]
+    assert worker_env["VALIDATOR_BENCHMARK_CAPACITY"] == (
+        "${VALIDATOR_BENCHMARK_CAPACITY:-4}"
+    )
+    assert _compose_default(
+        api["environment"]["DITTOBENCH_MAX_CONCURRENT_RUNS"]
+    ) == _compose_default(worker_env["VALIDATOR_BENCHMARK_CAPACITY"])
     assert "RELAY_API_KEY" in relay["environment"]
     assert "model-relay" in service["depends_on"]
 
