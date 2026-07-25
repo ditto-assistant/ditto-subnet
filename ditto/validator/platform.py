@@ -68,7 +68,8 @@ class PlatformClient:
         self._keypair = keypair
         self._base = config.platform_api_url.rstrip("/")
         self._inference_base = (
-            getattr(config, "platform_inference_base_url", "") or config.platform_api_url
+            getattr(config, "platform_inference_base_url", "")
+            or config.platform_api_url
         ).rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
 
