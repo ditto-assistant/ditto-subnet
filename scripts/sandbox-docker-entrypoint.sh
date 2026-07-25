@@ -86,7 +86,17 @@ ensure_sandbox_network() {
   iptables -A DITTO-SANDBOX-EGRESS -m addrtype --dst-type LOCAL -p tcp --dport 11436 -j ACCEPT
   iptables -A DITTO-SANDBOX-EGRESS -m limit --limit 12/min --limit-burst 20 \
     -j LOG --log-prefix 'ditto-sandbox-deny ' --log-level warning
-  iptables -A DITTO-SANDBOX-EGRESS -j DROP
+  # Deny loudly, not silently. A silent DROP costs a denied TCP connect a full
+  # SYN timeout (~26.5 s per resolved address), so a harness still pointed at a
+  # non-allowlisted model host spends the whole ticket blackholed instead of
+  # failing: measured at 53 s of dead time per benchmark check, which is ~4 h of
+  # wall clock on a full run and starves every other agent waiting on the slot.
+  # An explicit reset/unreachable ends the connect immediately, so the run
+  # completes in minutes and the miner sees a legible "connection refused"
+  # instead of a timeout. This changes only how fast a denied packet fails —
+  # the allowlist above is unchanged, so nothing new becomes reachable.
+  iptables -A DITTO-SANDBOX-EGRESS -p tcp -j REJECT --reject-with tcp-reset
+  iptables -A DITTO-SANDBOX-EGRESS -j REJECT --reject-with icmp-port-unreachable
   while iptables -D DOCKER-USER -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS 2>/dev/null; do :; done
   iptables -I DOCKER-USER 1 -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS
   # Traffic to this DinD host itself traverses INPUT, not DOCKER-USER. Apply

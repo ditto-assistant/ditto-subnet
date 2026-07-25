@@ -189,7 +189,12 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "com.docker.network.bridge.enable_icc=false" in entrypoint
     assert "-i 'dtj+' -j DITTO-SANDBOX-EGRESS" in entrypoint
     assert "ditto-sandbox-deny" in entrypoint
-    assert "-j DROP" in entrypoint
+    # Denied egress must fail fast: a silent DROP costs a full SYN timeout per
+    # connect (~53 s of dead time per benchmark check), which burns the whole
+    # ticket and starves the scoring slot. The allowlist is unchanged.
+    assert "-j DROP" not in entrypoint
+    assert "-p tcp -j REJECT --reject-with tcp-reset" in entrypoint
+    assert "-j REJECT --reject-with icmp-port-unreachable" in entrypoint
     assert "/var/run/docker.sock" not in COMPOSE_PATH.read_text()
 
 
