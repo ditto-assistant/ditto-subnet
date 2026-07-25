@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_capacity import ActiveBenchmarkSlot
 from ditto.api_models.benchmark_progress import (
     MAX_BENCHMARK_CHECKS,
     BenchmarkProgressStage,
@@ -3754,3 +3755,72 @@ class TestContestedDethroneConfirmation:
 
         dittobench.score_tarball.assert_not_awaited()
         platform.submit_score.assert_not_awaited()
+
+
+class TestSlotIsClaimedBeforeInferenceActivation:
+    """A claimed slot must announce itself before the inference hand-off.
+
+    Exchanging the grant and standing up the broker session is unbounded work,
+    and with several slots contending it can hold a slot for minutes. Until the
+    slot published something, the platform had a live lease with no progress
+    against it: the fleet view rendered "Benchmark progress not reported" and
+    the lease-liveness gate could read the same silence as an idle slot.
+    """
+
+    async def test_preparing_is_published_before_inference_activation(self) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        seen_before_activation: list[ActiveBenchmarkSlot] = []
+
+        async def activate(_job: JobResponse) -> None:
+            for call in platform.submit_heartbeat.await_args_list:
+                capacity = call.args[0].benchmark_capacity
+                if capacity is not None:
+                    seen_before_activation.extend(capacity.active)
+            return None
+
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(
+                score_tarball=AsyncMock(return_value=_report("run", 0.9))
+            ),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._activate_ticket_inference = AsyncMock(  # type: ignore[method-assign]
+            side_effect=activate
+        )
+
+        await worker._score_job(job)
+
+        assert seen_before_activation, (
+            "the slot published nothing before inference activation"
+        )
+        first = seen_before_activation[0]
+        assert first.slot_id == "slot-0"
+        assert first.agent_id == job.agent_id
+        assert first.progress.stage == "preparing"
+        assert first.progress.ticket_deadline == job.deadline
+
+    async def test_failed_activation_releases_the_claimed_slot(self) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._activate_ticket_inference = AsyncMock(  # type: ignore[method-assign]
+            side_effect=PlatformError("inference exchange escaped ticket bounds")
+        )
+
+        with pytest.raises(PlatformError):
+            await worker._score_job(job)
+
+        # Nothing downstream clears a slot claimed this early, so the failure
+        # path must, or the slot stays advertised as busy forever.
+        assert worker._capacity_snapshot().active == []
+        assert worker._active_agent_id is None

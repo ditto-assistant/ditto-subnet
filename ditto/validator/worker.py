@@ -1042,7 +1042,20 @@ class ValidatorWorker:
         ticket_deadline: datetime,
         bench_version: int = DEFAULT_BENCH_VERSION,
     ) -> None:
-        """Reset progress throttling and publish artifact preparation promptly."""
+        """Reset progress throttling and publish artifact preparation promptly.
+
+        Idempotent per lease. ``_score_job`` claims the slot before handing off
+        to inference activation so the slot is never silently occupied, and the
+        scoring path then announces the run proper; the second call must not
+        re-emit ``preparing`` or discard the progress already published for this
+        exact lease.
+        """
+        if (
+            self._active_agent_id == agent_id
+            and self._active_ticket_deadline == ticket_deadline
+            and self._benchmark_progress is not None
+        ):
+            return
         self._retain_failed_progress_until = 0.0
         self._active_agent_id = agent_id
         self._active_ticket_deadline = ticket_deadline
@@ -1926,7 +1939,24 @@ class ValidatorWorker:
                 f"re-derive from pinned block hash "
                 f"{job.dataset_seed_block_hash!r}; refusing to score"
             )
-        broker = await self._activate_ticket_inference(job)
+        # Claim the slot publicly BEFORE activating inference. Exchanging the
+        # grant and standing up the broker session is unbounded work -- with
+        # several slots contending for inference it can hold a slot for many
+        # minutes -- and until this ran the slot published nothing at all. The
+        # platform then had a live lease with no progress against it, which
+        # renders as "Benchmark progress not reported" and, worse, reads to the
+        # lease-liveness gate as a slot sitting idle. ``_evaluate_and_submit``
+        # re-announces ``preparing`` for the run proper; re-announcing the first
+        # stage of a lease is explicitly allowed and simply rebaselines.
+        await self._begin_active_ticket(
+            job.agent_id, job.deadline, job.bench_version or DEFAULT_BENCH_VERSION
+        )
+        try:
+            broker = await self._activate_ticket_inference(job)
+        except Exception:
+            # Nothing downstream will clear the slot we just claimed.
+            self._clear_active_ticket()
+            raise
         inference_session_id = broker.session_id if broker is not None else None
         inference_grant_id = (
             job.inference.grant_id
