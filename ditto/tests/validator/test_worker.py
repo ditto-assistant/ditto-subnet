@@ -7,14 +7,17 @@ import hashlib
 import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, get_args
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.benchmark_progress import MAX_BENCHMARK_CHECKS
+from ditto.api_models.benchmark_progress import (
+    MAX_BENCHMARK_CHECKS,
+    BenchmarkProgressStage,
+)
 from ditto.api_models.inference import InferenceExchangeResponse, InferenceGrantOffer
 from ditto.api_models.stack_health import ValidatorComponentHealth
 from ditto.api_models.validator import (
@@ -1816,6 +1819,47 @@ class TestRunOnce:
 
         assert await worker._publish_benchmark_progress("building_harness") is False
         assert worker._last_progress_heartbeat_monotonic == last_delivered
+
+    def test_progress_stage_order_is_exhaustive_over_the_wire_stages(self) -> None:
+        # A stage missing here raises KeyError inside the monotonicity guard,
+        # which the fail-open handler swallows: every update for that stage is
+        # dropped silently and the dashboard freezes on the previous stage.
+        declared = list(get_args(BenchmarkProgressStage))
+        assert set(worker_mod._PROGRESS_STAGE_ORDER) == set(declared)
+        # The Literal is declared in lifecycle order, so ranks must follow it.
+        assert list(worker_mod._PROGRESS_STAGE_ORDER) == declared
+        assert list(worker_mod._PROGRESS_STAGE_ORDER.values()) == list(
+            range(len(declared))
+        )
+
+    async def test_generating_dataset_advances_past_preparing(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        await worker._begin_active_ticket(
+            uuid4(), datetime.now(UTC) + timedelta(hours=1)
+        )
+        assert worker._benchmark_progress is not None
+        assert worker._benchmark_progress.stage == "preparing"
+        sent = platform.submit_heartbeat.await_count
+
+        assert await worker._publish_benchmark_progress("generating_dataset") is True
+        assert platform.submit_heartbeat.await_count == sent + 1
+        published = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert published.benchmark_progress is not None
+        assert published.benchmark_progress.stage == "generating_dataset"
+
+        # It stays between building_harness and starting_harness, so neither the
+        # deprecated earlier stage nor a re-poll of it can regress the lifecycle.
+        assert await worker._publish_benchmark_progress("building_harness") is False
+        assert worker._benchmark_progress.stage == "generating_dataset"
+        assert await worker._publish_benchmark_progress("starting_harness") is True
+        assert worker._benchmark_progress.stage == "starting_harness"
 
     async def test_failed_stage_is_retried_before_visibility_retention(self) -> None:
         job = _job("5MinerA" + "x" * 41)

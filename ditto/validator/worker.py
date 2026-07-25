@@ -140,14 +140,18 @@ _ACTIVE_TELEMETRY_TIMEOUT_SECONDS = 2.0
 _FAILED_PROGRESS_MIN_VISIBLE_SECONDS = 60.0
 _RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
 
+# Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
+# KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
+# handler swallows, silently dropping every update for that stage.
 _PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
     "preparing": 0,
     "building_harness": 1,
-    "starting_harness": 2,
-    "running_benchmark": 3,
-    "finalizing": 4,
-    "submitting_result": 5,
-    "failed_retrying": 6,
+    "generating_dataset": 2,
+    "starting_harness": 3,
+    "running_benchmark": 4,
+    "finalizing": 5,
+    "submitting_result": 6,
+    "failed_retrying": 7,
 }
 
 
