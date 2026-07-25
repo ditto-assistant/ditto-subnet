@@ -218,11 +218,18 @@ services:
       # (configuredPlatformProxyURL returns "" -> activate always 401s). It
       # must therefore equal the proxy_url the platform mints in the grant
       # exchange, which is DITTO_INFERENCE_PUBLIC_BASE_URL joined to
-      # /api/v1/inference/chat/completions. Deliberately NOT derived from
-      # VALIDATOR_PLATFORM_API_URL: operators commonly set that with a
-      # trailing slash, and the resulting "//api/..." path fails the
-      # broker's exact-path check.
-      DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL: ${DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL:-https://platform-api.heyditto.ai/api/v1/inference/chat/completions}
+      # /api/v1/inference/chat/completions.
+      #
+      # This is a TWO-SIDED contract: the value below and the platform's
+      # DITTO_INFERENCE_PUBLIC_BASE_URL must be changed together, or every
+      # activation 401s fleet-wide. See infra PR changing the prod platform to
+      # https://dittobench.ai.
+      #
+      # Deliberately NOT derived from VALIDATOR_PLATFORM_API_URL: operators
+      # commonly set that with a trailing slash, and the resulting "//api/..."
+      # path fails the broker's exact-path check. For the same reason the base
+      # below has no trailing slash.
+      DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL: ${DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL:-https://dittobench.ai/api/v1/inference/chat/completions}
     read_only: true
     tmpfs:
       - /tmp
