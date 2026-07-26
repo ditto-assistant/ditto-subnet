@@ -2481,7 +2481,7 @@ class ValidatorWorker:
     ) -> None:
         """Submit weights in a chain-safe window, independently of scoring."""
         chain_floor = await self._chain_min_epoch_seconds()
-        has_run_weight_epoch = False
+        last_submit_at: float | None = None
         while not stop.is_set():
             if drain_requested is not None and drain_requested.is_set():
                 # The scoring loop is the sole drain-acknowledgement owner: it
@@ -2489,14 +2489,26 @@ class ValidatorWorker:
                 # ``drained``. The weight loop only remains quiescent here.
                 while drain_requested.is_set() and not stop.is_set():
                     await self._sleep_or_stop(stop, 0.05)
-                if not stop.is_set() and has_run_weight_epoch:
-                    # A drain interrupts the cadence sleep. Start a fresh
-                    # bounded epoch after resume instead of immediately
-                    # resubmitting weights and risking the chain rate limit.
+                if not stop.is_set() and last_submit_at is not None:
+                    # A drain interrupts the cadence sleep. Resume on the
+                    # REMAINDER of the interrupted epoch, not a fresh full one:
+                    # a deploy that drains late in an epoch used to pay a second
+                    # full epoch before weights resumed, up to 72 minutes of
+                    # avoidable propagation delay per restart on SN118.
+                    #
+                    # The remainder is measured from this worker's own last
+                    # submission rather than from the chain window, because
+                    # ``_seconds_until_weight_window`` fails open to 0 when the
+                    # ``LastUpdate`` read is unavailable. Resuming on that alone
+                    # would resubmit immediately during a Pylon read outage --
+                    # exactly the rate-limit race the original full-epoch sleep
+                    # existed to prevent. Local elapsed time is always known.
                     epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
-                    await self._sleep_or_stop_or_drain(
-                        stop, epoch_seconds, drain_requested
-                    )
+                    remaining = epoch_seconds - (time.monotonic() - last_submit_at)
+                    if remaining > 0:
+                        await self._sleep_or_stop_or_drain(
+                            stop, remaining, drain_requested
+                        )
                 continue
             epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
             window_delay = await self._seconds_until_weight_window(epoch_seconds)
@@ -2530,7 +2542,7 @@ class ValidatorWorker:
                 logger.exception("weight epoch failed; retrying next epoch")
             finally:
                 self._weights_active = False
-                has_run_weight_epoch = True
+                last_submit_at = time.monotonic()
             last_update, observed_block = await self._observe_onchain_weight_state()
             self._telemetry.record_sweep(
                 SweepStats(
