@@ -154,7 +154,12 @@ result.
 ## Scoring and emissions
 
 - DittoBench generates fresh tool-use and memory-recall cases for each
-  submission. Production locks every harness to Qwen3-32B in a TEE; your local
+  submission. Production locks every harness to one consensus model, so model
+  choice is not a miner lever: on the current contract (**Bench v7**) that is
+  **`openai/gpt-oss-20b`**, served through the platform-owned OpenRouter
+  inference boundary with reasoning pinned on. Tune your prompting and
+  reasoning budget for the active benchmark model; `GET
+  /api/v1/public/bench/config` reports the authoritative contract. Your local
   practice key and model are not included in the submitted crate.
 - The validator self-checks its `tool_endpoint` before scoring. A platform
   listener failure aborts and retries the run; if the listener is healthy and
