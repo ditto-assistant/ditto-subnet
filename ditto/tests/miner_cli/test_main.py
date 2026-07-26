@@ -124,34 +124,34 @@ class TestAttestFlagWiring:
         "flags",
         [
             [
-                "--old-wallet.name",
-                "old-miner",
-                "--old-wallet.hotkey",
-                "old-default",
                 "--wallet.name",
                 "miner",
                 "--wallet.hotkey",
                 "default",
+                "--other-wallet.name",
+                "old-miner",
+                "--other-wallet.hotkey",
+                "old-default",
             ],
             [
-                "--old-coldkey",
-                "old-miner",
-                "--old-hotkey-name",
-                "old-default",
                 "--coldkey",
                 "miner",
                 "--hotkey",
                 "default",
+                "--other-coldkey",
+                "old-miner",
+                "--other-hotkey-name",
+                "old-default",
             ],
             [  # mixed forms
-                "--old-wallet.name",
-                "old-miner",
-                "--old-hotkey-name",
-                "old-default",
                 "--coldkey",
                 "miner",
                 "--wallet.hotkey",
                 "default",
+                "--other-wallet.name",
+                "old-miner",
+                "--other-hotkey-name",
+                "old-default",
             ],
         ],
     )
@@ -159,10 +159,10 @@ class TestAttestFlagWiring:
         parser = _build_parser()
         args = parser.parse_args(["attest", *flags])
 
-        assert args.old_coldkey_name == "old-miner"
-        assert args.old_hotkey_name == "old-default"
         assert args.coldkey_name == "miner"
         assert args.hotkey_name == "default"
+        assert args.other_coldkey_name == "old-miner"
+        assert args.other_hotkey_name == "old-default"
 
     def test_netuid_defaults_to_118_and_yes_print_only_default_false(self) -> None:
         parser = _build_parser()
@@ -171,6 +171,30 @@ class TestAttestFlagWiring:
         assert args.netuid == 118
         assert args.yes is False
         assert args.print_only is False
+
+    def test_both_key_kinds_default_to_hotkey(self) -> None:
+        """Hotkey is the default because it proves the linked key directly;
+        the coldkey path is the recovery case, chosen deliberately."""
+        parser = _build_parser()
+        args = parser.parse_args(["attest"])
+
+        assert args.key_kind == "hotkey"
+        assert args.other_key_kind == "hotkey"
+
+    def test_key_kinds_are_set_independently(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["attest", "--key-kind", "coldkey", "--other-key-kind", "hotkey"]
+        )
+
+        assert args.key_kind == "coldkey"
+        assert args.other_key_kind == "hotkey"
+
+    @pytest.mark.parametrize("flag", ["--key-kind", "--other-key-kind"])
+    def test_key_kind_rejects_anything_else(self, flag: str) -> None:
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["attest", flag, "mnemonic"])
 
     def test_netuid_flag_and_env_override(
         self, monkeypatch: pytest.MonkeyPatch
@@ -195,7 +219,7 @@ class TestAttestFlagWiring:
         from unittest.mock import patch
 
         with patch("ditto.miner_cli.commands.attest.run", return_value=0) as fake_run:
-            rc = main(["attest", "--old-coldkey", "old", "--coldkey", "new"])
+            rc = main(["attest", "--coldkey", "new", "--other-coldkey", "old"])
 
         assert rc == 0
         assert isinstance(fake_run.call_args.args[0], argparse.Namespace)
@@ -203,7 +227,8 @@ class TestAttestFlagWiring:
     def test_help_states_the_scope_without_overstating_it(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """The one thing a miner must not misread is what the link grants."""
+        """The one thing a miner must not misread is what the link grants, and
+        the second thing is that signing it is not a transfer."""
         with pytest.raises(SystemExit) as ex:
             main(["attest", "--help"])
         assert ex.value.code == 0
@@ -211,9 +236,18 @@ class TestAttestFlagWiring:
         # argparse hard-wraps to terminal width; compare on collapsed
         # whitespace so the assertions pin wording, not line breaks.
         out = " ".join(capsys.readouterr().out.split())
-        assert "plagiarism screening against the old hotkey's earlier work" in out
-        assert "ONLY" in out
+        assert "Signing does NOT transfer any TAO" in out
+        assert (
+            "exempts each hotkey from plagiarism screening against the linked "
+            "hotkey's earlier work ONLY" in out
+        )
         assert "does NOT grant an additional emission slot" in out
+        assert "does NOT permit byte-identical or repacked resubmission" in out
+        assert "recorded, auditable, and revocable" in out
+        assert (
+            "evidence grade (coldkey-coldkey / mixed / hotkey-hotkey) is "
+            "reviewer context and does not change whether the exemption applies" in out
+        )
 
 
 class TestNetworkFlagPosition:

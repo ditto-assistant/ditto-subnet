@@ -30,8 +30,8 @@ from ditto.api_models import (
     AgentResponse,
     AgentStatusResponse,
     EvalPricingResponse,
-    HotkeyAttestationRequest,
-    HotkeyAttestationResponse,
+    OwnerLinkRequest,
+    OwnerLinkResponse,
     UploadAgentResponse,
     UploadCheckRequest,
     UploadCheckResponse,
@@ -249,27 +249,25 @@ class ApiClient:
             )
         return UploadAgentResponse.model_validate(response.json())
 
-    # ---- /attestations/hotkey-rotation ----------------------------------
+    # ---- /attestations/owner-link ---------------------------------------
 
-    def post_hotkey_attestation(
-        self, body: HotkeyAttestationRequest
-    ) -> HotkeyAttestationResponse:
-        """Record a signed hotkey-rotation link. Returns the recorded row.
+    def post_owner_link(self, body: OwnerLinkRequest) -> OwnerLinkResponse:
+        """Record a signed owner link between two hotkeys. Returns the row.
 
-        The endpoint is all-or-nothing: it verifies both signatures, the
-        netuid, the freshness window, and the nonce before it writes, so any
-        non-2xx response means nothing was recorded and the same two hotkeys
-        can mint a fresh attestation immediately.
+        The endpoint is all-or-nothing: it verifies both proofs, the netuid,
+        the freshness window, and the nonce before it writes, so any non-2xx
+        response means nothing was recorded and the same two hotkeys can mint
+        a fresh attestation immediately.
 
         Args:
-            body: Fully-signed request. Both signatures must be over the same
+            body: Fully-signed request. Both proofs must be over the same
                 ``nonce`` / ``issued_at`` pair; see
                 :mod:`ditto.miner_cli.attestation`.
 
         Returns:
-            Parsed :class:`HotkeyAttestationResponse` describing the recorded
-            link, including its ``scope`` and the always-false
-            ``grants_additional_emission_slot``.
+            Parsed :class:`OwnerLinkResponse` describing the recorded link,
+            including its ``evidence_grade``, its ``scope``, and the
+            always-false ``grants_additional_emission_slot``.
 
         Raises:
             AttestationRejectedError: When the API returns any status other
@@ -277,14 +275,12 @@ class ApiClient:
         """
         response = self._request(
             "POST",
-            "/api/v1/attestations/hotkey-rotation",
+            "/api/v1/attestations/owner-link",
             json=body.model_dump(mode="json"),
         )
         if response.status_code not in (200, 201):
-            raise AttestationRejectedError(
-                _format_error(response, prefix="hotkey-attestation")
-            )
-        return HotkeyAttestationResponse.model_validate(response.json())
+            raise AttestationRejectedError(_format_error(response, prefix="owner-link"))
+        return OwnerLinkResponse.model_validate(response.json())
 
     # ---- /retrieval/agent/{id}/status -----------------------------------
 

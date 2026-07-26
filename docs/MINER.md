@@ -209,67 +209,133 @@ hotkey-level ban.
 Copy screening compares each submission against earlier work from other miners.
 The exemption that keeps it from flagging your *own* history is keyed on the
 wallet that paid, so once you rotate to a new coldkey or hotkey, your own
-earlier submission starts looking like someone else's work to the screener. A
-rotation attestation is the self-serve fix, and it replaces asking in Discord.
+earlier submission starts looking like someone else's work to the screener. An
+owner-link attestation is the self-serve fix, and it replaces asking in Discord.
 
 Use it when you have already rotated keys and a new submission is being
-copy-flagged against work you submitted from the old hotkey. A normal upload
+copy-flagged against work you submitted from the other hotkey. A normal upload
 does not need one.
 
-Both keys sign. The old hotkey signs an attestation that the new hotkey
-continues it; the new hotkey counter-signs an acceptance over the same nonce.
-The second signature is what stops anyone from naming a hotkey they do not
-control as their successor, so both wallets must be present on the machine you
-run this from. The old hotkey does not have to still be registered on SN118 —
-the link only ever reaches submissions that hotkey already made, and those are
-immutable history.
+### Both ends sign, and either key can prove an end
+
+The link is symmetric: it says *these two hotkeys are the same operator*. There
+is no "from" and no "to". **Both** ends must sign, because a one-sided link
+would let anyone name a hotkey they do not control and then resubmit that
+miner's work under cover of the link. Both wallets therefore have to be on the
+machine you run this from.
+
+Each end proves itself with **either** of two keys, chosen per side:
+
+- **`hotkey`** (the default) signs with the hotkey being linked. It proves
+  control of the exact key named in the link.
+- **`coldkey`** signs with the coldkey that owns that hotkey. The platform
+  reaches the claim through the coldkey→hotkey binding it already knows from
+  your payment records.
+
+Both are accepted. They differ in key strength, not validity.
+
+### Signing with a coldkey does not move any TAO
+
+Say it plainly, because the coldkey is the key that *can* move funds: **signing
+an attestation is not a transfer.** The CLI hands your key a short text string
+and stores the signature. It does not build an extrinsic, it does not submit
+one, and the chain never sees it. Your balance, your stake, and your
+delegations are untouched. The only thing a coldkey proof costs you is typing
+the keyfile password so the key can be decrypted long enough to sign.
+
+### Which key to use
+
+Pick per side, based on what you still hold:
+
+| Situation | How to prove that side |
+| --- | --- |
+| You hold the hotkey's key | `hotkey` (the default) |
+| You lost the old hotkey's key but still hold the coldkey that owned it | `coldkey` |
+| You rotated coldkeys but kept the hotkey | `hotkey` |
+| You hold both | `hotkey` — it is the more direct proof |
+
+A `coldkey` proof requires that hotkey to have a **payment record** on the
+platform binding it to that coldkey; that binding is what makes the proof mean
+anything, and it is learned from on-chain payment proofs rather than from your
+attestation. A hotkey that never paid for an evaluation has no such record, so
+sign that side with the hotkey itself.
+
+### Mint the link
 
 ```sh
 uv run ditto --network finney attest \
-  --old-coldkey old-miner \
-  --old-hotkey-name default \
   --coldkey miner \
-  --hotkey default
+  --hotkey default \
+  --other-coldkey old-miner \
+  --other-hotkey-name default
 ```
+
+`--coldkey` / `--hotkey` name **this** side's wallet; `--other-coldkey` /
+`--other-hotkey-name` name the **other** side's. Which is which does not matter
+to the result — the CLI sorts the two hotkeys into a canonical order and signs
+each half for the side it lands on. Add `--key-kind coldkey` or
+`--other-key-kind coldkey` to prove a side with its coldkey instead; both
+default to `hotkey`.
 
 The CLI loads both wallets, mints a single-use nonce, signs both halves, prints
 what the link does, asks for confirmation, and submits. Add `-y` to skip the
-prompt in a script. `--netuid` defaults to 118 and is signed into both payloads,
-so an attestation minted for one subnet cannot be replayed onto another.
+prompt in a script. `--netuid` defaults to 118 and is signed into both
+payloads, so an attestation minted for one subnet cannot be replayed onto
+another.
 
-Worked example. You mined from `old-miner`/`default` through submission v3,
-rotated to a fresh coldkey `miner`/`default`, and your first upload from the new
-hotkey came back held for copy review against your own v3:
+### Worked example
+
+You mined from `old-miner`/`default` through submission v3, rotated to a fresh
+coldkey `miner`/`default`, and your first upload from the new hotkey came back
+held for copy review against your own v3. You still have both keyfiles:
 
 ```sh
 uv run ditto --network finney attest \
-  --old-coldkey old-miner \
-  --old-hotkey-name default \
   --coldkey miner \
-  --hotkey default
+  --hotkey default \
+  --other-coldkey old-miner \
+  --other-hotkey-name default
 ```
 
 ```
-Hotkey rotation attestation
-  Netuid:      118
-  Old hotkey:  5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y
-  New hotkey:  5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy
-...
+Owner-link attestation
+  Netuid:     118
+  Hotkey lo:  5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy
+    proved by hotkey: 5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy
+  Hotkey hi:  5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y
+    proved by hotkey: 5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y
+
+Signing does NOT transfer any TAO...
 Submit this attestation? [y/N]: y
 3f6b1c04-5a7e-4a2f-9c31-0d8b2e4f7a15
 ```
 
+Same situation, except the old hotkey's keyfile is gone and you only have the
+old coldkey. Prove that side with the coldkey:
+
+```sh
+uv run ditto --network finney attest \
+  --coldkey miner \
+  --hotkey default \
+  --other-coldkey old-miner \
+  --other-hotkey-name default \
+  --other-key-kind coldkey
+```
+
+The old hotkey does not have to still be registered on SN118 — the link only
+ever reaches submissions that hotkey already made, and those are immutable
+history.
+
 The UUID on stdout is the attestation ID; quote it if you open a review ticket.
-The link takes effect from the moment it is recorded, so it applies to screening
-that runs after it, not to a decision already made. If a submission is already
-held, mint the attestation and then ask for the review to be re-run.
+The link takes effect from the moment it is recorded, so it applies to
+screening that runs after it, not to a decision already made. If a submission
+is already held, mint the attestation and then ask for the review to be re-run.
 
-Read the scope literally:
+### Read the scope literally
 
-- It exempts the new hotkey from plagiarism screening **against the old
+- It exempts each linked hotkey from plagiarism screening **against the other
   hotkey's earlier work only**. Screening against every other miner is
-  unchanged, and the exemption runs one way: your old hotkey is not exempted
-  against your new one.
+  unchanged.
 - It does **not** grant an additional emission slot. Emission positions are one
   per distinct agent no matter how many keys you hold, and this link is not an
   input to that calculation. Rotating keys and attesting the link does not put
@@ -278,22 +344,36 @@ Read the scope literally:
   the same artifact under a new key is still held, with or without a link.
 - Links are recorded, auditable, and revocable. They are visible to reviewers,
   and one can be revoked if a key is sold or compromised.
+- The **evidence grade** — `coldkey-coldkey`, `mixed`, or `hotkey-hotkey`,
+  reported back when the link is recorded — describes which key kinds proved
+  the two halves. It is reviewer context. It does **not** change whether the
+  exemption applies; all three grades establish the link identically.
 
-If the old key lives on a machine that should not reach the platform, use
+### Links are direct only
+
+A link covers exactly the two hotkeys it names. It is **not transitive**:
+attesting `A`–`B` and `B`–`C` does not link `A` and `C`, because those two
+owners never signed anything with each other. If you have rotated more than
+once, attest each pair you actually need — for a chain of three hotkeys where
+old work under `A` collides with new work under `C`, mint `A`–`C` directly.
+
+### Signing on an offline machine
+
+If a key lives on a machine that should not reach the platform, use
 `--print-only` to sign both halves and print the request body instead of
 submitting it:
 
 ```sh
 uv run ditto --network finney attest \
-  --old-coldkey old-miner \
-  --old-hotkey-name default \
   --coldkey miner \
   --hotkey default \
+  --other-coldkey old-miner \
+  --other-hotkey-name default \
   --print-only > attestation.json
 ```
 
 Move `attestation.json` to a networked machine and POST it to
-`/api/v1/attestations/hotkey-rotation` yourself. Minted attestations expire, so
+`/api/v1/attestations/owner-link` yourself. Minted attestations expire, so
 submit it the same day or mint a fresh one.
 
 ## Common questions

@@ -7,10 +7,12 @@ default cadence (interactive prompt by default, ``-y`` / ``--yes`` /
 for the prior art we're matching.
 
 Two actions prompt: paying the evaluation fee (:func:`confirm_payment`)
-and publishing a hotkey-rotation attestation
-(:func:`confirm_attestation`). The attestation preview restates the
-link's scope in full, because the one thing a miner must not be able to
-misread is what the link does and does not grant.
+and publishing an owner-link attestation (:func:`confirm_attestation`).
+The attestation preview restates the link's scope in full, because the
+one thing a miner must not be able to misread is what the link does and
+does not grant. It also says outright that signing moves no TAO, since a
+half may be proved with the coldkey and that is the key which normally
+does move funds.
 """
 
 from __future__ import annotations
@@ -74,26 +76,30 @@ def confirm_payment(
 def confirm_attestation(
     *,
     netuid: int,
-    old_hotkey_ss58: str,
-    old_coldkey_name: str,
-    new_hotkey_ss58: str,
-    new_coldkey_name: str,
+    hotkey_lo: str,
+    hotkey_hi: str,
+    lo_key_kind: str,
+    hi_key_kind: str,
+    lo_signer: str,
+    hi_signer: str,
     skip: bool,
 ) -> None:
-    """Show the rotation-attestation preview + prompt for confirmation.
+    """Show the owner-link preview + prompt for confirmation.
 
     The preview spells the scope out rather than summarising it. The link is
     narrow, it is public, and it is permanent until revoked, so a miner who
     reads only this screen must still come away with the correct expectation.
+    It leads with "no TAO moves" because one or both halves may be proved by a
+    coldkey, and a coldkey signature must never be mistaken for a transfer.
 
     Args:
         netuid: Subnet the attestation is minted for.
-        old_hotkey_ss58: Predecessor hotkey that signs the attestation.
-        old_coldkey_name: Wallet coldkey name for the old hotkey (display
-            only).
-        new_hotkey_ss58: Successor hotkey that signs the acceptance.
-        new_coldkey_name: Wallet coldkey name for the new hotkey (display
-            only).
+        hotkey_lo: Lower hotkey of the canonically-ordered pair.
+        hotkey_hi: Higher hotkey of the canonically-ordered pair.
+        lo_key_kind: ``hotkey`` or ``coldkey`` -- how the lo half is proved.
+        hi_key_kind: ``hotkey`` or ``coldkey`` -- how the hi half is proved.
+        lo_signer: SS58 that signs the lo half.
+        hi_signer: SS58 that signs the hi half.
         skip: When ``True`` the prompt is bypassed entirely. Used by the
             ``-y`` / ``--yes`` flag for scripted invocations.
 
@@ -102,21 +108,32 @@ def confirm_attestation(
             other input including blank + EOF declines).
     """
     print()
-    print("Hotkey rotation attestation")
-    print(f"  Netuid:      {netuid}")
-    print(f"  Old hotkey:  {old_hotkey_ss58}  (coldkey: {old_coldkey_name})")
-    print(f"  New hotkey:  {new_hotkey_ss58}  (coldkey: {new_coldkey_name})")
+    print("Owner-link attestation")
+    print(f"  Netuid:     {netuid}")
+    print(f"  Hotkey lo:  {hotkey_lo}")
+    print(f"    proved by {lo_key_kind}: {lo_signer}")
+    print(f"  Hotkey hi:  {hotkey_hi}")
+    print(f"    proved by {hi_key_kind}: {hi_signer}")
     print()
-    print("Both wallets sign: the old hotkey attests, the new hotkey accepts.")
+    print("This declares the two hotkeys are the same operator. Both ends sign;")
+    print("each end may prove itself with its own hotkey or with the coldkey")
+    print("that owns it.")
+    print()
+    print("Signing does NOT transfer any TAO. Each signature covers a text")
+    print("message and nothing else. No extrinsic is built and none is sent,")
+    print("including when a half is proved with a coldkey.")
+    print()
     print("What this link does:")
-    print("  - It exempts the new hotkey from plagiarism screening against")
-    print("    the old hotkey's earlier work ONLY. Nothing else is exempted.")
+    print("  - It exempts each hotkey from plagiarism screening against the")
+    print("    linked hotkey's earlier work ONLY. Nothing else is exempted.")
     print("What it does NOT do:")
     print("  - It does NOT grant an additional emission slot. One slot per")
     print("    distinct agent, no matter how many keys you hold.")
     print("  - It does NOT permit byte-identical or repacked resubmission;")
     print("    those are still held for review.")
     print("The link is recorded, auditable, and revocable.")
+    print("The evidence grade (coldkey-coldkey / mixed / hotkey-hotkey) is")
+    print("reviewer context; it does not change whether the exemption applies.")
     print()
 
     if skip:
