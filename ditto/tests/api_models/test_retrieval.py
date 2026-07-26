@@ -55,10 +55,23 @@ class TestAgentStatusResponse:
         assert parsed.status == AgentStatus.SCREENING
 
     def test_stable_polling_shape(self) -> None:
-        """Polling includes the optional miner-visible screening reason."""
+        """Polling carries the miner-visible screening reason and its code.
+
+        ``screening_reason`` is prose for a human; ``screening_reason_code`` is
+        the stable token a miner's tooling can branch on. The platform has
+        served both since it added the code; this copy carried only the prose,
+        so pydantic's default ``extra='ignore'`` dropped the code on every poll
+        and no client could act on it.
+        """
         parsed = AgentStatusResponse.model_validate(
             _load_fixture("agent_status_response_v1.json")
         )
         dumped = parsed.model_dump()
-        assert set(dumped.keys()) == {"agent_id", "status", "screening_reason"}
+        assert set(dumped.keys()) == {
+            "agent_id",
+            "status",
+            "screening_reason",
+            "screening_reason_code",
+        }
         assert dumped["screening_reason"] is None
+        assert dumped["screening_reason_code"] is None

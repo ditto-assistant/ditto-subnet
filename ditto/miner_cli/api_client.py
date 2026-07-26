@@ -192,6 +192,7 @@ class ApiClient:
         signature: str,
         payment: PaymentReceipt,
         admission_token: UUID,
+        allow_identical_rescore: bool = False,
     ) -> UploadAgentResponse:
         """Submit the tarball + payment proof.
 
@@ -214,6 +215,8 @@ class ApiClient:
             "payment_block_number": str(payment.block_number),
             "payment_extrinsic_index": str(payment.extrinsic_index),
             "admission_token": str(admission_token),
+            # FastAPI's Form(bool) parses the lowercase JSON spelling.
+            "allow_identical_rescore": "true" if allow_identical_rescore else "false",
         }
         response = self._request(
             "POST",

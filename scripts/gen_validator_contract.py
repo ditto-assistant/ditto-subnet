@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Regenerate the committed validator contract golden.
+"""Regenerate the committed wire-contract goldens.
 
 The golden (``ditto/tests/contract/validator_contract.json``) is the structural
 shape of the validator wire models *as defined by the platform* — the source of
@@ -54,13 +54,9 @@ def _load_contract_schema() -> ModuleType:
     return module
 
 
-_DEFAULT_OUT = (
-    Path(__file__).resolve().parent.parent
-    / "ditto"
-    / "tests"
-    / "contract"
-    / "validator_contract.json"
-)
+_CONTRACT_DIR = Path(__file__).resolve().parent.parent / "ditto" / "tests" / "contract"
+_DEFAULT_OUT = _CONTRACT_DIR / "validator_contract.json"
+_DEFAULT_MINER_OUT = _CONTRACT_DIR / "miner_contract.json"
 
 
 def main() -> None:
@@ -69,12 +65,23 @@ def main() -> None:
         "--out",
         type=Path,
         default=_DEFAULT_OUT,
-        help="destination golden path (default: the committed subnet golden)",
+        help="destination validator golden path (default: the committed one)",
+    )
+    parser.add_argument(
+        "--miner-out",
+        type=Path,
+        default=_DEFAULT_MINER_OUT,
+        help="destination miner golden path (default: the committed one)",
     )
     args = parser.parse_args()
-    contract = _load_contract_schema().compute_contract()
-    args.out.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
-    print(f"wrote {len(contract)} model(s) to {args.out}")
+    schema = _load_contract_schema()
+    for compute, out in (
+        (schema.compute_contract, args.out),
+        (schema.compute_miner_contract, args.miner_out),
+    ):
+        contract = compute()
+        out.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
+        print(f"wrote {len(contract)} model(s) to {out}")
 
 
 if __name__ == "__main__":

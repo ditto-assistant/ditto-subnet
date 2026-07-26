@@ -136,6 +136,16 @@ def add_subparser(
         action="store_true",
         help="Skip interactive payment confirmation. For scripted use.",
     )
+    parser.add_argument(
+        "--allow-identical-rescore",
+        dest="allow_identical_rescore",
+        action="store_true",
+        help=(
+            "Deliberately buy another independently seeded run of source that "
+            "is byte-identical to one you already submitted. Off by default so "
+            "an accidental duplicate cannot spend TAO."
+        ),
+    )
     recovery = parser.add_argument_group(
         "payment recovery",
         "Reuse a finalized payment after an upload transport/server failure. "
@@ -219,6 +229,8 @@ def _run_upload(
     if not 1 <= len(agent_name) <= 64:
         raise MinerCliError("agent name must be 1-64 characters")
 
+    allow_identical_rescore = bool(getattr(args, "allow_identical_rescore", False))
+
     # Step 2: pre-flight (raises TarStructureError on missing file)
     print(f"running pre-flight on {args.tar_path}...", file=sys.stderr)
     preflight = run_preflight(args.tar_path)
@@ -255,6 +267,7 @@ def _run_upload(
                 sha256=preflight.sha256,
                 file_size_bytes=preflight.file_size_bytes,
                 signature=signature_hex,
+                allow_identical_rescore=allow_identical_rescore,
                 reserve_submission_slot=True,
             )
         )
@@ -349,6 +362,7 @@ def _run_upload(
                 signature=signature_hex,
                 payment=receipt,
                 admission_token=admission_token,
+                allow_identical_rescore=allow_identical_rescore,
             )
         except ApiResponseError:
             # Money is on chain. Any post-payment API failure (server
@@ -391,8 +405,37 @@ def _run_upload(
     saved_name = save_agent_name(
         network=network_name, hotkey=handle.hotkey_ss58, name=agent_name
     )
+    if result.payment_disposition == "reusable_credit":
+        # The platform returned an EXISTING agent: these bytes were already
+        # submitted under this owner, so no new evaluation was purchased and the
+        # payment is banked as a credit. Reporting the ordinary success line
+        # here would tell the miner they bought a run they did not.
+        print(
+            f"\nno new submission was created: {agent_name} is byte-identical "
+            f"to an artifact you already submitted"
+            + (
+                f" (agent {result.credit_for_agent_id})"
+                if result.credit_for_agent_id
+                else ""
+            )
+            + ".\n"
+            "Your payment was NOT spent -- the platform banked it as a reusable "
+            "credit, and your next upload of different source will consume it "
+            "with no new transfer.\n"
+            "To deliberately buy a second, independently seeded run of these "
+            "exact bytes, resubmit with --allow-identical-rescore.\n"
+            f"poll the existing submission with:\n  ditto status {result.agent_id}",
+            file=sys.stderr,
+        )
+        return 0
     print(
-        f"\nupload succeeded: {agent_name} · submission v{result.version}\n"
+        f"\nupload succeeded: {agent_name} · submission v{result.version}"
+        + (
+            " (funded by your reusable credit; no new transfer was sent)"
+            if result.payment_disposition == "credit_consumed"
+            else ""
+        )
+        + "\n"
         + (
             "saved as this hotkey's local default; override with --name\n"
             if saved_name
@@ -444,6 +487,7 @@ def _post_upload_with_retries(
     signature: str,
     payment: PaymentReceipt,
     admission_token: UUID,
+    allow_identical_rescore: bool = False,
 ) -> UploadAgentResponse:
     """Retry transient post-payment failures with the same proof and archive."""
     for attempt in range(len(_UPLOAD_RETRY_DELAYS_S) + 1):
@@ -458,6 +502,7 @@ def _post_upload_with_retries(
                     signature=signature,
                     payment=payment,
                     admission_token=admission_token,
+                    allow_identical_rescore=allow_identical_rescore,
                 )
         except SubmissionCooldownError:
             # The server supplied the actual eligibility time. Preserve the

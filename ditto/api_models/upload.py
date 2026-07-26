@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -52,6 +52,15 @@ class UploadCheckRequest(BaseModel):
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
     """Hex sr25519 signature over ``f"{hotkey}:{sha256}"``."""
 
+    allow_identical_rescore: bool = False
+    """Explicitly permit buying another seed for byte-identical source.
+
+    The platform refuses an identical resubmission by default so an accidental
+    duplicate cannot spend TAO. Setting this is the only way to deliberately
+    purchase a second, independently seeded run of the same bytes -- so a client
+    that cannot send it has no way to ask for one.
+    """
+
     reserve_submission_slot: bool = False
     """Ask the platform to reserve eligibility before any payment is sent."""
 
@@ -73,6 +82,15 @@ class UploadCheckResponse(BaseModel):
     messages: list[str]
     """Parallel array of human-readable failure reasons. Empty when ``ok``."""
 
+    payment_required: bool = True
+    """False when an existing same-owner artifact makes payment unnecessary."""
+
+    identical_agent_id: UUID | None = None
+    """Existing same-owner submission when identical bytes were detected."""
+
+    identical_agent_status: AgentStatus | None = None
+    """Current lifecycle state of :attr:`identical_agent_id`."""
+
     retry_at: datetime | None = None
     """UTC timestamp when an owner coldkey blocked by cooldown may retry."""
 
@@ -89,10 +107,11 @@ class UploadCheckResponse(BaseModel):
 class UploadAgentResponse(BaseModel):
     """Returned by ``POST /upload/agent`` on a successful upload.
 
-    The endpoint's only positive output: the server-generated
-    ``agent_id`` plus the lifecycle state the row was inserted at. The
-    retrieval endpoints (next PR) expose anything else the miner CLI
-    might want to poll for.
+    A new artifact returns its server-generated identity. An accidental
+    byte-identical upload returns the *existing* identity plus a reusable
+    payment credit disposition, so the miner can fund different source without
+    paying again. Both cases are HTTP 200, and
+    :attr:`payment_disposition` is the only field that tells them apart.
     """
 
     agent_id: UUID
@@ -109,6 +128,25 @@ class UploadAgentResponse(BaseModel):
     ]
 
     status: AgentStatus
-    """Initial lifecycle state. Always ``uploaded`` immediately after a
-    successful upload; the platform-operated screening service advances it
-    shortly after."""
+    """Lifecycle state of the returned agent.
+
+    ``uploaded`` immediately after a successful new upload; the
+    platform-operated screening service advances it shortly after. When the
+    upload was an identical duplicate this is the *existing* agent's state
+    instead, which can be any later state.
+    """
+
+    payment_disposition: Literal["consumed", "credit_consumed", "reusable_credit"] = (
+        "consumed"
+    )
+    """Whether this proof funded the returned agent or remains reusable.
+
+    ``reusable_credit`` means the upload was byte-identical to an existing
+    same-owner submission: no new evaluation was purchased, the returned
+    ``agent_id`` is the pre-existing one, and the payment is banked as a credit
+    for a future upload of different source. Reporting that as an ordinary
+    success is what makes a miner believe they bought a run they did not.
+    """
+
+    credit_for_agent_id: UUID | None = None
+    """Existing identical submission that caused a reusable credit."""

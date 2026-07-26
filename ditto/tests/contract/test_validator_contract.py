@@ -14,9 +14,14 @@ import json
 from pathlib import Path
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.tests.contract._schema import SHARED_MODELS, compute_contract
+from ditto.tests.contract._schema import (
+    SHARED_MODELS,
+    compute_contract,
+    compute_miner_contract,
+)
 
 _GOLDEN = Path(__file__).parent / "validator_contract.json"
+_MINER_GOLDEN = Path(__file__).parent / "miner_contract.json"
 
 
 def test_validator_models_match_platform_contract() -> None:
@@ -46,3 +51,28 @@ def test_public_agent_status_matches_platform_generated_contract() -> None:
         if "AgentStatus" in schema.get("$defs", {})
     }
     assert definitions == {tuple(status.value for status in AgentStatus)}
+
+
+def test_miner_models_match_platform_contract() -> None:
+    """Guard: the miner CLI's wire models match the platform's contract.
+
+    The validator golden above has always existed; these models had no guard,
+    and they drifted. The platform's payment path grew five fields the CLI
+    never learned to read, so ``extra='ignore'`` discarded a "your payment was
+    banked as a credit, not spent" answer and the CLI printed an ordinary
+    success over it.
+    """
+    golden = json.loads(_MINER_GOLDEN.read_text())
+    actual = compute_miner_contract()
+
+    assert set(actual) == set(golden), (
+        "miner wire model set changed; update MINER_MODELS + regenerate the "
+        "golden from ditto-platform"
+    )
+    mismatched = [name for name in sorted(golden) if actual[name] != golden[name]]
+    assert not mismatched, (
+        f"miner wire model(s) {mismatched} drifted from the platform contract. "
+        f"If intended, regenerate ditto/tests/contract/miner_contract.json from "
+        f"ditto-platform via scripts/gen_validator_contract.py and commit it "
+        f"with the change."
+    )

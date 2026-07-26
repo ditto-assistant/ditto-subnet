@@ -1,0 +1,374 @@
+{
+  "retrieval.AgentResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "quarantined",
+          "rejected",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "created_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "screening_reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screening_reason_code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      },
+      "version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "agent_id",
+      "miner_hotkey",
+      "name",
+      "status",
+      "sha256",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "retrieval.AgentStatusResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "quarantined",
+          "rejected",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "screening_reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screening_reason_code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      }
+    },
+    "required": [
+      "agent_id",
+      "status"
+    ],
+    "type": "object"
+  },
+  "upload.EvalPricingResponse": {
+    "properties": {
+      "amount_rao": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "send_address": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "amount_rao",
+      "send_address"
+    ],
+    "type": "object"
+  },
+  "upload.UploadAgentResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "quarantined",
+          "rejected",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "credit_for_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "payment_disposition": {
+        "default": "consumed",
+        "enum": [
+          "consumed",
+          "credit_consumed",
+          "reusable_credit"
+        ],
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      },
+      "version": {
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "agent_id",
+      "version",
+      "status"
+    ],
+    "type": "object"
+  },
+  "upload.UploadCheckRequest": {
+    "properties": {
+      "allow_identical_rescore": {
+        "default": false,
+        "type": "boolean"
+      },
+      "file_size_bytes": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      },
+      "reserve_submission_slot": {
+        "default": false,
+        "type": "boolean"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "signature": {
+        "pattern": "^[0-9a-fA-F]{128}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "hotkey",
+      "sha256",
+      "file_size_bytes",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "upload.UploadCheckResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "quarantined",
+          "rejected",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "admission_expires_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "admission_token": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "cooldown_seconds": {
+        "anyOf": [
+          {
+            "maximum": 86400,
+            "minimum": 60,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "error_codes": {
+        "items": {
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "identical_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "identical_agent_status": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AgentStatus"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "messages": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "ok": {
+        "type": "boolean"
+      },
+      "payment_required": {
+        "default": true,
+        "type": "boolean"
+      },
+      "retry_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "ok",
+      "error_codes",
+      "messages"
+    ],
+    "type": "object"
+  }
+}

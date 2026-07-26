@@ -145,6 +145,23 @@ def _upload_response() -> UploadAgentResponse:
     return UploadAgentResponse(agent_id=uuid4(), version=2, status=AgentStatus.UPLOADED)
 
 
+def _reusable_credit_response() -> UploadAgentResponse:
+    """What the platform returns for a byte-identical resubmission.
+
+    HTTP 200 carrying the EXISTING agent, with the payment banked rather than
+    spent. Structurally indistinguishable from a fresh success except for
+    ``payment_disposition``.
+    """
+    existing = uuid4()
+    return UploadAgentResponse(
+        agent_id=existing,
+        version=2,
+        status=AgentStatus.SCORED,
+        payment_disposition="reusable_credit",
+        credit_for_agent_id=existing,
+    )
+
+
 class TestUploadHappyPath:
     def test_full_flow_exits_zero_and_prints_agent_id(
         self, good_tar: Path, capsys: pytest.CaptureFixture[str]
@@ -1084,3 +1101,122 @@ class TestUploadConfirmBypass:
             assert run(make_args(good_tar, yes=False)) == 0
 
         assert confirm.call_args.kwargs["skip"] is False
+
+
+class TestPaymentDisposition:
+    """The platform's three payment dispositions must read differently.
+
+    ``reusable_credit`` means no new evaluation was bought. Reporting it with
+    the ordinary success line tells a miner they purchased a run they did not,
+    which is exactly what happened while these fields were missing from this
+    repo's copy of ``UploadAgentResponse``.
+    """
+
+    def _run(
+        self, good_tar: Path, response: UploadAgentResponse, **arg_overrides
+    ) -> tuple[int, MagicMock]:
+        client = MagicMock()
+        client.post_upload_check.return_value = _ok_check()
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.return_value = response
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar, **arg_overrides))
+        return rc, client
+
+    def test_reusable_credit_is_not_reported_as_a_new_submission(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        response = _reusable_credit_response()
+        rc, _ = self._run(good_tar, response)
+        err = capsys.readouterr().err
+
+        assert rc == 0
+        # The ordinary success line must NOT appear: nothing new was submitted.
+        assert "upload succeeded" not in err
+        assert "submission v2" not in err
+        assert "byte-identical" in err
+        assert "NOT spent" in err
+        assert "reusable credit" in err
+        # Names the flag that actually buys another seed, and the existing agent.
+        assert "--allow-identical-rescore" in err
+        assert str(response.credit_for_agent_id) in err
+
+    def test_credit_consumed_says_no_transfer_was_sent(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc, _ = self._run(
+            good_tar,
+            UploadAgentResponse(
+                agent_id=uuid4(),
+                version=3,
+                status=AgentStatus.UPLOADED,
+                payment_disposition="credit_consumed",
+            ),
+        )
+        err = capsys.readouterr().err
+
+        assert rc == 0
+        assert "upload succeeded" in err
+        assert "funded by your reusable credit" in err
+
+    def test_ordinary_success_is_unchanged(
+        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc, _ = self._run(good_tar, _upload_response())
+        err = capsys.readouterr().err
+
+        assert rc == 0
+        assert "upload succeeded: alpha \u00b7 submission v2" in err
+        assert "reusable credit" not in err
+
+    def test_allow_identical_rescore_reaches_both_platform_calls(
+        self, good_tar: Path
+    ) -> None:
+        """The flag is useless unless it rides BOTH the check and the upload.
+
+        ``/upload/check`` refuses the duplicate before payment; ``/upload/agent``
+        decides credit-vs-purchase after it. Sending it to only one of the two
+        either blocks the miner pre-payment or banks a credit they explicitly
+        declined.
+        """
+        _, client = self._run(
+            good_tar, _upload_response(), allow_identical_rescore=True
+        )
+
+        check_body = client.post_upload_check.call_args.args[0]
+        assert check_body.allow_identical_rescore is True
+        upload_kwargs = client.post_upload_agent.call_args.kwargs
+        assert upload_kwargs["allow_identical_rescore"] is True
+
+    def test_flag_defaults_off_so_a_duplicate_cannot_spend_tao(
+        self, good_tar: Path
+    ) -> None:
+        _, client = self._run(good_tar, _upload_response())
+
+        check_body = client.post_upload_check.call_args.args[0]
+        assert check_body.allow_identical_rescore is False
+        upload_kwargs = client.post_upload_agent.call_args.kwargs
+        assert upload_kwargs["allow_identical_rescore"] is False
