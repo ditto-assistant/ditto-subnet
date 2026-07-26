@@ -1053,7 +1053,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 15
+        assert heartbeat.protocol_version == 16
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
@@ -1597,7 +1597,7 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 15
+        assert heartbeat.protocol_version == 16
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
@@ -1619,7 +1619,7 @@ class TestRunOnce:
 
         assert await worker._report_heartbeat("idle") is True
         heartbeat = platform.submit_heartbeat.await_args.args[0]
-        assert heartbeat.protocol_version == 15
+        assert heartbeat.protocol_version == 16
         assert heartbeat.capabilities is not None
         scorer = heartbeat.capabilities.scorer_benchmarks
         assert scorer is not None and scorer.probe is not None
@@ -3947,8 +3947,49 @@ class TestSlotIsClaimedBeforeInferenceActivation:
         first = seen_before_activation[0]
         assert first.slot_id == "slot-0"
         assert first.agent_id == job.agent_id
+        assert first.progress is not None
         assert first.progress.stage == "preparing"
         assert first.progress.ticket_deadline == job.deadline
+
+    async def test_a_claimed_slot_is_reported_before_it_has_any_progress(
+        self,
+    ) -> None:
+        """Protocol 16: occupancy is reported even with nothing to say yet.
+
+        Through v15 the snapshot dropped any slot whose ``progress`` was None,
+        so a slot that was claimed but still seeding was indistinguishable from
+        a free one. The platform derives every lease-revocation safeguard from
+        this list, so the omission is what let a live run's lease be revoked.
+        """
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=_platform_with_ledger(jobs=[], ledger=[]),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        agent_id = uuid4()
+        slot = worker._slots["slot-0"]
+        slot.active_agent_id = agent_id
+        slot.progress = None
+
+        active = worker._capacity_snapshot().active
+
+        assert [entry.slot_id for entry in active] == ["slot-0"]
+        assert active[0].agent_id == agent_id
+        assert active[0].progress is None
+
+    async def test_an_unclaimed_slot_is_still_omitted(self) -> None:
+        """The claim, not the progress, is what makes a slot occupied."""
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=_platform_with_ledger(jobs=[], ledger=[]),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        assert worker._capacity_snapshot().active == []
 
     async def test_failed_activation_releases_the_claimed_slot(self) -> None:
         job = _job("5MinerA" + "x" * 41)

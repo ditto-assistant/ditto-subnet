@@ -15,7 +15,19 @@ from ditto import __version__
 # so the bump exists so the platform can tell a validator that cannot report
 # probe evidence from one that reported none. The platform must ship v15
 # awareness before validators send it: its heartbeat models forbid extras.
-HEARTBEAT_PROTOCOL_VERSION = 15
+#
+# v16 reports a slot from the moment it is claimed, with ``progress`` null until
+# there is something to say. Through v15 the worker omitted such a slot from
+# ``benchmark_capacity.active`` entirely, so the platform could not tell a slot
+# that was seeding from a slot that was free -- and revoked live leases on the
+# difference. The signing bytes are unchanged (``progress: null`` serializes
+# canonically under the same v11 domain), so the bump exists purely so the
+# platform can tell "this validator cannot report a bare claim" from "this
+# validator reports none". Same ordering rule as v15, and it matters more here:
+# a platform that has not shipped v16 awareness rejects the payload during
+# request parsing, never refreshes ``seen_at``, and force-expires the very lease
+# this is meant to protect.
+HEARTBEAT_PROTOCOL_VERSION = 16
 
 
 @dataclass(frozen=True)

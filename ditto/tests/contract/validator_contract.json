@@ -1581,7 +1581,15 @@
             "type": "boolean"
           },
           "progress": {
-            "$ref": "#/$defs/BenchmarkProgress"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BenchmarkProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "slot_id": {
             "pattern": "^slot-[0-7]$",
@@ -1591,8 +1599,7 @@
         "required": [
           "slot_id",
           "agent_id",
-          "bench_version",
-          "progress"
+          "bench_version"
         ],
         "type": "object"
       },

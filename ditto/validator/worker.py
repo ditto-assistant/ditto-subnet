@@ -434,8 +434,12 @@ class ValidatorWorker:
     def _capacity_snapshot(self) -> BenchmarkCapacity:
         active = []
         for slot in self._slots.values():
-            if slot.active_agent_id is None or slot.progress is None:
+            if slot.active_agent_id is None:
                 continue
+            # `progress is None` is NOT a reason to omit the slot. A leased slot
+            # with nothing to report yet is occupied, and the platform cannot
+            # tell an omitted slot from a free one -- which is how a live lease
+            # got revoked mid-run. Report the claim; the progress catches up.
             active.append(
                 ActiveBenchmarkSlot(
                     slot_id=slot.slot_id,

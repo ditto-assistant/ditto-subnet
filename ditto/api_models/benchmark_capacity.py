@@ -23,7 +23,17 @@ class ActiveBenchmarkSlot(BaseModel):
     slot_id: Annotated[str, Field(pattern=_SLOT_PATTERN)]
     agent_id: UUID
     bench_version: Annotated[int, Field(ge=1)]
-    progress: BenchmarkProgress
+    progress: BenchmarkProgress | None = None
+    """``None`` once the slot is claimed but has nothing to report yet.
+
+    Through protocol 15 this was required, and the worker's answer to "no
+    progress" was to omit the slot from ``active`` entirely -- so a slot still
+    pulling its image, rendering its dataset, or seeding was indistinguishable
+    from a free one. The platform's lease liveness gate reads that list, and
+    every safeguard it has is derived from it, so the omission is what let a
+    healthy run's lease be revoked. Reporting the claim with a null progress is
+    the honest negative that gate was always missing.
+    """
     healthy: bool = True
 
 
