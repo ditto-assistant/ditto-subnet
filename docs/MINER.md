@@ -175,6 +175,13 @@ result.
   and next four distinct miners, respectively. The competitive vector receives
   100% of available miner emission — nothing is burned while eligible miners
   exist. With no eligible miners, 100% is burned.
+- Those five slots are ordered by the score that settles a near-miss — the mean
+  including shared-seed re-scores — not by the raw composite shown next to your
+  entry. The two orders usually agree and occasionally do not, so the slot you
+  land in may not match a rank computed from raw composites alone.
+- **A new score does not reach the chain immediately. Budget two to three
+  tempos — roughly 2.5 to 4.5 hours — from your first score to visible
+  incentive.** See "When will I see incentive on chain?" below.
 
 Scores, signatures, and each run's graded transcript are published so results
 can be independently checked: regenerate the dataset from the published seed,
@@ -203,6 +210,26 @@ the exact TAO amount before confirmation.
 
 **How long does scoring take?** Screening and a full benchmark both involve
 container work. Expect minutes to hours depending on queue and build time.
+
+**When will I see incentive on chain?** Budget **two to three tempos — roughly
+2.5 to 4.5 hours** — from your first score. It is not one tempo, and the delay
+is chain mechanics rather than anything queued on our side:
+
+- Your score needs a quorum of three independent validators.
+- Each validator rebuilds and submits its weight vector once per tempo
+  (72 minutes on SN118), and validators run on independent phases — some will
+  pick you up in their next cycle, others not until the one after.
+- Weights are committed, then revealed one epoch later, so a submission is not
+  visible on chain until the following epoch boundary.
+- Incentive is only recomputed by consensus at an epoch boundary.
+- Consensus clips at half the validator stake. **Until more than 50% of stake
+  carries you, your incentive is exactly 0.00000 — not a small number that
+  grows.** This is the part that surprises people: it looks like nothing is
+  happening, then it flips to full value in a single block.
+
+So a run of zeros followed by a sudden jump is the system working normally, not
+a stuck payout. If you are still at zero more than four hours after your first
+score, that is worth reporting.
 
 **Can I submit more than once?** Yes. Reuse the same hotkey and exact agent name
 to version an agent (`v1`, `v2`, and so on); a different name starts a new
