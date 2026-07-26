@@ -551,6 +551,152 @@ class TestTop5ConfirmationLane:
         platform.submit_top5_confirmation_score.assert_not_awaited()
 
 
+class TestTop5ConfirmationLaneSlotBinding:
+    """The retest must report against the slot the platform actually leased.
+
+    The lane runs in the sweep body, outside the per-slot context ``run_slot``
+    installs, so every state write used to resolve to the default ``slot-0``
+    while the platform issued the lease against ``job.slot_id``. The platform
+    drops slot progress that does not match a live ticket on that exact slot,
+    so a healthy retest on any slot but ``slot-0`` reported nothing at all and
+    read as frozen for its whole lease.
+    """
+
+    @staticmethod
+    def _lane_worker(platform: MagicMock, *, capacity: int) -> ValidatorWorker:
+        config = _config()
+        config.benchmark_capacity = capacity
+        return ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+    async def test_progress_lands_on_the_leased_slot_not_slot_zero(self) -> None:
+        entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+            update={"bench_version": 1}
+        )
+        job = _job(entry.miner_hotkey, slot_id="slot-1").model_copy(
+            update={
+                "agent_id": entry.agent_id,
+                "bench_version": 1,
+                "deadline": datetime.now(UTC) + timedelta(hours=3),
+            }
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[entry])
+        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        worker = self._lane_worker(platform, capacity=2)
+        observed: list[tuple[str, UUID | None]] = []
+
+        async def evaluate(
+            _agent_id: UUID, _sha256: str, *, seed: int, **kwargs: object
+        ) -> ScoreReport:
+            # Drive the scorer's own progress callback so this covers the
+            # published-progress path, not just the initial claim.
+            callback = kwargs["progress_callback"]
+            assert callable(callback)
+            await callback(
+                DittobenchProgressSnapshot(
+                    stage="running_benchmark",
+                    completed=7,
+                    total=30,
+                    run_token="abcdef01",
+                )
+            )
+            observed.extend(
+                (slot_id, slot.active_agent_id)
+                for slot_id, slot in worker._slots.items()
+            )
+            return _report(str(seed), 0.8).model_copy(
+                update={"seed": seed, "bench_version": 1}
+            )
+
+        worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
+        await worker._run_top5_confirmation_lane()
+
+        # The leased slot owns the run; the default slot is never touched.
+        assert ("slot-1", entry.agent_id) in observed
+        assert ("slot-0", None) in observed
+
+        # ...and that is what the platform actually receives. A slot_id the
+        # platform cannot match to a live ticket is dropped at ingest, which is
+        # precisely how a running retest went out as "nothing active".
+        reported = [
+            slot
+            for call in platform.submit_heartbeat.await_args_list
+            if call.args[0].benchmark_capacity is not None
+            for slot in call.args[0].benchmark_capacity.active
+        ]
+        assert reported, "the retest published no capacity at all"
+        assert {slot.slot_id for slot in reported} == {"slot-1"}
+        assert {slot.agent_id for slot in reported} == {entry.agent_id}
+        running = [
+            slot for slot in reported if slot.progress.stage == "running_benchmark"
+        ]
+        assert running and running[-1].progress.completed == 7
+
+        # The slot is released once the lease is done, so it is reusable.
+        assert worker._slots["slot-1"].active_agent_id is None
+        platform.submit_top5_confirmation_score.assert_awaited_once()
+
+    async def test_lease_for_an_unserved_slot_is_handed_back(self) -> None:
+        # A slot this validator does not serve must not raise KeyError out of
+        # the lane and abort the sweep; hand the lease back like the canonical
+        # path does on a slot mismatch.
+        entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+            update={"bench_version": 1}
+        )
+        job = _job(entry.miner_hotkey, slot_id="slot-3").model_copy(
+            update={"agent_id": entry.agent_id, "bench_version": 1}
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[entry])
+        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        worker = self._lane_worker(platform, capacity=2)
+        worker._evaluate = AsyncMock()  # type: ignore[method-assign]
+
+        await worker._run_top5_confirmation_lane()
+
+        worker._evaluate.assert_not_awaited()
+        platform.report_ticket_failed.assert_awaited_once()
+        assert platform.report_ticket_failed.await_args.args == (job, "infrastructure")
+        platform.submit_top5_confirmation_score.assert_not_awaited()
+
+    async def test_slot_is_released_when_the_lease_names_another_agent(self) -> None:
+        # The claim is made from job.agent_id but release used to be gated on
+        # entry.agent_id. A divergence left the slot occupied for the rest of
+        # the lease with no operator signal and no way to revoke it.
+        entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+            update={"bench_version": 1}
+        )
+        job = _job(entry.miner_hotkey, slot_id="slot-1").model_copy(
+            update={
+                "agent_id": uuid4(),
+                "bench_version": 1,
+                "deadline": datetime.now(UTC) + timedelta(hours=3),
+            }
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[entry])
+        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        worker = self._lane_worker(platform, capacity=2)
+
+        async def evaluate(
+            _agent_id: UUID, _sha256: str, *, seed: int, **_: object
+        ) -> ScoreReport:
+            return _report(str(seed), 0.8).model_copy(
+                update={"seed": seed, "bench_version": 1}
+            )
+
+        worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
+        await worker._run_top5_confirmation_lane()
+
+        # No slot may be left holding the lease -- not the leased one, and not
+        # the default one the claim used to land on.
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+        assert all(slot.progress is None for slot in worker._slots.values())
+
+
 class TestRunOnce:
     async def test_capacity_mismatch_narrows_to_the_scorer_rather_than_stopping(
         self,

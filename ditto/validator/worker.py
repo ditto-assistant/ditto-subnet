@@ -1271,11 +1271,41 @@ class ValidatorWorker:
                 return
             entry = member.entry
             job = None
+            slot_token = None
+            ticket_claimed = False
             try:
                 job = await self._platform.request_top5_confirmation_job(
                     champion_agent_id=plan.champion.agent_id,
                     member_agent_id=entry.agent_id,
                 )
+                # Mirrors the canonical path's slot-mismatch guard: binding an
+                # unserved slot below would raise KeyError out of the lane and
+                # take the rest of the sweep's confirmations with it.
+                if job.slot_id not in self._slots:
+                    logger.warning(
+                        "top-five confirmation leased unserved slot %s for "
+                        "agent %s; this validator serves %s",
+                        job.slot_id,
+                        entry.agent_id,
+                        sorted(self._slots),
+                    )
+                    await self._report_ticket_failed(job, "infrastructure")
+                    continue
+                # This lane runs in the sweep body, after the per-slot gather
+                # and therefore outside the context ``run_slot`` establishes.
+                # Every per-slot write below -- the active ticket, published
+                # progress, and the slot key ``_report_heartbeat`` files pending
+                # progress under -- resolves through ``_CURRENT_SLOT``, so
+                # without this bind the whole retest reported against the
+                # default ``slot-0`` while the platform leased ``job.slot_id``.
+                # The platform drops slot progress it cannot match to a live
+                # ticket on that exact slot, so the assigned slot published
+                # nothing at all and read as frozen for its whole lease.
+                # Bind per lease rather than around the lane: the slot belongs
+                # to the ticket, not to the lane. Plain awaits inherit this
+                # context, and the scorer's progress callback runs under tasks
+                # created after this point, which copy it at creation.
+                slot_token = _CURRENT_SLOT.set(job.slot_id)
                 expected_seeds = tuple(member.seeds_to_score)
                 received_seeds = tuple(
                     dataset.seed for dataset in job.confirmation_datasets
@@ -1314,6 +1344,10 @@ class ValidatorWorker:
                         for seed in expected_seeds
                     ]
                 )
+                # Set before the claim, not after: ``_begin_active_ticket``
+                # occupies the slot as its first act, so a failure part-way
+                # through must still leave the slot clearable below.
+                ticket_claimed = True
                 await self._begin_active_ticket(
                     job.agent_id,
                     job.deadline,
@@ -1362,9 +1396,18 @@ class ValidatorWorker:
                 if job is not None:
                     await self._report_ticket_failed(job, "infrastructure")
             finally:
-                if self._active_agent_id == entry.agent_id:
+                # Release whatever this iteration actually claimed. Matching on
+                # ``entry.agent_id`` instead would leak the slot for the rest of
+                # the lease if a lease ever came back for a different agent than
+                # the member requested: the claim is made from ``job.agent_id``,
+                # so a divergence left the slot occupied with no way to revoke
+                # it. Both the clear and its heartbeat must run before the slot
+                # context is unwound, or they land on the wrong slot.
+                if ticket_claimed:
                     self._clear_active_ticket()
                     await self._report_heartbeat("polling")
+                if slot_token is not None:
+                    _CURRENT_SLOT.reset(slot_token)
 
     async def _evaluate_confirmation_report(
         self,
