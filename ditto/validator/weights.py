@@ -411,8 +411,27 @@ def top5_confirmation_set(
     baseline_seeds: int,
     max_seeds: int,
     catch_up_rate: int = 2,
+    cohort_size: int | None = None,
+    max_cohort_size: int = 25,
 ) -> Top5ConfirmationPlan | None:
-    """Plan one continual champion-anchored shared-seed top-five round."""
+    """Plan one continual champion-anchored shared-seed round.
+
+    ``cohort_size`` is how many ranked agents the *platform's operator* wants
+    rescored (``LedgerResponse.continual_retest_cohort_size``). ``None`` --- an
+    older platform, or a stale last-known-good ledger --- plans the emission set,
+    which is what this lane has always done.
+
+    It is deliberately separate from ``tail_size``. ``tail_size`` is a frozen
+    consensus constant: it sizes the participation tail that splits emissions,
+    and widening it would change the weight fold on one validator only. This
+    changes nothing but which agents get rescored, and the platform re-derives
+    membership before it grants any lease, so a validator planning a wider round
+    than the operator asked for is refused rather than obeyed.
+
+    Ordering carries the priority the platform enforces: the champion first, then
+    strict rank order, so the emission set is always claimed before the extended
+    members and a 409 on rank 12 never costs the top five a slot.
+    """
     scored = [
         entry
         for entry in entries
@@ -421,7 +440,13 @@ def top5_confirmation_set(
     if not scored:
         return None
     champion = _champion(scored, margin, dethrone_z)
-    members = [champion, *_tail(scored, champion, tail_size)]
+    # Never below the emission set, never above the cap: a platform that
+    # reported something absurd (or a hostile one) cannot make this validator
+    # spend its whole cycle on rescores, and cannot shrink the round below the
+    # five members whose comparability the lane exists to maintain.
+    requested = tail_size if cohort_size is None else int(cohort_size) - 1
+    cohort_tail = min(max(requested, tail_size), max(1, int(max_cohort_size)) - 1)
+    members = [champion, *_tail(scored, champion, cohort_tail)]
     cap = max(1, int(max_seeds))
     full = confirmation_seeds(
         [str(champion.agent_id)], version=current_version, count=cap

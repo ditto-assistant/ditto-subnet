@@ -1263,6 +1263,11 @@ class ValidatorWorker:
             baseline_seeds=self._config.koth_confirmation_seeds,
             max_seeds=self._config.top5_max_confirmation_seeds,
             catch_up_rate=self._config.top5_catch_up_rate,
+            # Operator policy, re-read on every ledger poll so a Backroom change
+            # reaches the fleet without a validator restart. A stale
+            # last-known-good ledger omits it and falls back to the emission set.
+            cohort_size=ledger.continual_retest_cohort_size,
+            max_cohort_size=self._config.top5_max_cohort_size,
         )
         if plan is None:
             return

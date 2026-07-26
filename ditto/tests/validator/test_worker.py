@@ -346,6 +346,7 @@ def _config() -> MagicMock:
     cfg.koth_confirmation_seeds = 3
     cfg.top5_max_confirmation_seeds = 16
     cfg.top5_catch_up_rate = 2
+    cfg.top5_max_cohort_size = 25
     cfg.miner_emission_share = 1.0
     cfg.burn_hotkey = _BURN_HOTKEY
     cfg.min_stake_tao = 0.0

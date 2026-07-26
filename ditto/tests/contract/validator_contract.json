@@ -834,6 +834,11 @@
         "minimum": 0,
         "type": "integer"
       },
+      "continual_retest_cohort_size": {
+        "default": 5,
+        "minimum": 5,
+        "type": "integer"
+      },
       "count": {
         "minimum": 0,
         "type": "integer"

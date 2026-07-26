@@ -1127,6 +1127,23 @@ class LedgerResponse(BaseModel):
         int,
         Field(default=0, ge=0, description="Age of the served snapshot in seconds."),
     ] = 0
+    continual_retest_cohort_size: Annotated[
+        int,
+        Field(
+            default=5,
+            ge=5,
+            description=(
+                "How many ranked agents the operator currently has the continual "
+                "retest lane covering: 5 (the emission set) up to 25. Advisory "
+                "planning input for this validator's shared-seed round — the "
+                "platform still enforces membership when it issues the lease, so "
+                "planning narrower than this costs only coverage, never "
+                "correctness. Emissions, the weight fold, and wave completion "
+                "are always the top five, whatever this says. Absent on a stale "
+                "last-known-good ledger, which reads as the top five."
+            ),
+        ),
+    ] = 5
 
     model_config = ConfigDict(
         json_schema_extra={

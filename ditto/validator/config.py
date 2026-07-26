@@ -39,6 +39,9 @@ KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
 TOP5_MAX_CONFIRMATION_SEEDS = 16
 TOP5_CATCH_UP_RATE = 2
+# Hard ceiling on the operator-requested continual retest cohort. Mirrors the
+# platform's own cap so the two agree on what an operator may ask for.
+TOP5_MAX_COHORT_SIZE = 25
 # Release the full miner emission through KOTH. The burn hotkey is retained only
 # as the safe idle vector: with no eligible miners the whole vector still routes
 # to burn rather than zeroing the chain.
@@ -207,6 +210,15 @@ class ValidatorConfig:
 
     top5_catch_up_rate: int
     """Missing seeds a new top-five entrant may catch up per claimed round."""
+
+    top5_max_cohort_size: int
+    """Ceiling on the operator-requested continual retest cohort this validator
+    will plan for. The depth itself is the platform operator's call, arriving on
+    each ledger read as ``continual_retest_cohort_size``; this only bounds how
+    far a validator will follow it, so a misconfigured or hostile platform
+    cannot spend a validator's whole cycle on rescores. Not a consensus knob:
+    membership is re-derived and enforced by the platform at lease time, and
+    emissions are the top five at any cohort size."""
 
     miner_emission_share: float
     """Share of miner emission released through KOTH; the remainder is burned.
@@ -461,6 +473,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_confirmation_seeds=KOTH_CONFIRMATION_SEEDS,
         top5_max_confirmation_seeds=TOP5_MAX_CONFIRMATION_SEEDS,
         top5_catch_up_rate=TOP5_CATCH_UP_RATE,
+        top5_max_cohort_size=TOP5_MAX_COHORT_SIZE,
         miner_emission_share=MINER_EMISSION_SHARE,
         burn_hotkey=burn_hotkey,
         min_stake_tao=min_stake_tao,

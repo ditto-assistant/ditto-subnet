@@ -207,6 +207,73 @@ class TestTop5ConfirmationSet:
             is None
         )
 
+    @staticmethod
+    def _ranked_pool(count: int) -> list[Any]:
+        return [
+            _e(f"m{rank:02d}", 0.90 - rank / 100, bench_version=6, minutes=rank)
+            for rank in range(count)
+        ]
+
+    @staticmethod
+    def _plan(pool: list[Any], **overrides: Any) -> Any:
+        return top5_confirmation_set(
+            pool,
+            current_version=6,
+            margin=0.02,
+            dethrone_z=1.64,
+            tail_size=4,
+            baseline_seeds=3,
+            max_seeds=16,
+            catch_up_rate=2,
+            **overrides,
+        )
+
+    def test_plans_the_emission_set_when_the_platform_says_nothing(self) -> None:
+        """An older platform (or a stale ledger) keeps the historical round."""
+        pool = self._ranked_pool(12)
+
+        plan = self._plan(pool)
+
+        assert plan is not None
+        assert [member.entry.miner_hotkey for member in plan.members] == [
+            f"m{rank:02d}" for rank in range(5)
+        ]
+
+    def test_follows_the_operator_cohort_in_strict_rank_order(self) -> None:
+        """Rank order is the priority the platform enforces at lease time."""
+        pool = self._ranked_pool(30)
+
+        plan = self._plan(pool, cohort_size=10)
+
+        assert plan is not None
+        assert [member.entry.miner_hotkey for member in plan.members] == [
+            f"m{rank:02d}" for rank in range(10)
+        ]
+
+    def test_clamps_a_cohort_outside_the_agreed_band(self) -> None:
+        """A platform cannot shrink the round below five or run a validator dry."""
+        pool = self._ranked_pool(40)
+
+        assert len(self._plan(pool, cohort_size=1).members) == 5
+        assert len(self._plan(pool, cohort_size=999).members) == 25
+        assert len(self._plan(pool, cohort_size=999, max_cohort_size=10).members) == 10
+
+    def test_a_wider_cohort_does_not_touch_the_weight_fold(self) -> None:
+        """Retest depth is operator policy; the emission split is consensus."""
+        pool = self._ranked_pool(12)
+        shares = (0.65, 0.14, 0.10, 0.07, 0.04)
+
+        narrow = compute_weights(
+            pool, margin=0.02, tail_size=4, rank_shares=shares, dethrone_z=1.64
+        )
+        assert len(self._plan(pool, cohort_size=25).members) == 12
+        wide = compute_weights(
+            pool, margin=0.02, tail_size=4, rank_shares=shares, dethrone_z=1.64
+        )
+
+        assert narrow == wide
+        assert len([hotkey for hotkey, weight in narrow.items() if weight > 0]) == 5
+
 
 class TestEntryConfirmations:
     def test_absent_field_is_none(self) -> None:
