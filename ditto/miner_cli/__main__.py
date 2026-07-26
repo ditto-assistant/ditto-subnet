@@ -16,6 +16,7 @@ import logging
 import os
 import sys
 
+from ditto.miner_cli.commands import attest as attest_cmd
 from ditto.miner_cli.commands import status as status_cmd
 from ditto.miner_cli.commands import upload as upload_cmd
 from ditto.miner_cli.commands import verify as verify_cmd
@@ -129,6 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
     upload_cmd.add_subparser(subparsers, parents=[sub_parent])
     status_cmd.add_subparser(subparsers, parents=[sub_parent])
     verify_cmd.add_subparser(subparsers, parents=[sub_parent])
+    attest_cmd.add_subparser(subparsers, parents=[sub_parent])
 
     return parser
 

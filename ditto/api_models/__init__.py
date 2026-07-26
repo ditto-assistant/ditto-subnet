@@ -17,6 +17,10 @@ Usage:
 
 from __future__ import annotations
 
+from ditto.api_models.attestation import (
+    HotkeyAttestationRequest,
+    HotkeyAttestationResponse,
+)
 from ditto.api_models.health import HealthResponse
 from ditto.api_models.retrieval import AgentResponse, AgentStatusResponse
 from ditto.api_models.upload import (
@@ -31,6 +35,8 @@ __all__ = [
     "AgentStatusResponse",
     "EvalPricingResponse",
     "HealthResponse",
+    "HotkeyAttestationRequest",
+    "HotkeyAttestationResponse",
     "UploadAgentResponse",
     "UploadCheckRequest",
     "UploadCheckResponse",

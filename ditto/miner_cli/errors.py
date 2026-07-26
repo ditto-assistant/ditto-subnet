@@ -243,6 +243,27 @@ class UploadAgentRejectedError(ApiResponseError):
     pass
 
 
+class AttestationRejectedError(ApiResponseError):
+    """Raised when ``/attestations/hotkey-rotation`` returns a non-2xx status.
+
+    This can happen when:
+    - Either signature does not verify against the hotkey it claims (the wrong
+      wallet signed a half, or the two halves were minted from different
+      nonce / ``issued_at`` values).
+    - The attestation was minted for a different netuid than the platform
+      serves.
+    - The attestation sat unsubmitted past the server's acceptance window, or
+      its ``issued_at`` is ahead of the server clock beyond the allowed skew.
+    - The nonce was already submitted (replay guard).
+    - ``old_hotkey`` and ``new_hotkey`` are the same key.
+
+    Nothing is recorded and no funds move when this is raised; mint a fresh
+    attestation and submit it again.
+    """
+
+    pass
+
+
 class AgentNotFoundError(ApiResponseError):
     """Raised when ``/retrieval/agent/{id}/status`` returns 404.
 
@@ -277,6 +298,21 @@ class PaymentCancelledError(MinerCliError):
     - The interactive ``Confirm payment? [y/N]`` prompt receives anything
       other than ``y`` (including empty input).
     - The user sends EOF / Ctrl-D at the prompt.
+    """
+
+    pass
+
+
+class AttestationCancelledError(MinerCliError):
+    """Raised when the miner declines the rotation-attestation confirmation.
+
+    This can happen when:
+    - The interactive ``Submit this attestation? [y/N]`` prompt receives
+      anything other than ``y`` (including empty input).
+    - The user sends EOF / Ctrl-D at the prompt.
+
+    Both halves were signed locally but nothing was sent, so re-running the
+    command mints a fresh nonce and starts over.
     """
 
     pass

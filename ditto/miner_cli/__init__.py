@@ -7,11 +7,12 @@ Every other chain query (registration status, neuron lookup) is handled
 server-side by the API and surfaced through retrieval endpoints, so the
 CLI itself never reaches for Pylon or :class:`ditto.chain.ChainClient`.
 
-Three subcommands ship here:
+Four subcommands ship here:
 
 - ``ditto upload <tar>``: full 10-step submission flow
 - ``ditto status [agent_id]``: poll lifecycle by id or wallet hotkey
 - ``ditto verify <tar>``: pure-local pre-flight without paying
+- ``ditto attest``: link a rotated hotkey to its predecessor, signed by both
 
 Usage:
     from ditto.miner_cli import create_miner_cli_config, resolve_network
@@ -31,6 +32,8 @@ from __future__ import annotations
 from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
+    AttestationCancelledError,
+    AttestationRejectedError,
     DependencyAllowlistError,
     HotkeyAgentNotFoundError,
     ManifestError,
@@ -86,7 +89,9 @@ __all__ = [
     "UploadAgentRejectedError",
     "AgentNotFoundError",
     "HotkeyAgentNotFoundError",
+    "AttestationRejectedError",
     "PaymentCancelledError",
+    "AttestationCancelledError",
     # Factory
     "create_miner_cli_config",
 ]

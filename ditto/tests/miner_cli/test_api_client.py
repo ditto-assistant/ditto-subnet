@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -26,12 +27,15 @@ import pytest
 
 from ditto.api_models import (
     EvalPricingResponse,
+    HotkeyAttestationRequest,
+    HotkeyAttestationResponse,
     UploadCheckRequest,
 )
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
+    AttestationRejectedError,
     HotkeyAgentNotFoundError,
     PreCheckRejectedError,
     SubmissionCooldownError,
@@ -325,6 +329,84 @@ class TestAgentByHotkey:
 
         with make_client(handler) as client, pytest.raises(HotkeyAgentNotFoundError):
             client.get_agent_by_hotkey(miner_hotkey=self.HOTKEY)
+
+
+class TestHotkeyAttestation:
+    OLD = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+    NEW = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
+    NONCE = "2f1d5f7a-8c4b-4a2e-9f01-6b3c8d5e7a90"
+
+    def _body(self) -> HotkeyAttestationRequest:
+        return HotkeyAttestationRequest(
+            netuid=118,
+            old_hotkey=self.OLD,
+            new_hotkey=self.NEW,
+            nonce=UUID(self.NONCE),
+            issued_at=datetime(2026, 7, 26, 15, 4, 5, 123456, tzinfo=UTC),
+            attestation_signature="aa" * 64,
+            acceptance_signature="bb" * 64,
+        )
+
+    def _ok_payload(self) -> dict[str, Any]:
+        return {
+            "attestation_id": "22222222-2222-2222-2222-222222222222",
+            "netuid": 118,
+            "old_hotkey": self.OLD,
+            "new_hotkey": self.NEW,
+            "created_at": "2026-07-26T15:04:06Z",
+            "scope": "plagiarism-screening-only",
+            "grants_additional_emission_slot": False,
+        }
+
+    def test_happy_path_pins_method_path_and_body(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["method"] = request.method
+            captured["url"] = str(request.url)
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(201, json=self._ok_payload())
+
+        with make_client(handler) as client:
+            result = client.post_hotkey_attestation(self._body())
+
+        assert captured["method"] == "POST"
+        assert captured["url"].endswith("/api/v1/attestations/hotkey-rotation")
+        # Wire body must match the platform's HotkeyAttestationRequest exactly.
+        assert captured["body"] == {
+            "netuid": 118,
+            "old_hotkey": self.OLD,
+            "new_hotkey": self.NEW,
+            "nonce": self.NONCE,
+            "issued_at": "2026-07-26T15:04:05.123456Z",
+            "attestation_signature": "aa" * 64,
+            "acceptance_signature": "bb" * 64,
+        }
+        assert isinstance(result, HotkeyAttestationResponse)
+        assert result.scope == "plagiarism-screening-only"
+        assert result.grants_additional_emission_slot is False
+
+    def test_200_is_also_accepted(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=self._ok_payload())
+
+        with make_client(handler) as client:
+            result = client.post_hotkey_attestation(self._body())
+
+        assert str(result.attestation_id).startswith("22222222")
+
+    def test_rejection_raises_attestation_rejected(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return _envelope_response(400, 1300, "attestation has expired")
+
+        with (
+            make_client(handler) as client,
+            pytest.raises(AttestationRejectedError) as e,
+        ):
+            client.post_hotkey_attestation(self._body())
+
+        assert "400" in str(e.value)
+        assert "expired" in str(e.value)
 
 
 class TestTransportErrors:

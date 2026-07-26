@@ -20,6 +20,7 @@ serving live inference.
 - [Track your submission](#track-your-submission)
 - [Scoring and emissions](#scoring-and-emissions)
 - [What counts as cheating](#what-counts-as-cheating)
+- [Link a rotated hotkey](#link-a-rotated-hotkey)
 - [Common questions](#common-questions)
 
 ## Build and practice locally
@@ -202,6 +203,98 @@ fingerprints detect renamed, reformatted, or padded near-duplicates across
 miners, and suspicious or matching submissions are quarantined for human review
 rather than automatically banned. Confirmed plagiarism can result in a
 hotkey-level ban.
+
+## Link a rotated hotkey
+
+Copy screening compares each submission against earlier work from other miners.
+The exemption that keeps it from flagging your *own* history is keyed on the
+wallet that paid, so once you rotate to a new coldkey or hotkey, your own
+earlier submission starts looking like someone else's work to the screener. A
+rotation attestation is the self-serve fix, and it replaces asking in Discord.
+
+Use it when you have already rotated keys and a new submission is being
+copy-flagged against work you submitted from the old hotkey. A normal upload
+does not need one.
+
+Both keys sign. The old hotkey signs an attestation that the new hotkey
+continues it; the new hotkey counter-signs an acceptance over the same nonce.
+The second signature is what stops anyone from naming a hotkey they do not
+control as their successor, so both wallets must be present on the machine you
+run this from. The old hotkey does not have to still be registered on SN118 —
+the link only ever reaches submissions that hotkey already made, and those are
+immutable history.
+
+```sh
+uv run ditto --network finney attest \
+  --old-coldkey old-miner \
+  --old-hotkey-name default \
+  --coldkey miner \
+  --hotkey default
+```
+
+The CLI loads both wallets, mints a single-use nonce, signs both halves, prints
+what the link does, asks for confirmation, and submits. Add `-y` to skip the
+prompt in a script. `--netuid` defaults to 118 and is signed into both payloads,
+so an attestation minted for one subnet cannot be replayed onto another.
+
+Worked example. You mined from `old-miner`/`default` through submission v3,
+rotated to a fresh coldkey `miner`/`default`, and your first upload from the new
+hotkey came back held for copy review against your own v3:
+
+```sh
+uv run ditto --network finney attest \
+  --old-coldkey old-miner \
+  --old-hotkey-name default \
+  --coldkey miner \
+  --hotkey default
+```
+
+```
+Hotkey rotation attestation
+  Netuid:      118
+  Old hotkey:  5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y
+  New hotkey:  5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy
+...
+Submit this attestation? [y/N]: y
+3f6b1c04-5a7e-4a2f-9c31-0d8b2e4f7a15
+```
+
+The UUID on stdout is the attestation ID; quote it if you open a review ticket.
+The link takes effect from the moment it is recorded, so it applies to screening
+that runs after it, not to a decision already made. If a submission is already
+held, mint the attestation and then ask for the review to be re-run.
+
+Read the scope literally:
+
+- It exempts the new hotkey from plagiarism screening **against the old
+  hotkey's earlier work only**. Screening against every other miner is
+  unchanged, and the exemption runs one way: your old hotkey is not exempted
+  against your new one.
+- It does **not** grant an additional emission slot. Emission positions are one
+  per distinct agent no matter how many keys you hold, and this link is not an
+  input to that calculation. Rotating keys and attesting the link does not put
+  two of your agents in the weight vector.
+- It does **not** permit byte-identical or repacked resubmission. Re-uploading
+  the same artifact under a new key is still held, with or without a link.
+- Links are recorded, auditable, and revocable. They are visible to reviewers,
+  and one can be revoked if a key is sold or compromised.
+
+If the old key lives on a machine that should not reach the platform, use
+`--print-only` to sign both halves and print the request body instead of
+submitting it:
+
+```sh
+uv run ditto --network finney attest \
+  --old-coldkey old-miner \
+  --old-hotkey-name default \
+  --coldkey miner \
+  --hotkey default \
+  --print-only > attestation.json
+```
+
+Move `attestation.json` to a networked machine and POST it to
+`/api/v1/attestations/hotkey-rotation` yourself. Minted attestations expire, so
+submit it the same day or mint a fresh one.
 
 ## Common questions
 

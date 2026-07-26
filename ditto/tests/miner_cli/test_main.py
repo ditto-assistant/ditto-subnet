@@ -116,6 +116,106 @@ class TestFlagAliases:
         assert sentinel.hotkey == "default"
 
 
+class TestAttestFlagWiring:
+    """``attest`` carries two wallet pairs, and mixing them up would sign the
+    halves with the wrong keys. Pin every alias to its destination."""
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            [
+                "--old-wallet.name",
+                "old-miner",
+                "--old-wallet.hotkey",
+                "old-default",
+                "--wallet.name",
+                "miner",
+                "--wallet.hotkey",
+                "default",
+            ],
+            [
+                "--old-coldkey",
+                "old-miner",
+                "--old-hotkey-name",
+                "old-default",
+                "--coldkey",
+                "miner",
+                "--hotkey",
+                "default",
+            ],
+            [  # mixed forms
+                "--old-wallet.name",
+                "old-miner",
+                "--old-hotkey-name",
+                "old-default",
+                "--coldkey",
+                "miner",
+                "--wallet.hotkey",
+                "default",
+            ],
+        ],
+    )
+    def test_wallet_flag_aliases_parse_to_distinct_dests(self, flags) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(["attest", *flags])
+
+        assert args.old_coldkey_name == "old-miner"
+        assert args.old_hotkey_name == "old-default"
+        assert args.coldkey_name == "miner"
+        assert args.hotkey_name == "default"
+
+    def test_netuid_defaults_to_118_and_yes_print_only_default_false(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(["attest"])
+
+        assert args.netuid == 118
+        assert args.yes is False
+        assert args.print_only is False
+
+    def test_netuid_flag_and_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parser = _build_parser()
+        assert parser.parse_args(["attest", "--netuid", "42"]).netuid == 42
+
+        monkeypatch.setenv("NETUID", "7")
+        assert _build_parser().parse_args(["attest"]).netuid == 7
+
+    @pytest.mark.parametrize("flag", ["-y", "--yes"])
+    def test_yes_aliases(self, flag: str) -> None:
+        parser = _build_parser()
+        assert parser.parse_args(["attest", flag]).yes is True
+
+    def test_print_only_sets_the_flag(self) -> None:
+        parser = _build_parser()
+        assert parser.parse_args(["attest", "--print-only"]).print_only is True
+
+    def test_attest_dispatches_to_run(self) -> None:
+        import argparse
+        from unittest.mock import patch
+
+        with patch("ditto.miner_cli.commands.attest.run", return_value=0) as fake_run:
+            rc = main(["attest", "--old-coldkey", "old", "--coldkey", "new"])
+
+        assert rc == 0
+        assert isinstance(fake_run.call_args.args[0], argparse.Namespace)
+
+    def test_help_states_the_scope_without_overstating_it(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The one thing a miner must not misread is what the link grants."""
+        with pytest.raises(SystemExit) as ex:
+            main(["attest", "--help"])
+        assert ex.value.code == 0
+
+        # argparse hard-wraps to terminal width; compare on collapsed
+        # whitespace so the assertions pin wording, not line breaks.
+        out = " ".join(capsys.readouterr().out.split())
+        assert "plagiarism screening against the old hotkey's earlier work" in out
+        assert "ONLY" in out
+        assert "does NOT grant an additional emission slot" in out
+
+
 class TestNetworkFlagPosition:
     """The shared top-level flags (``--network``, ``--chain-endpoint``,
     ``-v``) must accept BOTH the position before the subcommand AND
