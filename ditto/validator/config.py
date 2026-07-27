@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
@@ -47,6 +48,63 @@ TOP5_MAX_COHORT_SIZE = 25
 # to burn rather than zeroing the chain.
 MINER_EMISSION_SHARE = 1.0
 FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
+
+
+# --- Lease-derived run bounds (not env-tunable, not a consensus knob) ---
+# The platform issues a scoring ticket with a deadline. A validator still
+# holding that ticket when the deadline passes has said nothing about the
+# agent, and the ledger cannot tell that apart from a validator that died: the
+# ticket simply reads ``expired``. So the abort point is derived from the
+# ticket's own deadline instead of from a constant that has to be manually kept
+# below a TTL this repo does not control -- that TTL has already moved
+# 30 -> 45 -> 90 minutes, and any of those moves could have inverted the
+# relationship silently.
+#
+# The margin is what an abort keeps in hand to cancel the scorer run and land a
+# signed ``POST /validator/job/fail``: a bounded cancel plus one signed round
+# trip, with room to spare. It is also >= the platform's own two-minute
+# freshness bound on a signed validator request, so a report prepared at the
+# abort point is still acceptable when it arrives.
+LEASE_REPORT_MARGIN_SECONDS = 120.0
+
+
+def lease_budget_seconds(
+    ticket_deadline: datetime, *, now: datetime | None = None
+) -> float:
+    """Seconds of work this lease can still fund while keeping the report margin.
+
+    Negative means the lease cannot fund any more work *and* has already eaten
+    into the margin; callers must stop and report immediately rather than start
+    or continue anything.
+    """
+    reference = now if now is not None else datetime.now(UTC)
+    remaining = (ticket_deadline - reference).total_seconds()
+    return remaining - LEASE_REPORT_MARGIN_SECONDS
+
+
+def run_budget_seconds(
+    cap_seconds: float,
+    ticket_deadline: datetime | None,
+    *,
+    now: datetime | None = None,
+) -> float:
+    """Wall-clock seconds a validator may still spend on one leased run.
+
+    The smaller of the operator's harness cap and what the lease can fund. The
+    minimum is the whole point: ``VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS`` is an
+    operator dial with a fixed default, so it is only ever an upper bound on
+    effort — never a promise that the lease will still be alive when it fires.
+    Keeping the two related by hand is what produced the incident: a 4500s cap
+    was correct against a 90-minute TTL only by arithmetic nobody re-checked
+    when the TTL moved, and it measured from the wrong instant regardless.
+
+    An unticketed run (no deadline) keeps the plain cap, which is all the bound
+    that exists for it.
+    """
+    cap = float(cap_seconds)
+    if ticket_deadline is None:
+        return cap
+    return min(cap, lease_budget_seconds(ticket_deadline, now=now))
 
 
 def _is_local_subtensor_network(network: str) -> bool:

@@ -39,8 +39,10 @@ from ditto.api_models.validator_capabilities import (
     V7InferenceCalibration,
     ValidatorStackIdentity,
 )
+from ditto.validator.config import LEASE_REPORT_MARGIN_SECONDS, run_budget_seconds
 from ditto.validator.errors import (
     DittobenchError,
+    LeaseDeadlineError,
     SandboxOomError,
     ValidatorInfrastructureError,
 )
@@ -53,6 +55,10 @@ logger = logging.getLogger(__name__)
 # Terminal job states reported by dittobench-api's store.
 _DONE = "done"
 _FAILED = "failed"
+
+# Hard bound on the best-effort run cancellation that follows an abort. Small
+# by design: it is spent out of the lease's reporting margin.
+_CANCEL_TIMEOUT_SECONDS = 15.0
 
 _PROGRESS_STAGE_BY_STATUS: dict[str, BenchmarkProgressStage] = {
     "queued": "preparing",
@@ -1044,11 +1050,18 @@ class DittobenchClient:
         inference_agent_id: UUID | None = None,
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
+        ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
         Submits the scoring inputs, then polls until the run finishes.
         Raises :class:`DittobenchError` on a failed run or the overall timeout.
+
+        ``ticket_deadline`` is the lease this run is being scored under. It
+        bounds the poll independently of ``inference_ticket_deadline``, which
+        only exists for v7 and only travels to the inference broker: every
+        benchmark version has a lease to respect, so the abort must not depend
+        on whether a broker session was involved.
 
         ``tarball_sha256`` (the digest the platform registered at upload) is
         forwarded so the scorer re-verifies the fetched bytes against it and
@@ -1100,6 +1113,7 @@ class DittobenchClient:
             run_id,
             progress_callback=progress_callback,
             expected_bench_version=bench_version,
+            ticket_deadline=ticket_deadline,
         )
 
     def _mock_report(self) -> ScoreReport:
@@ -1257,6 +1271,7 @@ class DittobenchClient:
         *,
         progress_callback: ProgressCallback | None = None,
         expected_bench_version: int | None = None,
+        ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         if (
             expected_bench_version is None
@@ -1266,15 +1281,28 @@ class DittobenchClient:
                 f"unsupported benchmark version {expected_bench_version!r}"
             )
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
-        deadline = self._config.dittobench_timeout_seconds
-        waited = 0.0
+        # Wall clock, and lease-derived. The previous budget was accumulated
+        # ``dittobench_poll_seconds`` units, which charged nothing for the poll
+        # request itself (bounded only by ``http_timeout_seconds``), the
+        # progress callback, or the heartbeat it publishes -- so the nominal cap
+        # had no upper bound in real time at all. And it started counting here,
+        # leaving everything before it (artifact fetch, inference grant
+        # exchange, submit) chargeable to the lease but not to the cap.
+        started = time.monotonic()
+        budget = run_budget_seconds(
+            self._config.dittobench_timeout_seconds, ticket_deadline
+        )
+        lease_bound = (
+            ticket_deadline is not None
+            and budget < self._config.dittobench_timeout_seconds
+        )
         # Opaque, stable-per-run token every progress heartbeat for this run
         # carries, so the platform can distinguish a fresh re-attempt of the same
         # lease from continued progress on the previous run and rebaseline the
         # monotonicity guard accordingly.
         run_token = hashlib.sha256(run_id.encode()).hexdigest()[:16]
         try:
-            while waited <= deadline:
+            while time.monotonic() - started <= budget:
                 resp = await self._client.get(url)
                 if resp.status_code != 200:
                     raise DittobenchError(
@@ -1369,14 +1397,34 @@ class DittobenchClient:
                             f"{error}"
                         )
                     raise DittobenchError(f"run {run_id} failed: {error}")
-                await asyncio.sleep(self._config.dittobench_poll_seconds)
-                waited += self._config.dittobench_poll_seconds
+                # Never sleep past the budget: the abort must keep the whole
+                # reporting margin, not the margin minus a poll interval.
+                remaining = budget - (time.monotonic() - started)
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(
+                    min(self._config.dittobench_poll_seconds, remaining)
+                )
         except httpx.HTTPError as e:
             raise DittobenchError(f"poll failed: {e}") from e
         except asyncio.CancelledError:
             await self._cancel(run_id)
             raise
         await self._cancel(run_id)
+        elapsed = time.monotonic() - started
+        if lease_bound and ticket_deadline is not None:
+            # Name the binding constraint. An operator reading this must be able
+            # to tell "your harness cap fired" from "the lease ran out first",
+            # because only the second one means the cap was never the real
+            # bound.
+            raise LeaseDeadlineError(
+                f"run {run_id} did not finish within the {budget:.0f}s its "
+                f"lease could fund (ticket deadline "
+                f"{ticket_deadline.isoformat()}, less a "
+                f"{LEASE_REPORT_MARGIN_SECONDS:.0f}s reporting margin); "
+                f"aborting after {elapsed:.0f}s so the ticket is resolved "
+                "rather than left to expire"
+            )
         raise DittobenchError(
             f"run {run_id} did not finish within "
             f"{self._config.dittobench_timeout_seconds}s"
@@ -1427,10 +1475,14 @@ class DittobenchClient:
 
         Older scorer revisions do not expose DELETE yet; a failed cancellation
         is logged but never hides the original validator timeout.
+
+        Bounded well inside the reporting margin on purpose. This runs *after*
+        the abort decision, so a scorer wedged badly enough to have caused the
+        abort must not be able to spend the seconds the failure report needs.
         """
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
         try:
-            resp = await self._client.delete(url)
+            resp = await self._client.delete(url, timeout=_CANCEL_TIMEOUT_SECONDS)
             if resp.status_code not in (200, 202, 404, 405):
                 logger.warning(
                     "dittobench run %s cancellation rejected (%d): %s",

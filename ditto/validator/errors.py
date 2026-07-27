@@ -24,6 +24,21 @@ class ValidatorInfrastructureError(DittobenchError):
     """
 
 
+class LeaseDeadlineError(DittobenchError):
+    """The attempt ran out of lease before the scorer returned a verdict.
+
+    Terminal for this attempt, and deliberately **not** a
+    :class:`ValidatorInfrastructureError`. A run that was given the whole lease
+    and still produced nothing says something about the artifact, not about
+    this host. Reporting it as ``infrastructure`` would mint a no-fault retry
+    grant, apply the escalating infra backoff, and re-lease the same hanging
+    artifact indefinitely — the loop that let one miner family hold three
+    validator slots per round without ever reaching a verdict. It is handed
+    back as ``scoring_error`` instead, so the attempt is consumed and the agent
+    reaches a terminal outcome.
+    """
+
+
 class SandboxOomError(DittobenchError):
     """The miner sandbox exceeded its bounded memory allowance.
 

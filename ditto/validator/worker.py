@@ -45,9 +45,11 @@ from ditto.api_models.validator_capabilities import (
 )
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
+from ditto.validator.config import lease_budget_seconds
 from ditto.validator.crn import confirmation_seeds
 from ditto.validator.errors import (
     DittobenchError,
+    LeaseDeadlineError,
     PlatformError,
     SandboxOomError,
     ValidatorInfrastructureError,
@@ -135,6 +137,15 @@ _ACTIVE_HEARTBEAT_SECONDS = 10.0
 _PROGRESS_UPDATE_SECONDS = 5.0
 # Active ticket work must never wait on the platform client's normal HTTP timeout.
 _ACTIVE_TELEMETRY_TIMEOUT_SECONDS = 2.0
+# Hard bound on the signed ticket hand-back. It is reached from the lease-abort
+# path with only ``LEASE_REPORT_MARGIN_SECONDS`` (120s) left, and it shares that
+# margin with the scorer-run cancellation (``_CANCEL_TIMEOUT_SECONDS``, 15s):
+# 15 + 30 leaves ~75s of headroom, so the two together cannot exhaust it. There
+# is nothing to gain from sizing it above the HTTP client's own 30s
+# per-request default, and the platform rejects a signed validator request
+# older than two minutes, so a report prepared at the abort point has to land
+# well inside that window regardless.
+_FAIL_REPORT_TIMEOUT_SECONDS = 30.0
 # Keep a successfully reported generic failure visible through at least one
 # progress reporting interval. A new ticket supersedes it immediately.
 _FAILED_PROGRESS_MIN_VISIBLE_SECONDS = 60.0
@@ -544,7 +555,7 @@ class ValidatorWorker:
                             )
                             continue
                         try:
-                            report = await self._score_job(job)
+                            report = await self._score_job_within_lease(job)
                             self._ledger_changed.set()
                             details = (
                                 report.details
@@ -554,6 +565,24 @@ class ValidatorWorker:
                             slot_scored.append(
                                 scored_agent_stat(job.miner_hotkey, report, details)
                             )
+                        except LeaseDeadlineError as error:
+                            # Reported as scoring_error, never infrastructure.
+                            # See LeaseDeadlineError: an artifact that consumed
+                            # its whole lease without a verdict must consume the
+                            # attempt, or the platform's no-fault infra grant
+                            # re-leases it forever and it never resolves.
+                            logger.warning(
+                                "lease deadline reached for agent %s on %s "
+                                "(deadline=%s); handing the ticket back as "
+                                "scoring_error rather than letting it expire: "
+                                "%s",
+                                job.agent_id,
+                                slot_id,
+                                job.deadline.isoformat(),
+                                error,
+                            )
+                            await self._report_ticket_failed(job, "scoring_error")
+                            slot_failed += 1
                         except SandboxOomError as error:
                             logger.warning(
                                 "sandbox out of memory for agent %s on %s; "
@@ -1381,6 +1410,7 @@ class ValidatorWorker:
                         inference_ticket_deadline=(
                             job.deadline if broker is not None else None
                         ),
+                        ticket_deadline=job.deadline,
                     )
                 finally:
                     if broker is not None:
@@ -1395,6 +1425,18 @@ class ValidatorWorker:
                     report=report,
                     ticket_deadline=job.deadline,
                 )
+            except LeaseDeadlineError as exc:
+                logger.warning(
+                    "top-five confirmation reached the lease deadline "
+                    "champion=%s member=%s: %s",
+                    plan.champion.agent_id,
+                    entry.agent_id,
+                    exc,
+                )
+                if job is not None:
+                    # Same attribution rule as the canonical lane: running out
+                    # of lease is not this host's infrastructure failing.
+                    await self._report_ticket_failed(job, "scoring_error")
             except (PlatformError, DittobenchError) as exc:
                 logger.warning(
                     "top-five confirmation failed champion=%s member=%s: %s",
@@ -1429,10 +1471,26 @@ class ValidatorWorker:
         inference_grant_id: UUID | None = None,
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
+        ticket_deadline: datetime | None = None,
     ) -> ScoreReport | None:
-        """Evaluate fresh seeds and package one signed append-only receipt."""
+        """Evaluate fresh seeds and package one signed append-only receipt.
+
+        Every seed is bounded by the same lease, so a seed that hangs cannot
+        consume the budget the remaining seeds -- and the hand-back -- need.
+        """
         reports: list[ScoreReport] = []
         for dataset in datasets:
+            if (
+                ticket_deadline is not None
+                and lease_budget_seconds(ticket_deadline) <= 0
+            ):
+                logger.warning(
+                    "top-five confirmation ran out of lease for agent %s before "
+                    "seed %s; resolving the ticket with what has been scored",
+                    agent_id,
+                    dataset.seed,
+                )
+                break
             try:
                 reports.append(
                     await self._evaluate(
@@ -1455,6 +1513,7 @@ class ValidatorWorker:
                         inference_grant_id=inference_grant_id,
                         inference_slot_id=inference_slot_id,
                         inference_ticket_deadline=inference_ticket_deadline,
+                        ticket_deadline=ticket_deadline,
                     )
                 )
             except (PlatformError, DittobenchError) as exc:
@@ -1873,9 +1932,18 @@ class ValidatorWorker:
         old platform without ``/validator/job/fail``, or any transport/validation
         error, must never crash the sweep — the ticket then simply expires on its
         own deadline exactly as it did before this endpoint existed.
+
+        Bounded, because "best-effort" must not mean "unbounded". This is the
+        call that turns a lease into a resolved ticket, and it is reached from
+        the abort path with only the reporting margin left; a platform that
+        accepts the connection and then stalls would otherwise spend the margin
+        here and produce the silent expiry the abort exists to prevent.
         """
         try:
-            await self._platform.report_ticket_failed(job, reason)
+            await asyncio.wait_for(
+                self._platform.report_ticket_failed(job, reason),
+                timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
+            )
         except Exception as e:  # noqa: BLE001 - hand-back is best-effort telemetry
             logger.warning(
                 "handing back failed ticket for agent %s did not land "
@@ -1950,6 +2018,45 @@ class ValidatorWorker:
             await self._dittobench.cancel_inference_session(broker.session_id)
             raise
         return broker
+
+    async def _score_job_within_lease(self, job: JobResponse) -> ScoreReport:
+        """Score one ticket under a hard bound derived from its own lease.
+
+        The invariant this enforces: **a validator holding a ticket always
+        resolves it before the lease expires.** Silence is not a neutral
+        outcome — an unresolved ticket reads in the ledger exactly like a
+        validator that died, and it holds one of the fleet's few scoring slots
+        for the full lease while saying nothing.
+
+        The poll loop is bounded by the same budget (see
+        :func:`ditto.validator.config.run_budget_seconds`), so in the ordinary
+        case this never fires. It exists because the poll is not the only place a
+        ticket can hang: the artifact fetch, the inference grant exchange (this
+        module already documents it as "unbounded work ... can hold a slot for
+        many minutes"), the submit, and the post-run cancel are all awaits with
+        no bound of their own beyond a per-request HTTP timeout that a
+        responsive-but-stuck peer never trips. One outer bound covers all of
+        them, which is also what keeps a single hanging agent from holding a
+        slot for the whole lease while the rest of the queue waits.
+
+        The margin is left deliberately outside the bound so the caller still
+        has time to land the failure report.
+        """
+        budget = lease_budget_seconds(job.deadline)
+        if budget <= 0:
+            raise LeaseDeadlineError(
+                f"ticket for agent {job.agent_id} has less than the reporting "
+                f"margin left before {job.deadline.isoformat()}; not starting"
+            )
+        try:
+            async with asyncio.timeout(budget):
+                return await self._score_job(job)
+        except TimeoutError as error:
+            raise LeaseDeadlineError(
+                f"scoring agent {job.agent_id} did not resolve within the "
+                f"{budget:.0f}s its lease could fund before "
+                f"{job.deadline.isoformat()}"
+            ) from error
 
     async def _score_job(self, job: JobResponse) -> ScoreReport:
         """Score one issued ticket against its platform-pinned dataset.
@@ -2049,6 +2156,7 @@ class ValidatorWorker:
         inference_grant_id: UUID | None = None,
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
+        ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Run one re-score while managing its benchmark heartbeat.
 
@@ -2075,6 +2183,7 @@ class ValidatorWorker:
                 inference_grant_id=inference_grant_id,
                 inference_slot_id=inference_slot_id,
                 inference_ticket_deadline=inference_ticket_deadline,
+                ticket_deadline=ticket_deadline,
             )
         finally:
             heartbeat_stop.set()
@@ -2097,6 +2206,7 @@ class ValidatorWorker:
         inference_grant_id: UUID | None = None,
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
+        ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
         artifact = await self._platform.get_artifact(agent_id)
@@ -2146,6 +2256,7 @@ class ValidatorWorker:
             inference_agent_id=agent_id if inference_session_id is not None else None,
             inference_slot_id=inference_slot_id,
             inference_ticket_deadline=inference_ticket_deadline,
+            ticket_deadline=ticket_deadline,
         )
         details = report.details
         bench_version = (
@@ -2309,6 +2420,7 @@ class ValidatorWorker:
                 inference_ticket_deadline=(
                     ticket_deadline if inference_session_id is not None else None
                 ),
+                ticket_deadline=ticket_deadline,
             )
             await self._publish_benchmark_progress(
                 "finalizing", completed=report.n, total=report.n
