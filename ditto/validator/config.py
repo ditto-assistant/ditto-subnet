@@ -17,6 +17,10 @@ from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from ditto.validator.errors import ValidatorConfigError
+from ditto.validator.resource_gate import (
+    ResourceCeilings,
+    parse_resource_ceilings_from_env,
+)
 from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
 
 # --- Frozen consensus constants (KOTH + ATH gate) ---
@@ -163,6 +167,14 @@ class ValidatorConfig:
 
     Defaults to one for compatibility and is capped at eight by the wire
     contract. This must not exceed dittobench-api's full-run capacity.
+    """
+
+    resource_ceilings: ResourceCeilings
+    """Host-resource percentages at or above which this worker stops claiming.
+
+    Set from ``VALIDATOR_{CPU,MEMORY,DISK}_PERCENT_CEILING``. See
+    :mod:`ditto.validator.resource_gate` for why the defaults are high and why
+    CPU ships disabled.
     """
 
     inference_proxy_required: bool
@@ -478,6 +490,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         run_size=run_size,
         dittobench_mock=dittobench_mock,
         benchmark_capacity=int(os.environ.get("VALIDATOR_BENCHMARK_CAPACITY", "1")),
+        resource_ceilings=parse_resource_ceilings_from_env(),
         inference_proxy_required=(
             os.environ.get("VALIDATOR_INFERENCE_PROXY_REQUIRED", "false").lower()
             in _truthy

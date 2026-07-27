@@ -1692,7 +1692,8 @@
             "enum": [
               "accepting",
               "draining",
-              "paused"
+              "paused",
+              "resource_constrained"
             ],
             "type": "string"
           },

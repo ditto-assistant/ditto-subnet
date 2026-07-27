@@ -23,6 +23,7 @@ from ditto.api_models.benchmark_progress import (
 )
 from ditto.api_models.inference import InferenceExchangeResponse, InferenceGrantOffer
 from ditto.api_models.stack_health import ValidatorComponentHealth
+from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.api_models.validator import (
     ArtifactResponse,
     ConfirmationDatasetPin,
@@ -52,6 +53,10 @@ from ditto.validator.errors import (
     ValidatorInfrastructureError,
 )
 from ditto.validator.onchain_seed import derive_seed
+from ditto.validator.resource_gate import (
+    DEFAULT_RESOURCE_CEILINGS,
+    ResourceCeilings,
+)
 from ditto.validator.stack_health import fallback_stack_health
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
@@ -4146,3 +4151,197 @@ class TestSlotIsClaimedBeforeInferenceActivation:
         # path must, or the slot stays advertised as busy forever.
         assert worker._capacity_snapshot().active == []
         assert worker._active_agent_id is None
+
+
+class TestResourceConstrainedAdmission:
+    """A host past its own ceilings declines work -- visibly, not silently.
+
+    The failure mode this guards against is the one that already cost a day on
+    this subnet (#274 / platform #496): a validator that simply goes quiet is
+    indistinguishable from one that is free. So a constrained worker keeps
+    heartbeating, keeps advertising how many slots it has, and says *why* it is
+    idle -- it just offers none of them.
+    """
+
+    @staticmethod
+    def _collector(*, cpu: int = 0, memory: int = 0, disk: int = 0) -> MagicMock:
+        collector = MagicMock()
+        collector.collect = MagicMock(
+            return_value=SystemMetrics(
+                collected_at=int(datetime.now(UTC).timestamp()),
+                cpu_percent=cpu,
+                memory_percent=memory,
+                disk_percent=disk,
+                docker=DockerHealth(
+                    status="healthy", running_containers=1, unhealthy_containers=0
+                ),
+            )
+        )
+        return collector
+
+    def _worker(
+        self, *, collector: MagicMock, ceilings: ResourceCeilings | None = None
+    ) -> tuple[ValidatorWorker, MagicMock]:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(return_value=None)
+        config = _config()
+        config.benchmark_capacity = 4
+        config.resource_ceilings = ceilings or DEFAULT_RESOURCE_CEILINGS
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 4
+        dittobench.preflight = AsyncMock()
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+            system_metrics=collector,
+        )
+        return worker, platform
+
+    async def test_a_nearly_full_disk_claims_nothing_but_still_heartbeats(
+        self,
+    ) -> None:
+        worker, platform = self._worker(collector=self._collector(disk=95))
+
+        outcome = await worker.run_once(set_weights=False)
+
+        assert outcome.queue_depth == 0
+        platform.request_job.assert_not_awaited()
+        platform.request_top5_confirmation_job.assert_not_awaited()
+        # Still visible, and the reason is on the wire.
+        assert platform.submit_heartbeat.await_count >= 1
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.admission == "resource_constrained"
+        assert final.benchmark_capacity.healthy_slots == []
+        # The host still says how big it is, so recovery needs no rediscovery.
+        assert final.benchmark_capacity.configured_slots == 4
+        # And the metrics that justify the decline ride the same heartbeat.
+        assert final.system_metrics is not None
+        assert final.system_metrics.disk_percent == 95
+
+    async def test_nearly_exhausted_memory_declines_the_same_way(self) -> None:
+        worker, platform = self._worker(collector=self._collector(memory=95))
+
+        await worker.run_once(set_weights=False)
+
+        platform.request_job.assert_not_awaited()
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.admission == "resource_constrained"
+
+    async def test_a_busy_healthy_host_is_completely_unaffected(self) -> None:
+        """65% memory and a pinned CPU is a working benchmark host."""
+        worker, platform = self._worker(
+            collector=self._collector(cpu=100, memory=65, disk=45)
+        )
+
+        await worker.run_once(set_weights=False)
+
+        assert platform.request_job.await_count == 4
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.admission == "accepting"
+        assert final.benchmark_capacity.healthy_slots == [
+            f"slot-{index}" for index in range(4)
+        ]
+
+    async def test_the_ceilings_are_operator_configurable(self) -> None:
+        """The same reading declines or not, purely on the configured ceiling."""
+        worker, platform = self._worker(
+            collector=self._collector(disk=80),
+            ceilings=ResourceCeilings(disk_percent=80),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        platform.request_job.assert_not_awaited()
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.admission == "resource_constrained"
+
+    async def test_recovery_needs_no_restart(self) -> None:
+        collector = self._collector(disk=95)
+        worker, platform = self._worker(collector=collector)
+
+        await worker.run_once(set_weights=False)
+        platform.request_job.assert_not_awaited()
+
+        collector.collect.return_value = SystemMetrics(
+            collected_at=int(datetime.now(UTC).timestamp()),
+            cpu_percent=0,
+            memory_percent=20,
+            disk_percent=45,
+            docker=DockerHealth(
+                status="healthy", running_containers=1, unhealthy_containers=0
+            ),
+        )
+        await worker.run_once(set_weights=False)
+
+        assert platform.request_job.await_count == 4
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.admission == "accepting"
+
+    async def test_a_worker_with_no_collector_behaves_as_before(self) -> None:
+        """Unobserved is not constrained; the gate opens only on evidence."""
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(return_value=None)
+        config = _config()
+        config.benchmark_capacity = 2
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 2
+        dittobench.preflight = AsyncMock()
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        assert platform.request_job.await_count == 2
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.admission == "accepting"
+
+    async def test_a_collector_failure_never_stops_the_validator(self) -> None:
+        """psutil hiccupping must not be read as a full disk."""
+        collector = MagicMock()
+        collector.collect = MagicMock(side_effect=OSError("/proc unavailable"))
+        worker, platform = self._worker(collector=collector)
+
+        await worker.run_once(set_weights=False)
+
+        assert platform.request_job.await_count == 4
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.admission == "accepting"
+
+    async def test_a_drain_outranks_a_resource_decline(self) -> None:
+        """Both stop work; the deliberate one must be what the fleet view says."""
+        worker, platform = self._worker(collector=self._collector(disk=100))
+        drain = asyncio.Event()
+        drain.set()
+
+        await worker.run_once(set_weights=False, drain_requested=drain)
+
+        final = platform.submit_heartbeat.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        assert final.benchmark_capacity.admission == "draining"
+
+    async def test_a_live_lease_is_still_reported_while_constrained(self) -> None:
+        """Withholding new work must never look like abandoning current work."""
+        worker, _ = self._worker(collector=self._collector(disk=95))
+        worker._admission = "resource_constrained"
+        worker._slots["slot-1"].active_agent_id = uuid4()
+
+        capacity = worker._capacity_snapshot()
+
+        assert capacity.admission == "resource_constrained"
+        assert capacity.healthy_slots == []
+        assert [slot.slot_id for slot in capacity.active] == ["slot-1"]

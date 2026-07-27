@@ -76,6 +76,15 @@ If you need more throughput but are near a memory or disk ceiling, raise the
 *within-run* parallelism instead (`VALIDATOR_V7_CASE_CONCURRENCY`,
 `VALIDATOR_V7_EMBEDDING_CONCURRENCY`) — those add no sandbox.
 
+The validator also gates itself. At or above `VALIDATOR_DISK_PERCENT_CEILING` or
+`VALIDATOR_MEMORY_PERCENT_CEILING` (95% each by default) it stops claiming new
+tickets and reports `admission=resource_constrained` in its heartbeat, so the
+fleet view shows a validator that is healthy and deliberately idle rather than
+one that has quietly gone missing. Benchmarks already running are unaffected --
+they finish and report -- and claiming resumes on its own as soon as a later
+sample reports headroom. The platform gates the same readings independently from
+its side, so an overloaded host is refused work even if it asks.
+
 ## Requirements
 
 - Linux x86-64 with at least 4 vCPU, 160 GB free disk, and 32 GB RAM to serve
@@ -111,6 +120,9 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
 | `VALIDATOR_BENCHMARK_CAPACITY` | Full-run slots this host advertises, `1`-`8`. Leave unset to take the compose default of `8` (the protocol maximum) so the platform's cap is the only lever; the platform decides how many are actually used. Set `4` on a 16 GB host — see the sizing table. |
+| `VALIDATOR_DISK_PERCENT_CEILING` | Stop claiming tickets at or above this disk usage (default `95`). `0` disables; otherwise a multiple of 5 in `[50, 100]`. |
+| `VALIDATOR_MEMORY_PERCENT_CEILING` | Same, for memory (default `95`). |
+| `VALIDATOR_CPU_PERCENT_CEILING` | Same, for CPU. Defaults to `0` (disabled) -- a pinned CPU is a working benchmark host, not a failing one. |
 | `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Keep `true`; v7/v8 scoring fails closed without a ticket session. |
 | `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Keep `true`; the validator must not claim work without the platform proxy. |
 

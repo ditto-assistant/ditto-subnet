@@ -64,6 +64,11 @@ from ditto.validator.lease_roster import (
     read_roster,
 )
 from ditto.validator.onchain_seed import seed_matches
+from ditto.validator.resource_gate import (
+    DEFAULT_RESOURCE_CEILINGS,
+    ConstrainedResource,
+    ResourceCeilings,
+)
 from ditto.validator.signing import sign_heartbeat, sign_score
 from ditto.validator.stack_health import fallback_stack_health
 from ditto.validator.stack_identity import (
@@ -98,6 +103,7 @@ from ditto.validator.weights import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ditto.api_models.system_health import SystemMetrics
     from ditto.api_models.validator import (
         FailJobReason,
         JobResponse,
@@ -389,6 +395,17 @@ class ValidatorWorker:
         self._healthy_slots = set(self._slots)
         self._resource_blocked_until: dict[str, float] = {}
         self._admission: BenchmarkAdmission = "accepting"
+        # Host-resource self-gate. A ``MagicMock`` config (the unit-test double)
+        # would otherwise hand us a mock in place of the ceilings and every
+        # comparison below would be meaningless, so accept only the real type
+        # and fall back to the shipped defaults.
+        configured_ceilings = getattr(config, "resource_ceilings", None)
+        self._resource_ceilings: ResourceCeilings = (
+            configured_ceilings
+            if isinstance(configured_ceilings, ResourceCeilings)
+            else DEFAULT_RESOURCE_CEILINGS
+        )
+        self._constrained_resources: tuple[ConstrainedResource, ...] = ()
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
         # Rides every published BenchmarkProgress so the platform can tell a
@@ -460,6 +477,54 @@ class ValidatorWorker:
     def _retain_failed_progress_until(self, value: float) -> None:
         self._slot_state().retain_failed_progress_until = value
 
+    def _collect_system_metrics(self) -> SystemMetrics | None:
+        """Return the cached coarse host sample, or ``None`` if unobservable.
+
+        The collector already caches on its own reporting cadence, so calling
+        this per sweep costs nothing beyond the cache read. A collector failure
+        is reported as "no observation" rather than as pressure: refusing work
+        because psutil hiccuped would be the opposite of protective.
+        """
+        if self._system_metrics is None:
+            return None
+        try:
+            return self._system_metrics.collect()
+        except Exception as e:  # noqa: BLE001 - telemetry must never gate work
+            logger.warning(
+                "host metric collection failed; the resource gate stays open: %s", e
+            )
+            return None
+
+    def _refresh_resource_admission(self, metrics: SystemMetrics | None) -> None:
+        """Re-evaluate the self-gate and set ``admission`` from one sample.
+
+        Drain and operator pause outrank a resource decline: both are stronger,
+        deliberate statements about this worker, and neither should be
+        downgraded to "the disk is a bit full" in the fleet view.
+
+        The transition is logged, not the steady state, so a host that sits
+        constrained for an hour produces two lines rather than one per sweep.
+        """
+        if self._admission in ("draining", "paused"):
+            return
+        exceeded = self._resource_ceilings.exceeded(metrics)
+        if exceeded != self._constrained_resources:
+            if exceeded:
+                logger.warning(
+                    "host is resource constrained (%s); declining to claim new "
+                    "tickets until it recovers. Active benchmarks continue and "
+                    "heartbeats keep reporting, so this is visibly idle-by-"
+                    "choice rather than silently absent.",
+                    self._resource_ceilings.describe(metrics),
+                )
+            else:
+                logger.info(
+                    "host resources recovered (%s); claiming tickets again",
+                    self._resource_ceilings.describe(metrics),
+                )
+            self._constrained_resources = exceeded
+        self._admission = "resource_constrained" if exceeded else "accepting"
+
     def _capacity_snapshot(self) -> BenchmarkCapacity:
         active = []
         for slot in self._slots.values():
@@ -516,6 +581,9 @@ class ValidatorWorker:
             if drain_requested is not None and drain_requested.is_set()
             else "accepting"
         )
+        # Decide before the first heartbeat of the sweep, so the snapshot the
+        # platform receives already says why this validator is about to sit out.
+        self._refresh_resource_admission(self._collect_system_metrics())
         await self._report_heartbeat("polling")
         write_update_state("working", platform_accepted=self._platform_accepted)
         scored: list[ScoredAgentStat] = []
@@ -740,8 +808,12 @@ class ValidatorWorker:
         # Continual top-five confirmation is strictly spare-capacity work. If
         # this sweep claimed even one canonical quorum job, let the ordinary
         # queue keep the validator until a later sweep proves it is empty.
+        # Spare-capacity work is still work: a constrained host must not claim
+        # a confirmation ticket either, so gate the lane on admission directly
+        # rather than relying on the (now empty) healthy-slot set.
         if (
             scoring_available
+            and self._admission == "accepting"
             and queue_depth == 0
             and not self._new_work_blocked(stop_requested, drain_requested)
         ):
@@ -796,6 +868,12 @@ class ValidatorWorker:
         update ordering into a validator that scores nothing at all, and a
         three-validator quorum cannot spare one.
         """
+        # A host past its own resource ceiling offers nothing this sweep. It
+        # keeps heartbeating (with ``admission="resource_constrained"``), and
+        # any slot already running a benchmark stays in ``capacity.active``, so
+        # a live lease is never mistaken for an abandoned one.
+        if self._admission != "accepting":
+            return set()
         scorer_capacity = int(getattr(self._dittobench, "full_run_capacity", 1))
         unblocked = sorted(
             slot_id
@@ -935,11 +1013,13 @@ class ValidatorWorker:
             if timestamp <= self._last_heartbeat_timestamp:
                 raise RuntimeError("heartbeat wall-clock rate limit was bypassed")
             self._last_heartbeat_timestamp = timestamp
-            system_metrics = (
-                self._system_metrics.collect()
-                if self._system_metrics is not None
-                else None
-            )
+            system_metrics = self._collect_system_metrics()
+            # Every heartbeat re-decides, not just the sweep boundary: a disk
+            # that fills during a 90-minute run must show up as constrained on
+            # the next heartbeat, not one whole sweep later. Recovery narrows
+            # nothing here (``_healthy_slots &=`` below only ever shrinks); the
+            # next sweep's preflight is what re-opens the slots.
+            self._refresh_resource_admission(system_metrics)
             capabilities, stack = validator_capabilities_and_stack()
             capability_probe = getattr(
                 self._dittobench, "scorer_benchmark_capability", None

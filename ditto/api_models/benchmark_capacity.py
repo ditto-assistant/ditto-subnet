@@ -12,7 +12,21 @@ from ditto.api_models.benchmark_progress import BenchmarkProgress
 
 _SLOT_PATTERN = r"^slot-[0-7]$"
 
-BenchmarkAdmission = Literal["accepting", "draining", "paused"]
+BenchmarkAdmission = Literal["accepting", "draining", "paused", "resource_constrained"]
+"""Why a validator is (not) taking new work.
+
+``resource_constrained`` is the honest negative for a host that is up, healthy
+and heartbeating but past one of its own resource ceilings -- disk nearly full,
+memory nearly exhausted. It is deliberately distinct from ``paused`` (an
+operator decision) and ``draining`` (a shutdown in progress) because the
+platform's response differs: a constrained validator recovers on its own and
+should be re-offered work the moment it does.
+
+Adding a value here is wire-safe in both directions. ``admission`` is already a
+signed field of every v10+ capacity token, so an older validator's signature is
+byte-identical to what it always was; only the platform's *parser* has to learn
+the new value, which is why the platform change lands first.
+"""
 
 
 class ActiveBenchmarkSlot(BaseModel):
@@ -71,7 +85,7 @@ class BenchmarkCapacity(BaseModel):
             raise ValueError("active benchmark slots exceed configured capacity")
         if self.admission != "accepting" and healthy:
             raise ValueError(
-                "draining or paused capacity cannot advertise healthy slots"
+                "capacity that is not accepting cannot advertise healthy slots"
             )
         return self
 

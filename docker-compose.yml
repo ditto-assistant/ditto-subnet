@@ -240,10 +240,20 @@ services:
       # How many of these slots actually receive tickets is decided by the
       # platform's validator-slot cap (an append-only revision setting changed
       # from backroom, default 2), so concurrency can be raised gradually and
-      # reverted instantly without a release. Advertising 4 here is what gives
-      # the operator room to ramp above 2 without shipping a new stack; idle
-      # slots cost nothing but two extra 204 polls per sweep.
+      # reverted instantly without a release. Advertising the protocol maximum
+      # here gives the operator room to ramp without shipping a new stack; idle
+      # slots only add lightweight polls to each sweep.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
+      # Self-imposed resource ceilings. At or above these the worker stops
+      # claiming tickets and reports admission=resource_constrained, while
+      # still heartbeating and still finishing what it holds. High on purpose:
+      # this stops a host that is about to fail, it does not throttle a busy
+      # one. 0 disables; anything else must be a multiple of 5 in [50, 100],
+      # because heartbeat host metrics ride a five-point grid.
+      VALIDATOR_DISK_PERCENT_CEILING: ${VALIDATOR_DISK_PERCENT_CEILING:-95}
+      VALIDATOR_MEMORY_PERCENT_CEILING: ${VALIDATOR_MEMORY_PERCENT_CEILING:-95}
+      # A pinned CPU is a working benchmark host, not a failing one.
+      VALIDATOR_CPU_PERCENT_CEILING: ${VALIDATOR_CPU_PERCENT_CEILING:-0}
       VALIDATOR_INFERENCE_PROXY_REQUIRED: "true"
       # The platform serves its inference plane under its own public hostname
       # (DITTO_INFERENCE_PUBLIC_BASE_URL), which need not equal the API host
