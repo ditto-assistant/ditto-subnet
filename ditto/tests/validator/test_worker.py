@@ -820,7 +820,7 @@ class TestRunOnce:
         assert "slot-1" in worker._healthy_slots
 
     async def test_compose_default_capacity_allocates_dense_slot_ids(self) -> None:
-        """The shipped compose default must produce four usable, dense slots.
+        """The shipped compose default must produce that many dense slots.
 
         The platform addresses slots by ordinal (``slot-0``..``slot-N``) when it
         applies its operator cap, so a sparse or renamed slot set would silently
@@ -844,16 +844,21 @@ class TestRunOnce:
 
         await worker.run_once(set_weights=False)
 
-        expected = [f"slot-{index}" for index in range(4)]
-        assert sorted(worker._slots) == expected
+        expected = [
+            f"slot-{index}" for index in range(_COMPOSE_DEFAULT_BENCHMARK_CAPACITY)
+        ]
+        assert sorted(worker._slots) == sorted(expected)
         final = platform.submit_heartbeat.await_args_list[-1].args[0]
         assert final.benchmark_capacity is not None
-        assert final.benchmark_capacity.configured_slots == 4
+        assert (
+            final.benchmark_capacity.configured_slots
+            == _COMPOSE_DEFAULT_BENCHMARK_CAPACITY
+        )
         assert final.benchmark_capacity.healthy_slots == expected
         assert final.benchmark_capacity.admission == "accepting"
         # Every advertised slot polls, so a platform-side cap can decline the
         # ones it does not want used.
-        assert platform.request_job.await_count == 4
+        assert platform.request_job.await_count == _COMPOSE_DEFAULT_BENCHMARK_CAPACITY
 
     async def test_platform_capping_slots_is_not_an_error(self) -> None:
         """A 204 on the capped slots must leave the worker healthy.
