@@ -210,7 +210,7 @@ services:
       # slots than the worker has configured. The compose default is the
       # production value; the platform's operator cap decides how many of these
       # slots actually receive tickets.
-      DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-4}
+      DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
       # Deliberately still 1. This bounds the frozen *local Ollama* embedding
       # lane, which only v2-v6 use; hosted v7 embeddings bypass it entirely and
       # are serialized per ticket instead. Raising it would add concurrent load
@@ -335,7 +335,7 @@ services:
       # reverted instantly without a release. Advertising 4 here is what gives
       # the operator room to ramp above 2 without shipping a new stack; idle
       # slots cost nothing but two extra 204 polls per sweep.
-      VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-4}
+      VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
       # V7 tickets fail closed without platform inference regardless of this
       # flag. Leave fleet-wide enforcement dark until v6 has drained.
       VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-false}

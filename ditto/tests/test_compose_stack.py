@@ -178,12 +178,16 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     # advertises fewer full-run slots than the worker configured, so these two
     # must ride the same variable with the same default. A host that sets
     # nothing must land on the production value, not on the old behaviour.
+    # That default is the protocol maximum on purpose: the platform's cap can
+    # narrow an advertised eight to anything in [1, 8] within seconds and with
+    # no release, but it can never widen past what the validator advertises, so
+    # advertising less makes the fleet-wide dial work in one direction only.
     assert api["environment"]["DITTOBENCH_MAX_CONCURRENT_RUNS"] == (
-        "${VALIDATOR_BENCHMARK_CAPACITY:-4}"
+        "${VALIDATOR_BENCHMARK_CAPACITY:-8}"
     )
     worker_env = compose["services"]["ditto-subnet"]["environment"]
     assert worker_env["VALIDATOR_BENCHMARK_CAPACITY"] == (
-        "${VALIDATOR_BENCHMARK_CAPACITY:-4}"
+        "${VALIDATOR_BENCHMARK_CAPACITY:-8}"
     )
     assert _compose_default(
         api["environment"]["DITTOBENCH_MAX_CONCURRENT_RUNS"]

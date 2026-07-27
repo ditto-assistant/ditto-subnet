@@ -44,16 +44,47 @@ every submission before it reaches validators and ships a verified pre-built
 Docker image with it, so your host normally does not compile miner code.
 
 Every miner container runs with strict CPU, memory, PID, capability, seccomp,
-and egress limits. The stack advertises four full-run slots and the platform
-decides how many of them actually receive tickets, so the concurrency your host
-runs is an operator setting on the platform (default two), not a value you edit
-here. Lower `VALIDATOR_BENCHMARK_CAPACITY` only if your host is below the
-documented 16 GB RAM / 80 GB disk; each concurrent run adds a miner sandbox with
-a 3 GiB memory cap plus its own image and writable layer.
+and egress limits. The stack advertises eight full-run slots — the protocol
+maximum — and the platform decides how many of them actually receive tickets, so
+the concurrency your host runs is an operator setting on the platform, not a
+value you edit here. Advertising the maximum is what lets the platform's cap be
+the single fleet-wide lever: it can narrow an advertised eight down to any value
+in `[1, 8]` within seconds and with no release, but it can never widen past what
+you advertise.
+
+**Disk is the binding constraint, not memory.** Each concurrent run adds a miner
+sandbox carrying its own image and writable layer, and those accumulate; the
+3 GiB per-sandbox figure is a memory *cap*, not steady-state usage. Production
+validators run 3-4 concurrent benchmarks at 15-20% memory while sitting at 80-90%
+disk, so size the disk first:
+
+| `VALIDATOR_BENCHMARK_CAPACITY` | Free disk | Host RAM |
+| --- | --- | --- |
+| 8 (default) | 160 GB | 32 GB |
+| 6 | 120 GB | 24 GB |
+| 4 | 80 GB | 16 GB |
+| 2 | 40 GB | 8 GB |
+
+The RAM column is headroom for the worst case where every sandbox reaches its cap
+at once; a host that is comfortably under it in practice is normal and not a sign
+you can skip the disk.
+
+**A full disk costs far more than advertising fewer slots.** A validator whose
+heartbeat reports disk at or above the platform's `disk_percent_ceiling` is held
+to a *single* slot until it recovers — so a host that advertises eight and then
+fills its disk ends up serving one, which is strictly worse than having
+advertised four. If you cannot give the stack the disk in the table above, set
+`VALIDATOR_BENCHMARK_CAPACITY` to match what you can.
+
+If you need more throughput but are near a memory or disk ceiling, raise the
+*within-run* parallelism instead (`VALIDATOR_V7_CASE_CONCURRENCY`,
+`VALIDATOR_V7_EMBEDDING_CONCURRENCY`) — those add no sandbox.
 
 ## Requirements
 
-- Linux x86-64 with at least 4 vCPU, 16 GB RAM, and 80 GB free disk.
+- Linux x86-64 with at least 4 vCPU, 160 GB free disk, and 32 GB RAM to serve
+  the default eight slots. Disk is the constraint that binds in practice; see
+  the sizing table above to run a smaller host.
 - Docker Engine, Buildx, and the Docker Compose plugin v2 or newer, including
   v5. Docker must start at boot.
 - Git and `flock` from util-linux.
@@ -86,7 +117,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_NAME` | Coldkey directory under `~/.bittensor/wallets`. |
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
-| `VALIDATOR_BENCHMARK_CAPACITY` | Full-run slots this host advertises. Leave unset to take the compose default of `4`; the platform caps how many are used. |
+| `VALIDATOR_BENCHMARK_CAPACITY` | Full-run slots this host advertises, `1`-`8`. Leave unset to take the compose default of `8` (the protocol maximum) so the platform's cap is the only lever; the platform decides how many are actually used. Set `4` on a 16 GB host — see the sizing table. |
 | `RELAY_PROVIDER` / `RELAY_API_KEY` | Existing frozen v6 route only; retain during transition. |
 | `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Leave `false` until v6 drains; v7 is independently fail-closed. |
 | `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Leave `false` until v6 drains; v7 is independently fail-closed. |
@@ -416,10 +447,10 @@ host identity.
 Heartbeat protocol 10 adds authoritative bounded capacity: configured and
 healthy slot ids, admission state, and privacy-safe progress for every active
 benchmark. Active heartbeats refresh every 30 seconds, with changed aggregate
-question counts eligible every 15 seconds. The stack advertises four slots by
-default and the platform's operator cap decides how many receive tickets;
-draining or paused validators advertise no healthy slots and receive no new
-work.
+question counts eligible every 15 seconds. The stack advertises eight slots by
+default — the protocol maximum — and the platform's operator cap decides how many
+receive tickets; draining or paused validators advertise no healthy slots and
+receive no new work.
 
 ### Per-component stack health
 
