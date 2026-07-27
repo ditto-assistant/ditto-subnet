@@ -548,7 +548,8 @@ class TestTop5ConfirmationLane:
 
         worker._evaluate.assert_not_awaited()
         platform.report_ticket_failed.assert_awaited_once()
-        assert platform.report_ticket_failed.await_args.args == (job, "infrastructure")
+        handed_job, reason, _ = platform.report_ticket_failed.await_args.args
+        assert (handed_job, reason) == (job, "infrastructure")
         platform.submit_top5_confirmation_score.assert_not_awaited()
 
 
@@ -661,7 +662,8 @@ class TestTop5ConfirmationLaneSlotBinding:
 
         worker._evaluate.assert_not_awaited()
         platform.report_ticket_failed.assert_awaited_once()
-        assert platform.report_ticket_failed.await_args.args == (job, "infrastructure")
+        handed_job, reason, _ = platform.report_ticket_failed.await_args.args
+        assert (handed_job, reason) == (job, "infrastructure")
         platform.submit_top5_confirmation_score.assert_not_awaited()
 
     async def test_slot_is_released_when_the_lease_names_another_agent(self) -> None:
@@ -1392,7 +1394,7 @@ class TestRunOnce:
         # The failed lease is handed back for immediate reissue rather than left
         # to expire; the sweep still ends and weights still proceed.
         platform.report_ticket_failed.assert_awaited_once()
-        handed_job, reason = platform.report_ticket_failed.await_args.args
+        handed_job, reason, _ = platform.report_ticket_failed.await_args.args
         assert handed_job is jobs[0]
         assert reason == "infrastructure"
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
@@ -1423,7 +1425,7 @@ class TestRunOnce:
         assert outcome.queue_depth == 2
         assert platform.request_job.await_count == 3  # two jobs + terminating 204
         platform.report_ticket_failed.assert_awaited_once()
-        failed_job, reason = platform.report_ticket_failed.await_args.args
+        failed_job, reason, _ = platform.report_ticket_failed.await_args.args
         assert failed_job is jobs[0]
         assert reason == "scoring_error"
 
@@ -1448,7 +1450,9 @@ class TestRunOnce:
 
         assert outcome.queue_depth == 2
         assert platform.request_job.await_count == 3
-        platform.report_ticket_failed.assert_awaited_once_with(jobs[0], "sandbox_oom")
+        platform.report_ticket_failed.assert_awaited_once_with(
+            jobs[0], "sandbox_oom", "SandboxOomError: memory allowance"
+        )
         assert "slot-0" in worker._healthy_slots
         assert "slot-0" not in worker._resource_blocked_until
         platform.submit_score.assert_awaited_once()

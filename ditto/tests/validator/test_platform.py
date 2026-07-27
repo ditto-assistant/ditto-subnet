@@ -141,6 +141,103 @@ async def test_report_ticket_failed_is_fresh_lease_bound_and_signed() -> None:
     assert response.reopened is True
 
 
+async def test_report_ticket_failed_carries_the_scorer_failure_code() -> None:
+    # ditto-subnet#279 deliverable (1). `reason` is a three-value class chosen to
+    # drive the platform's reissue policy, so it says how the platform should
+    # respond and nothing about what happened. The validator knows which of the
+    # five `_SANDBOX_INFRASTRUCTURE_CODES` fired; before this it threw the code
+    # away and left only a host log line, which is why the ~60-minute `mnemo*`
+    # killer was never identified. Now it reaches the ticket.
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    job = JobResponse(
+        agent_id=agent_id,
+        miner_hotkey="5MinerA" + "x" * 41,
+        sha256="ab" * 32,
+        deadline=datetime(2026, 7, 14, 12, 30, tzinfo=UTC),
+        seed=1,
+        dataset_sha256="cd" * 32,
+        run_size="full",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["failure_detail"] == "sandbox_network_unavailable"
+        fail = FailJobRequest.model_validate(body)
+        assert fail.failure_detail == "sandbox_network_unavailable"
+        # Advisory, so it is deliberately outside the signed payload, exactly as
+        # `reason` is. Signing it would have made an additive field a protocol
+        # break with no security gained.
+        message = job_fail_signing_message(
+            validator_hotkey=fail.validator_hotkey,
+            agent_id=fail.agent_id,
+            ticket_deadline=fail.ticket_deadline,
+            nonce=fail.nonce,
+            requested_at=fail.requested_at,
+        )
+        assert keypair.verify(message, bytes.fromhex(fail.signature))
+        return httpx.Response(200, json={"agent_id": str(agent_id), "reopened": True})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).report_ticket_failed(job, "infrastructure", "sandbox_network_unavailable")
+
+    assert response.reopened is True
+
+
+async def test_report_without_a_detail_sends_no_new_key() -> None:
+    # Backward compatibility from the sending side. A report with no detail must
+    # be byte-identical to what this client sent before the field existed, so a
+    # platform predating it sees no new key at all and cannot 422 the hand-back.
+    # A rejected hand-back leaves the lease to expire silently, which is exactly
+    # the ambiguity this whole change exists to remove.
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    job = JobResponse(
+        agent_id=agent_id,
+        miner_hotkey="5MinerA" + "x" * 41,
+        sha256="ab" * 32,
+        deadline=datetime(2026, 7, 14, 12, 30, tzinfo=UTC),
+        seed=1,
+        dataset_sha256="cd" * 32,
+        run_size="full",
+    )
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"agent_id": str(agent_id), "reopened": True})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).report_ticket_failed(job, "scoring_error")
+
+    assert "failure_detail" not in seen[0]
+    assert set(seen[0]) == {
+        "validator_hotkey",
+        "agent_id",
+        "ticket_deadline",
+        "reason",
+        "nonce",
+        "requested_at",
+        "signature",
+    }
+
+
 async def test_report_ticket_failed_raises_typed_error_on_rejection() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     job = JobResponse(

@@ -54,6 +54,7 @@ from ditto.validator.errors import (
     SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
+    failure_detail,
 )
 from ditto.validator.onchain_seed import seed_matches
 from ditto.validator.signing import sign_heartbeat, sign_score
@@ -544,7 +545,9 @@ class ValidatorWorker:
                             break
                         slot_claimed += 1
                         if job.slot_id != slot_id:
-                            await self._report_ticket_failed(job, "infrastructure")
+                            await self._report_ticket_failed(
+                                job, "infrastructure", "ticket_slot_mismatch"
+                            )
                             slot_failed += 1
                             break
                         if job.deadline <= datetime.now(UTC):
@@ -581,7 +584,9 @@ class ValidatorWorker:
                                 job.deadline.isoformat(),
                                 error,
                             )
-                            await self._report_ticket_failed(job, "scoring_error")
+                            await self._report_ticket_failed(
+                                job, "scoring_error", failure_detail(error)
+                            )
                             slot_failed += 1
                         except SandboxOomError as error:
                             logger.warning(
@@ -591,7 +596,9 @@ class ValidatorWorker:
                                 slot_id,
                                 error,
                             )
-                            await self._report_ticket_failed(job, "sandbox_oom")
+                            await self._report_ticket_failed(
+                                job, "sandbox_oom", failure_detail(error)
+                            )
                             slot_failed += 1
                         except ValidatorInfrastructureError as error:
                             logger.warning(
@@ -601,7 +608,9 @@ class ValidatorWorker:
                                 slot_id,
                                 error,
                             )
-                            await self._report_ticket_failed(job, "infrastructure")
+                            await self._report_ticket_failed(
+                                job, "infrastructure", failure_detail(error)
+                            )
                             self._healthy_slots.discard(slot_id)
                             if any(
                                 code in str(error)
@@ -619,7 +628,9 @@ class ValidatorWorker:
                                 slot_id,
                                 error,
                             )
-                            await self._report_ticket_failed(job, "scoring_error")
+                            await self._report_ticket_failed(
+                                job, "scoring_error", failure_detail(error)
+                            )
                             slot_failed += 1
                     return slot_scored, slot_failed, slot_claimed
                 finally:
@@ -1327,7 +1338,9 @@ class ValidatorWorker:
                         entry.agent_id,
                         sorted(self._slots),
                     )
-                    await self._report_ticket_failed(job, "infrastructure")
+                    await self._report_ticket_failed(
+                        job, "infrastructure", "confirmation_slot_not_served"
+                    )
                     continue
                 # This lane runs in the sweep body, after the per-slot gather
                 # and therefore outside the context ``run_slot`` establishes.
@@ -1359,7 +1372,9 @@ class ValidatorWorker:
                         entry.agent_id,
                         expected_seeds,
                     )
-                    await self._report_ticket_failed(job, "infrastructure")
+                    await self._report_ticket_failed(
+                        job, "infrastructure", "confirmation_dataset_pins_missing"
+                    )
                     continue
                 if len(received_seeds) != len(set(received_seeds)):
                     logger.warning(
@@ -1368,7 +1383,9 @@ class ValidatorWorker:
                         entry.agent_id,
                         received_seeds,
                     )
-                    await self._report_ticket_failed(job, "infrastructure")
+                    await self._report_ticket_failed(
+                        job, "infrastructure", "confirmation_dataset_pins_duplicated"
+                    )
                     continue
                 datasets = (
                     job.confirmation_datasets
@@ -1418,7 +1435,9 @@ class ValidatorWorker:
                             broker.session_id
                         )
                 if report is None:
-                    await self._report_ticket_failed(job, "scoring_error")
+                    await self._report_ticket_failed(
+                        job, "scoring_error", "confirmation_run_produced_no_report"
+                    )
                     continue
                 await self._platform.submit_top5_confirmation_score(
                     entry.agent_id,
@@ -1436,7 +1455,9 @@ class ValidatorWorker:
                 if job is not None:
                     # Same attribution rule as the canonical lane: running out
                     # of lease is not this host's infrastructure failing.
-                    await self._report_ticket_failed(job, "scoring_error")
+                    await self._report_ticket_failed(
+                        job, "scoring_error", failure_detail(exc)
+                    )
             except (PlatformError, DittobenchError) as exc:
                 logger.warning(
                     "top-five confirmation failed champion=%s member=%s: %s",
@@ -1445,7 +1466,9 @@ class ValidatorWorker:
                     exc,
                 )
                 if job is not None:
-                    await self._report_ticket_failed(job, "infrastructure")
+                    await self._report_ticket_failed(
+                        job, "infrastructure", failure_detail(exc)
+                    )
             finally:
                 # Release whatever this iteration actually claimed. Matching on
                 # ``entry.agent_id`` instead would leak the slot for the rest of
@@ -1923,9 +1946,20 @@ class ValidatorWorker:
             return None, None
 
     async def _report_ticket_failed(
-        self, job: JobResponse, reason: FailJobReason
+        self,
+        job: JobResponse,
+        reason: FailJobReason,
+        detail: str | None = None,
     ) -> None:
         """Best-effort hand-back of a failed ticket for immediate reissue.
+
+        ``detail`` is the reporter's own code behind ``reason``, from
+        :func:`~ditto.validator.errors.failure_detail`. ``reason`` is a
+        three-value class chosen to drive the platform's reissue policy, so it
+        says how the platform should respond and nothing about what happened;
+        ditto-subnet#279 classified twelve dead ``mnemo*`` leases off it and
+        still could not name the fault. Optional on both sides of the wire, so
+        omitting it is always safe.
 
         Closing the live lease lets the next :meth:`request_job` mint a fresh
         ticket instead of resuming the failed attempt. Strictly best-effort: an
@@ -1941,7 +1975,7 @@ class ValidatorWorker:
         """
         try:
             await asyncio.wait_for(
-                self._platform.report_ticket_failed(job, reason),
+                self._platform.report_ticket_failed(job, reason, detail),
                 timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
             )
         except Exception as e:  # noqa: BLE001 - hand-back is best-effort telemetry

@@ -25,7 +25,14 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
@@ -59,6 +66,14 @@ ValidatorRuntimeState = Literal[
 # miner's error detail, only whether the fault was the validator's own scoring
 # infrastructure or an ordinary scoring failure.
 FailJobReason = Literal["infrastructure", "scoring_error", "sandbox_oom"]
+
+FAILURE_DETAIL_MAX_LENGTH = 200
+"""Cap on ``FailJobRequest.failure_detail``, matching the platform's.
+
+The worker truncates to this before sending. A detail that overflows must never
+turn a hand-back into a 422 and leave the lease to expire silently -- that would
+trade the diagnosis this field adds for exactly the ambiguity it removes.
+"""
 
 
 class JobRequest(BaseModel):
@@ -227,6 +242,17 @@ class FailJobRequest(BaseModel):
         FailJobReason,
         Field(description="Coarse, source-free failure classification."),
     ]
+    failure_detail: Annotated[
+        str | None,
+        StringConstraints(strip_whitespace=True, max_length=FAILURE_DETAIL_MAX_LENGTH),
+        Field(
+            default=None,
+            description=(
+                "Reporter's own failure code or short note behind ``reason``. "
+                "Advisory: drives no policy, unsigned, and optional."
+            ),
+        ),
+    ] = None
     nonce: Annotated[UUID, Field(description="One-time report nonce.")]
     requested_at: Annotated[
         datetime, Field(description="UTC time at which the report was signed.")

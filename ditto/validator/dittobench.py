@@ -1382,19 +1382,29 @@ class DittobenchClient:
                 if status == _FAILED:
                     error = str(data.get("error", "unknown"))
                     infrastructure_code = _sandbox_infrastructure_failure_code(data)
+                    # `code=` is what stops the scorer's own classifier from
+                    # dying here. All five infrastructure codes collapse into
+                    # one `infrastructure` hand-back, so without it the specific
+                    # code survives only in a validator-host log line -- which is
+                    # why ditto-subnet#279 could not name the ~60-minute
+                    # `mnemo*` killer. It now reaches the ticket as
+                    # `failure_detail`.
                     if infrastructure_code == "sandbox_oom":
                         raise SandboxOomError(
-                            f"run {run_id} exhausted the sandbox memory allowance"
+                            f"run {run_id} exhausted the sandbox memory allowance",
+                            code=infrastructure_code,
                         )
                     if infrastructure_code is not None:
                         raise ValidatorInfrastructureError(
                             f"run {run_id} reported validator infrastructure "
-                            f"failure: {infrastructure_code}"
+                            f"failure: {infrastructure_code}",
+                            code=infrastructure_code,
                         )
                     if _is_embedding_infrastructure_failure(error):
                         raise ValidatorInfrastructureError(
                             f"run {run_id} lost validator embedding infrastructure: "
-                            f"{error}"
+                            f"{error}",
+                            code="embedding_provider_unavailable",
                         )
                     raise DittobenchError(f"run {run_id} failed: {error}")
                 # Never sleep past the budget: the abort must keep the whole

@@ -31,6 +31,12 @@ SHARED_MODELS = [
     "ValidatorHeartbeatResponse",
     "LedgerEntry",
     "LedgerResponse",
+    # The ticket hand-back. Added when ``failure_detail`` did: it is the first
+    # field on this route whose shape (optional, defaulted, length-bounded) is
+    # itself the backward-compatibility guarantee, and a golden is the only
+    # thing that notices if one repo quietly drops the default.
+    "FailJobRequest",
+    "FailJobResponse",
 ]
 
 # Cosmetic JSON-Schema keys that carry prose/illustration, not structure.

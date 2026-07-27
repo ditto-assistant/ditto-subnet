@@ -275,8 +275,11 @@ class TestHangingAgentIsResolvedNotAbandoned:
         await asyncio.wait_for(worker.run_once(set_weights=False), timeout=30)
 
         platform.report_ticket_failed.assert_awaited_once()
-        _, reason = platform.report_ticket_failed.await_args.args
+        _, reason, detail = platform.report_ticket_failed.await_args.args
         assert reason == "scoring_error"
+        # And the hand-back names the cause, so an operator reading the ticket
+        # sees "LeaseDeadlineError: ..." rather than an unlabelled class.
+        assert detail.startswith("LeaseDeadlineError")
 
     async def test_the_ticket_is_resolved_rather_than_left_to_expire(self) -> None:
         deadline = datetime.now(UTC) + timedelta(
@@ -288,7 +291,7 @@ class TestHangingAgentIsResolvedNotAbandoned:
 
         # Resolved: the hand-back landed, and it landed while the lease was
         # still alive so the platform can accept it.
-        handed_job, _ = platform.report_ticket_failed.await_args.args
+        handed_job, _, _ = platform.report_ticket_failed.await_args.args
         assert handed_job.deadline == deadline
         assert datetime.now(UTC) < deadline
 
@@ -358,8 +361,11 @@ class TestHangingAgentIsResolvedNotAbandoned:
 
         await worker.run_once(set_weights=False)
 
-        _, reason = platform.report_ticket_failed.await_args.args
+        _, reason, detail = platform.report_ticket_failed.await_args.args
         assert reason == "infrastructure"
+        # An error with no structured code still names itself, which beats the
+        # three-value class and nothing else.
+        assert detail == "ValidatorInfrastructureError: ollama forwarder lost"
 
 
 class TestTheHandBackItselfIsBounded:

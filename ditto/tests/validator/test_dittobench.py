@@ -13,6 +13,7 @@ from uuid import UUID
 import httpx
 import pytest
 
+from ditto.api_models.validator import FailJobRequest
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
     ValidatorComponentIdentity,
@@ -28,9 +29,11 @@ from ditto.validator.dittobench import (
     safe_progress_snapshot,
 )
 from ditto.validator.errors import (
+    FAILURE_DETAIL_MAX_LENGTH,
     DittobenchError,
     SandboxOomError,
     ValidatorInfrastructureError,
+    failure_detail,
 )
 
 _REVISION = "ab" * 20
@@ -1584,6 +1587,62 @@ async def test_sandbox_resource_failure_is_retryable_infrastructure(
                 "run-1", expected_bench_version=3
             )
     assert private_marker not in str(caught.value)
+    # The scorer's own classifier survives the raise. All five codes collapse
+    # into one `infrastructure` hand-back, so without this the specific code
+    # existed only in a validator-host log line -- which is why ditto-subnet#279
+    # could not name what killed a `mnemo*` run at ~60 minutes. It now rides the
+    # wire as `failure_detail` and lands on the ticket.
+    assert caught.value.code == code
+    assert failure_detail(caught.value) == code
+
+
+@pytest.mark.asyncio
+async def test_legacy_embedding_failure_is_labelled_with_its_code() -> None:
+    # The pre-structured-code rollout path. It is still a known infrastructure
+    # class, so it reports the same code the structured payload would.
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"status": "failed", "error": "ollama embed request failed"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=7
+            )
+    assert failure_detail(caught.value) == "embedding_provider_unavailable"
+
+
+def test_failure_detail_falls_back_to_the_exception_when_uncoded() -> None:
+    # An unclassified failure still names itself, which beats a three-value
+    # class and nothing else.
+    assert (
+        failure_detail(DittobenchError("run r-1 failed: boom"))
+        == "DittobenchError: run r-1 failed: boom"
+    )
+
+
+def test_failure_detail_is_truncated_to_the_wire_cap() -> None:
+    # Enforced on the sending side, not merely respected: an overlong detail
+    # would be rejected 422 and lose the whole hand-back, turning a diagnosis
+    # into the silent expiry the field exists to prevent.
+    detail = failure_detail(DittobenchError("x" * 5000))
+    assert len(detail) == FAILURE_DETAIL_MAX_LENGTH
+    assert FailJobRequest.model_fields["failure_detail"].default is None
+    parsed = FailJobRequest.model_validate(
+        {
+            "validator_hotkey": "5" + "A" * 47,
+            "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+            "ticket_deadline": "2026-07-14T12:30:00Z",
+            "reason": "scoring_error",
+            "failure_detail": detail,
+            "nonce": "550e8400-e29b-41d4-a716-446655440001",
+            "requested_at": "2026-07-14T12:00:00Z",
+            "signature": "ab" * 64,
+        }
+    )
+    assert parsed.failure_detail == detail
 
 
 @pytest.mark.asyncio

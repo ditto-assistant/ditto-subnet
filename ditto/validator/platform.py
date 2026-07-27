@@ -177,7 +177,10 @@ class PlatformClient:
         return InferenceExchangeResponse.model_validate(response.json())
 
     async def report_ticket_failed(
-        self, job: JobResponse, reason: FailJobReason
+        self,
+        job: JobResponse,
+        reason: FailJobReason,
+        failure_detail: str | None = None,
     ) -> FailJobResponse:
         """Hand a failed ticket back so the platform reissues a fresh lease.
 
@@ -188,6 +191,12 @@ class PlatformClient:
         any non-200; callers MUST treat this as best-effort and never let a
         failed report crash the scoring sweep — an old platform without this
         endpoint just leaves the ticket to expire on its own, exactly as before.
+
+        ``failure_detail`` is the reporter's own code behind ``reason`` (see
+        :func:`ditto.validator.errors.failure_detail`). It is optional and
+        unsigned, exactly as ``reason`` is, so a platform predating the field
+        ignores it and a validator predating it simply omits it. Bounded by the
+        wire model, and truncated before it gets here.
         """
         url = f"{self._base}{_PREFIX}/job/fail"
         requested_at = datetime.now(UTC)
@@ -197,6 +206,7 @@ class PlatformClient:
             agent_id=job.agent_id,
             ticket_deadline=job.deadline,
             reason=reason,
+            failure_detail=failure_detail,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_job_fail_request(
@@ -210,7 +220,13 @@ class PlatformClient:
         )
         try:
             resp = await self._client.post(
-                url, headers=self._headers, json=payload.model_dump(mode="json")
+                url,
+                headers=self._headers,
+                # exclude_none drops only failure_detail — every other field on
+                # this model is required and non-None — so a report with no
+                # detail is byte-identical to what this client sent before the
+                # field existed, and an older platform sees no new key at all.
+                json=payload.model_dump(mode="json", exclude_none=True),
             )
         except httpx.HTTPError as e:
             raise PlatformError(f"job fail report failed: {e}") from e

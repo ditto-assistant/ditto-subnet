@@ -203,6 +203,80 @@
     ],
     "type": "object"
   },
+  "FailJobRequest": {
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "failure_detail": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "reason": {
+        "enum": [
+          "infrastructure",
+          "scoring_error",
+          "sandbox_oom"
+        ],
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "pattern": "^[0-9a-fA-F]{128}$",
+        "type": "string"
+      },
+      "ticket_deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "agent_id",
+      "ticket_deadline",
+      "reason",
+      "nonce",
+      "requested_at",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "FailJobResponse": {
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "reopened": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "agent_id",
+      "reopened"
+    ],
+    "type": "object"
+  },
   "LedgerEntry": {
     "$defs": {
       "AgentStatus": {

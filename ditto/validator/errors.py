@@ -12,7 +12,21 @@ class ValidatorConfigError(ValidatorError):
 
 
 class DittobenchError(ValidatorError):
-    """Raised when a dittobench-api run fails or times out."""
+    """Raised when a dittobench-api run fails or times out.
+
+    ``code`` is the scorer's own machine-readable failure code when the payload
+    carried one (see ``dittobench._SANDBOX_INFRASTRUCTURE_CODES``). It exists
+    because that code used to die here: the worker collapsed all five sandbox
+    infrastructure codes into one unlabelled ``infrastructure`` hand-back and the
+    specific code survived only in a log line on the validator host. ditto-subnet#279
+    read twelve dead ``mnemo*`` leases off the ticket ledger and still could not
+    name what killed them at ~60 minutes, for that reason alone. Now it rides the
+    wire in ``FailJobRequest.failure_detail`` and lands on the ticket.
+    """
+
+    def __init__(self, *args: object, code: str | None = None) -> None:
+        super().__init__(*args)
+        self.code = code
 
 
 class ValidatorInfrastructureError(DittobenchError):
@@ -51,6 +65,36 @@ class SandboxOomError(DittobenchError):
 
 class PlatformError(ValidatorError):
     """Raised when a platform ``/validator/*`` call fails."""
+
+
+FAILURE_DETAIL_MAX_LENGTH = 200
+"""Mirrors ``ditto.api_models.validator.FAILURE_DETAIL_MAX_LENGTH``.
+
+Duplicated rather than imported so this module keeps its zero-dependency shape;
+:func:`failure_detail` asserts nothing about it beyond truncating to it, and the
+wire model is the enforcing side.
+"""
+
+
+def failure_detail(error: BaseException) -> str:
+    """Bounded, machine-first description of why an attempt died.
+
+    Prefers the scorer's structured code, because that is the field an operator
+    can group by and the thing ditto-subnet#279 could not recover. Falls back to
+    the exception type and message, which still beats the status quo of a
+    three-value class and nothing else.
+
+    Always truncates to :data:`FAILURE_DETAIL_MAX_LENGTH`. Sending an overlong
+    detail would be rejected 422 by the platform and lose the whole hand-back,
+    turning a diagnosis into the silent expiry the field exists to prevent -- so
+    the cap is enforced here, on the sending side, not merely respected.
+    """
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and code.strip():
+        return code.strip()[:FAILURE_DETAIL_MAX_LENGTH]
+    message = str(error).strip()
+    detail = f"{type(error).__name__}: {message}" if message else type(error).__name__
+    return detail[:FAILURE_DETAIL_MAX_LENGTH]
 
 
 class WeightSubmissionError(ValidatorError):
