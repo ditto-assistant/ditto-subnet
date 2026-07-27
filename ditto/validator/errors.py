@@ -53,6 +53,25 @@ class LeaseDeadlineError(DittobenchError):
     """
 
 
+class LeaseRevokedError(ValidatorError):
+    """The platform authoritatively stopped holding the lease this run needed.
+
+    Not a failure of the artifact, of this host, or of the run. The platform owns
+    lease assignment; when its heartbeat roster stops listing a lease (an
+    operator eviction, most often), continuing to score is pure waste — a full
+    host slot burned for up to the lease TTL to produce a score the platform will
+    refuse with a clean 409.
+
+    Deliberately **not** a :class:`DittobenchError`, so it cannot be swallowed by
+    the ``(DittobenchError, PlatformError)`` hand-back and cannot be reordered
+    into or out of the :class:`LeaseDeadlineError` branch by accident. It gets
+    its own handler that reports *nothing* back: there is no ticket left to hand
+    back, ``scoring_error`` would consume an attempt the platform already took
+    away, and ``infrastructure`` would mint a no-fault grant and re-lease the
+    submission forever.
+    """
+
+
 class SandboxOomError(DittobenchError):
     """The miner sandbox exceeded its bounded memory allowance.
 

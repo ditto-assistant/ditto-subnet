@@ -450,11 +450,67 @@ class ValidatorHeartbeatRequest(BaseModel):
         return self
 
 
+class HeldLease(BaseModel):
+    """One lease the platform's ledger says this validator holds right now.
+
+    The ledger is the only authority on lease assignment, so this is what the
+    validator should be executing — not what it believes it is executing.
+    ``deadline`` is carried for logging and future use; it is deliberately *not*
+    an identity term for the reporter's cancel decision, because a lease that is
+    re-issued in place keeps its ``(slot_id, agent_id)`` while its deadline
+    moves, and a deadline mismatch must never be able to authorize a kill.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    slot_id: Annotated[
+        str,
+        Field(pattern=r"^slot-[0-7]$", description="Execution slot holding the lease."),
+    ]
+    agent_id: Annotated[UUID, Field(description="Agent this lease is scoped to.")]
+    bench_version: Annotated[
+        int, Field(ge=1, description="Benchmark version the lease was issued for.")
+    ]
+    deadline: Annotated[
+        datetime, Field(description="UTC instant after which the lease lapses.")
+    ]
+
+
 class ValidatorHeartbeatResponse(BaseModel):
-    """Acknowledgement that a signed heartbeat was persisted."""
+    """Acknowledgement that a signed heartbeat was persisted.
+
+    ``leases`` is heartbeat protocol **17**: the platform's authoritative roster
+    of the leases this validator currently holds. Its two absent-ish values are
+    different states and must never be collapsed:
+
+    * ``None`` — *the platform did not tell you.* The reporter declared a
+      protocol below 17, the roster read failed, or the peer is a platform old
+      enough not to have this field at all. Carries no information about any
+      lease and can never justify stopping a run.
+    * ``[]`` — *the platform told you that you hold nothing.* An authoritative,
+      successfully-derived answer, and the one case where a reporter with a
+      running benchmark should stop it.
+
+    A reporter is expected to cancel a run only when the slot it advertised in
+    the very request that produced this response is missing from a non-``None``
+    roster. That request-then-read ordering is what makes the roster safe to act
+    on without any clock comparison: the platform necessarily read its ledger
+    after the reporter had already claimed the slot it sent.
+    """
 
     accepted: bool
     seen_at: datetime
+    leases: Annotated[
+        list[HeldLease] | None,
+        Field(
+            default=None,
+            description=(
+                "Protocol v17 authoritative lease roster. ``null`` means "
+                "'not answered' and is never grounds to cancel work; an empty "
+                "list means 'you hold no lease'."
+            ),
+        ),
+    ] = None
 
 
 class ArtifactResponse(BaseModel):

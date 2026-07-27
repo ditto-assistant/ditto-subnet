@@ -27,7 +27,17 @@ from ditto import __version__
 # a platform that has not shipped v16 awareness rejects the payload during
 # request parsing, never refreshes ``seen_at``, and force-expires the very lease
 # this is meant to protect.
-HEARTBEAT_PROTOCOL_VERSION = 16
+# v17 reads the platform's authoritative lease roster off the heartbeat
+# *response* and cancels any run whose lease it no longer lists. Nothing about
+# the request changes -- the signing bytes are untouched again -- so the bump
+# exists purely to negotiate: the platform sends a roster only to a reporter
+# that declared 17, which is what keeps a v15 or v16 build on the same fleet
+# behaving exactly as it does today. The ordering rule inverts relative to v15
+# and v16: because the new field is on the response and the response model does
+# not forbid extras, a v17 validator against a pre-v17 platform simply parses
+# ``leases`` as absent -- "not answered" -- and cancels nothing. So this side
+# can ship first, and the platform half can land whenever it is ready.
+HEARTBEAT_PROTOCOL_VERSION = 17
 
 
 @dataclass(frozen=True)

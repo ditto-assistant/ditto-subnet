@@ -37,6 +37,7 @@ from ditto.api_models.benchmark_progress import (
 from ditto.api_models.validator import (
     ConfirmationDatasetPin,
     ValidatorHeartbeatRequest,
+    ValidatorHeartbeatResponse,
     ValidatorRuntimeState,
 )
 from ditto.api_models.validator_capabilities import (
@@ -50,11 +51,17 @@ from ditto.validator.crn import confirmation_seeds
 from ditto.validator.errors import (
     DittobenchError,
     LeaseDeadlineError,
+    LeaseRevokedError,
     PlatformError,
     SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
     failure_detail,
+)
+from ditto.validator.lease_roster import (
+    RosterUnknown,
+    plan_cancellations,
+    read_roster,
 )
 from ditto.validator.onchain_seed import seed_matches
 from ditto.validator.signing import sign_heartbeat, sign_score
@@ -307,6 +314,10 @@ class _SlotState:
     last_progress_heartbeat_monotonic: float | None = None
     last_progress_bucket: int | None = None
     retain_failed_progress_until: float = 0.0
+    # Set when the platform's heartbeat roster stops listing this slot's lease.
+    # Only ever *requests* a stop: the scoring path owns the unwind, so the
+    # scorer-side container kill and the slot reset keep their single home.
+    revoked: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 _CURRENT_SLOT: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -568,6 +579,31 @@ class ValidatorWorker:
                             slot_scored.append(
                                 scored_agent_stat(job.miner_hotkey, report, details)
                             )
+                        except LeaseRevokedError as error:
+                            # Nothing is reported back, and that is the point.
+                            # The platform revoked this lease itself, so there
+                            # is no ticket left to hand back: `scoring_error`
+                            # would consume an attempt the platform already took
+                            # away, and `infrastructure` would mint a no-fault
+                            # grant and re-lease the submission forever. Silence
+                            # here is the correct wire behaviour.
+                            #
+                            # Listed first, and its own exception hierarchy, so
+                            # it can never be reordered into the DittobenchError
+                            # branch below the way LeaseDeadlineError can.
+                            logger.warning(
+                                "lease for agent %s on %s was revoked by the "
+                                "platform; slot freed immediately instead of "
+                                "at the lease TTL: %s",
+                                job.agent_id,
+                                slot_id,
+                                error,
+                            )
+                            # The scoring path may have been cut before its own
+                            # cleanup ran, so stop advertising a lease this
+                            # worker no longer holds.
+                            self._clear_active_ticket()
+                            slot_failed += 1
                         except LeaseDeadlineError as error:
                             # Reported as scoring_error, never infrastructure.
                             # See LeaseDeadlineError: an artifact that consumed
@@ -940,11 +976,57 @@ class ValidatorWorker:
             # rejection must revoke an earlier success instead of leaving the
             # updater-visible state permanently sticky.
             self._platform_accepted = response.accepted
+            self._apply_lease_roster(response, advertised=capacity)
             return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
+            # Reached when the heartbeat never landed: unreachable platform,
+            # rejection, malformed body. Nothing is cancelled from here, and
+            # that is structural rather than a rule to remember -- the roster is
+            # only ever read from a response that exists.
             self._platform_accepted = False
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
             return False
+
+    def _apply_lease_roster(
+        self, response: ValidatorHeartbeatResponse, *, advertised: BenchmarkCapacity
+    ) -> None:
+        """Stop any advertised run whose lease the platform no longer lists.
+
+        ``advertised`` is the capacity this very heartbeat carried, and pairing
+        it with that heartbeat's own answer is what makes the diff sound without
+        comparing clocks: the platform read its ledger while handling the
+        request, hence strictly after this worker had claimed every slot named in
+        it. See :mod:`ditto.validator.lease_roster`.
+
+        This is the validator voluntarily standing down because the platform
+        told it the lease is gone. It is not the platform inferring idleness from
+        silence, which is the thing ditto-platform#496 exists to forbid: a slot
+        that has never reported is *more* protected here, not less, because a
+        lease the platform still holds is listed whether or not it has heard
+        progress on it.
+        """
+        roster = read_roster(response)
+        if isinstance(roster, RosterUnknown):
+            logger.debug("heartbeat carried no lease roster: %s", roster.reason)
+            return
+        for slot_id, agent_id in plan_cancellations(roster, advertised=advertised):
+            slot = self._slots.get(slot_id)
+            if slot is None or slot.active_agent_id != agent_id:
+                # The run finished, or the slot moved on, between building the
+                # request and reading its answer. A normal no-op: any score it
+                # already produced is refused with a clean 409 if the lease
+                # really did go away.
+                continue
+            if slot.revoked.is_set():
+                continue
+            logger.warning(
+                "platform no longer holds the lease for agent %s on %s; "
+                "cancelling the run rather than spending the rest of the lease "
+                "on a score it will refuse",
+                agent_id,
+                slot_id,
+            )
+            slot.revoked.set()
 
     async def _heartbeat_while_active(self, stop: asyncio.Event) -> None:
         """Refresh ``running_benchmark`` until the current scorer call ends."""
@@ -2076,6 +2158,11 @@ class ValidatorWorker:
         The margin is left deliberately outside the bound so the caller still
         has time to land the failure report.
         """
+        slot = self._slot_state()
+        # A revocation belongs to the lease that provoked it, never to the next
+        # one this slot picks up. If the new lease is also gone the very next
+        # heartbeat says so again.
+        slot.revoked.clear()
         budget = lease_budget_seconds(job.deadline)
         if budget <= 0:
             raise LeaseDeadlineError(
@@ -2084,13 +2171,60 @@ class ValidatorWorker:
             )
         try:
             async with asyncio.timeout(budget):
-                return await self._score_job(job)
+                return await self._score_until_revoked(job, slot)
         except TimeoutError as error:
             raise LeaseDeadlineError(
                 f"scoring agent {job.agent_id} did not resolve within the "
                 f"{budget:.0f}s its lease could fund before "
                 f"{job.deadline.isoformat()}"
             ) from error
+
+    async def _score_until_revoked(
+        self, job: JobResponse, slot: _SlotState
+    ) -> ScoreReport:
+        """Score, but stop the moment the platform says the lease is gone.
+
+        Cancellation works exactly the way ``asyncio.timeout`` already makes it
+        work here: a watchdog cancels *this* task, so the ``CancelledError``
+        lands on whichever await the run is actually parked on. That is what
+        lets ``DittobenchClient._poll``'s own ``except CancelledError`` reach the
+        scorer and kill the run's container, and it is why the scoring call stays
+        inline -- moving it into a child task would put it outside the reach of
+        the enclosing lease-deadline timeout and quietly break ditto-subnet#279.
+
+        The ``CancelledError`` is only re-labelled when the revocation is what
+        caused it. If the lease deadline fired too, #279 keeps the attribution:
+        that path must still hand the ticket back as ``scoring_error``, and a
+        revocation racing in at the very end must not turn it into silence.
+        """
+        running = asyncio.current_task()
+
+        async def watch_for_revocation() -> None:
+            await slot.revoked.wait()
+            if running is not None:
+                running.cancel()
+
+        watchdog = asyncio.create_task(watch_for_revocation())
+        try:
+            return await self._score_job(job)
+        except asyncio.CancelledError:
+            if not slot.revoked.is_set() or lease_budget_seconds(job.deadline) <= 0:
+                raise
+            # Balance the watchdog's cancel so an enclosing ``asyncio.timeout``
+            # does not later read this as its own expiry.
+            if running is not None:
+                running.uncancel()
+            raise LeaseRevokedError(
+                f"platform no longer holds the lease for agent {job.agent_id} "
+                f"on {job.slot_id}; stopping the run"
+            ) from None
+        finally:
+            # Cancelled, never awaited. The watchdog has no await between
+            # observing the event and calling ``cancel``, so cancelling it here
+            # provably stops it from firing late into the next lease -- while
+            # awaiting it would risk swallowing this task's *own* cancellation
+            # and losing the lease-deadline abort it was meant to preserve.
+            watchdog.cancel()
 
     async def _score_job(self, job: JobResponse) -> ScoreReport:
         """Score one issued ticket against its platform-pinned dataset.

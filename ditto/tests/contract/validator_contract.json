@@ -2504,9 +2504,53 @@
     "type": "object"
   },
   "ValidatorHeartbeatResponse": {
+    "$defs": {
+      "HeldLease": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "slot_id": {
+            "pattern": "^slot-[0-7]$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot_id",
+          "agent_id",
+          "bench_version",
+          "deadline"
+        ],
+        "type": "object"
+      }
+    },
     "properties": {
       "accepted": {
         "type": "boolean"
+      },
+      "leases": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/HeldLease"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "seen_at": {
         "format": "date-time",
