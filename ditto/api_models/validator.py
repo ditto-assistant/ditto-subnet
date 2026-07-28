@@ -67,12 +67,45 @@ ValidatorRuntimeState = Literal[
 # infrastructure or an ordinary scoring failure.
 FailJobReason = Literal["infrastructure", "scoring_error", "sandbox_oom"]
 
-FAILURE_DETAIL_MAX_LENGTH = 200
+FAILURE_DETAIL_MAX_LENGTH = 4096
 """Cap on ``FailJobRequest.failure_detail``, matching the platform's.
 
-The worker truncates to this before sending. A detail that overflows must never
-turn a hand-back into a 422 and leave the lease to expire silently -- that would
-trade the diagnosis this field adds for exactly the ambiguity it removes.
+Was 200 -- a failure code plus a short qualifier, and nothing more. The first
+time this field carried a real diagnostic message it cut it mid-word:
+
+    ``... the platform rejected 81 of the harness's inference r``
+
+losing ``equest(s) outright, before reserving any capacity``, the clause that
+said what the platform had actually done. The count and the verb survived only
+by where they happened to fall in the sentence, and the fragment left behind
+read as a finished thought.
+
+4096 is a deliberate ceiling, not "unbounded": the platform stores this per
+ticket on a hot table, and its content derives from strings a miner's harness
+can influence. It is ~16x the longest message observed here.
+
+The worker still truncates to this before sending -- a detail that overflows
+must never turn a hand-back into a 422 and leave the lease to expire silently,
+which would trade the diagnosis this field adds for exactly the ambiguity it
+removes -- but :func:`ditto.validator.errors.failure_detail` now marks the cut
+instead of making it silently.
+
+This number must equal the platform's. ``ditto/tests/contract`` pins it: the
+golden is generated from the platform's models, and ``FailJobRequest`` is in
+``SHARED_MODELS``, so a one-sided change fails the contract test rather than
+becoming a 422 in production.
+"""
+
+LEGACY_FAILURE_DETAIL_MAX_LENGTH = 200
+"""The pre-widening cap. Still the safe value against an un-upgraded platform.
+
+Validators run mixed versions and so, at any moment, does the platform relative
+to them. Widening a ``max_length`` only ever admits more, so a validator still
+truncating to 200 keeps working against a widened platform with no change. The
+reverse -- this validator, widened, against a platform that still enforces 200 --
+is handled in :meth:`ditto.validator.platform.PlatformClient.report_ticket_failed`,
+which retries a 422'd hand-back once at this bound so the report still lands and
+only the tail of the message is lost.
 """
 
 
@@ -248,8 +281,8 @@ class FailJobRequest(BaseModel):
         Field(
             default=None,
             description=(
-                "Reporter's own failure code or short note behind ``reason``. "
-                "Advisory: drives no policy, unsigned, and optional."
+                "Reporter's own failure code or diagnostic message behind "
+                "``reason``. Advisory: drives no policy, unsigned, and optional."
             ),
         ),
     ] = None

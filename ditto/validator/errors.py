@@ -86,13 +86,53 @@ class PlatformError(ValidatorError):
     """Raised when a platform ``/validator/*`` call fails."""
 
 
-FAILURE_DETAIL_MAX_LENGTH = 200
+FAILURE_DETAIL_MAX_LENGTH = 4096
 """Mirrors ``ditto.api_models.validator.FAILURE_DETAIL_MAX_LENGTH``.
 
 Duplicated rather than imported so this module keeps its zero-dependency shape;
 :func:`failure_detail` asserts nothing about it beyond truncating to it, and the
 wire model is the enforcing side.
 """
+
+TRUNCATION_MARKER_TEMPLATE = "...[truncated, {total} chars]"
+"""Appended when :func:`truncate_failure_detail` actually cuts something.
+
+The old 200-char cap cut
+
+    ``... the platform rejected 81 of the harness's inference r``
+
+and said nothing about having done so. What made that expensive was not the
+lost characters but the lost *signal*: the fragment ended on a word boundary
+that read as a complete finding, so there was no reason to suspect a second
+clause existed. A reader who sees this marker knows to go looking; a reader who
+does not can trust what they are holding is whole.
+
+Carries the pre-truncation length because "how much is missing" is the first
+question asked next, and it is free to record here and unrecoverable later.
+"""
+
+
+def truncate_failure_detail(detail: str, limit: int = FAILURE_DETAIL_MAX_LENGTH) -> str:
+    """Cut ``detail`` to ``limit`` characters, visibly.
+
+    Returns ``detail`` unchanged when it fits -- the overwhelmingly common case,
+    and one that must not acquire a marker it hasn't earned. Otherwise the tail
+    is replaced with :data:`TRUNCATION_MARKER_TEMPLATE` so the result is still
+    within ``limit`` *including* the marker: the point is to satisfy the wire
+    bound, so a marker that pushed the value back over it would defeat itself.
+
+    ``limit`` is a parameter rather than a constant read because the client
+    re-truncates to the legacy bound when talking to an un-upgraded platform.
+    """
+    if len(detail) <= limit:
+        return detail
+    marker = TRUNCATION_MARKER_TEMPLATE.format(total=len(detail))
+    if limit <= len(marker):
+        # Degenerate limit: no room for both. The marker alone is more useful
+        # than a prefix that lies about being whole, so keep as much of it as
+        # fits. Unreachable at either real bound (200 and 4096 both dwarf it).
+        return marker[:limit]
+    return detail[: limit - len(marker)] + marker
 
 
 def failure_detail(error: BaseException) -> str:
@@ -101,19 +141,25 @@ def failure_detail(error: BaseException) -> str:
     Prefers the scorer's structured code, because that is the field an operator
     can group by and the thing ditto-subnet#279 could not recover. Falls back to
     the exception type and message, which still beats the status quo of a
-    three-value class and nothing else.
+    three-value class and nothing else. That precedence is deliberate and load
+    bearing -- the code is what gets grouped and classified, the message is the
+    human-facing detail -- and widening the cap does not disturb it: a code is
+    short enough that the bound never applied to it in the first place. What the
+    wider bound buys is the *fallback* branch, which is where real diagnostic
+    messages live and where 200 characters was demonstrably not enough.
 
     Always truncates to :data:`FAILURE_DETAIL_MAX_LENGTH`. Sending an overlong
     detail would be rejected 422 by the platform and lose the whole hand-back,
     turning a diagnosis into the silent expiry the field exists to prevent -- so
-    the cap is enforced here, on the sending side, not merely respected.
+    the cap is enforced here, on the sending side, not merely respected. Since
+    it goes through :func:`truncate_failure_detail`, a cut now announces itself.
     """
     code = getattr(error, "code", None)
     if isinstance(code, str) and code.strip():
-        return code.strip()[:FAILURE_DETAIL_MAX_LENGTH]
+        return truncate_failure_detail(code.strip())
     message = str(error).strip()
     detail = f"{type(error).__name__}: {message}" if message else type(error).__name__
-    return detail[:FAILURE_DETAIL_MAX_LENGTH]
+    return truncate_failure_detail(detail)
 
 
 class WeightSubmissionError(ValidatorError):

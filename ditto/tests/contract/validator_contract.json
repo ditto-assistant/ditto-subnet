@@ -212,7 +212,7 @@
       "failure_detail": {
         "anyOf": [
           {
-            "maxLength": 200,
+            "maxLength": 4096,
             "type": "string"
           },
           {

@@ -21,6 +21,7 @@ from ditto.api_models.inference import (
     InferenceExchangeResponse,
 )
 from ditto.api_models.validator import (
+    LEGACY_FAILURE_DETAIL_MAX_LENGTH,
     ArtifactResponse,
     FailJobReason,
     FailJobRequest,
@@ -35,7 +36,7 @@ from ditto.api_models.validator import (
     ValidatorHeartbeatRequest,
     ValidatorHeartbeatResponse,
 )
-from ditto.validator.errors import PlatformError
+from ditto.validator.errors import PlatformError, truncate_failure_detail
 from ditto.validator.signing import (
     sign_artifact_request,
     sign_inference_exchange,
@@ -192,13 +193,17 @@ class PlatformClient:
         failed report crash the scoring sweep — an old platform without this
         endpoint just leaves the ticket to expire on its own, exactly as before.
 
-        ``failure_detail`` is the reporter's own code behind ``reason`` (see
-        :func:`ditto.validator.errors.failure_detail`). It is optional and
-        unsigned, exactly as ``reason`` is, so a platform predating the field
-        ignores it and a validator predating it simply omits it. Bounded by the
-        wire model, and truncated before it gets here.
+        ``failure_detail`` is the reporter's own code or diagnostic message
+        behind ``reason`` (see :func:`ditto.validator.errors.failure_detail`). It
+        is optional and unsigned, exactly as ``reason`` is, so a platform
+        predating the field ignores it and a validator predating it simply omits
+        it. Bounded by the wire model, and truncated before it gets here.
+
+        The bound moved 200 -> 4096, and the fleet does not upgrade atomically,
+        so this method now also handles the one skew that widening creates: a
+        detail this validator considers legal that the platform on the other end
+        still rejects. See :meth:`_post_job_fail`.
         """
-        url = f"{self._base}{_PREFIX}/job/fail"
         requested_at = datetime.now(UTC)
         nonce = uuid4()
         payload = FailJobRequest(
@@ -218,9 +223,64 @@ class PlatformClient:
                 requested_at=requested_at,
             ),
         )
+        resp = await self._post_job_fail(payload)
+        if (
+            resp.status_code == 422
+            and payload.failure_detail is not None
+            and len(payload.failure_detail) > LEGACY_FAILURE_DETAIL_MAX_LENGTH
+        ):
+            # Version skew, the only direction that can actually break. A
+            # platform that has not taken the widening still caps this field at
+            # 200 and answers 422 — and a 422 here is not a lost field, it is a
+            # lost *hand-back*: the lease stays live until its deadline and the
+            # slot sits idle, which is the silent expiry `failure_detail` was
+            # introduced to eliminate. Trading the tail of one message for the
+            # whole report is unambiguously the right side of that trade.
+            #
+            # Safe to replay with the same nonce and signature: a 422 is request
+            # validation, raised before the endpoint body runs, so the nonce was
+            # never consumed. And the signature does not cover `failure_detail`
+            # (it never has — the field is unsigned by design), so shortening it
+            # leaves the signed payload byte-identical. Nothing needs re-signing.
+            #
+            # Deliberately not a general retry: it fires once, only on 422, and
+            # only when the detail is long enough for the length bound to be a
+            # plausible cause. Any other 422 falls through to the raise below
+            # after one wasted round trip.
+            logger.info(
+                "job fail report rejected 422 with a %d-char detail; retrying "
+                "at the legacy %d-char bound (platform predates the widening) "
+                "agent=%s",
+                len(payload.failure_detail),
+                LEGACY_FAILURE_DETAIL_MAX_LENGTH,
+                job.agent_id,
+            )
+            resp = await self._post_job_fail(
+                payload.model_copy(
+                    update={
+                        "failure_detail": truncate_failure_detail(
+                            payload.failure_detail, LEGACY_FAILURE_DETAIL_MAX_LENGTH
+                        )
+                    }
+                )
+            )
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"job fail report rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return FailJobResponse.model_validate(resp.json())
+
+    async def _post_job_fail(self, payload: FailJobRequest) -> httpx.Response:
+        """POST one hand-back attempt, returning the response uninterpreted.
+
+        Split out so the legacy-bound retry in :meth:`report_ticket_failed`
+        sends through exactly the same serialization as the first attempt — in
+        particular ``exclude_none``, which is what keeps a detail-free report
+        byte-identical to the pre-``failure_detail`` wire format.
+        """
         try:
-            resp = await self._client.post(
-                url,
+            return await self._client.post(
+                f"{self._base}{_PREFIX}/job/fail",
                 headers=self._headers,
                 # exclude_none drops only failure_detail — every other field on
                 # this model is required and non-None — so a report with no
@@ -230,11 +290,6 @@ class PlatformClient:
             )
         except httpx.HTTPError as e:
             raise PlatformError(f"job fail report failed: {e}") from e
-        if resp.status_code != 200:
-            raise PlatformError(
-                f"job fail report rejected ({resp.status_code}): {resp.text[:200]}"
-            )
-        return FailJobResponse.model_validate(resp.json())
 
     async def request_top5_confirmation_job(
         self, *, champion_agent_id: UUID, member_agent_id: UUID

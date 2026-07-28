@@ -14,6 +14,8 @@ import httpx
 import pytest
 
 from ditto.api_models.validator import (
+    FAILURE_DETAIL_MAX_LENGTH,
+    LEGACY_FAILURE_DETAIL_MAX_LENGTH,
     FailJobRequest,
     JobRequest,
     JobResponse,
@@ -236,6 +238,183 @@ async def test_report_without_a_detail_sends_no_new_key() -> None:
         "requested_at",
         "signature",
     }
+
+
+def _fail_job() -> JobResponse:
+    return JobResponse(
+        agent_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
+        miner_hotkey="5MinerA" + "x" * 41,
+        sha256="ab" * 32,
+        deadline=datetime(2026, 7, 14, 12, 30, tzinfo=UTC),
+        seed=1,
+        dataset_sha256="cd" * 32,
+        run_size="full",
+    )
+
+
+async def test_a_long_detail_reaches_an_upgraded_platform_whole() -> None:
+    # The forward case, and the point of the whole change: a validator carrying
+    # the widened bound talking to a platform that has it too. The real
+    # 2026-07-27 message, which the old 200-char cap cut at "inference r", must
+    # arrive character for character.
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    job = _fail_job()
+    detail = (
+        "DittobenchError: run 2b7c6b6c-ae45-493d-b8f5-b1a4a6ff8b3a failed: "
+        "harness exhausted its inference allowance: agent-attributable "
+        "inference decline: the platform rejected 81 of the harness's "
+        "inference request(s) outright, before reserving any capacity"
+    )
+    assert len(detail) > LEGACY_FAILURE_DETAIL_MAX_LENGTH
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body["failure_detail"])
+        # Validated through the real wire model, so the length bound is the
+        # actual one and not the test's opinion of it.
+        assert FailJobRequest.model_validate(body).failure_detail == detail
+        return httpx.Response(
+            200, json={"agent_id": str(job.agent_id), "reopened": True}
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).report_ticket_failed(job, "infrastructure", detail)
+
+    assert response.reopened is True
+    # One request. No retry fires when nothing rejects the detail.
+    assert seen == [detail]
+    assert seen[0].endswith("before reserving any capacity")
+
+
+async def test_a_long_detail_is_retried_at_the_legacy_bound_on_422() -> None:
+    # Fleet version skew, the direction that can actually break something.
+    # Validators run 0.34.1 through 0.37.3 concurrently, and the platform is
+    # independently versioned relative to all of them. A widened validator
+    # reporting to a platform that still enforces 200 gets a 422 -- and a 422
+    # here does not lose a field, it loses the entire hand-back: the lease stays
+    # live to its deadline and the slot idles, which is precisely the silent
+    # expiry `failure_detail` was introduced to eliminate.
+    #
+    # So the client gives up the tail of the message rather than the report.
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    job = _fail_job()
+    detail = "D" * (LEGACY_FAILURE_DETAIL_MAX_LENGTH * 3)
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        if len(body["failure_detail"]) > LEGACY_FAILURE_DETAIL_MAX_LENGTH:
+            # Exactly what an un-upgraded platform's pydantic layer answers.
+            return httpx.Response(422, text="string_too_long")
+        return httpx.Response(
+            200, json={"agent_id": str(job.agent_id), "reopened": True}
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).report_ticket_failed(job, "infrastructure", detail)
+
+    # The hand-back landed. That is the property being defended.
+    assert response.reopened is True
+    assert len(seen) == 2
+    assert len(seen[1]["failure_detail"]) == LEGACY_FAILURE_DETAIL_MAX_LENGTH
+    # Re-truncation is visible too, so an operator reading the old platform's
+    # ticket row knows the message was cut and by how much.
+    assert seen[1]["failure_detail"].endswith("chars]")
+
+    # The retry replays the *same* signed payload. `failure_detail` is unsigned
+    # by design, so shortening it leaves the signed fields byte-identical --
+    # nothing is re-signed, and the nonce is reused deliberately: a 422 is
+    # request validation, raised before the endpoint consumes the nonce.
+    for field in ("validator_hotkey", "agent_id", "ticket_deadline", "reason"):
+        assert seen[0][field] == seen[1][field]
+    assert seen[0]["nonce"] == seen[1]["nonce"]
+    assert seen[0]["requested_at"] == seen[1]["requested_at"]
+    assert seen[0]["signature"] == seen[1]["signature"]
+    message = job_fail_signing_message(
+        validator_hotkey=seen[1]["validator_hotkey"],
+        agent_id=UUID(seen[1]["agent_id"]),
+        ticket_deadline=datetime.fromisoformat(seen[1]["ticket_deadline"]),
+        nonce=UUID(seen[1]["nonce"]),
+        requested_at=datetime.fromisoformat(seen[1]["requested_at"]),
+    )
+    assert keypair.verify(message, bytes.fromhex(seen[1]["signature"]))
+
+
+async def test_a_short_detail_is_not_retried_on_422() -> None:
+    # The retry is a targeted skew workaround, not a general one. A 422 on a
+    # detail already inside the legacy bound cannot be about length, so
+    # re-sending it would burn a round trip to get the same answer. It stays a
+    # single attempt and a typed error, exactly as before this change.
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    job = _fail_job()
+    attempts = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(422, text="some other validation failure")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformError):
+            await PlatformClient(
+                config,  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).report_ticket_failed(job, "scoring_error", "sandbox_oom")
+
+    assert attempts == 1
+
+
+async def test_a_detail_at_the_widened_cap_is_sent_unmodified() -> None:
+    # The boundary. Exactly at the cap is legal and must not be trimmed,
+    # re-marked, or otherwise touched on the way out.
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    job = _fail_job()
+    detail = "q" * FAILURE_DETAIL_MAX_LENGTH
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body["failure_detail"])
+        return httpx.Response(
+            200, json={"agent_id": str(job.agent_id), "reopened": True}
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).report_ticket_failed(job, "scoring_error", detail)
+
+    assert seen == [detail]
+    assert len(seen[0]) == FAILURE_DETAIL_MAX_LENGTH
 
 
 async def test_report_ticket_failed_raises_typed_error_on_rejection() -> None:

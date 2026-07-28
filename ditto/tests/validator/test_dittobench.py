@@ -13,7 +13,10 @@ from uuid import UUID
 import httpx
 import pytest
 
-from ditto.api_models.validator import FailJobRequest
+from ditto.api_models.validator import (
+    LEGACY_FAILURE_DETAIL_MAX_LENGTH,
+    FailJobRequest,
+)
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
     ValidatorComponentIdentity,
@@ -1627,26 +1630,101 @@ def test_failure_detail_falls_back_to_the_exception_when_uncoded() -> None:
     )
 
 
+def _fail_job_body(detail: str) -> dict[str, str]:
+    return {
+        "validator_hotkey": "5" + "A" * 47,
+        "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+        "ticket_deadline": "2026-07-14T12:30:00Z",
+        "reason": "scoring_error",
+        "failure_detail": detail,
+        "nonce": "550e8400-e29b-41d4-a716-446655440001",
+        "requested_at": "2026-07-14T12:00:00Z",
+        "signature": "ab" * 64,
+    }
+
+
 def test_failure_detail_is_truncated_to_the_wire_cap() -> None:
     # Enforced on the sending side, not merely respected: an overlong detail
     # would be rejected 422 and lose the whole hand-back, turning a diagnosis
     # into the silent expiry the field exists to prevent.
-    detail = failure_detail(DittobenchError("x" * 5000))
+    detail = failure_detail(DittobenchError("x" * 50_000))
     assert len(detail) == FAILURE_DETAIL_MAX_LENGTH
     assert FailJobRequest.model_fields["failure_detail"].default is None
-    parsed = FailJobRequest.model_validate(
-        {
-            "validator_hotkey": "5" + "A" * 47,
-            "agent_id": "550e8400-e29b-41d4-a716-446655440000",
-            "ticket_deadline": "2026-07-14T12:30:00Z",
-            "reason": "scoring_error",
-            "failure_detail": detail,
-            "nonce": "550e8400-e29b-41d4-a716-446655440001",
-            "requested_at": "2026-07-14T12:00:00Z",
-            "signature": "ab" * 64,
-        }
-    )
+    parsed = FailJobRequest.model_validate(_fail_job_body(detail))
     assert parsed.failure_detail == detail
+
+
+def test_truncation_announces_itself_instead_of_cutting_silently() -> None:
+    # The old cap cut mid-word and said nothing, so the fragment it left behind
+    # read as a finished sentence. That is what made 200 chars expensive: not
+    # the lost characters but the absence of any sign that characters were lost.
+    # A truncated detail must now be recognizable as truncated, and must still
+    # fit the wire bound *with* the marker on it -- a marker that pushed the
+    # value back over the cap would 422 the hand-back it exists to preserve.
+    detail = failure_detail(DittobenchError("x" * 50_000))
+    assert len(detail) == FAILURE_DETAIL_MAX_LENGTH
+    assert detail.endswith("chars]")
+    assert "...[truncated," in detail
+    # The pre-truncation length is recorded, because "how much is missing" is
+    # the next question and it is unrecoverable after the fact. 50_000 x's plus
+    # the "DittobenchError: " prefix.
+    assert str(50_000 + len("DittobenchError: ")) in detail
+    assert (
+        FailJobRequest.model_validate(_fail_job_body(detail)).failure_detail == detail
+    )
+
+
+def test_a_detail_that_fits_gets_no_truncation_marker() -> None:
+    # The overwhelmingly common case. A whole message must not acquire a marker
+    # it has not earned -- a reader who sees one goes looking for a missing
+    # clause, and sending them after nothing is its own kind of noise.
+    detail = failure_detail(DittobenchError("run r-1 failed: boom"))
+    assert detail == "DittobenchError: run r-1 failed: boom"
+    assert "truncated" not in detail
+
+
+def test_the_real_inference_decline_message_survives_the_round_trip() -> None:
+    # The regression this widening exists for, asserted end to end.
+    #
+    # This is the actual 2026-07-27 production value -- the message that named a
+    # root cause three separate investigations had failed to reach. At the old
+    # 200-char bound it arrived cut at "inference r", discarding "equest(s)
+    # outright, before reserving any capacity": the clause saying what the
+    # platform had done. The count (81) and the verb (rejected) survived by pure
+    # luck of word order; a sentence built slightly differently would have lost
+    # both and left a fragment that still read as complete.
+    error = DittobenchError(
+        "run 2b7c6b6c-ae45-493d-b8f5-b1a4a6ff8b3a failed: harness exhausted its "
+        "inference allowance: agent-attributable inference decline: the platform "
+        "rejected 81 of the harness's inference request(s) outright, before "
+        "reserving any capacity"
+    )
+    detail = failure_detail(error)
+
+    # Longer than the bound that truncated it, and now carried whole.
+    assert len(detail) > LEGACY_FAILURE_DETAIL_MAX_LENGTH
+    assert "truncated" not in detail
+    assert detail == f"DittobenchError: {error}"
+    # The clause the old cap ate, named explicitly: a future re-narrowing fails
+    # on the thing that was actually lost rather than on a length mismatch.
+    assert detail.endswith("outright, before reserving any capacity")
+    assert "rejected 81 of the harness's inference request(s)" in detail
+
+    # ...and it validates against the real wire model, which is where the old
+    # bound was enforced and where a one-sided revert would show up.
+    parsed = FailJobRequest.model_validate(_fail_job_body(detail))
+    assert parsed.failure_detail == detail
+
+
+def test_a_structured_code_still_wins_over_the_message() -> None:
+    # Precedence is load bearing and independent of the cap. The code is what an
+    # operator groups by and what the classifier reads; the message is the
+    # human-facing detail. Widening the bound must not tempt this into
+    # preferring the longer, richer-looking string -- a coded error still
+    # reports its code alone, exactly as before.
+    error = DittobenchError("run r-1 failed: " + "x" * 5000, code="sandbox_oom")
+    assert failure_detail(error) == "sandbox_oom"
+    assert "truncated" not in failure_detail(error)
 
 
 @pytest.mark.asyncio
