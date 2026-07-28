@@ -1556,7 +1556,6 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
         "model_relay_unavailable",
         "embedding_provider_unavailable",
         "screened_image_unavailable",
-        "inference_lane_saturated",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(
@@ -1729,9 +1728,12 @@ def test_agent_inference_codes_are_never_no_fault() -> None:
         )
     # The complement: lane saturation is deliberately kept no-fault, because a
     # miner can neither provision the platform's inference lane nor see its
-    # contention. If a future change moves it, that is a decision about who pays
-    # for a saturated rail and should have to edit this line to make it.
-    assert "inference_lane_saturated" in _SANDBOX_INFRASTRUCTURE_CODES
+    # contention. It reaches us as ``model_relay_unavailable`` with the cause in
+    # diagnostics, NOT as a code of its own -- a new no-fault code would be
+    # scoring_error on every validator that predates it, which would charge
+    # miners for a saturated platform rail for the length of the rollout.
+    assert "inference_lane_saturated" not in _SANDBOX_INFRASTRUCTURE_CODES
+    assert "model_relay_unavailable" in _SANDBOX_INFRASTRUCTURE_CODES
 
 
 @pytest.mark.asyncio

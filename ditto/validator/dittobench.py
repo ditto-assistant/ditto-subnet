@@ -247,21 +247,22 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # the platform stored, and a no-fault verdict would re-lease a permanently
     # broken image without bound.
     "screened_image_unavailable",
-    # The scorer's inference call spent its entire bounded backpressure budget
-    # waiting on a platform lane that stayed full. Split out of the generic
-    # ``model_relay_unavailable`` by dittobench-api so a saturated rail is
-    # legible without reading container logs -- but deliberately kept in THIS
-    # set, and therefore no-fault, because lane saturation is genuinely
-    # ambiguous (an under-provisioned platform, or one embed-heavy ticket
-    # crowding out its neighbours) and a miner can neither provision the lane
-    # nor observe its contention. Blaming an agent for a saturated platform rail
-    # is the mirror image of the misclassification that motivated the split.
-    "inference_lane_saturated",
 }
 
 
 # The other half of the same dittobench-api change, recorded here because this
 # set is where a future edit would be tempted to "finish the job".
+#
+# Note what is deliberately NOT here: a code for inference-lane saturation.
+# dittobench-api distinguishes a saturated platform lane in the failure's
+# DIAGNOSTICS and keeps ``model_relay_unavailable`` as the code, precisely so it
+# needs no entry in this set. Adding a code here only helps validators that have
+# already rolled; ``_sandbox_infrastructure_failure_code`` returns None for
+# anything outside this set, and None becomes fail_job("scoring_error"), so a
+# NEW no-fault code charges the miner on every validator that predates it. The
+# fleet lags scorer releases by design. Agent codes have no such hazard -- an
+# old validator's terminal default is already the intended outcome for them --
+# which is why only this direction needs the care.
 #
 # ``inference_allowance_exhausted`` is what the scorer now emits when the
 # harness spent the request-count or token allowance its own ticket granted, or
