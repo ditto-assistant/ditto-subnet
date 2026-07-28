@@ -156,13 +156,13 @@ result.
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to Qwen3-32B in a TEE; your local
   practice key and model are not included in the submitted crate.
-- Every scored run starts with a reachability preflight: the validator sends
-  one probe case whose `case_id` begins with `preflight:`, and your harness
-  must answer it by POSTing one tool call (`search_web` with any args is
-  sufficient) to the advertised `tool_endpoint`. Hard-code this on the
-  `case_id` prefix — do not rely on your model deciding to call the tool. A
-  run whose probe is never observed is retried instead of scored. See the
-  scoring engine's `PROTOCOL.md` ("Reachability preflight").
+- The validator self-checks its `tool_endpoint` before scoring. A platform
+  listener failure aborts and retries the run; if the listener is healthy and
+  your harness never calls it, the run completes with the corresponding
+  low/zero tool score and transcript evidence. New harnesses do not need a
+  synthetic `preflight:` handler. The prefix remains reserved and older
+  handlers continue to be accepted for compatibility. See the scoring engine's
+  `PROTOCOL.md` ("Tool endpoint reachability").
 - Grading is deterministic and judge-free. Tool and memory means contribute
   equally to the composite; bounded efficiency, consistency, and integrity
   checks can reduce it.

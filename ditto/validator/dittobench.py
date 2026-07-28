@@ -222,10 +222,11 @@ def _is_embedding_infrastructure_failure(error: str) -> bool:
 _SANDBOX_INFRASTRUCTURE_CODES = {
     "sandbox_oom",
     "sandbox_tmpfs_exhausted",
-    # The scorer could not start the miner container because the validator's own
-    # sandbox egress network was missing. This is validator infrastructure, not
-    # the agent's fault, so it must end the sweep and back off rather than blame
-    # and re-lease the agent in a tight resubmit loop.
+    # The scorer could not establish its validator-owned sandbox network path:
+    # either the egress network was missing at container start or the observed
+    # tool listener could not self-verify. This is validator infrastructure,
+    # not the agent's fault, so it must end the sweep and back off rather than
+    # blame and re-lease the agent in a tight resubmit loop.
     "sandbox_network_unavailable",
     # The scorer's locked-model-relay preflight failed (relay unreachable or its
     # upstream provider degraded mid-run). Also validator-side infrastructure, so
