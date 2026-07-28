@@ -235,6 +235,18 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # complete delivery. The scorer fails closed and the validator retries the
     # whole ticket later; the agent must never receive a score for this attempt.
     "embedding_provider_unavailable",
+    # The scorer could not ACQUIRE the screened image the platform itself
+    # produced -- transport error, object-store 5xx/429, a local scratch-disk
+    # fault, or a stream truncated mid-download. Charging that to the miner
+    # spends one of their finite attempts on an outage they did not cause and
+    # could not have influenced: every failure carrying this code happens
+    # strictly before ``docker run``, so the harness has not executed an
+    # instruction. Verification failures (sha256/size/image-id mismatch,
+    # malformed archive, 4xx other than 429, docker image load) are deliberately
+    # NOT given this code by the scorer -- they are deterministic in the bytes
+    # the platform stored, and a no-fault verdict would re-lease a permanently
+    # broken image without bound.
+    "screened_image_unavailable",
 }
 
 

@@ -1552,6 +1552,7 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
         "sandbox_network_unavailable",
         "model_relay_unavailable",
         "embedding_provider_unavailable",
+        "screened_image_unavailable",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(
@@ -1663,6 +1664,55 @@ async def test_unknown_sandbox_failure_code_is_not_retryable() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(DittobenchError, match="miner runtime exited"):
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=3
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        "build failed: screened image sha256 mismatch: got deadbeef",
+        "build failed: screened image size mismatch: expected 100 got 99",
+        "build failed: screened image id mismatch: expected sha256:aa got sha256:bb",
+        "build failed: screened image fetch: unexpected status 404",
+        "build failed: invalid screened image archive: manifest.json is missing",
+        "build failed: docker image load failed: exit status 1",
+        # The no-fault code's own words, in a harness's own output. Only the
+        # scorer's typed sentinel mints the code; prose in ``error`` cannot.
+        "harness never became healthy: screened image unavailable",
+    ],
+)
+async def test_screened_image_verification_failure_stays_the_agents(
+    error: str,
+) -> None:
+    """The bound on ``screened_image_unavailable``: only acquisition is no-fault.
+
+    ``infrastructure`` mints a retry grant, RAISES the attempt cap, and
+    re-leases, so a deterministic failure reaching it would re-lease the same
+    permanently broken image forever. dittobench-api keeps every verification
+    failure on the terminal ``sandbox_failure``/``retryable=false`` default;
+    assert this side agrees, so the two halves of the guarantee stay pinned
+    together across repos.
+    """
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": error,
+                "failure": {
+                    "kind": "sandbox_failure",
+                    "code": "sandbox_runtime",
+                    "retryable": False,
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(DittobenchError):
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
                 "run-1", expected_bench_version=3
             )
