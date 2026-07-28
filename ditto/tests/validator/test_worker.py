@@ -821,6 +821,115 @@ class TestRunOnce:
         assert "slot-0" not in worker._healthy_slots
         assert "slot-1" in worker._healthy_slots
 
+    async def test_idle_slot_repolls_while_a_sibling_holds_a_lease(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty poll must not retire a slot for the rest of the sweep.
+
+        ``run_once`` gathers every slot and does not return until the last one
+        does, while the slot holding a lease keeps re-claiming inside that same
+        gather. So a slot that breaks out on its first empty queue does not poll
+        again until the whole pool is idle -- up to a full ninety-minute lease,
+        and indefinitely while any sibling keeps finding work. The host then
+        serves exactly one benchmark no matter how many slots it advertises or
+        how high the platform sets ``max_concurrent_slots``, which is the fleet
+        being pinned at one busy slot per validator.
+        """
+        long_job = _job("5MinerA" + "x" * 41, slot_id="slot-0")
+        late_job = _job("5MinerB" + "x" * 41, slot_id="slot-1")
+        pending = {"slot-0": long_job, "slot-1": late_job}
+        polls: list[str] = []
+        queue_refilled = asyncio.Event()
+        claimed_late = asyncio.Event()
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            polls.append(slot_id)
+            # slot-1's work only exists after its first poll, exactly like a
+            # quorum opening or a new submission arriving mid-lease.
+            if slot_id == "slot-1" and not queue_refilled.is_set():
+                return None
+            job = pending.pop(slot_id, None)
+            if job is not None and slot_id == "slot-1":
+                claimed_late.set()
+            return job
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 2
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 2
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        # Keep the idle wait short; the mechanism under test is that the slot
+        # comes back at all, not how long it waits first.
+        monkeypatch.setattr(
+            worker_mod, "_IDLE_SLOT_REPOLL_SECONDS", 0.01, raising=False
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def score(job: JobResponse) -> ScoreReport:
+            if job.slot_id == "slot-0":
+                started.set()
+                await release.wait()
+                return _report("run-slot-0", 0.7)
+            return _report("run-slot-1", 0.8)
+
+        monkeypatch.setattr(worker, "_score_job", score)
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        queue_refilled.set()
+        stranded = False
+        try:
+            await asyncio.wait_for(claimed_late.wait(), timeout=2)
+        except TimeoutError:
+            stranded = True
+        release.set()
+        outcome = await asyncio.wait_for(sweep, timeout=5)
+
+        assert not stranded, (
+            "slot-1 never polled again after its first empty queue, so it sat "
+            "out the whole sweep while slot-0 held a lease"
+        )
+        assert polls.count("slot-1") >= 2
+        # Both leases were claimed inside the one sweep, and neither slot was
+        # left holding work the sweep never handed out.
+        assert outcome.queue_depth == 2
+        assert pending == {}
+
+    async def test_idle_slots_end_the_sweep_when_nothing_is_running(self) -> None:
+        """With no lease in flight an empty poll still ends the sweep at once.
+
+        The waiting above is bounded by a sibling actually holding a lease. An
+        idle pool must not spin: it has to fall through to the ordinary sweep
+        cadence exactly as before.
+        """
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(return_value=None)
+        config = _config()
+        config.benchmark_capacity = 4
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 4
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert outcome.queue_depth == 0
+        # One poll per slot and no more: nothing was running, so nothing waited.
+        assert platform.request_job.await_count == 4
+
     async def test_compose_default_capacity_allocates_dense_slot_ids(self) -> None:
         """The shipped compose default must produce that many dense slots.
 

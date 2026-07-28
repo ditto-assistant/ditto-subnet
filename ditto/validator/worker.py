@@ -158,6 +158,12 @@ _FAIL_REPORT_TIMEOUT_SECONDS = 30.0
 # progress reporting interval. A new ticket supersedes it immediately.
 _FAILED_PROGRESS_MIN_VISIBLE_SECONDS = 60.0
 _RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
+# How long a slot that found an empty queue waits before polling again, while a
+# sibling slot is still executing a lease. It only bounds how quickly free
+# capacity notices that the queue refilled; the platform's cap, not this, decides
+# how many slots actually receive tickets. Short enough that a quorum opening is
+# picked up promptly, long enough that seven idle slots are not a poll storm.
+_IDLE_SLOT_REPOLL_SECONDS = 15.0
 
 # Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
 # KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
@@ -522,12 +528,24 @@ class ValidatorWorker:
         # execute independently: a sandbox/provider failure drains only that slot
         # while healthy siblings continue. The shared counter keeps the sweep's
         # historical queue_limit bound across the whole worker pool.
+        #
+        # ``running`` counts the slots currently executing a lease. It is what
+        # lets an empty poll tell "this sweep is finished" apart from "the queue
+        # had nothing for me *this second*" -- see the ``job is None`` branch in
+        # ``run_slot``, which must not retire a slot for the rest of the sweep.
         if scoring_available:
             budget_lock = asyncio.Lock()
             claimed = 0
+            running = 0
+            # Set whenever a slot finishes a lease, so a waiting slot re-polls
+            # the instant the pool changes instead of sitting out the interval.
+            # Cleared and read under ``budget_lock`` together with ``running``,
+            # which is what makes the wakeup impossible to miss: a sibling that
+            # has not yet decremented is a sibling whose ``set`` is still to come.
+            lease_finished = asyncio.Event()
 
             async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
-                nonlocal claimed
+                nonlocal claimed, running
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
@@ -553,7 +571,33 @@ class ValidatorWorker:
                         if job is None:
                             async with budget_lock:
                                 claimed -= 1
-                            break
+                                siblings_running = running
+                                if siblings_running:
+                                    lease_finished.clear()
+                            if siblings_running == 0:
+                                # Nothing of this worker's is in flight, so an
+                                # empty poll really is an empty queue. End the
+                                # sweep and let the ordinary sweep cadence bring
+                                # the whole pool back at once.
+                                break
+                            # A sibling still holds a lease, and ``asyncio.gather``
+                            # below does not return until it does -- up to the
+                            # full ninety-minute lease. Breaking here would retire
+                            # this slot for that entire time, and the sibling's own
+                            # loop keeps re-claiming, so the sweep never ends and
+                            # the slots that lost the first poll never poll again.
+                            # That is how a host advertising eight slots serves
+                            # exactly one benchmark no matter how high the
+                            # platform's cap is set. The queue refills constantly
+                            # (quorum openings, expiries, new submissions), so wait
+                            # and ask again instead of leaving the sweep.
+                            await self._sleep_or_interrupt(
+                                _IDLE_SLOT_REPOLL_SECONDS,
+                                stop_requested,
+                                drain_requested,
+                                lease_finished,
+                            )
+                            continue
                         slot_claimed += 1
                         if job.slot_id != slot_id:
                             await self._report_ticket_failed(
@@ -568,6 +612,11 @@ class ValidatorWorker:
                                 job.deadline.isoformat(),
                             )
                             continue
+                        # From here to the ``finally`` this slot is executing a
+                        # lease, which is exactly the window that keeps an idle
+                        # sibling waiting rather than abandoning the sweep.
+                        async with budget_lock:
+                            running += 1
                         try:
                             report = await self._score_job_within_lease(job)
                             self._ledger_changed.set()
@@ -668,6 +717,10 @@ class ValidatorWorker:
                                 job, "scoring_error", failure_detail(error)
                             )
                             slot_failed += 1
+                        finally:
+                            async with budget_lock:
+                                running -= 1
+                                lease_finished.set()
                     return slot_scored, slot_failed, slot_claimed
                 finally:
                     _CURRENT_SLOT.reset(token)
@@ -3049,3 +3102,30 @@ class ValidatorWorker:
         """Sleep up to ``seconds``, returning early if ``stop`` is set."""
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=seconds)
+
+    @staticmethod
+    async def _sleep_or_interrupt(
+        seconds: float, *events: asyncio.Event | None
+    ) -> None:
+        """Sleep up to ``seconds``, returning early if any event is set.
+
+        The in-sweep twin of :meth:`_sleep_or_stop_or_drain`, which requires a
+        non-optional ``stop``. Inside ``run_once`` both the stop and drain events
+        are optional, so a waiting slot has to tolerate having neither and still
+        honour whichever it was given -- otherwise an idle slot's wait would add
+        its full duration to every shutdown and drain.
+        """
+        waits = [
+            asyncio.create_task(event.wait()) for event in events if event is not None
+        ]
+        if not waits:
+            await asyncio.sleep(seconds)
+            return
+        try:
+            await asyncio.wait(
+                waits, timeout=seconds, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            for task in waits:
+                task.cancel()
+            await asyncio.gather(*waits, return_exceptions=True)
