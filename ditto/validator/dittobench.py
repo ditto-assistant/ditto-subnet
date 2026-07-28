@@ -247,7 +247,42 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # the platform stored, and a no-fault verdict would re-lease a permanently
     # broken image without bound.
     "screened_image_unavailable",
+    # The scorer's inference call spent its entire bounded backpressure budget
+    # waiting on a platform lane that stayed full. Split out of the generic
+    # ``model_relay_unavailable`` by dittobench-api so a saturated rail is
+    # legible without reading container logs -- but deliberately kept in THIS
+    # set, and therefore no-fault, because lane saturation is genuinely
+    # ambiguous (an under-provisioned platform, or one embed-heavy ticket
+    # crowding out its neighbours) and a miner can neither provision the lane
+    # nor observe its contention. Blaming an agent for a saturated platform rail
+    # is the mirror image of the misclassification that motivated the split.
+    "inference_lane_saturated",
 }
+
+
+# The other half of the same dittobench-api change, recorded here because this
+# set is where a future edit would be tempted to "finish the job".
+#
+# ``inference_allowance_exhausted`` is what the scorer now emits when the
+# harness spent the request-count or token allowance its own ticket granted, or
+# sent a single request too large to reserve (platform decline codes
+# 4102/4104/4109). The lease was alive and the platform healthy in every one of
+# those; the agent simply spent what it was given.
+#
+# It MUST NOT be added to ``_SANDBOX_INFRASTRUCTURE_CODES``. Every code in that
+# set is no-fault: it mints a retry grant, RAISES the attempt cap, and
+# re-leases. An agent that reliably exhausts its own allowance would therefore
+# re-lease itself forever -- exactly the loop that let the mnemox family reach
+# far past its attempt budget with zero scores while holding validator slots.
+#
+# Belt and braces: the scorer sends this as ``sandbox_failure`` /
+# ``retryable: false``, and ``_sandbox_infrastructure_failure_code`` requires
+# ``validator_infrastructure`` AND ``retryable is True`` before it even looks at
+# the code. So the agent codes are excluded three independent ways. The test
+# ``test_agent_attributable_inference_failures_stay_the_agents`` pins all three.
+_AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset({"inference_allowance_exhausted"})
+
+assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
 
 
 def _sandbox_infrastructure_failure_code(payload: dict[str, object]) -> str | None:

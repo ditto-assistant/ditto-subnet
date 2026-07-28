@@ -21,11 +21,14 @@ from ditto.api_models.validator_capabilities import (
     ValidatorStackIdentity,
 )
 from ditto.validator.dittobench import (
+    _AGENT_ATTRIBUTABLE_INFERENCE_CODES,
+    _SANDBOX_INFRASTRUCTURE_CODES,
     DittobenchClient,
     DittobenchProgressSnapshot,
     InferenceBrokerSession,
     LocalEmbeddingLane,
     _parse_v7_calibration,
+    _sandbox_infrastructure_failure_code,
     safe_progress_snapshot,
 )
 from ditto.validator.errors import (
@@ -1553,6 +1556,7 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
         "model_relay_unavailable",
         "embedding_provider_unavailable",
         "screened_image_unavailable",
+        "inference_lane_saturated",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(
@@ -1644,6 +1648,90 @@ def test_failure_detail_is_truncated_to_the_wire_cap() -> None:
         }
     )
     assert parsed.failure_detail == detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        # What dittobench-api actually sends for an agent-attributable decline.
+        {
+            "kind": "sandbox_failure",
+            "code": "inference_allowance_exhausted",
+            "retryable": False,
+        },
+        # The same code smuggled under the no-fault KIND. Rejected because the
+        # code is not in the allowlist.
+        {
+            "kind": "validator_infrastructure",
+            "code": "inference_allowance_exhausted",
+            "retryable": True,
+        },
+    ],
+)
+async def test_agent_attributable_inference_failures_stay_the_agents(
+    failure: dict[str, object],
+) -> None:
+    """The bound on the decline split: only the platform's half is no-fault.
+
+    ``inference_allowance_exhausted`` means the harness spent the request-count
+    or token allowance its own ticket granted, or sent one request too large to
+    reserve (platform decline codes 4102/4104/4109). The lease was alive and the
+    platform healthy throughout.
+
+    ``infrastructure`` mints a retry grant, RAISES the attempt cap, and
+    re-leases, so an agent that reliably exhausts its own allowance would
+    re-lease itself forever -- the mnemox loop, arriving through the inference
+    lane instead of the sandbox. Both spellings below must land on
+    ``scoring_error``, so the guarantee holds even if a future scorer sends the
+    wrong envelope for this code.
+    """
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "harness exhausted its inference allowance",
+                "failure": failure,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(DittobenchError) as raised:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=7
+            )
+        assert not isinstance(raised.value, ValidatorInfrastructureError)
+
+
+def test_agent_inference_codes_are_never_no_fault() -> None:
+    """Pinned as a set property, not only through the poll path.
+
+    A future edit adding one of these to ``_SANDBOX_INFRASTRUCTURE_CODES``
+    -- the natural mistake, since the neighbouring ``inference_lane_saturated``
+    IS in it -- must fail here rather than in production as an unbounded
+    re-lease loop.
+    """
+    assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
+    for code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES:
+        assert (
+            _sandbox_infrastructure_failure_code(
+                {
+                    "failure": {
+                        "kind": "validator_infrastructure",
+                        "code": code,
+                        "retryable": True,
+                    }
+                }
+            )
+            is None
+        )
+    # The complement: lane saturation is deliberately kept no-fault, because a
+    # miner can neither provision the platform's inference lane nor see its
+    # contention. If a future change moves it, that is a decision about who pays
+    # for a saturated rail and should have to edit this line to make it.
+    assert "inference_lane_saturated" in _SANDBOX_INFRASTRUCTURE_CODES
 
 
 @pytest.mark.asyncio
