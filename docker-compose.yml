@@ -6,8 +6,8 @@
 # pin — must be this one anchor. A hardcoded copy that could drift from the
 # build context is exactly what let a cached scorer image assert a revision it
 # was not built from (see docs/VALIDATOR.md, "Stale scorer image").
-x-dittobench-revision: &dittobench-revision 3de0c62ff90a4f6288b19db5a310ecc6e6f78540
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=3de0c62ff90a4f6288b19db5a310ecc6e6f78540}
+x-dittobench-revision: &dittobench-revision 9a8ec96ded614615ba2999503d926e95de8439e9
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=9a8ec96ded614615ba2999503d926e95de8439e9}
 x-dittobench-software-version: &dittobench-software-version ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
 # Shared secret for the validator -> scorer inference control plane
 # (POST/DELETE /v1/inference/session*). The scorer joins sandbox-docker's
@@ -363,9 +363,9 @@ services:
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:3de0c62ff90a4f6288b19db5a310ecc6e6f78540
+      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:9a8ec96ded614615ba2999503d926e95de8439e9
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:3de0c62ff90a4f6288b19db5a310ecc6e6f78540
+      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:9a8ec96ded614615ba2999503d926e95de8439e9
       VALIDATOR_STACK_COMPONENT_PYLON: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
       VALIDATOR_STACK_COMPONENT_OLLAMA: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
