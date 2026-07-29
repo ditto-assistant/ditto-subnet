@@ -243,7 +243,7 @@ class TestAttestFlagWiring:
         )
         assert "does NOT grant an additional emission slot" in out
         assert "does NOT permit byte-identical or repacked resubmission" in out
-        assert "recorded, auditable, and revocable" in out
+        assert "recorded and auditable; an operator can revoke a link" in out
         assert (
             "evidence grade (coldkey-coldkey / mixed / hotkey-hotkey) is "
             "reviewer context and does not change whether the exemption applies" in out

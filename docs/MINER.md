@@ -342,8 +342,9 @@ is already held, mint the attestation and then ask for the review to be re-run.
   two of your agents in the weight vector.
 - It does **not** permit byte-identical or repacked resubmission. Re-uploading
   the same artifact under a new key is still held, with or without a link.
-- Links are recorded, auditable, and revocable. They are visible to reviewers,
-  and one can be revoked if a key is sold or compromised.
+- Links are recorded and auditable. If a key is sold or compromised, contact
+  an operator and quote the attestation ID so the link can be revoked. The
+  current miner CLI creates links; it does not provide self-service revocation.
 - The **evidence grade** — `coldkey-coldkey`, `mixed`, or `hotkey-hotkey`,
   reported back when the link is recorded — describes which key kinds proved
   the two halves. It is reviewer context. It does **not** change whether the
@@ -359,9 +360,10 @@ old work under `A` collides with new work under `C`, mint `A`–`C` directly.
 
 ### Signing on an offline machine
 
-If a key lives on a machine that should not reach the platform, use
+If both wallets live on a machine that should not reach the platform, use
 `--print-only` to sign both halves and print the request body instead of
-submitting it:
+submitting it. This is not split signing: both wallets must be available to the
+same command invocation.
 
 ```sh
 uv run ditto --network finney attest \
@@ -372,9 +374,16 @@ uv run ditto --network finney attest \
   --print-only > attestation.json
 ```
 
-Move `attestation.json` to a networked machine and POST it to
-`/api/v1/attestations/owner-link` yourself. Minted attestations expire, so
-submit it the same day or mint a fresh one.
+Move `attestation.json` to a networked machine and POST it yourself:
+
+```sh
+curl --fail-with-body \
+  -H 'Content-Type: application/json' \
+  --data-binary @attestation.json \
+  https://platform-api.heyditto.ai/api/v1/attestations/owner-link
+```
+
+Minted attestations expire, so submit it the same day or mint a fresh one.
 
 ## Common questions
 

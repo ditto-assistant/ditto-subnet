@@ -72,7 +72,8 @@ _SCOPE_SUMMARY = (
     "linked hotkey's earlier work ONLY. It does NOT grant an additional "
     "emission slot (one slot per distinct agent, however many keys you hold), "
     "and it does NOT permit byte-identical or repacked resubmission, which is "
-    "still held for review. Links are recorded, auditable, and revocable. The "
+    "still held for review. Links are recorded and auditable; an operator can "
+    "revoke a link if either key is sold or compromised. The "
     "evidence grade (coldkey-coldkey / mixed / hotkey-hotkey) is reviewer "
     "context and does not change whether the exemption applies."
 )
@@ -194,10 +195,10 @@ def add_subparser(
         action="store_true",
         help=(
             "Sign both halves, print the JSON request body to stdout, and "
-            "submit nothing. Use this when a key lives on a machine that "
-            "should not talk to the platform: produce the body there, move "
-            "it, and POST it yourself. The body expires, so submit it the "
-            "same day."
+            "submit nothing. Both wallets must still be available on this "
+            "machine. Use it when the machine holding both keys should not "
+            "talk to the platform: produce the body there, move it, and POST "
+            "it yourself. The body expires, so submit it the same day."
         ),
     )
     parser.set_defaults(func=run)
