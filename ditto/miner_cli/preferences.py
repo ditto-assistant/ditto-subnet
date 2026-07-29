@@ -5,9 +5,19 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from ditto.miner_cli.models import PaymentReceipt
+
+
+@dataclass(frozen=True)
+class AgentWalletIdentity:
+    """One locally remembered wallet that successfully uploaded an agent."""
+
+    coldkey_name: str
+    hotkey_name: str
+    hotkey_ss58: str
 
 
 def preferences_path() -> Path:
@@ -65,6 +75,73 @@ def save_agent_name(*, network: str, hotkey: str, name: str) -> bool:
         names = {}
     names[_key(network=network, hotkey=hotkey)] = name
     raw["agent_names"] = names
+    return _save_preferences(raw)
+
+
+def load_previous_agent_wallet(
+    *, network: str, name: str, excluding_hotkey: str
+) -> AgentWalletIdentity | None:
+    """Return the most recently saved different wallet for an agent name."""
+    raw = _load_preferences()
+    histories = raw.get("agent_wallet_history")
+    if not isinstance(histories, dict):
+        return None
+    values = histories.get(f"{network}:{name}")
+    if not isinstance(values, list):
+        return None
+    for value in reversed(values):
+        if not isinstance(value, dict) or value.get("hotkey_ss58") == excluding_hotkey:
+            continue
+        coldkey_name = value.get("coldkey_name")
+        hotkey_name = value.get("hotkey_name")
+        hotkey_ss58 = value.get("hotkey_ss58")
+        if (
+            isinstance(coldkey_name, str)
+            and bool(coldkey_name)
+            and isinstance(hotkey_name, str)
+            and bool(hotkey_name)
+            and isinstance(hotkey_ss58, str)
+            and bool(hotkey_ss58)
+        ):
+            return AgentWalletIdentity(
+                coldkey_name=coldkey_name,
+                hotkey_name=hotkey_name,
+                hotkey_ss58=hotkey_ss58,
+            )
+    return None
+
+
+def save_agent_wallet(
+    *,
+    network: str,
+    name: str,
+    coldkey_name: str,
+    hotkey_name: str,
+    hotkey_ss58: str,
+) -> bool:
+    """Remember a successful upload wallet without storing any key material."""
+    raw = _load_preferences()
+    histories = raw.get("agent_wallet_history")
+    if not isinstance(histories, dict):
+        histories = {}
+    key = f"{network}:{name}"
+    values = histories.get(key)
+    if not isinstance(values, list):
+        values = []
+    values = [
+        value
+        for value in values
+        if not isinstance(value, dict) or value.get("hotkey_ss58") != hotkey_ss58
+    ]
+    values.append(
+        {
+            "coldkey_name": coldkey_name,
+            "hotkey_name": hotkey_name,
+            "hotkey_ss58": hotkey_ss58,
+        }
+    )
+    histories[key] = values[-10:]
+    raw["agent_wallet_history"] = histories
     return _save_preferences(raw)
 
 

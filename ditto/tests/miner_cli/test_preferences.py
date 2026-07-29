@@ -10,8 +10,10 @@ from ditto.miner_cli.preferences import (
     clear_pending_payment,
     load_agent_name,
     load_pending_payment,
+    load_previous_agent_wallet,
     preferences_path,
     save_agent_name,
+    save_agent_wallet,
     save_pending_payment,
 )
 
@@ -47,6 +49,40 @@ def test_malformed_preferences_fail_open(tmp_path: Path, monkeypatch) -> None:  
     monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(config))
 
     assert load_agent_name(network="finney", hotkey="hk") is None
+
+
+def test_agent_wallet_history_returns_latest_different_hotkey(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(tmp_path / "config.json"))
+    assert save_agent_wallet(
+        network="finney",
+        name="alpha",
+        coldkey_name="cold-a",
+        hotkey_name="hot-a",
+        hotkey_ss58="5HotA",
+    )
+    assert save_agent_wallet(
+        network="finney",
+        name="alpha",
+        coldkey_name="cold-b",
+        hotkey_name="hot-b",
+        hotkey_ss58="5HotB",
+    )
+
+    previous = load_previous_agent_wallet(
+        network="finney", name="alpha", excluding_hotkey="5HotB"
+    )
+    assert previous is not None
+    assert previous.coldkey_name == "cold-a"
+    assert previous.hotkey_name == "hot-a"
+    assert previous.hotkey_ss58 == "5HotA"
+    assert (
+        load_previous_agent_wallet(
+            network="test", name="alpha", excluding_hotkey="5HotB"
+        )
+        is None
+    )
 
 
 def test_pending_payment_round_trip_is_exact_and_private(

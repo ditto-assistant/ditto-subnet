@@ -31,7 +31,11 @@ from ditto.api_models import (
     UploadCheckResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
-from ditto.miner_cli.commands.upload import _post_upload_with_retries, run
+from ditto.miner_cli.commands.upload import (
+    _offer_owner_link,
+    _post_upload_with_retries,
+    run,
+)
 from ditto.miner_cli.errors import (
     ApiResponseError,
     PaymentCancelledError,
@@ -42,6 +46,7 @@ from ditto.miner_cli.errors import (
     UploadAgentRejectedError,
 )
 from ditto.miner_cli.models import PaymentReceipt, PreflightCheckResult, PreflightResult
+from ditto.miner_cli.preferences import AgentWalletIdentity
 
 HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 DEST = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -74,6 +79,11 @@ def _stub_payment_signer_preflight():  # type: ignore[no-untyped-def]
     with (
         patch("ditto.miner_cli.commands.upload.preflight_payment_signer"),
         patch("ditto.miner_cli.commands.upload.save_agent_name", return_value=True),
+        patch("ditto.miner_cli.commands.upload.save_agent_wallet", return_value=True),
+        patch(
+            "ditto.miner_cli.commands.upload.load_previous_agent_wallet",
+            return_value=None,
+        ),
         patch(
             "ditto.miner_cli.commands.upload.load_pending_payment",
             return_value=None,
@@ -88,6 +98,62 @@ def _stub_payment_signer_preflight():  # type: ignore[no-untyped-def]
         ),
     ):
         yield
+
+
+class TestOwnerLinkOffer:
+    def test_interactive_acceptance_submits_existing_attestation_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        args = make_args(Path("agent.tgz"), network="finney", yes=False)
+        previous = AgentWalletIdentity(
+            coldkey_name="old-cold",
+            hotkey_name="old-hot",
+            hotkey_ss58="5OldHotkey",
+        )
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda _prompt: "yes")
+        with patch(
+            "ditto.miner_cli.commands.attest._run_attest", return_value=0
+        ) as submit:
+            _offer_owner_link(
+                args=args,
+                agent_name="alpha",
+                previous_wallet=previous,
+                current_hotkey=HOTKEY,
+                network_api_url="https://platform.example",
+            )
+
+        attest_args = submit.call_args.args[0]
+        assert attest_args.coldkey_name == "miner"
+        assert attest_args.hotkey_name == "default"
+        assert attest_args.other_coldkey_name == "old-cold"
+        assert attest_args.other_hotkey_name == "old-hot"
+        assert attest_args.key_kind == "hotkey"
+        assert attest_args.other_key_kind == "hotkey"
+        assert submit.call_args.kwargs == {
+            "network_api_url": "https://platform.example",
+            "emit_result": False,
+        }
+
+    def test_noninteractive_upload_prints_manual_command_without_signing(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        args = make_args(Path("agent.tgz"), network="finney")
+        previous = AgentWalletIdentity("old-cold", "old-hot", "5OldHotkey")
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        with patch("ditto.miner_cli.commands.attest._run_attest") as submit:
+            _offer_owner_link(
+                args=args,
+                agent_name="alpha",
+                previous_wallet=previous,
+                current_hotkey=HOTKEY,
+                network_api_url="https://platform.example",
+            )
+
+        submit.assert_not_called()
+        err = capsys.readouterr().err
+        assert "previously uploaded with hotkey 5OldHotkey" in err
+        assert "--other-coldkey old-cold" in err
 
 
 def _good_preflight() -> PreflightResult:

@@ -282,6 +282,18 @@ each half for the side it lands on. Add `--key-kind coldkey` or
 `--other-key-kind coldkey` to prove a side with its coldkey instead; both
 default to `hotkey`.
 
+After each successful upload, the CLI remembers only the local wallet names,
+public hotkey address, network, and stable agent name (never key material). Like
+the main Ditto CLI, this is user-scoped config under the home directory:
+`$XDG_CONFIG_HOME/ditto/config.json`, or `~/.config/ditto/config.json` when XDG
+is unset. The file is written atomically with mode `0600`; operators and tests
+may override it with `DITTO_CLI_CONFIG_PATH`.
+
+If a later upload reuses that agent name from a different wallet, an interactive
+CLI offers to sign and submit this same direct owner link before payment.
+Declining does not block the upload. Non-interactive uploads never sign
+implicitly; they print the exact `ditto attest` command to run separately.
+
 The CLI loads both wallets, mints a single-use nonce, signs both halves, prints
 what the link does, asks for confirmation, and submits. Add `-y` to skip the
 prompt in a script. `--netuid` defaults to 118 and is signed into both

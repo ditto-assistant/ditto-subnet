@@ -231,7 +231,9 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
 
-def _run_attest(args: argparse.Namespace, *, network_api_url: str) -> int:
+def _run_attest(
+    args: argparse.Namespace, *, network_api_url: str, emit_result: bool = True
+) -> int:
     # Step 1: load both wallets. The link is symmetric, so "this" and "other"
     # name only which flags carried them; neither side is privileged.
     this_handle, this_wallet = load_wallet(
@@ -337,13 +339,20 @@ def _run_attest(args: argparse.Namespace, *, network_api_url: str) -> int:
         result = client.post_owner_link(body)
 
     # Step 7: attestation_id to stdout, everything else to stderr.
-    print(result.attestation_id)
-    print(
-        f"\nowner link recorded: {result.hotkey_lo} <-> {result.hotkey_hi}\n"
-        f"evidence grade: {result.evidence_grade} (reviewer context only)\n"
-        f"scope: {result.scope}\n"
-        f"grants an additional emission slot: "
-        f"{result.grants_additional_emission_slot}\n" + _SCOPE_SUMMARY,
-        file=sys.stderr,
-    )
+    if emit_result:
+        print(result.attestation_id)
+        print(
+            f"\nowner link recorded: {result.hotkey_lo} <-> {result.hotkey_hi}\n"
+            f"evidence grade: {result.evidence_grade} (reviewer context only)\n"
+            f"scope: {result.scope}\n"
+            f"grants an additional emission slot: "
+            f"{result.grants_additional_emission_slot}\n" + _SCOPE_SUMMARY,
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"owner link recorded before upload: {result.hotkey_lo} <-> "
+            f"{result.hotkey_hi} ({result.evidence_grade})",
+            file=sys.stderr,
+        )
     return 0

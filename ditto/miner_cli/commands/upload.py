@@ -51,10 +51,13 @@ from ditto.miner_cli.models import PaymentReceipt
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
 from ditto.miner_cli.preferences import (
+    AgentWalletIdentity,
     clear_pending_payment,
     load_agent_name,
     load_pending_payment,
+    load_previous_agent_wallet,
     save_agent_name,
+    save_agent_wallet,
     save_pending_payment,
 )
 from ditto.miner_cli.signing import sign_upload_payload
@@ -231,6 +234,20 @@ def _run_upload(
 
     allow_identical_rescore = bool(getattr(args, "allow_identical_rescore", False))
 
+    previous_wallet = load_previous_agent_wallet(
+        network=network_name,
+        name=agent_name,
+        excluding_hotkey=handle.hotkey_ss58,
+    )
+    if previous_wallet is not None:
+        _offer_owner_link(
+            args=args,
+            agent_name=agent_name,
+            previous_wallet=previous_wallet,
+            current_hotkey=handle.hotkey_ss58,
+            network_api_url=network_api_url,
+        )
+
     # Step 2: pre-flight (raises TarStructureError on missing file)
     print(f"running pre-flight on {args.tar_path}...", file=sys.stderr)
     preflight = run_preflight(args.tar_path)
@@ -405,6 +422,13 @@ def _run_upload(
     saved_name = save_agent_name(
         network=network_name, hotkey=handle.hotkey_ss58, name=agent_name
     )
+    saved_wallet = save_agent_wallet(
+        network=network_name,
+        name=agent_name,
+        coldkey_name=args.coldkey_name,
+        hotkey_name=args.hotkey_name,
+        hotkey_ss58=handle.hotkey_ss58,
+    )
     if result.payment_disposition == "reusable_credit":
         # The platform returned an EXISTING agent: these bytes were already
         # submitted under this owner, so no new evaluation was purchased and the
@@ -438,13 +462,77 @@ def _run_upload(
         + "\n"
         + (
             "saved as this hotkey's local default; override with --name\n"
-            if saved_name
+            if saved_name and saved_wallet
             else "warning: could not save the local agent-name default\n"
         )
         + f"poll status with:\n  ditto status {result.agent_id}",
         file=sys.stderr,
     )
     return 0
+
+
+def _offer_owner_link(
+    *,
+    args: argparse.Namespace,
+    agent_name: str,
+    previous_wallet: AgentWalletIdentity,
+    current_hotkey: str,
+    network_api_url: str,
+) -> None:
+    """Offer a direct owner link when a known agent moves to another wallet."""
+    from ditto.miner_cli.commands.attest import DEFAULT_NETUID, _run_attest
+
+    old_coldkey = previous_wallet.coldkey_name
+    old_hotkey_name = previous_wallet.hotkey_name
+    old_hotkey = previous_wallet.hotkey_ss58
+    command = (
+        f"ditto --network {args.network} attest --coldkey {args.coldkey_name} "
+        f"--hotkey {args.hotkey_name} --other-coldkey {old_coldkey} "
+        f"--other-hotkey-name {old_hotkey_name}"
+    )
+    if not sys.stdin.isatty():
+        print(
+            f"notice: agent {agent_name!r} was previously uploaded with hotkey "
+            f"{old_hotkey}; this upload uses {current_hotkey}. To prove both "
+            f"belong to you before screening, run:\n  {command}",
+            file=sys.stderr,
+        )
+        return
+    response = (
+        input(
+            f"Agent {agent_name!r} previously used coldkey {old_coldkey!r} / hotkey "
+            f"{old_hotkey_name!r}. This upload uses coldkey {args.coldkey_name!r} / "
+            f"hotkey {args.hotkey_name!r}. Sign both hotkey endpoints now (no TAO "
+            "transfer) to prove common ownership? [y/N]: "
+        )
+        .strip()
+        .lower()
+    )
+    if response not in {"y", "yes"}:
+        print(
+            f"owner link skipped; you can create it later with:\n  {command}",
+            file=sys.stderr,
+        )
+        return
+    attest_args = argparse.Namespace(
+        coldkey_name=args.coldkey_name,
+        hotkey_name=args.hotkey_name,
+        other_coldkey_name=old_coldkey,
+        other_hotkey_name=old_hotkey_name,
+        key_kind="hotkey",
+        other_key_kind="hotkey",
+        netuid=int(os.environ.get("NETUID", str(DEFAULT_NETUID))),
+        yes=True,
+        print_only=False,
+    )
+    try:
+        _run_attest(attest_args, network_api_url=network_api_url, emit_result=False)
+    except MinerCliError as exc:
+        print(
+            f"warning: automatic owner link failed ({exc}); upload will continue. "
+            f"Retry it manually with:\n  {command}",
+            file=sys.stderr,
+        )
 
 
 def _recovery_receipt_from_args(args: argparse.Namespace) -> PaymentReceipt | None:
