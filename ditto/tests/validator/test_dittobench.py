@@ -227,13 +227,18 @@ def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
         # v7 stays dark unless the scorer also supplies its reviewed manifest
         # digest and exact provider/profile/model route identities.
         (200, _REVISION, [2, 3, 4, 5, 6, 7], "fresh_verified", (2, 3, 4, 5, 6)),
-        # Project away unknown future contracts while preserving the versions
-        # this validator and scorer can safely negotiate.
-        (200, _REVISION, [2, 3, 4, 5, 6, 7, 8], "fresh_verified", (2, 3, 4, 5, 6)),
+        # V8 is an understood, backroom-gated capability; v7 still needs its
+        # exact calibration identity before it can be advertised.
+        (
+            200,
+            _REVISION,
+            [2, 3, 4, 5, 6, 7, 8],
+            "fresh_verified",
+            (2, 3, 4, 5, 6, 8),
+        ),
         # Unknown historical/gap versions remain malformed.
         (200, _REVISION, [1, 2, 3, 4, 5, 6], "unreachable", (2,)),
-        # A future-only scorer has no mutually supported contract.
-        (200, _REVISION, [8], "unreachable", (2,)),
+        (200, _REVISION, [8], "fresh_verified", (8,)),
         (200, "cd" * 20, [2, 3, 4], "identity_mismatch", (2,)),
         (404, _REVISION, [2, 3], "legacy_v2", (2,)),
         (503, _REVISION, [2, 3], "unreachable", (2,)),
@@ -293,7 +298,7 @@ async def test_future_scorer_version_preserves_negotiated_run_capacity() -> None
         observed = await client.scorer_benchmark_capability(_stack())
 
     assert observed.status == "fresh_verified"
-    assert observed.supported_bench_versions == (2, 3, 4, 5, 6)
+    assert observed.supported_bench_versions == (2, 3, 4, 5, 6, 8)
     assert client.full_run_capacity == 2
 
 
@@ -940,7 +945,7 @@ async def test_v3_plus_uses_versioned_route_and_binds_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [None, 0, 1, 8])
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 9])
 async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     bench_version: int | None,
 ) -> None:
@@ -1342,7 +1347,7 @@ async def test_v3_plus_poll_returns_version_bound_report(bench_version: int) -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 8])
+@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 9])
 async def test_poll_rejects_missing_or_unsupported_expected_version(
     expected_bench_version: int | None,
 ) -> None:

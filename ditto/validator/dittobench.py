@@ -79,7 +79,7 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # rather than scored blind. Versions >= 3 share one scorer contract (/v2/score,
 # pinned dataset, policy-9 screened image), so version-specific behaviour is
 # expressed as ``>= _SCREENED_IMAGE_BENCH_VERSION`` rather than per-version arms.
-_SUPPORTED_BENCH_VERSIONS = (2, 3, 4, 5, 6, 7)
+_SUPPORTED_BENCH_VERSIONS = (2, 3, 4, 5, 6, 7, 8)
 _SCREENED_IMAGE_BENCH_VERSION = 3
 
 # Benchmark versions whose memory phase runs through the validator's OWN Ollama
@@ -95,10 +95,8 @@ _SCREENED_IMAGE_BENCH_VERSION = 3
 # A v7 run therefore never opens a socket to this host's Ollama, and a dead
 # Ollama says nothing about whether this validator can serve v7.
 #
-# The lane is NOT removed for v2-v6: those code paths still exist, and the local
-# container is single-tenant per host, so the serialisation around it stays. This
-# set is the one place that knows which versions need it -- a future v8 lands
-# here or nowhere.
+# The lane is NOT removed in this capability layer: historical versions still
+# serialize locally, while both v7 and v8 use ticket-hosted embeddings.
 _LOCAL_EMBEDDING_BENCH_VERSIONS = frozenset({2, 3, 4, 5, 6})
 
 
