@@ -16,9 +16,7 @@ _COMPONENTS = (
     "DITTO_SUBNET",
     "DITTOBENCH_API",
     "SANDBOX_DOCKER",
-    "MODEL_RELAY",
     "PYLON",
-    "OLLAMA",
 )
 
 
@@ -139,6 +137,7 @@ def test_managed_descriptor_env_produces_only_signed_exact_identities(
     assert all(
         identity.provenance == "signed_descriptor"
         for identity in stack.components.__dict__.values()
+        if identity is not None
     )
 
 
@@ -146,7 +145,7 @@ def test_managed_descriptor_env_produces_only_signed_exact_identities(
     ("name", "value"),
     [
         ("VALIDATOR_STACK_DESCRIPTOR_REF", "ghcr.io/example:latest"),
-        ("VALIDATOR_STACK_COMPONENT_OLLAMA", "docker.io/ollama/ollama:latest"),
+        ("VALIDATOR_STACK_COMPONENT_PYLON", "docker.io/pylon:latest"),
         ("VALIDATOR_STACK_REVISION", "main"),
     ],
 )

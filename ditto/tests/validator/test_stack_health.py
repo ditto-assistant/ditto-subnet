@@ -68,9 +68,7 @@ def _stack() -> ValidatorStackIdentity:
             ditto_subnet=_component(),
             dittobench_api=_component(),
             sandbox_docker=_component(None),
-            model_relay=_component(),
             pylon=_component(None),
-            ollama=_component(None),
         ),
     )
 
@@ -134,13 +132,10 @@ class TestCollector:
         assert health.dittobench_api.observed_identity is not None
         assert health.dittobench_api.observed_identity.source_revision == _REV
         assert health.sandbox_docker.health == "healthy"
-        assert health.model_relay.health == "healthy"
-        assert health.model_relay.model_ready is True
-        assert health.model_relay.observed_identity is not None
         # An unauthenticated 404 still proves the Pylon API is up and serving.
         assert health.pylon.health == "healthy"
-        assert health.ollama.health == "healthy"
-        assert health.ollama.model_ready is True
+        assert health.model_relay is None
+        assert health.ollama is None
 
     async def test_unreachable_sidecars(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -150,7 +145,7 @@ class TestCollector:
             collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
             health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
 
-        for name in ("sandbox_docker", "model_relay", "pylon", "ollama"):
+        for name in ("sandbox_docker", "pylon"):
             component = getattr(health, name)
             assert component.health == "unreachable"
             assert component.observed_at is not None
@@ -166,7 +161,7 @@ class TestCollector:
         async with _client(handler) as client:
             collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
             health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-        assert health.ollama.health == "unreachable"
+        assert health.sandbox_docker.health == "unreachable"
 
     async def test_degraded_states(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -189,115 +184,11 @@ class TestCollector:
             health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
 
         assert health.sandbox_docker.health == "degraded"
-        assert health.model_relay.health == "degraded"
         assert health.pylon.health == "degraded"
-        assert health.ollama.health == "degraded"
-        assert health.ollama.model_ready is False
-
-    async def test_model_relay_identity_mismatch(self) -> None:
-        handler = _all_up_handler(
-            relay_body={
-                "status": "ok",
-                "model_route_ready": True,
-                "source_revision": _OTHER_REV,
-            }
-        )
-        async with _client(handler) as client:
-            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
-            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-
-        assert health.model_relay.health == "identity_mismatch"
-        assert health.model_relay.observed_identity is not None
-        assert health.model_relay.observed_identity.source_revision == _OTHER_REV
-
-    async def test_relay_never_copies_configured_pin(self) -> None:
-        # The relay answers healthy but reports no identity: the observed
-        # identity must stay unknown, not echo the committed pin.
-        handler = _all_up_handler(relay_body={"status": "ok"})
-        async with _client(handler) as client:
-            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
-            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-
-        assert health.model_relay.health == "healthy"
-        assert health.model_relay.observed_identity is None
-        assert health.model_relay.model_ready is None
-
-    async def test_relay_without_health_route_still_proves_reachability(self) -> None:
-        # The relay may not serve the probed path at all; a 404 still proves
-        # the process is up, and no observation is invented from its body.
-        def handler(request: httpx.Request) -> httpx.Response:
-            if str(request.url) == _RELAY_URL:
-                return httpx.Response(404, text="not found")
-            return _all_up_handler()(request)  # type: ignore[operator]
-
-        async with _client(handler) as client:
-            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
-            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-
-        assert health.model_relay.health == "healthy"
-        assert health.model_relay.ready is True
-        assert health.model_relay.observed_identity is None
-
-    async def test_deprecated_relay_path_is_not_a_scorer_dependency(self) -> None:
-        # Ticket inference is probed only after capability activation. A stale
-        # legacy relay-preflight failure must not degrade the new scorer.
-        def handler(request: httpx.Request) -> httpx.Response:
-            if str(request.url) == _RELAY_PREFLIGHT_URL:
-                return httpx.Response(
-                    503,
-                    json={
-                        "status": "unavailable",
-                        "failure": {
-                            "kind": "validator_infrastructure",
-                            "code": "model_relay_unavailable",
-                            "retryable": True,
-                        },
-                    },
-                )
-            return _all_up_handler()(request)  # type: ignore[operator]
-
-        async with _client(handler) as client:
-            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
-            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-
-        assert health.dittobench_api.health == "healthy"
-        assert health.dittobench_api.ready is True
-        assert health.dittobench_api.observed_identity is not None
-        assert health.dittobench_api.observed_identity.source_revision == _REV
-        assert health.model_relay.health == "healthy"
-
-    async def test_older_scorer_without_relay_preflight_stays_healthy(self) -> None:
-        # A scorer that predates the relay-preflight endpoint (404) is left to the
-        # per-run signal; the check must never fabricate a fault.
-        def handler(request: httpx.Request) -> httpx.Response:
-            if str(request.url) == _RELAY_PREFLIGHT_URL:
-                return httpx.Response(404, text="not found")
-            return _all_up_handler()(request)  # type: ignore[operator]
-
-        async with _client(handler) as client:
-            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
-            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-
-        assert health.dittobench_api.health == "healthy"
-
-    async def test_relay_path_non_infrastructure_503_does_not_degrade(self) -> None:
-        # A 503 that is not the validator_infrastructure envelope is not our signal.
-        def handler(request: httpx.Request) -> httpx.Response:
-            if str(request.url) == _RELAY_PREFLIGHT_URL:
-                return httpx.Response(503, text="temporarily unavailable")
-            return _all_up_handler()(request)  # type: ignore[operator]
-
-        async with _client(handler) as client:
-            collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
-            health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-
-        assert health.dittobench_api.health == "healthy"
 
     async def test_unconfigured_probes_stay_unknown(self) -> None:
         config = _config(
             sandbox_docker_probe_url="",
-            model_relay_probe_url="",
-            embed_preflight_url="",
             pylon_probe_url="",
             pylon_url="",
         )
@@ -306,9 +197,10 @@ class TestCollector:
             collector = StackHealthCollector(config, client)  # type: ignore[arg-type]
             health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
 
-        for name in ("sandbox_docker", "model_relay", "pylon", "ollama"):
+        for name in ("sandbox_docker", "pylon"):
             assert getattr(health, name).health == "unknown"
-        assert health.model_relay.required is False
+        assert health.model_relay is None
+        assert health.ollama is None
 
     async def test_mock_mode_performs_no_probes(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -321,7 +213,7 @@ class TestCollector:
 
         assert health.ditto_subnet.health == "healthy"
         assert health.dittobench_api.health == "unknown"
-        assert health.ollama.health == "unknown"
+        assert health.ollama is None
 
     async def test_sidecar_snapshot_is_cached_within_ttl(self) -> None:
         calls = {"count": 0}
@@ -335,8 +227,8 @@ class TestCollector:
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
             first = calls["count"]
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-        assert first == 4
-        assert calls["count"] == 4
+        assert first == 2
+        assert calls["count"] == 2
 
     async def test_zero_cache_reprobes_every_collect(self) -> None:
         calls = {"count": 0}
@@ -350,8 +242,8 @@ class TestCollector:
             collector = StackHealthCollector(config, client)  # type: ignore[arg-type]
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
             await collector.collect(stack=_stack(), scorer=_fresh_scorer())
-        # Four sidecar probes per sweep, re-run when caching is disabled.
-        assert calls["count"] == 8
+        # Two sidecar probes per sweep, re-run when caching is disabled.
+        assert calls["count"] == 4
 
     async def test_probe_sweep_crash_degrades_to_unknown(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -361,7 +253,7 @@ class TestCollector:
             collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
             health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
 
-        for name in ("sandbox_docker", "model_relay", "pylon", "ollama"):
+        for name in ("sandbox_docker", "pylon"):
             assert getattr(health, name).health == "unknown"
         assert health.ditto_subnet.health == "healthy"
 
@@ -449,8 +341,6 @@ class TestFallback:
         for name in (
             "dittobench_api",
             "sandbox_docker",
-            "model_relay",
             "pylon",
-            "ollama",
         ):
             assert getattr(health, name).health == "unknown"

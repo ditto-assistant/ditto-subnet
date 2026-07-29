@@ -950,7 +950,7 @@ class ValidatorWorker:
             # validator is too old to observe anything".
             scorer_benchmarks = ScorerBenchmarkCapability(
                 status="legacy_v2",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=ScorerLivenessProbe(outcome="not_probed", observed_at=timestamp),
             )
             if capability_probe is not None:

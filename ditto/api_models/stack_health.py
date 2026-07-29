@@ -107,16 +107,16 @@ class ValidatorComponentHealth(BaseModel):
 
 
 class ValidatorStackHealth(BaseModel):
-    """Exactly the six supported Compose components, best-effort observed."""
+    """Current components and optional retired-sidecar observations."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     ditto_subnet: ValidatorComponentHealth
     dittobench_api: ValidatorComponentHealth
     sandbox_docker: ValidatorComponentHealth
-    model_relay: ValidatorComponentHealth
+    model_relay: ValidatorComponentHealth | None = None
     pylon: ValidatorComponentHealth
-    ollama: ValidatorComponentHealth
+    ollama: ValidatorComponentHealth | None = None
 
     @model_validator(mode="after")
     def reporter_observes_itself(self) -> ValidatorStackHealth:

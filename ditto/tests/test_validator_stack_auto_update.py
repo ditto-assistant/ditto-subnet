@@ -33,17 +33,13 @@ MANAGED_IMAGES = {
     "VALIDATOR_IMAGE": "ghcr.io/ditto-assistant/ditto-subnet-validator",
     "SANDBOX_DOCKER_IMAGE": "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",
     "DITTOBENCH_API_IMAGE": "ghcr.io/ditto-assistant/dittobench-api-sandbox",
-    "MODEL_RELAY_IMAGE": "ghcr.io/ditto-assistant/dittobench-api-relay",
     "PYLON_IMAGE": "docker.io/backenddevelopersltd/bittensor-pylon",
-    "OLLAMA_IMAGE": "docker.io/ollama/ollama",
 }
 SERVICE_IMAGE_KEYS = {
     "ditto-subnet": "VALIDATOR_IMAGE",
     "sandbox-docker": "SANDBOX_DOCKER_IMAGE",
     "dittobench-api": "DITTOBENCH_API_IMAGE",
-    "model-relay": "MODEL_RELAY_IMAGE",
     "pylon": "PYLON_IMAGE",
-    "ollama": "OLLAMA_IMAGE",
 }
 
 
@@ -149,9 +145,7 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         "VALIDATOR_STACK_COMPONENT_DITTO_SUBNET": manifest["VALIDATOR_IMAGE"],
         "VALIDATOR_STACK_COMPONENT_DITTOBENCH_API": manifest["DITTOBENCH_API_IMAGE"],
         "VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER": manifest["SANDBOX_DOCKER_IMAGE"],
-        "VALIDATOR_STACK_COMPONENT_MODEL_RELAY": manifest["MODEL_RELAY_IMAGE"],
         "VALIDATOR_STACK_COMPONENT_PYLON": manifest["PYLON_IMAGE"],
-        "VALIDATOR_STACK_COMPONENT_OLLAMA": manifest["OLLAMA_IMAGE"],
     }
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
     assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == "0.10.0"
@@ -249,7 +243,7 @@ def test_release_builder_rejects_ambiguous_identity_fields(
 
 def test_release_builder_requires_every_managed_service(tmp_path: Path) -> None:
     compose = yaml.safe_load(COMPOSE.read_text())
-    del compose["services"]["model-relay"]
+    del compose["services"]["pylon"]
     incomplete = tmp_path / "incomplete.yml"
     incomplete.write_text(yaml.safe_dump(compose, sort_keys=False))
     command = _build_command(tmp_path / "release")
@@ -265,7 +259,7 @@ def test_release_builder_requires_every_managed_service(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "missing managed services" in result.stderr
-    assert "model-relay" in result.stderr
+    assert "pylon" in result.stderr
     assert not (tmp_path / "release/manifest.env").exists()
 
 
@@ -281,9 +275,7 @@ def test_source_compose_cannot_claim_managed_release_identity() -> None:
     assert validator_environment["VALIDATOR_STACK_COMPONENT_DITTOBENCH_API"].startswith(
         "source:"
     )
-    assert validator_environment["VALIDATOR_STACK_COMPONENT_MODEL_RELAY"].startswith(
-        "source:"
-    )
+    assert "VALIDATOR_STACK_COMPONENT_MODEL_RELAY" not in validator_environment
 
 
 FAKE_WRAPPER_DOCKER = r"""#!/usr/bin/env python3
@@ -565,17 +557,21 @@ elif args[:1] == ["up"]:
         )
         state["current_install_version"] = manifest["STACK_VERSION"]
 elif args[:2] == ["config", "--services"]:
-    print("\n".join((
-        "pylon", "sandbox-docker", "model-relay", "ollama",
-        "dittobench-api", "ditto-subnet",
-    )))
+    with open(os.path.join(release_dir, "manifest.env")) as handle:
+        values = dict(line.rstrip().split("=", 1) for line in handle)
+    services = ["pylon", "sandbox-docker"]
+    if "MODEL_RELAY_IMAGE" in values:
+        services.extend(("model-relay", "ollama"))
+    services.extend(("dittobench-api", "ditto-subnet"))
+    print("\n".join(services))
 elif args[:2] == ["config", "--images"]:
     with open(os.path.join(release_dir, "manifest.env")) as handle:
         values = dict(line.rstrip().split("=", 1) for line in handle)
-    print("\n".join(values[key] for key in (
-        "PYLON_IMAGE", "SANDBOX_DOCKER_IMAGE", "MODEL_RELAY_IMAGE",
-        "OLLAMA_IMAGE", "DITTOBENCH_API_IMAGE", "VALIDATOR_IMAGE",
-    )))
+    keys = ["PYLON_IMAGE", "SANDBOX_DOCKER_IMAGE"]
+    if "MODEL_RELAY_IMAGE" in values:
+        keys.extend(("MODEL_RELAY_IMAGE", "OLLAMA_IMAGE"))
+    keys.extend(("DITTOBENCH_API_IMAGE", "VALIDATOR_IMAGE"))
+    print("\n".join(values[key] for key in keys))
 elif args == ["config"]:
     print("services: {}")
 else:
@@ -700,7 +696,6 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
             "DITTOBENCH_API_IMAGE": (
                 "https://github.com/ditto-assistant/dittobench-api"
             ),
-            "MODEL_RELAY_IMAGE": ("https://github.com/ditto-assistant/dittobench-api"),
         }.items():
             labels[images[key]] = {
                 "org.opencontainers.image.source": source,
@@ -950,9 +945,60 @@ def test_success_replaces_and_commits_the_complete_stack(
     assert "unrelated-container" not in {call[-1] for call in state["calls"] if call}
 
 
+def test_four_service_candidate_can_roll_back_to_legacy_six_service_release(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    state = json.loads(state_path.read_text())
+    old_release = Path(state["descriptor_dirs"][OLD_STACK_DIGEST])
+    relay = "ghcr.io/ditto-assistant/dittobench-api-relay@sha256:" + "9" * 64
+    ollama = "docker.io/ollama/ollama@sha256:" + "a" * 64
+    with (old_release / "manifest.env").open("a") as manifest:
+        manifest.write(f"MODEL_RELAY_IMAGE={relay}\nOLLAMA_IMAGE={ollama}\n")
+    for index, (service, image) in enumerate(
+        (("model-relay", relay), ("ollama", ollama)), start=8
+    ):
+        image_id = "sha256:" + str(index) * 64
+        state["images"][image] = image_id
+        state["containers"][f"{service}-container"] = {
+            "image": image_id,
+            "running": True,
+            "health": "healthy",
+        }
+    state["descriptor_labels"][relay] = {
+        "org.opencontainers.image.source": (
+            "https://github.com/ditto-assistant/dittobench-api"
+        ),
+        "org.opencontainers.image.revision": REVISION,
+        "org.opencontainers.image.version": "0.10.0",
+    }
+    state_path.write_text(json.dumps(state))
+
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["fail_health_service"] = "dittobench-api"
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode != 0
+    final = json.loads(state_path.read_text())
+    rollback_up_calls = [
+        call
+        for call in final["compose_calls"]
+        if "up" in call and "model-relay" in call and "ollama" in call
+    ]
+    assert rollback_up_calls
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+
+
 @pytest.mark.parametrize(
     "failure_service",
-    ["pylon", "sandbox-docker", "model-relay", "ollama", "dittobench-api"],
+    ["pylon", "sandbox-docker", "dittobench-api"],
 )
 def test_unhealthy_candidate_sidecar_rolls_back_every_service_and_is_suppressed(
     stack_updater_env: tuple[dict[str, str], Path, Path, Path],

@@ -6,8 +6,8 @@ explains what the updater guarantees and where its boundaries are.
 
 ## Trust model
 
-A promoted stack descriptor binds all six services (`ditto-subnet`,
-`dittobench-api`, `model-relay`, `sandbox-docker`, `pylon`, `ollama`) to
+A promoted stack descriptor binds all four services (`ditto-subnet`,
+`dittobench-api`, `sandbox-docker`, `pylon`) to
 immutable manifest digests. `ghcr.io/ditto-assistant/ditto-subnet-stack:compat-2`
 is only a discovery tag: the updater resolves it once to a content-addressed
 descriptor, verifies that digest's keyless Cosign certificate against this
@@ -29,9 +29,9 @@ automatically.
 
 First adoption is always supervised: disable existing updater timers, fast-
 forward this checkout to the reviewed release that published the descriptor
-(keeping your existing `.env`), require a clean checkout and six healthy
+(keeping your existing `.env`), require a clean checkout and four healthy
 services, then run `migrate <descriptor-digest>` — or `adopt
-<descriptor-digest>` only when all six running services already match the
+<descriptor-digest>` only when all four running services already match the
 descriptor. Both require a fresh platform-accepted heartbeat and record the
 installed stack atomically. Never substitute a mutable tag for the digest, and
 enable the timer only after `status` looks right. A `managed-image.env` left
@@ -53,7 +53,7 @@ reconciles the full candidate stack, requires healthy services plus a fresh
 platform-accepted heartbeat from the candidate validator, records the
 descriptor atomically, and resumes lease intake via `USR2`.
 
-Any failure rolls **all six services** back to the retained previous
+Any failure rolls **all four services** back to the retained previous
 descriptor and resumes the old validator only once that stack is healthy; the
 failed digest stays suppressed until the channel advances. Crashes recover
 from the journal, and once `USR2` may have fired the updater refuses to
@@ -72,8 +72,8 @@ touched; no managed update ever builds from source.
   building source.
 - For managed installs the release renderer injects the signed stack identity
   (version, revisions, protocols, component digests) into the validator
-  environment; `.env` cannot override it, and benchmark-v3 support is accepted
-  only when the scorer's runtime identity matches. Anything else stays
-  conservatively benchmark v2.
+  environment; `.env` cannot override it. Benchmark work is accepted only when
+  the scorer's runtime identity matches; an identity fault advertises no
+  benchmark versions.
 - Pylon is pinned to an amd64-only runtime; arm64 hosts need the documented
   binfmt/QEMU support.

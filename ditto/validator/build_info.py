@@ -37,7 +37,7 @@ from ditto import __version__
 # not forbid extras, a v17 validator against a pre-v17 platform simply parses
 # ``leases`` as absent -- "not answered" -- and cancels nothing. So this side
 # can ship first, and the platform half can land whenever it is ready.
-HEARTBEAT_PROTOCOL_VERSION = 17
+HEARTBEAT_PROTOCOL_VERSION = 18
 
 
 @dataclass(frozen=True)

@@ -53,14 +53,26 @@ def _components(
     }
 
 
-def test_managed_stack_requires_exact_six_signed_image_identities() -> None:
+def test_managed_stack_accepts_transition_and_current_component_sets() -> None:
     stack = ValidatorStackIdentity(
         mode="managed",
         compose_schema=1,
         release_descriptor_digest=_DIGEST,
         components=ValidatorStackComponents(**_components()),
     )
+    assert stack.components.ollama is not None
     assert stack.components.ollama.image_digest == _DIGEST
+    current = _components()
+    current.pop("model_relay")
+    current.pop("ollama")
+    current_stack = ValidatorStackIdentity(
+        mode="managed",
+        compose_schema=1,
+        release_descriptor_digest=_DIGEST,
+        components=ValidatorStackComponents(**current),
+    )
+    assert current_stack.components.model_relay is None
+    assert current_stack.components.ollama is None
     with pytest.raises(ValidationError):
         ValidatorStackComponents(**(_components() | {"unexpected": _component()}))
     with pytest.raises(ValidationError):

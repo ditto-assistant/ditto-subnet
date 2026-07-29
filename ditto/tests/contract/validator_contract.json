@@ -2282,10 +2282,26 @@
             "$ref": "#/$defs/ValidatorComponentIdentity"
           },
           "model_relay": {
-            "$ref": "#/$defs/ValidatorComponentIdentity"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidatorComponentIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "ollama": {
-            "$ref": "#/$defs/ValidatorComponentIdentity"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidatorComponentIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "pylon": {
             "$ref": "#/$defs/ValidatorComponentIdentity"
@@ -2298,9 +2314,7 @@
           "ditto_subnet",
           "dittobench_api",
           "sandbox_docker",
-          "model_relay",
-          "pylon",
-          "ollama"
+          "pylon"
         ],
         "type": "object"
       },
@@ -2314,10 +2328,26 @@
             "$ref": "#/$defs/ValidatorComponentHealth"
           },
           "model_relay": {
-            "$ref": "#/$defs/ValidatorComponentHealth"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidatorComponentHealth"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "ollama": {
-            "$ref": "#/$defs/ValidatorComponentHealth"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidatorComponentHealth"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "pylon": {
             "$ref": "#/$defs/ValidatorComponentHealth"
@@ -2330,9 +2360,7 @@
           "ditto_subnet",
           "dittobench_api",
           "sandbox_docker",
-          "model_relay",
-          "pylon",
-          "ollama"
+          "pylon"
         ],
         "type": "object"
       },

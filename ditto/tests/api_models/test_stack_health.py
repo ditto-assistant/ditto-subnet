@@ -169,6 +169,8 @@ class TestValidatorStackHealth:
             ),
             model_relay=_unknown(),
         )
+        assert health.ollama is not None
+        assert health.model_relay is not None
         assert health.ollama.health == "unreachable"
         assert health.model_relay.health == "unknown"
 

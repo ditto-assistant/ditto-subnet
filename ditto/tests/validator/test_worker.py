@@ -1169,7 +1169,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 17
+        assert heartbeat.protocol_version == 18
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
@@ -1184,7 +1184,7 @@ class TestRunOnce:
         assert heartbeat.stack_health is not None
         assert heartbeat.stack_health.ditto_subnet.health == "healthy"
         assert heartbeat.stack_health.dittobench_api.health == "unknown"
-        assert heartbeat.stack_health.ollama.health == "unknown"
+        assert heartbeat.stack_health.ollama is None
         assert len(heartbeat.code_digest) == 64
         running = [
             heartbeat
@@ -1715,7 +1715,7 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 17
+        assert heartbeat.protocol_version == 18
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
@@ -1737,7 +1737,7 @@ class TestRunOnce:
 
         assert await worker._report_heartbeat("idle") is True
         heartbeat = platform.submit_heartbeat.await_args.args[0]
-        assert heartbeat.protocol_version == 17
+        assert heartbeat.protocol_version == 18
         assert heartbeat.capabilities is not None
         scorer = heartbeat.capabilities.scorer_benchmarks
         assert scorer is not None and scorer.probe is not None
@@ -1761,7 +1761,7 @@ class TestRunOnce:
         heartbeat = platform.submit_heartbeat.await_args.args[0]
         assert heartbeat.stack_health is not None
         assert heartbeat.stack_health.ditto_subnet.health == "healthy"
-        assert heartbeat.stack_health.ollama.health == "unknown"
+        assert heartbeat.stack_health.ollama is None
 
     async def test_long_benchmark_refreshes_running_heartbeat(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2648,7 +2648,7 @@ class TestRunOnce:
         )
         platform = _platform_with_ledger(jobs=[], ledger=[])
         artifact = platform.get_artifact.return_value.model_copy(
-            update={"bench_version": 2}
+            update={"bench_version": 7}
         )
         platform.get_artifact = AsyncMock(return_value=artifact)
         dittobench = MagicMock(score_tarball=AsyncMock())
@@ -3687,7 +3687,7 @@ class TestConfirmAndSubmit:
         async def _score(**kw: Any) -> ScoreReport:
             if kw["seed"] == 20:
                 return self._seeded_report(20, 0.75).model_copy(
-                    update={"bench_version": 2, "details": {"bench_version": 2}}
+                    update={"bench_version": 7, "details": {"bench_version": 7}}
                 )
             raise worker_mod.DittobenchError("boom")
 
@@ -3701,11 +3701,19 @@ class TestConfirmAndSubmit:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
-                bench_version=2,
+                bench_version=7,
+                screening_policy_version=9,
+                screened_image_url="https://signed.example/image.tar",
+                screened_image_sha256="12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "34" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
             )
         )
         w = await self._worker(dittobench, platform)
-        w._current_bench_version = 2
+        w._current_bench_version = 7
 
         report = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -3729,11 +3737,19 @@ class TestConfirmAndSubmit:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
-                bench_version=2,
+                bench_version=7,
+                screening_policy_version=9,
+                screened_image_url="https://signed.example/image.tar",
+                screened_image_sha256="12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "34" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
             )
         )
         w = await self._worker(dittobench, platform)
-        w._current_bench_version = 2
+        w._current_bench_version = 7
 
         out = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]

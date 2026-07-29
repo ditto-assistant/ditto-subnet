@@ -116,7 +116,7 @@ class TestPollAbortsOnTheLease:
                 await asyncio.wait_for(
                     client._poll(
                         "run-1",
-                        expected_bench_version=2,
+                        expected_bench_version=7,
                         ticket_deadline=deadline,
                     ),
                     timeout=30,
@@ -141,7 +141,7 @@ class TestPollAbortsOnTheLease:
                 await asyncio.wait_for(
                     client._poll(
                         "run-1",
-                        expected_bench_version=2,
+                        expected_bench_version=7,
                         ticket_deadline=deadline,
                     ),
                     timeout=30,
@@ -184,7 +184,7 @@ class TestPollAbortsOnTheLease:
             client = DittobenchClient(cast(Any, config), http)
             with pytest.raises(worker_module.DittobenchError, match="did not finish"):
                 await asyncio.wait_for(
-                    client._poll("run-1", expected_bench_version=2),
+                    client._poll("run-1", expected_bench_version=7),
                     timeout=30,
                 )
         assert request_count > 0
@@ -201,7 +201,7 @@ class TestPollAbortsOnTheLease:
             client = DittobenchClient(cast(Any, config), http)
             with pytest.raises(worker_module.DittobenchError) as caught:
                 await asyncio.wait_for(
-                    client._poll("run-1", expected_bench_version=2),
+                    client._poll("run-1", expected_bench_version=7),
                     timeout=30,
                 )
         # A cap-bound abort is NOT a lease abort: the distinction is what lets

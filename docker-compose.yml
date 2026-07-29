@@ -81,84 +81,10 @@ services:
     volumes:
       - sandbox-docker-rootful-data:/var/lib/docker
     healthcheck:
-      # Docker readiness alone does not prove the harness embedding route. This
-      # hits the same socat listener inner containers reach through
-      # host.docker.internal:11434 and exercises Ollama's loaded model.
-      test:
-        - CMD-SHELL
-        - >-
-          docker info >/dev/null 2>&1 &&
-          curl --silent --show-error --max-time 10 --output /dev/null
-          --write-out '%{http_code}' --request POST
-          --header 'Content-Type: application/json'
-          --data '{"model":"embeddinggemma","input":"health"}'
-          http://127.0.0.1:11434/api/embed | grep -q '^200$$'
+      test: [CMD-SHELL, "docker info >/dev/null 2>&1"]
       interval: 10s
       timeout: 15s
       retries: 30
-
-  # The embedding model the harness scores memory recall against. Runs on the
-  # private Compose network. The sandbox-docker forwarder makes it available to
-  # inner sandboxes at host.docker.internal:11434.
-  ollama:
-    # 0.11.10 is the first Ollama release with EmbeddingGemma support. Keep the
-    # multi-arch index pinned so amd64 validators and arm64 development hosts
-    # resolve reproducibly.
-    image: docker.io/ollama/ollama:0.11.10@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
-    restart: unless-stopped
-    volumes:
-      - ollama-data:/root/.ollama
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        /bin/ollama serve &
-        until /bin/ollama list >/dev/null 2>&1; do sleep 1; done
-        /bin/ollama pull embeddinggemma
-        wait
-    healthcheck:
-      # A listed model can still be unusable (Ollama 0.6.8 pulled
-      # EmbeddingGemma but returned 500 for /api/embed). Probe the capability
-      # the scoring harness actually needs.
-      test:
-        - CMD-SHELL
-        - >-
-          bash -ec 'body="{\"model\":\"embeddinggemma\",\"input\":\"health\"}";
-          exec 3<>/dev/tcp/127.0.0.1/11434;
-          printf "POST /api/embed HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "$${#body}" "$$body" >&3;
-          head -n 1 <&3 | grep -q " 200 "'
-      interval: 10s
-      timeout: 15s
-      retries: 30
-
-  # Bounded-transition v6 relay. Existing v6 tickets continue through the
-  # validator-owned frozen Qwen route until v7 is activated and every v6 lease
-  # has drained. Ticket-bound v7 runs ignore HARNESS_GATEWAY_URL and use the
-  # trusted local inference broker instead. Remove this service and its secret
-  # only in the separately announced post-v7 cleanup release.
-  model-relay:
-    build:
-      context: *dittobench-build-context
-      target: relay
-      # Same build-time provenance stamp as the scorer: the relay reports its
-      # own source_revision to the validator's stack-health probe.
-      args:
-        DITTOBENCH_SOURCE_SHA: *dittobench-revision
-        DITTOBENCH_SOFTWARE_VERSION: *dittobench-software-version
-    restart: unless-stopped
-    environment:
-      RELAY_PROVIDER: ${RELAY_PROVIDER:-chutes}
-      # The scorer keeps the frozen v6 Chutes profile behind an explicit
-      # transition gate. Leave it enabled only while v6 tickets can still be
-      # issued or retried; the post-v7 cleanup removes this relay and secret.
-      RELAY_ENABLE_DEPRECATED_CHUTES: ${RELAY_ENABLE_DEPRECATED_CHUTES:-1}
-      RELAY_API_KEY: ${RELAY_API_KEY:?set RELAY_API_KEY in .env during the v6 transition}
-      PORT: "11435"
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
   dittobench-api:
     build:
@@ -181,16 +107,8 @@ services:
     depends_on:
       sandbox-docker:
         condition: service_healthy
-      model-relay:
-        condition: service_started
-      ollama:
-        condition: service_healthy
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
-      # Legacy v6 uses the frozen relay. A ticket inference session replaces
-      # this value with the source-bound broker URL for v7.
-      HARNESS_GATEWAY_URL: http://host.docker.internal:11435
-      HARNESS_EMBED_URL: http://host.docker.internal:11434
       DITTOBENCH_SANDBOX_HARDEN: "1"
       DITTOBENCH_SANDBOX_EGRESS_NETWORK: ditto-sandbox
       # Production opt-in for platform-verified screened archives. Keep the
@@ -211,11 +129,6 @@ services:
       # production value; the platform's operator cap decides how many of these
       # slots actually receive tickets.
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
-      # Deliberately still 1. This bounds the frozen *local Ollama* embedding
-      # lane, which only v2-v6 use; hosted v7 embeddings bypass it entirely and
-      # are serialized per ticket instead. Raising it would add concurrent load
-      # to the single shared ollama container for no v7 benefit.
-      DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES: ${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}
       # Hosted v7 parallelism. Both default inside the scorer image to the
       # values dittobench-api#104 ships (4 cases, 8 concurrent embeddings per
       # run); these anchors exist so a host with unusual headroom, or one being
@@ -232,10 +145,7 @@ services:
       # is the safe knob and slot capacity is not.
       DITTOBENCH_V7_CASE_CONCURRENCY: ${VALIDATOR_V7_CASE_CONCURRENCY:-}
       DITTOBENCH_V7_EMBEDDING_CONCURRENCY: ${VALIDATOR_V7_EMBEDDING_CONCURRENCY:-}
-      # V7 always requires a ticket inference session in scorer code. Keep the
-      # global enforcement switch dark so in-flight/retried v6 tickets retain
-      # their frozen relay path during the bounded transition.
-      DITTOBENCH_REQUIRE_TICKET_INFERENCE: ${DITTOBENCH_REQUIRE_TICKET_INFERENCE:-false}
+      DITTOBENCH_REQUIRE_TICKET_INFERENCE: "true"
       # Authorizes the validator's session prepare/activate/cancel calls. Same
       # anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
@@ -256,6 +166,10 @@ services:
       # path fails the broker's exact-path check. For the same reason the base
       # below has no trailing slash.
       DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL: ${DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL:-https://dittobench.ai/api/v1/inference/chat/completions}
+      # Hosted embeddings share the same ticket grant and platform boundary.
+      # This URL is consumed only by the trusted local broker; miner containers
+      # receive the source-bound broker URL, never this upstream or a bearer.
+      DITTOBENCH_EMBEDDING_UPSTREAM_URL: ${DITTOBENCH_EMBEDDING_UPSTREAM_URL:-https://dittobench.ai/api/v1/inference/embeddings}
     read_only: true
     tmpfs:
       - /tmp
@@ -280,7 +194,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "17"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "18"
     restart: unless-stopped
     stop_grace_period: 80m
     environment:
@@ -303,16 +217,10 @@ services:
       # otherwise every validator would degrade on a revision that cannot
       # possibly satisfy it.
       VALIDATOR_SCORER_REQUIRE_BINARY_PROVENANCE: "1"
-      # Same sandbox-docker:11434 listener reached from inner miner harnesses as
-      # host.docker.internal:11434. The worker probes it before claiming a lease.
-      VALIDATOR_EMBED_PREFLIGHT_URL: http://sandbox-docker:11434/api/embed
-      VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS: "5"
       # Heartbeat v10+ per-component health probes. Private-network URLs only —
       # they are configuration, never part of the public payload. The sandbox
-      # probe exercises the same harness-facing forwarder listener that inner
-      # sandboxes reach as host.docker.internal:11434.
+      # probe exercises the sandbox daemon's harness-facing listener.
       VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:11434/
-      VALIDATOR_MODEL_RELAY_PROBE_URL: http://model-relay:11435/
       VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS: "2"
       VALIDATOR_STACK_HEALTH_CACHE_SECONDS: "60"
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
@@ -336,9 +244,7 @@ services:
       # the operator room to ramp above 2 without shipping a new stack; idle
       # slots cost nothing but two extra 204 polls per sweep.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
-      # V7 tickets fail closed without platform inference regardless of this
-      # flag. Leave fleet-wide enforcement dark until v6 has drained.
-      VALIDATOR_INFERENCE_PROXY_REQUIRED: ${VALIDATOR_INFERENCE_PROXY_REQUIRED:-false}
+      VALIDATOR_INFERENCE_PROXY_REQUIRED: "true"
       # The platform serves its inference plane under its own public hostname
       # (DITTO_INFERENCE_PUBLIC_BASE_URL), which need not equal the API host
       # above. A ticket's exchange URL must match one of the two exactly.
@@ -365,9 +271,7 @@ services:
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
       VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:25e8f296a573673ea47610c7a133e50660f2f416
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_MODEL_RELAY: source:25e8f296a573673ea47610c7a133e50660f2f416
       VALIDATOR_STACK_COMPONENT_PYLON: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
-      VALIDATOR_STACK_COMPONENT_OLLAMA: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
       VALIDATOR_BOOTSTRAP_TOKEN: ${VALIDATOR_BOOTSTRAP_TOKEN:-manual}
       VALIDATOR_HTTP_TIMEOUT_SECONDS: "30"
@@ -420,5 +324,4 @@ services:
 volumes:
   pylon-data:
   sandbox-docker-rootful-data:
-  ollama-data:
   validator-update-bootstrap:

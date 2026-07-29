@@ -7,18 +7,15 @@ no miner source, credentials, or runnable exploit payloads.
 
 - Validators load a screener-built image whose archive digest, image ID,
   source artifact, screening attempt, and lease are bound by the platform.
-- Benchmark v2 preserves source-build fallback for legacy records and mixed
-  validator versions. Benchmark v3 is issued only after policy-9 screening and
-  a platform-verified image; this is a versioned contract, not a fleet-wide
-  environment switch.
+- Benchmarks v7 and v8 accept only a platform-verified screener image; validators
+  never build miner source.
 - Miner containers run non-root with a read-only root filesystem, ephemeral
   no-exec scratch, all capabilities dropped, no-new-privileges, resource and
   time limits, and request-scoped cleanup.
-- The `ditto-sandbox` bridge denies forwarding by default. During the bounded
-  v6 transition, only local embeddings on 11434, the frozen v6 relay on 11435,
-  and the source-bound v7 ticket broker on 11436 are admitted. The v6 relay and
-  validator provider secret are removed only after activation and lease drain.
-  Denials are logged with the `ditto-sandbox-deny` prefix.
+- The `ditto-sandbox` bridge denies forwarding by default. Only the
+  source-bound ticket broker is admitted; chat and embedding provider access
+  remains platform-owned. Denials are logged with the `ditto-sandbox-deny`
+  prefix.
 - No wallet, `.env`, cloud credential, Docker control socket, or host directory
   is mounted into a miner container. Host network, PID, IPC, and other namespaces
   are not shared or joined with miner containers.
@@ -42,8 +39,8 @@ network-reachable from a miner container. A host-root Docker socket must never
 be exposed to a miner container. Privileged DinD is an explicitly reported
 interim boundary, not the target architecture.
 
-Heartbeat protocol v7 reports screened-image mode, executor isolation, and the
-six component identities. This is signed routing and observability data. It is
+Heartbeat protocol 18 reports screened-image mode, executor isolation, and the
+four component identities. This is signed routing and observability data. It is
 not remote attestation: a compromised host can still lie using its validator
 wallet, so the platform must not treat a heartbeat as proof of host integrity.
 
@@ -51,16 +48,15 @@ wallet, so the platform must not treat a heartbeat as proof of host integrity.
 
 1. Confirm the deployed screener version contains static malicious-source
    preflight and that its canary quarantines before any Docker build event.
-2. Confirm the platform assigns v3 only to validators whose signed v8 capability
-   heartbeat advertises screened-image support and a freshly verified v3 scorer.
-   Source-capable validators may continue receiving v2 records.
+2. Confirm the platform assigns v7/v8 only to validators whose signed capability
+   heartbeat advertises screened-image support and a freshly verified scorer.
 3. Inspect and record the executor daemon security options. Enable the reviewed
    seccomp and AppArmor profiles where the host supports them.
 4. Verify the executor account cannot read validator wallet paths, service
    `.env` files, SSH/cloud configuration, or other users' homes.
 5. Run the inert canary suite. It must show Docker control absent, host-root and
    credential paths unreadable, host writes impossible, metadata blocked, and
-   outbound connections denied except the two inference relays.
+   outbound connections denied except the ticket broker.
 6. Confirm `ditto-sandbox-deny` events reach the operator log/alert sink without
    including request bodies, credentials, or private source.
 7. Confirm the required `dittobench-api` change is merged and the deployed

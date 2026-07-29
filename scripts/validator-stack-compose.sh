@@ -70,7 +70,7 @@ if [ "$release_dir" = "$current_dir" ]; then
   { [ "$managed_ref" = "$descriptor_ref" ] || [ "$transaction_ref" = "$descriptor_ref" ]; } || die "managed current release descriptor does not match installed state"
 fi
 
-allowed_keys=' STACK_FORMAT_VERSION STACK_VERSION STACK_REVISION DITTOBENCH_REVISION COMPATIBILITY_EPOCH UPDATE_PROTOCOL COMPOSE_SCHEMA HEARTBEAT_PROTOCOL VALIDATOR_IMAGE SANDBOX_DOCKER_IMAGE DITTOBENCH_API_IMAGE MODEL_RELAY_IMAGE PYLON_IMAGE OLLAMA_IMAGE '
+allowed_keys=' STACK_FORMAT_VERSION STACK_VERSION STACK_REVISION DITTOBENCH_REVISION COMPATIBILITY_EPOCH UPDATE_PROTOCOL COMPOSE_SCHEMA HEARTBEAT_PROTOCOL VALIDATOR_IMAGE SANDBOX_DOCKER_IMAGE DITTOBENCH_API_IMAGE PYLON_IMAGE '
 seen_keys='|'
 while IFS= read -r line || [ -n "$line" ]; do
   [ -n "$line" ] || continue
@@ -101,9 +101,7 @@ export HEARTBEAT_PROTOCOL="$(manifest_value HEARTBEAT_PROTOCOL)"
 export VALIDATOR_IMAGE="$(manifest_value VALIDATOR_IMAGE)"
 export SANDBOX_DOCKER_IMAGE="$(manifest_value SANDBOX_DOCKER_IMAGE)"
 export DITTOBENCH_API_IMAGE="$(manifest_value DITTOBENCH_API_IMAGE)"
-export MODEL_RELAY_IMAGE="$(manifest_value MODEL_RELAY_IMAGE)"
 export PYLON_IMAGE="$(manifest_value PYLON_IMAGE)"
-export OLLAMA_IMAGE="$(manifest_value OLLAMA_IMAGE)"
 export VALIDATOR_STACK_DESCRIPTOR_REF="$descriptor_ref"
 
 wallets_dir="${DITTO_BITTENSOR_WALLETS_DIR:-}"

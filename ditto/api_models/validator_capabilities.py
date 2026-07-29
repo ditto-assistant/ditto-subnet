@@ -163,19 +163,22 @@ class ScorerBenchmarkCapability(BaseModel):
     @model_validator(mode="after")
     def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
         versions = self.supported_bench_versions
-        if not versions or tuple(sorted(set(versions))) != versions:
+        if tuple(sorted(set(versions))) != versions:
             raise ValueError("supported benchmark versions must be unique and sorted")
         if self.status == "fresh_verified":
             if (
-                self.observed_at is None
+                not versions
+                or self.observed_at is None
                 or self.software_version is None
                 or self.source_revision is None
             ):
                 raise ValueError(
                     "fresh verified scorer support requires observation and identity"
                 )
-        elif versions != (2,):
-            raise ValueError("unverified scorer states may advertise only benchmark v2")
+        elif versions not in ((), (2,)):
+            raise ValueError(
+                "unverified scorer states may advertise no work or legacy benchmark v2"
+            )
         # Any post-v2 version must be backed by verified identity. Naming a
         # single version here let e.g. (2, 4) bypass the requirement entirely.
         if any(version > 2 for version in versions) and self.status != "fresh_verified":
@@ -267,16 +270,16 @@ class ValidatorComponentIdentity(BaseModel):
 
 
 class ValidatorStackComponents(BaseModel):
-    """Exactly the validator and five sidecars in the production stack."""
+    """Current stack components plus nullable rolling-transition sidecars."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     ditto_subnet: ValidatorComponentIdentity
     dittobench_api: ValidatorComponentIdentity
     sandbox_docker: ValidatorComponentIdentity
-    model_relay: ValidatorComponentIdentity
+    model_relay: ValidatorComponentIdentity | None = None
     pylon: ValidatorComponentIdentity
-    ollama: ValidatorComponentIdentity
+    ollama: ValidatorComponentIdentity | None = None
 
 
 class ValidatorStackIdentity(BaseModel):
@@ -293,7 +296,9 @@ class ValidatorStackIdentity(BaseModel):
 
     @model_validator(mode="after")
     def mode_matches_provenance(self) -> ValidatorStackIdentity:
-        identities = tuple(self.components.__dict__.values())
+        identities = tuple(
+            item for item in self.components.__dict__.values() if item is not None
+        )
         if self.mode == "managed":
             if self.release_descriptor_digest is None:
                 raise ValueError("managed stacks require a release descriptor digest")

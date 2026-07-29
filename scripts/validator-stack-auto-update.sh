@@ -23,8 +23,8 @@ EXPECTED_COMPATIBILITY_EPOCH=2
 EXPECTED_UPDATE_PROTOCOL=1
 EXPECTED_COMPOSE_SCHEMA=1
 RUNTIME_STATE_PATH=/tmp/ditto-validator-update-state.json
-SERVICES=(pylon sandbox-docker model-relay ollama dittobench-api ditto-subnet)
-IMAGE_KEYS=(PYLON_IMAGE SANDBOX_DOCKER_IMAGE MODEL_RELAY_IMAGE OLLAMA_IMAGE DITTOBENCH_API_IMAGE VALIDATOR_IMAGE)
+CURRENT_SERVICES=(pylon sandbox-docker dittobench-api ditto-subnet)
+CURRENT_IMAGE_KEYS=(PYLON_IMAGE SANDBOX_DOCKER_IMAGE DITTOBENCH_API_IMAGE VALIDATOR_IMAGE)
 LOCK_HELD=false
 DRAINED_CONTAINER=""
 DRAINED_RELEASE_DIR=""
@@ -67,13 +67,42 @@ manifest_value() {
   awk -F= -v key="$key" '$1==key {print substr($0,index($0,"=")+1); exit}' "$file"
 }
 
+release_is_legacy() {
+  [ -n "$(manifest_value "$1/manifest.env" MODEL_RELAY_IMAGE)" ] || \
+    [ -n "$(manifest_value "$1/manifest.env" OLLAMA_IMAGE)" ]
+}
+
+release_services() {
+  local dir="$1"
+  if release_is_legacy "$dir"; then
+    printf '%s\n' pylon sandbox-docker model-relay ollama dittobench-api ditto-subnet
+  else
+    printf '%s\n' "${CURRENT_SERVICES[@]}"
+  fi
+}
+
+release_image_keys() {
+  local dir="$1"
+  if release_is_legacy "$dir"; then
+    printf '%s\n' PYLON_IMAGE SANDBOX_DOCKER_IMAGE MODEL_RELAY_IMAGE OLLAMA_IMAGE DITTOBENCH_API_IMAGE VALIDATOR_IMAGE
+  else
+    printf '%s\n' "${CURRENT_IMAGE_KEYS[@]}"
+  fi
+}
+
 validate_manifest() {
-  local dir="$1" file line key value count=0 expected_count=14 image_key seen_keys='|'
+  local dir="$1" file line key value count=0 expected_count image_key seen_keys='|' allowed
   file="$dir/manifest.env"
-  local allowed=' STACK_FORMAT_VERSION STACK_VERSION STACK_REVISION DITTOBENCH_REVISION COMPATIBILITY_EPOCH UPDATE_PROTOCOL COMPOSE_SCHEMA HEARTBEAT_PROTOCOL VALIDATOR_IMAGE SANDBOX_DOCKER_IMAGE DITTOBENCH_API_IMAGE MODEL_RELAY_IMAGE PYLON_IMAGE OLLAMA_IMAGE '
+  allowed=' STACK_FORMAT_VERSION STACK_VERSION STACK_REVISION DITTOBENCH_REVISION COMPATIBILITY_EPOCH UPDATE_PROTOCOL COMPOSE_SCHEMA HEARTBEAT_PROTOCOL VALIDATOR_IMAGE SANDBOX_DOCKER_IMAGE DITTOBENCH_API_IMAGE PYLON_IMAGE '
   [ -f "$dir/compose.yml" ] && [ ! -L "$dir/compose.yml" ] || return 1
   [ -f "$file" ] && [ ! -L "$file" ] || return 1
   [ -z "$(find "$dir" -type l -print -quit)" ] || return 1
+  if release_is_legacy "$dir"; then
+    allowed+=' MODEL_RELAY_IMAGE OLLAMA_IMAGE '
+    expected_count=14
+  else
+    expected_count=12
+  fi
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
     [[ "$line" =~ ^([A-Z][A-Z0-9_]*)=([^[:space:]]+)$ ]] || return 1
@@ -92,11 +121,11 @@ validate_manifest() {
   [ "$(manifest_value "$file" UPDATE_PROTOCOL)" = "$EXPECTED_UPDATE_PROTOCOL" ] || return 1
   [ "$(manifest_value "$file" COMPOSE_SCHEMA)" = "$EXPECTED_COMPOSE_SCHEMA" ] || return 1
   [[ "$(manifest_value "$file" HEARTBEAT_PROTOCOL)" =~ ^[1-9][0-9]*$ ]] || return 1
-  for image_key in "${IMAGE_KEYS[@]}"; do
+  while IFS= read -r image_key; do
     value="$(manifest_value "$file" "$image_key")"
     is_image_digest "$value" || return 1
     validate_image_repository "$image_key" "$value" || return 1
-  done
+  done < <(release_image_keys "$dir")
 }
 
 verify_descriptor_signature() {
@@ -110,10 +139,10 @@ verify_descriptor_signature() {
 
 validate_compose_contract() {
   local dir="$1" actual_services actual_images expected_services expected_images key configured
-  expected_services="$(printf '%s\n' "${SERVICES[@]}" | sort)"
+  expected_services="$(release_services "$dir" | sort)"
   actual_services="$(compose "$dir" config --services 2>/dev/null | sort)" || return 1
   [ "$actual_services" = "$expected_services" ] || return 1
-  expected_images="$(for key in "${IMAGE_KEYS[@]}"; do manifest_value "$dir/manifest.env" "$key"; done | sort)"
+  expected_images="$(while IFS= read -r key; do manifest_value "$dir/manifest.env" "$key"; done < <(release_image_keys "$dir") | sort)"
   actual_images="$(compose "$dir" config --images 2>/dev/null | sort)" || return 1
   [ "$actual_images" = "$expected_images" ] || return 1
   configured="$(compose "$dir" config 2>/dev/null)" || return 1
@@ -194,11 +223,11 @@ resolve_channel_digest() {
 
 pull_release_images() {
   local dir="$1" key image
-  for key in "${IMAGE_KEYS[@]}"; do
+  while IFS= read -r key; do
     image="$(manifest_value "$dir/manifest.env" "$key")"
     docker pull "$image" >/dev/null || return 1
     docker image inspect "$image" >/dev/null 2>&1 || return 1
-  done
+  done < <(release_image_keys "$dir")
   validate_release_image_labels "$dir"
 }
 
@@ -223,8 +252,11 @@ validate_release_image_labels() {
     https://github.com/ditto-assistant/ditto-subnet "$stack_revision" "$version" || return 1
   validate_image_labels "$(manifest_value "$manifest" DITTOBENCH_API_IMAGE)" \
     https://github.com/ditto-assistant/dittobench-api "$dbench_revision" "$version" || return 1
-  validate_image_labels "$(manifest_value "$manifest" MODEL_RELAY_IMAGE)" \
-    https://github.com/ditto-assistant/dittobench-api "$dbench_revision" "$version"
+  if release_is_legacy "$dir"; then
+    validate_image_labels "$(manifest_value "$manifest" MODEL_RELAY_IMAGE)" \
+      https://github.com/ditto-assistant/dittobench-api "$dbench_revision" "$version" || return 1
+  fi
+  return 0
 }
 
 compose() {
@@ -261,9 +293,11 @@ state_drained() {
 }
 
 assert_stack_matches() {
-  local dir="$1" index service key ref expected actual container
-  for index in "${!SERVICES[@]}"; do
-    service="${SERVICES[$index]}"; key="${IMAGE_KEYS[$index]}"
+  local dir="$1" index service key ref expected actual container services=() image_keys=()
+  while IFS= read -r service; do services+=("$service"); done < <(release_services "$dir")
+  while IFS= read -r key; do image_keys+=("$key"); done < <(release_image_keys "$dir")
+  for index in "${!services[@]}"; do
+    service="${services[$index]}"; key="${image_keys[$index]}"
     ref="$(manifest_value "$dir/manifest.env" "$key")"
     expected="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)"
     container="$(service_container "$dir" "$service")"
@@ -275,13 +309,14 @@ assert_stack_matches() {
 
 stack_services_healthy() {
   local dir="$1" service container running health
-  for service in "${SERVICES[@]:0:5}"; do
+  while IFS= read -r service; do
+    [ "$service" = ditto-subnet ] && continue
     container="$(service_container "$dir" "$service")"; [ -n "$container" ] || return 1
     running="$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)"
     [ "$running" = true ] || return 1
     health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
     case "$health" in healthy|none) ;; *) return 1;; esac
-  done
+  done < <(release_services "$dir")
 }
 
 wait_stack_quiescent() {
@@ -336,11 +371,14 @@ new_bootstrap_token() {
 }
 
 deploy_release() {
-  local dir="$1" token
+  local dir="$1" token service sidecars=()
   token="$(new_bootstrap_token)" || return 1
+  while IFS= read -r service; do
+    [ "$service" = ditto-subnet ] || sidecars+=("$service")
+  done < <(release_services "$dir")
   DITTO_ALLOW_MANAGED_STACK_MUTATION=true VALIDATOR_START_DRAINED=true \
     VALIDATOR_BOOTSTRAP_TOKEN="$token" compose "$dir" up -d --no-build --pull never \
-      --force-recreate pylon sandbox-docker model-relay ollama dittobench-api || return 1
+      --remove-orphans --force-recreate "${sidecars[@]}" || return 1
   DITTO_ALLOW_MANAGED_STACK_MUTATION=true VALIDATOR_START_DRAINED=true \
     VALIDATOR_BOOTSTRAP_TOKEN="$token" compose "$dir" up -d --no-deps --no-build \
       --pull never --force-recreate ditto-subnet
@@ -519,7 +557,7 @@ show_status() {
   if [ -f "$CURRENT_DIR/manifest.env" ] && [ ! -L "$CURRENT_DIR/manifest.env" ]; then
     while IFS= read -r line; do
       case "$line" in
-        STACK_VERSION=*|STACK_REVISION=*|DITTOBENCH_REVISION=*|COMPATIBILITY_EPOCH=*|UPDATE_PROTOCOL=*|COMPOSE_SCHEMA=*|HEARTBEAT_PROTOCOL=*|VALIDATOR_IMAGE=*|SANDBOX_DOCKER_IMAGE=*|DITTOBENCH_API_IMAGE=*|MODEL_RELAY_IMAGE=*|PYLON_IMAGE=*|OLLAMA_IMAGE=*)
+        STACK_VERSION=*|STACK_REVISION=*|DITTOBENCH_REVISION=*|COMPATIBILITY_EPOCH=*|UPDATE_PROTOCOL=*|COMPOSE_SCHEMA=*|HEARTBEAT_PROTOCOL=*|VALIDATOR_IMAGE=*|SANDBOX_DOCKER_IMAGE=*|DITTOBENCH_API_IMAGE=*|PYLON_IMAGE=*)
           printf '%s\n' "$line"
           ;;
       esac

@@ -311,7 +311,7 @@ def test_stack_update_rebuilds_and_replaces_a_stale_scorer_image(
     replace the running containers, not just re-render their environment.
     """
     env, capture, _ = _wrapper_env(tmp_path)
-    env["FAKE_COMPOSE_PS_OUTPUT"] = "scorer-container\nrelay-container\n"
+    env["FAKE_COMPOSE_PS_OUTPUT"] = "scorer-container\n"
 
     result = subprocess.run(
         [str(COMPOSE_WRAPPER), "up", "-d"],
@@ -325,15 +325,14 @@ def test_stack_update_rebuilds_and_replaces_a_stale_scorer_image(
     assert result.returncode == 0, result.stderr
     calls = _compose_calls(capture)
     build = next(call for call in calls if "build" in call)
-    assert build[-4:] == ["build", "--pull", "dittobench-api", "model-relay"]
+    assert build[-3:] == ["build", "--pull", "dittobench-api"]
     recreate = next(call for call in calls if "--no-deps" in call)
-    assert recreate[-6:] == [
+    assert recreate[-5:] == [
         "up",
         "-d",
         "--no-deps",
         "--no-build",
         "dittobench-api",
-        "model-relay",
     ]
     # The operator's own command still runs, and it runs last.
     assert calls[-1][-2:] == ["up", "-d"]

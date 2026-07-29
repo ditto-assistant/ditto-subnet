@@ -54,16 +54,16 @@ ditto verify --path <agent.tar.gz>      # pre-flight checks only; no chain/API c
 
 ```sh
 cp .env.example .env
-# Fill in the wallet names, validator hotkey, Pylon token, bounded-transition
-# v6 relay key, and shared W&B key.
+# Fill in the wallet names, validator hotkey, Pylon token, and shared W&B key.
 # Set WANDB_MODE=disabled instead if you opt out of aggregate telemetry.
 ./scripts/validator-compose.sh config --quiet
 ./scripts/validator-compose.sh up -d --build
 ./scripts/validator-compose.sh ps
 ```
 
-The root Compose stack runs the worker, Pylon, model gateway, scorer, Ollama embedder, and
-isolated Docker sandbox from one `.env`. SN118 and the production scoring and weight mechanism
+The root Compose stack runs the worker, Pylon, scorer, and isolated Docker
+sandbox from one `.env`. Ticket-scoped chat and embedding inference is served
+by the platform; validators carry no provider credential. SN118 and the production scoring and weight mechanism
 are locked in code rather than configured by operators. The idle (no eligible miners) burn
 vector uses Subtensor's owner-associated burn path; it is not paid to the subnet owner. See
 [VALIDATOR.md](docs/VALIDATOR.md) for first deployment, health checks, and upgrades.

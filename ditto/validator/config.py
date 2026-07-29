@@ -168,22 +168,11 @@ class ValidatorConfig:
     inference_proxy_required: bool
     """Fail closed when a ticket lacks its platform inference capability."""
 
-    embed_preflight_url: str
-    """Ollama ``/api/embed`` URL through the harness-facing TCP forwarder."""
-
-    embed_preflight_timeout_seconds: float
-    """Hard timeout for the functional embedding probe before ticket claim."""
-
     # --- Per-component stack-health probes (heartbeat v9) ---
     sandbox_docker_probe_url: str
     """Optional readiness probe URL for the sandbox-docker sidecar on the
     private Compose network (e.g. its Docker ``/_ping``). Empty disables the
     probe and the component reports ``unknown``. Never published."""
-
-    model_relay_probe_url: str
-    """Optional health probe URL for the model relay on the private Compose
-    network. Empty disables the probe and the component reports ``unknown``.
-    Never published."""
 
     pylon_probe_url: str
     """Pylon API readiness probe URL. Empty falls back to ``pylon_url``.
@@ -402,20 +391,6 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     dittobench_api_url = os.environ.get("VALIDATOR_DITTOBENCH_API_URL", "")
     if not dittobench_mock:
         _require("VALIDATOR_DITTOBENCH_API_URL", dittobench_api_url)
-    embed_preflight_url = os.environ.get("VALIDATOR_EMBED_PREFLIGHT_URL", "")
-    if not dittobench_mock:
-        _require("VALIDATOR_EMBED_PREFLIGHT_URL", embed_preflight_url)
-    embed_preflight_timeout_seconds = _parse_float(
-        "VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS", "5"
-    )
-    if (
-        not math.isfinite(embed_preflight_timeout_seconds)
-        or embed_preflight_timeout_seconds <= 0
-    ):
-        raise ValidatorConfigError(
-            "VALIDATOR_EMBED_PREFLIGHT_TIMEOUT_SECONDS must be a finite number > 0, "
-            f"got {embed_preflight_timeout_seconds}"
-        )
     stack_probe_timeout_seconds = _parse_float(
         "VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS", "2"
     )
@@ -507,12 +482,9 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_INFERENCE_PROXY_REQUIRED", "false").lower()
             in _truthy
         ),
-        embed_preflight_url=embed_preflight_url,
-        embed_preflight_timeout_seconds=embed_preflight_timeout_seconds,
         sandbox_docker_probe_url=os.environ.get(
             "VALIDATOR_SANDBOX_DOCKER_PROBE_URL", ""
         ),
-        model_relay_probe_url=os.environ.get("VALIDATOR_MODEL_RELAY_PROBE_URL", ""),
         pylon_probe_url=os.environ.get("VALIDATOR_PYLON_PROBE_URL", ""),
         stack_probe_timeout_seconds=stack_probe_timeout_seconds,
         stack_health_cache_seconds=stack_health_cache_seconds,

@@ -20,23 +20,19 @@ unavailable.
 
 ## What runs
 
-The root Docker Compose stack starts six services:
+The root Docker Compose stack starts four services:
 
 | Service | Purpose |
 | --- | --- |
 | `ditto-subnet` | Leases work, signs scores, and computes weights. |
 | `dittobench-api` | Scores submissions. |
 | `sandbox-docker` | Isolated nested Docker daemon that runs miner containers. |
-| `model-relay` | Reaches the locked model on the selected provider without exposing its key. |
-| `ollama` | Serves the embedding model used for memory scoring. |
 | `pylon` | Submits weights with the validator wallet. |
 
-During the v7 transition, `ollama` remains required for backwards-compatible
-v2-v6 work. A v7 ticket instead routes the same locked 768-dimensional embed
-operation through `dittobench-api` to the platform-owned OpenRouter profile;
-the functional hosted-vector preflight runs after ticket exchange and before
-the miner container starts. No OpenRouter credential is installed on the
-validator.
+For v7 and v8, each ticket routes chat and the locked 768-dimensional embedding
+operation through `dittobench-api` to the platform-owned inference profile. No
+provider credential is installed on the validator or exposed to a miner
+container.
 
 The validator is stateless: the queue and score ledger live on the platform,
 and Pylon keeps in-flight weight state in a named volume. The platform screens
@@ -90,9 +86,6 @@ If you need more throughput but are near a memory or disk ceiling, raise the
 - Git and `flock` from util-linux.
 - A local Bittensor wallet whose hotkey is registered on Finney SN118 and has a
   validator permit.
-- During the bounded v6 transition, the existing frozen-relay provider key and
-  outbound provider access. V7 does not consume this key, and a later cleanup
-  release removes both after activation and all v6 leases drain.
 - Outbound access to Finney, the Ditto platform, and GHCR (anonymous pull of the public
   `ghcr.io/ditto-assistant/ditto-subnet-validator` package).
 
@@ -118,9 +111,8 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
 | `VALIDATOR_BENCHMARK_CAPACITY` | Full-run slots this host advertises, `1`-`8`. Leave unset to take the compose default of `8` (the protocol maximum) so the platform's cap is the only lever; the platform decides how many are actually used. Set `4` on a 16 GB host — see the sizing table. |
-| `RELAY_PROVIDER` / `RELAY_API_KEY` | Existing frozen v6 route only; retain during transition. |
-| `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Leave `false` until v6 drains; v7 is independently fail-closed. |
-| `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Leave `false` until v6 drains; v7 is independently fail-closed. |
+| `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Keep `true`; v7/v8 scoring fails closed without a ticket session. |
+| `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Keep `true`; the validator must not claim work without the platform proxy. |
 
 The example selects Finney, SN118, and the production platform. For local
 testing, change both the platform and chain settings in a separate `.env`.
@@ -148,12 +140,12 @@ Stop if the pull or digest check fails. Do not substitute a mutable tag or an
 unpromoted image; use the [source-build fallback](#development) until the
 channel is available.
 
-Start the five sidecars, then start only the digest-pinned validator:
+Start the three sidecars, then start only the digest-pinned validator:
 
 ```sh
 ./scripts/validator-compose.sh config --quiet
 ./scripts/validator-compose.sh up -d --build --wait --wait-timeout 180 \
-  pylon sandbox-docker model-relay ollama dittobench-api
+  pylon sandbox-docker dittobench-api
 DITTO_SUBNET_IMAGE="$DIGEST" \
   ./scripts/validator-compose.sh up -d --no-deps --no-build --pull never \
   ditto-subnet
@@ -175,8 +167,8 @@ curl -fsS https://platform-api.heyditto.ai/health
 ./scripts/validator-stack-auto-update.sh status
 ```
 
-All six services should be `Up`; `ollama`, `sandbox-docker`, and
-`dittobench-api` should be healthy. An idle validator may log
+All four services should be `Up`; `sandbox-docker` and `dittobench-api` should
+be healthy. An idle validator may log
 `scoring sweep complete: 0 agent(s)`. That is normal when the queue is empty.
 
 Production acceptance also requires:
@@ -190,7 +182,7 @@ Production acceptance also requires:
 ## Upgrade and operate
 
 In managed mode, the stack updater performs every upgrade — the validator and
-all five sidecars are replaced together as one transaction. Do not use direct
+all three sidecars are replaced together as one transaction. Do not use direct
 `docker compose`, a second supervisor, or manual restarts; those paths can
 replace a reviewed digest or interrupt leased work. The host launcher scripts
 are outside the signed bundle, so keep the repository checkout on the reviewed
@@ -221,8 +213,8 @@ Two things prevent that now.
 
 1. `scripts/validator-compose.sh` records the revision it last built. When a
    command that can start containers runs against a **different** pin, it forces
-   `docker compose build --pull dittobench-api model-relay` and replaces those
-   two containers before running your command. An unchanged pin does nothing, so
+   `docker compose build --pull dittobench-api` and replaces that container
+   before running your command. An unchanged pin does nothing, so
    restarts stay fast and work without network access. A failed rebuild stops
    the command instead of starting the previous image.
 2. The validator refuses to call a scorer verified unless its identity is
@@ -238,7 +230,7 @@ Two things prevent that now.
 A validator in that state logs `scorer_image_stale`, reports
 `capabilities.scorer_benchmarks.status = identity_mismatch` and
 `stack_health.dittobench_api.health = identity_mismatch`, and advertises
-benchmark v2 only. It keeps heartbeating and never crash-loops, so the fault is
+no benchmark versions. It keeps heartbeating and never crash-loops, so the fault is
 visible on the dashboard rather than hidden behind a green validator.
 
 On a managed stack the next stack update replaces the scorer from the signed
@@ -250,7 +242,7 @@ Compose wrapper detects the moved pin and rebuilds before it runs your command:
 git pull --ff-only
 ./scripts/validator-compose.sh config --quiet
 ./scripts/validator-compose.sh up -d --build --no-deps --wait \
-  --wait-timeout 180 dittobench-api model-relay
+  --wait-timeout 180 dittobench-api
 ./scripts/validator-compose.sh logs --since 10m ditto-subnet
 ```
 
@@ -355,7 +347,7 @@ cutover.
 Update this checkout to the exact reviewed release, install Cosign from its
 verified upstream release, and migrate. If this host ever ran the retired
 validator-only updater, disable its timer first. `migrate` waits for the
-validator to drain, installs all six exact services, and verifies a fresh
+validator to drain, installs all four exact services, and verifies a fresh
 accepted heartbeat before recording the stack:
 
 ```sh
@@ -372,7 +364,7 @@ test -n "$DIGEST"
 ./scripts/validator-stack-auto-update.sh status
 ```
 
-If all six services already match the descriptor, `adopt "$DIGEST"` records
+If all four services already match the descriptor, `adopt "$DIGEST"` records
 them without replacement. Both commands fail closed if the descriptor's
 signature is not from this repository's release workflow.
 
@@ -391,7 +383,7 @@ systemctl list-timers ditto-validator-stack-auto-update.timer
 ```
 
 Compatible patch and minor releases then install automatically: the updater
-drains the validator (an active benchmark finishes first), replaces all six
+drains the validator (an active benchmark finishes first), replaces all four
 services as one transaction, and rolls the complete previous stack back if the
 new one fails verification. Major or schema changes require supervised
 migration.
@@ -454,7 +446,7 @@ receive no new work.
 
 ### Per-component stack health
 
-Heartbeat protocol 9 adds a signed health entry for each of the six Compose
+Heartbeat protocol 18 adds a signed health entry for each of the four Compose
 components. Three ideas are reported separately and must not be conflated:
 
 - **Configured identity** — what Compose intends to run (the pinned image

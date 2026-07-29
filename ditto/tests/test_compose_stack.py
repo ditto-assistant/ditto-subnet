@@ -24,18 +24,10 @@ def _compose_default(expression: str) -> str:
     return remainder.rstrip("}")
 
 
-def test_ollama_is_pinned_with_functional_embedding_healthcheck() -> None:
+def test_retired_local_inference_sidecars_are_absent() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    ollama = compose["services"]["ollama"]
-
-    assert ollama["image"] == (
-        "docker.io/ollama/ollama:0.11.10@"
-        "sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd"
-    )
-    probe = " ".join(ollama["healthcheck"]["test"])
-    assert "/api/embed" in probe
-    assert "embeddinggemma" in probe
-    assert " 200 " in probe
+    assert "ollama" not in compose["services"]
+    assert "model-relay" not in compose["services"]
 
 
 def test_sandbox_image_pins_dind_and_installs_curl() -> None:
@@ -48,30 +40,16 @@ def test_sandbox_image_pins_dind_and_installs_curl() -> None:
     assert "RUN apk add --no-cache curl socat" in dockerfile
 
 
-def test_sandbox_health_and_validator_preflight_use_forwarded_embedding_route() -> None:
+def test_sandbox_health_requires_only_the_isolated_docker_daemon() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
-    validator = compose["services"]["ditto-subnet"]
-
     probe = " ".join(sandbox["healthcheck"]["test"])
-    assert "curl --silent --show-error --max-time 10" in probe
-    assert "nc -w" not in probe
-    assert "127.0.0.1:11434/api/embed" in probe
-    assert "/api/embed" in probe
-    assert "embeddinggemma" in probe
-    assert "%{http_code}" in probe
-    assert "^200$$" in probe
-    assert validator["environment"]["VALIDATOR_EMBED_PREFLIGHT_URL"] == (
-        "http://sandbox-docker:11434/api/embed"
-    )
+    assert "docker info" in probe
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
-    assert "TCP-LISTEN:11434" in entrypoint
-    assert "TCP:ollama:11434" in entrypoint
-    assert validator["environment"]["VALIDATOR_DITTOBENCH_API_URL"] == (
-        "http://sandbox-docker:8000"
-    )
+    assert "TCP-LISTEN:11434" not in entrypoint
+    assert "TCP-LISTEN:11435" not in entrypoint
 
 
 def test_scorer_capability_probe_needs_no_operator_secret() -> None:
@@ -151,7 +129,7 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
-    # The scorer reaches the v6 relay / embedding forwarders on loopback, so
+    # The source-bound ticket broker is reached on loopback, so
     # host.docker.internal must resolve there. The scorer joins sandbox-docker's
     # netns and SHARES its /etc/hosts, so the mapping lives on sandbox-docker (an
     # extra_hosts on the joining dittobench-api service would be ignored).
@@ -160,20 +138,18 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
         "host.docker.internal:127.0.0.1"
         in compose["services"]["sandbox-docker"]["extra_hosts"]
     )
-    assert env["HARNESS_GATEWAY_URL"] == "http://host.docker.internal:11435"
-    assert env["DITTOBENCH_REQUIRE_TICKET_INFERENCE"] == (
-        "${DITTOBENCH_REQUIRE_TICKET_INFERENCE:-false}"
+    assert env["DITTOBENCH_REQUIRE_TICKET_INFERENCE"] == "true"
+    assert env["DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL"] == (
+        "${DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL:-"
+        "https://dittobench.ai/api/v1/inference/chat/completions}"
     )
-    relay = compose["services"]["model-relay"]
-    assert relay["environment"]["RELAY_PROVIDER"] == "${RELAY_PROVIDER:-chutes}"
-    assert relay["environment"]["RELAY_ENABLE_DEPRECATED_CHUTES"] == (
-        "${RELAY_ENABLE_DEPRECATED_CHUTES:-1}"
+    assert env["DITTOBENCH_EMBEDDING_UPSTREAM_URL"] == (
+        "${DITTOBENCH_EMBEDDING_UPSTREAM_URL:-"
+        "https://dittobench.ai/api/v1/inference/embeddings}"
     )
 
     api = compose["services"]["dittobench-api"]
-    assert api["environment"]["DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES"] == (
-        "${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}"
-    )
+    assert "DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES" not in api["environment"]
     # The worker fails closed and claims nothing at all when the scorer
     # advertises fewer full-run slots than the worker configured, so these two
     # must ride the same variable with the same default. A host that sets
@@ -192,8 +168,8 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert _compose_default(
         api["environment"]["DITTOBENCH_MAX_CONCURRENT_RUNS"]
     ) == _compose_default(worker_env["VALIDATOR_BENCHMARK_CAPACITY"])
-    assert "RELAY_API_KEY" in relay["environment"]
-    assert "model-relay" in service["depends_on"]
+    assert "RELAY_API_KEY" not in env
+    assert "model-relay" not in service["depends_on"]
 
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
@@ -209,8 +185,8 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "ensure_sandbox_network" in entrypoint
     assert entrypoint.count("ensure_sandbox_network") >= 3
     assert "DITTO-SANDBOX-EGRESS" in entrypoint
-    assert "--dst-type LOCAL -p tcp --dport 11434 -j ACCEPT" in entrypoint
-    assert "--dst-type LOCAL -p tcp --dport 11435 -j ACCEPT" in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11434 -j ACCEPT" not in entrypoint
+    assert "--dst-type LOCAL -p tcp --dport 11435 -j ACCEPT" not in entrypoint
     assert "--dst-type LOCAL -p tcp --dport 11436 -j ACCEPT" in entrypoint
     assert "-i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS" in entrypoint
     assert "com.docker.network.bridge.enable_icc=false" in entrypoint
@@ -266,21 +242,18 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]
-    assert compose["services"]["model-relay"]["build"]["context"] == expected
     assert compose["services"]["dittobench-api"]["build"]["context"] == expected
     validator_environment = compose["services"]["ditto-subnet"]["environment"]
     assert validator_environment["VALIDATOR_STACK_COMPONENT_DITTOBENCH_API"] == (
         f"source:{checksum}"
     )
-    assert validator_environment["VALIDATOR_STACK_COMPONENT_MODEL_RELAY"] == (
-        f"source:{checksum}"
-    )
+    assert "VALIDATOR_STACK_COMPONENT_MODEL_RELAY" not in validator_environment
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
     assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == checksum
     # One anchor definition plus the build-context default. Everything else that
     # names the revision aliases the anchor or carries the `source:` prefix, so
     # no copy of the revision can drift away from the build context.
-    assert raw_compose.count(checksum) == 4
+    assert raw_compose.count(checksum) == 3
     assert f"x-dittobench-revision: &dittobench-revision {checksum}" in raw_compose
     assert "DITTOBENCH_SOURCE_SHA: *dittobench-revision" in raw_compose
     wrapper = COMPOSE_WRAPPER_PATH.read_text()
@@ -306,7 +279,7 @@ def test_scorer_identity_is_stamped_into_the_image_it_is_built_from() -> None:
     checksum = compose["x-dittobench-revision"]
     software_version = compose["x-dittobench-software-version"]
 
-    for service in ("dittobench-api", "model-relay"):
+    for service in ("dittobench-api",):
         build_args = compose["services"][service]["build"]["args"]
         assert build_args["DITTOBENCH_SOURCE_SHA"] == checksum
         assert build_args["DITTOBENCH_SOFTWARE_VERSION"] == software_version
@@ -325,13 +298,13 @@ def test_scorer_identity_is_stamped_into_the_image_it_is_built_from() -> None:
         workflow.count(
             "DITTOBENCH_SOURCE_SHA=${{ steps.dittobench-source.outputs.revision }}"
         )
-        == 2
+        == 1
     )
     assert (
         workflow.count(
             "DITTOBENCH_SOFTWARE_VERSION=${{ needs.release.outputs.version }}"
         )
-        == 2
+        == 1
     )
 
 
@@ -342,8 +315,8 @@ def test_stack_update_rebuilds_the_scorer_only_when_the_pin_moves() -> None:
     # replacement, and an unchanged pin costs nothing.
     assert 'built_revision_file="$STATE_DIR/dittobench-built-revision"' in wrapper
     assert 'if [ "$built_revision" != "$checksum" ]; then' in wrapper
-    assert "build --pull dittobench-api model-relay" in wrapper
-    assert "up -d --no-deps --no-build dittobench-api model-relay" in wrapper
+    assert "build --pull dittobench-api" in wrapper
+    assert "up -d --no-deps --no-build dittobench-api" in wrapper
     assert 'printf \'%s\\n\' "$checksum" > "$built_revision_file"' in wrapper
 
 
@@ -480,7 +453,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert (
         "docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130" in workflow
     )
-    # Validator, sandbox daemon, scorer, relay, and the final signed stack
+    # Validator, sandbox daemon, scorer, and the final signed stack
     # descriptor are independently built and published from the exact release.
     build_action_count = sum(
         workflow.count(action)
@@ -489,12 +462,11 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 5
+    assert build_action_count == 4
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",
         "ghcr.io/ditto-assistant/dittobench-api-sandbox",
-        "ghcr.io/ditto-assistant/dittobench-api-relay",
         "ghcr.io/ditto-assistant/ditto-subnet-stack",
     ):
         assert repository in workflow
@@ -511,23 +483,11 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert "Promote only the authenticated stack descriptor" in workflow
 
 
-def test_hosted_v7_parallelism_is_tunable_without_widening_the_local_ollama_lane() -> (
-    None
-):
-    """The two lanes must stay independently controllable, and only one may widen.
-
-    Bench versions 2-6 embed against the single Ollama container this compose
-    file starts; v7 bypasses it for the hosted route (dittobench-api #93). The
-    hazard this pins is an operator who wants more v7 parallelism reaching for
-    the memory-phase knob, which would serialise nothing and hammer Ollama.
-    """
+def test_hosted_v7_parallelism_remains_tunable() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     env = compose["services"]["dittobench-api"]["environment"]
 
-    # The local lane keeps its own anchor and its default of one.
-    assert env["DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES"] == (
-        "${VALIDATOR_BENCHMARK_MEMORY_CAPACITY:-1}"
-    )
+    assert "DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES" not in env
 
     # The hosted knobs are exposed, under distinct anchors, and default to
     # empty so the scorer image's own shipped defaults govern. An empty value
@@ -537,9 +497,7 @@ def test_hosted_v7_parallelism_is_tunable_without_widening_the_local_ollama_lane
         "${VALIDATOR_V7_EMBEDDING_CONCURRENCY:-}"
     )
 
-    anchors = {
-        env["DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES"],
-        env["DITTOBENCH_V7_CASE_CONCURRENCY"],
-        env["DITTOBENCH_V7_EMBEDDING_CONCURRENCY"],
-    }
-    assert len(anchors) == 3, "hosted and local concurrency share an anchor"
+    assert (
+        env["DITTOBENCH_V7_CASE_CONCURRENCY"]
+        != env["DITTOBENCH_V7_EMBEDDING_CONCURRENCY"]
+    )

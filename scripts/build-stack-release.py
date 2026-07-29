@@ -13,9 +13,7 @@ IMAGE_KEYS = {
     "ditto-subnet": "VALIDATOR_IMAGE",
     "sandbox-docker": "SANDBOX_DOCKER_IMAGE",
     "dittobench-api": "DITTOBENCH_API_IMAGE",
-    "model-relay": "MODEL_RELAY_IMAGE",
     "pylon": "PYLON_IMAGE",
-    "ollama": "OLLAMA_IMAGE",
 }
 IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -98,9 +96,7 @@ def main() -> None:
             "VALIDATOR_STACK_COMPONENT_DITTO_SUBNET": images["VALIDATOR_IMAGE"],
             "VALIDATOR_STACK_COMPONENT_DITTOBENCH_API": images["DITTOBENCH_API_IMAGE"],
             "VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER": images["SANDBOX_DOCKER_IMAGE"],
-            "VALIDATOR_STACK_COMPONENT_MODEL_RELAY": images["MODEL_RELAY_IMAGE"],
             "VALIDATOR_STACK_COMPONENT_PYLON": images["PYLON_IMAGE"],
-            "VALIDATOR_STACK_COMPONENT_OLLAMA": images["OLLAMA_IMAGE"],
         }
     )
 

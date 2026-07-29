@@ -20,7 +20,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import httpx
@@ -79,54 +79,12 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # rather than scored blind. Versions >= 3 share one scorer contract (/v2/score,
 # pinned dataset, policy-9 screened image), so version-specific behaviour is
 # expressed as ``>= _SCREENED_IMAGE_BENCH_VERSION`` rather than per-version arms.
-_SUPPORTED_BENCH_VERSIONS = (2, 3, 4, 5, 6, 7, 8)
+_SUPPORTED_BENCH_VERSIONS = (7, 8)
+_RETIRED_BENCH_VERSIONS = frozenset(range(2, 7))
 _SCREENED_IMAGE_BENCH_VERSION = 3
 
-# Benchmark versions whose memory phase runs through the validator's OWN Ollama
-# container -- the "local embedding lane". These are the only versions for which
-# that container is a real dependency.
-#
-# From v7 the scorer embeds through the hosted platform lane instead. In
-# dittobench-api the fork is per request -- ``benchVersion >= 7`` forwards to the
-# platform's ``/api/v1/inference/embeddings``, below it forwards to this host's
-# ``/api/embed`` -- and the local single-slot semaphore is taken only under
-# ``if benchVersion < 7``. The memory phase mirrors it:
-# ``beginMemoryPhase(..., localEmbedding: false)`` for v7, ``true`` for v2-v6.
-# A v7 run therefore never opens a socket to this host's Ollama, and a dead
-# Ollama says nothing about whether this validator can serve v7.
-#
-# The lane is NOT removed in this capability layer: historical versions still
-# serialize locally, while both v7 and v8 use ticket-hosted embeddings.
-_LOCAL_EMBEDDING_BENCH_VERSIONS = frozenset({2, 3, 4, 5, 6})
 
-
-@dataclass(frozen=True)
-class LocalEmbeddingLane:
-    """What this host's own Ollama container can currently support.
-
-    A capability, not a health boolean: the question that decides whether to
-    claim a ticket is "which benchmark versions can this validator still drive",
-    and the local lane only ever answers it for
-    :data:`_LOCAL_EMBEDDING_BENCH_VERSIONS`.
-
-    ``unknown`` is the pre-observation state (and mock/plumbing mode). It is
-    never read as broken -- absence of evidence is not evidence of a dead lane,
-    and treating it as one would fail closed on every process start.
-    """
-
-    status: Literal["unknown", "healthy", "unavailable"] = "unknown"
-    detail: str | None = None
-
-    @property
-    def usable(self) -> bool:
-        return self.status != "unavailable"
-
-    def supports(self, bench_version: int) -> bool:
-        """Whether this lane state permits driving ``bench_version``."""
-        return self.usable or bench_version not in _LOCAL_EMBEDDING_BENCH_VERSIONS
-
-
-# Scorer identity faults. Both degrade the validator to benchmark v2 and both
+# Scorer identity faults. Both stop benchmark advertisement and both
 # surface as an ``identity_mismatch`` scorer status in the heartbeat; the names
 # exist so an operator can tell the two causes apart in logs and telemetry.
 #
@@ -201,22 +159,6 @@ def _parse_v7_calibration(payload: object) -> V7InferenceCalibration | None:
         return None
 
 
-def _is_embedding_infrastructure_failure(error: str) -> bool:
-    """Identify legacy scorer failures from a validator-owned embedding route.
-
-    Kept only for the bounded mixed-version rollout. New scorers emit the
-    structured ``embedding_provider_unavailable`` failure code below.
-    """
-    normalized = error.lower()
-    return (
-        "host.docker.internal:11434" in normalized
-        or "ollama embed request" in normalized
-        or ("ollama" in normalized and "embedding" in normalized)
-        or "embedding service unavailable" in normalized
-        or "embedding provider timed out" in normalized
-    )
-
-
 _SANDBOX_INFRASTRUCTURE_CODES = {
     "sandbox_oom",
     "sandbox_tmpfs_exhausted",
@@ -226,8 +168,8 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # not the agent's fault, so it must end the sweep and back off rather than
     # blame and re-lease the agent in a tight resubmit loop.
     "sandbox_network_unavailable",
-    # The scorer's locked-model-relay preflight failed (relay unreachable or its
-    # upstream provider degraded mid-run). Also validator-side infrastructure, so
+    # The ticket inference route failed or its upstream provider degraded
+    # mid-run. Also validator-side infrastructure, so
     # back off instead of failing the agent and re-leasing it in a loop.
     "model_relay_unavailable",
     # The platform-owned hosted embedding route failed or could not prove
@@ -400,17 +342,6 @@ class DittobenchClient:
         # so, rather than carrying a claim it cannot support.
         self._scorer_last_served_at: int | None = None
         self._scorer_probe_failures = 0
-        # What this host's own Ollama container can still support, as observed
-        # by the most recent :meth:`preflight`. Read by the capability
-        # advertisement (to stop offering versions this validator cannot drive)
-        # and by :meth:`score_tarball` (to refuse such a ticket as
-        # infrastructure rather than score it as a miner failure).
-        self.local_embedding_lane = LocalEmbeddingLane()
-        self._local_embedding_lane_logged: str | None = None
-        # Benchmark versions this validator most recently advertised. Preflight
-        # needs it to answer "is anything still servable without the local
-        # lane"; empty means nothing has been observed yet, which fails closed.
-        self._advertised_bench_versions: tuple[int, ...] = ()
 
     def take_transcript(self, run_id: str) -> bytes | None:
         """Consume the verified transcript belonging to exactly ``run_id``."""
@@ -554,41 +485,20 @@ class DittobenchClient:
         :meth:`preflight` can never read a stale advertisement from an earlier
         sweep no matter which exit was taken.
         """
-        capability = await self._observe_scorer_benchmark_capability(stack)
-        self._advertised_bench_versions = tuple(capability.supported_bench_versions)
-        return capability
-
-    def _locally_servable(self, versions: tuple[int, ...]) -> tuple[int, ...]:
-        """Drop versions this host's dead local embedding lane cannot drive.
-
-        Returns ``versions`` unchanged when the lane is usable, or when dropping
-        would leave nothing: an empty advertisement has no representation in
-        :class:`ScorerBenchmarkCapability`, and inventing one (e.g. collapsing to
-        ``unreachable``/``(2,)``) would blame the scorer for a fault that is not
-        its own. That case is instead blocked one layer up, where
-        :meth:`preflight` refuses to claim any ticket at all -- which is exactly
-        the behaviour this whole change preserves for a v2-v6-only validator.
-        """
-        if self.local_embedding_lane.usable:
-            return versions
-        servable = tuple(
-            version
-            for version in versions
-            if version not in _LOCAL_EMBEDDING_BENCH_VERSIONS
-        )
-        return servable or versions
+        return await self._observe_scorer_benchmark_capability(stack)
 
     async def _observe_scorer_benchmark_capability(
         self, stack: ValidatorStackIdentity
     ) -> ScorerBenchmarkCapability:
         """Observe scorer support and bind post-v2 claims to signed stack identity.
 
-        Legacy 404s, malformed replies, timeouts, and source mismatches all fail
-        closed to v2. A newer scorer may advertise future benchmark versions;
-        report only the intersection this validator knows how to drive so a
-        forward-compatible rollout stays healthy without claiming unsupported
-        work. Unknown versions at or below this validator's current maximum are
-        still malformed and fail closed.
+        Legacy 404s, malformed replies, timeouts, and source mismatches advertise
+        no work. A mixed-version scorer may still report retired v2-v6 support;
+        recognize those values as transition input but never advertise or schedule
+        them. Report only the v7/v8 intersection this validator knows how to drive
+        so a forward-compatible rollout stays healthy without claiming unsupported
+        work. Unknown versions at or below this validator's current maximum remain
+        malformed and fail closed.
 
         The revision the scorer reports is only trustworthy when it is a
         property of the running binary. ``source_revision_origin`` says which it
@@ -608,7 +518,7 @@ class DittobenchClient:
             # be an invention, so it reports that none was made.
             return ScorerBenchmarkCapability(
                 status="legacy_v2",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe("not_probed", observed_at=observed_at),
             )
         self.full_run_capacity = 1
@@ -625,7 +535,7 @@ class DittobenchClient:
             # the other is a scorer that is not listening at all.
             return ScorerBenchmarkCapability(
                 status="unreachable",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "timeout"
                     if isinstance(error, httpx.TimeoutException)
@@ -640,7 +550,7 @@ class DittobenchClient:
             # the evidence that tells the two apart.
             return ScorerBenchmarkCapability(
                 status="legacy_v2",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "http_error", observed_at=observed_at, http_status=404
                 ),
@@ -648,7 +558,7 @@ class DittobenchClient:
         if response.status_code != 200:
             return ScorerBenchmarkCapability(
                 status="unreachable",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "http_error",
                     observed_at=observed_at,
@@ -660,7 +570,7 @@ class DittobenchClient:
         except ValueError:
             return ScorerBenchmarkCapability(
                 status="unreachable",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "unreadable",
                     observed_at=observed_at,
@@ -671,7 +581,7 @@ class DittobenchClient:
         if not isinstance(payload, dict):
             return ScorerBenchmarkCapability(
                 status="unreachable",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "unreadable",
                     observed_at=observed_at,
@@ -696,7 +606,7 @@ class DittobenchClient:
         ):
             return ScorerBenchmarkCapability(
                 status="unreachable",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "unreadable",
                     observed_at=observed_at,
@@ -707,12 +617,13 @@ class DittobenchClient:
         advertised_versions = tuple(sorted(set(versions)))
         if any(
             version not in _SUPPORTED_BENCH_VERSIONS
+            and version not in _RETIRED_BENCH_VERSIONS
             and version <= _SUPPORTED_BENCH_VERSIONS[-1]
             for version in advertised_versions
         ):
             return ScorerBenchmarkCapability(
                 status="unreachable",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "unreadable",
                     observed_at=observed_at,
@@ -728,7 +639,7 @@ class DittobenchClient:
         if not observed_versions:
             return ScorerBenchmarkCapability(
                 status="unreachable",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "unreadable",
                     observed_at=observed_at,
@@ -754,7 +665,7 @@ class DittobenchClient:
             if not observed_versions:
                 return ScorerBenchmarkCapability(
                     status="unreachable",
-                    supported_bench_versions=(2,),
+                    supported_bench_versions=(),
                     probe=self._record_scorer_probe(
                         "unreadable",
                         observed_at=observed_at,
@@ -766,7 +677,6 @@ class DittobenchClient:
             v7_calibration = None
         else:
             self._v7_calibration_rejected = False
-        observed_versions = self._locally_servable(observed_versions)
         expected_revision = stack.components.dittobench_api.source_revision
         fault = self._scorer_identity_fault(
             payload,
@@ -784,7 +694,7 @@ class DittobenchClient:
             )
             return ScorerBenchmarkCapability(
                 status="identity_mismatch",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 observed_at=observed_at,
                 software_version=software_version,
                 source_revision=source_revision,
@@ -825,7 +735,7 @@ class DittobenchClient:
             # that rather than a capability nothing verified.
             return ScorerBenchmarkCapability(
                 status="unreachable",
-                supported_bench_versions=(2,),
+                supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "unreadable",
                     observed_at=observed_at,
@@ -923,7 +833,7 @@ class DittobenchClient:
             "%s: the running scorer is not the pinned dittobench-api revision "
             "(reported revision=%s with provenance=%s, pinned revision=%s, "
             "reported version=%s, advertised bench versions=%s). The validator "
-            "is degraded and will advertise benchmark v2 only until the scorer "
+            "is degraded and will advertise no benchmark work until the scorer "
             "image is rebuilt from the pin; restarting the validator will not "
             "help. See docs/VALIDATOR.md, 'Stale scorer image'.",
             fault,
@@ -933,149 +843,6 @@ class DittobenchClient:
             software_version,
             list(observed_versions),
         )
-
-    async def preflight(self) -> None:
-        """Observe the local embedding lane, and block the sweep only if it matters.
-
-        The configured URL is the sandbox-docker forwarder's port 11434, the
-        same listener reached as ``host.docker.internal:11434`` by inner miner
-        harnesses. A real embedding request checks the forwarder, Ollama, and
-        the loaded model rather than merely checking container liveness.
-
-        This used to raise on any failure, which blocked *every* ticket claim on
-        a dependency only :data:`_LOCAL_EMBEDDING_BENCH_VERSIONS` actually use.
-        A host whose Ollama died was excluded from v7 -- the only version being
-        scored -- for a container v7 never opens a socket to.
-
-        So the failure is now recorded as a *capability* rather than raised as a
-        fault: the lane result narrows what this validator advertises, and the
-        sweep is blocked only when nothing servable is left. The observation
-        itself is unchanged, and still reaches operators through the ``ollama``
-        component of the signed stack health, which stays ``required`` because a
-        validator that can no longer drive v2-v6 genuinely is degraded.
-        """
-        if self._config.dittobench_mock:
-            return
-        detail = await self._probe_local_embedding_lane()
-        self._record_local_embedding_lane(detail)
-        if detail is None:
-            return
-        hosted = tuple(
-            version
-            for version in self._advertised_bench_versions
-            if version not in _LOCAL_EMBEDDING_BENCH_VERSIONS
-        )
-        if not hosted:
-            # Either nothing has been advertised yet, or everything advertised
-            # needs the lane. Both are exactly the old behaviour: claim nothing.
-            raise ValidatorInfrastructureError(
-                f"{detail}; this validator advertises no benchmark version that "
-                "can be served without the local embedding lane"
-            )
-        # The locked model is now ticket-scoped, so it cannot be probed before
-        # the platform issues and the local broker activates a capability. Each
-        # scored run performs that trusted probe after activation instead.
-
-    async def _probe_local_embedding_lane(self) -> str | None:
-        """Return why the local lane is unusable, or ``None`` if it served."""
-        try:
-            response = await self._client.post(
-                self._config.embed_preflight_url,
-                json={"model": "embeddinggemma", "input": "validator preflight"},
-                timeout=self._config.embed_preflight_timeout_seconds,
-            )
-        except httpx.TimeoutException:
-            return "embedding preflight timed out through the harness forwarder"
-        except httpx.HTTPError as e:
-            return f"embedding preflight could not reach the harness forwarder: {e}"
-        if response.status_code != 200:
-            return (
-                "embedding preflight through the harness forwarder rejected "
-                f"({response.status_code}): {response.text[:200]}"
-            )
-        try:
-            embeddings = response.json().get("embeddings")
-        except (ValueError, AttributeError):
-            return "embedding preflight returned an invalid response"
-        if (
-            not isinstance(embeddings, list)
-            or not embeddings
-            or not isinstance(embeddings[0], list)
-            or not embeddings[0]
-        ):
-            return "embedding preflight returned no embedding vector"
-        return None
-
-    def _record_local_embedding_lane(self, detail: str | None) -> None:
-        """Latch the lane state and log each transition exactly once."""
-        self.local_embedding_lane = (
-            LocalEmbeddingLane(status="healthy")
-            if detail is None
-            else LocalEmbeddingLane(status="unavailable", detail=detail)
-        )
-        status = self.local_embedding_lane.status
-        if self._local_embedding_lane_logged == status:
-            return
-        self._local_embedding_lane_logged = status
-        if detail is None:
-            logger.info(
-                "local embedding lane is serving again; benchmark versions %s "
-                "are servable on this host once more",
-                sorted(_LOCAL_EMBEDDING_BENCH_VERSIONS),
-            )
-            return
-        logger.warning(
-            "local embedding lane is unavailable (%s). Benchmark versions %s "
-            "need it and will no longer be advertised by this validator; "
-            "hosted-lane versions are unaffected and keep claiming tickets.",
-            detail,
-            sorted(_LOCAL_EMBEDDING_BENCH_VERSIONS),
-        )
-
-    async def _relay_preflight(self) -> None:
-        """Verify the scorer's model-relay path from where the scorer runs it.
-
-        The scorer reaches the locked model relay at ``host.docker.internal:11435``
-        inside sandbox-docker's shared network namespace. This validator is NOT in
-        that namespace — it reaches the relay only by service name — so it cannot
-        itself detect a broken ``host.docker.internal`` mapping (e.g. a managed
-        stack whose frozen compose predates the extra_hosts-on-sandbox-docker fix).
-        The embed preflight above has the same blind spot. So a broken relay path
-        stays invisible pre-lease, and the validator claims tickets it fast-fails
-        at run start (``model_relay_unavailable``), burning each agent's retry
-        budget until it wedges at quorum.
-
-        Ask the scorer — which IS in the right namespace — to run its own relay
-        health check via ``GET /v1/relay-preflight``. A broken relay surfaces as a
-        503 ``validator_infrastructure`` envelope; raising here makes the sweep
-        back off and claim no ticket, so a broken stack self-excludes and
-        self-heals instead of wedging agents.
-
-        Purely additive: an older scorer without the endpoint (404), or any other
-        non-503 response or transport blip, is left to the existing per-run relay
-        signal rather than newly blocking ticket claims.
-        """
-        try:
-            response = await self._client.get(
-                f"{self._config.dittobench_api_url}/v1/relay-preflight",
-                timeout=self._config.embed_preflight_timeout_seconds,
-            )
-        except httpx.HTTPError:
-            return
-        if response.status_code != 503:
-            return
-        try:
-            failure = response.json().get("failure")
-        except ValueError:
-            failure = None
-        if not isinstance(failure, dict):
-            return
-        if failure.get("kind") == "validator_infrastructure":
-            code = failure.get("code") or "model_relay_unavailable"
-            raise ValidatorInfrastructureError(
-                "scorer relay preflight reported the model relay is unreachable "
-                f"from the scorer ({code}); not claiming a ticket this sweep"
-            )
 
     async def score_tarball(
         self,
@@ -1124,16 +891,6 @@ class DittobenchClient:
         """
         if bench_version is None or bench_version not in _SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
-        if not self.local_embedding_lane.supports(bench_version):
-            # The narrowed advertisement should already have stopped this ticket
-            # from being issued, but the platform may still hold a heartbeat from
-            # before the lane died. Refuse it as *infrastructure* so the ticket
-            # is returned and retried elsewhere -- scoring it would fail on this
-            # host's dead container and charge the miner for it.
-            raise ValidatorInfrastructureError(
-                f"benchmark v{bench_version} needs the local embedding lane and "
-                f"it is unavailable ({self.local_embedding_lane.detail})"
-            )
         if self._config.dittobench_mock:
             self.last_details = {}
             self.last_transcript = None
@@ -1446,12 +1203,6 @@ class DittobenchClient:
                             f"run {run_id} reported validator infrastructure "
                             f"failure: {infrastructure_code}",
                             code=infrastructure_code,
-                        )
-                    if _is_embedding_infrastructure_failure(error):
-                        raise ValidatorInfrastructureError(
-                            f"run {run_id} lost validator embedding infrastructure: "
-                            f"{error}",
-                            code="embedding_provider_unavailable",
                         )
                     raise DittobenchError(f"run {run_id} failed: {error}")
                 # Never sleep past the budget: the abort must keep the whole

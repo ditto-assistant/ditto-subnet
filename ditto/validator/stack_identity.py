@@ -27,9 +27,7 @@ _MANAGED_COMPONENT_KEYS = {
     "ditto_subnet": "VALIDATOR_IMAGE",
     "dittobench_api": "DITTOBENCH_API_IMAGE",
     "sandbox_docker": "SANDBOX_DOCKER_IMAGE",
-    "model_relay": "MODEL_RELAY_IMAGE",
     "pylon": "PYLON_IMAGE",
-    "ollama": "OLLAMA_IMAGE",
 }
 _TRUTHY = {"1", "true", "yes"}
 
@@ -71,7 +69,7 @@ def _managed_identity() -> ValidatorStackIdentity | None:
             image_digest=image_match.group("digest"),
             source_revision=(
                 dbench_revision
-                if name in {"dittobench_api", "model_relay"}
+                if name == "dittobench_api"
                 else stack_revision
                 if name in {"ditto_subnet", "sandbox_docker"}
                 else None
