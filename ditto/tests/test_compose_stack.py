@@ -453,8 +453,9 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert (
         "docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130" in workflow
     )
-    # Validator, sandbox daemon, scorer, and the final signed stack
-    # descriptor are independently built and published from the exact release.
+    # Validator, sandbox daemon, scorer, the frozen-updater relay shim, and the
+    # final signed stack descriptor are independently built and published from
+    # the exact release.
     build_action_count = sum(
         workflow.count(action)
         for action in (
@@ -462,7 +463,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 4
+    assert build_action_count == 5
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",

@@ -70,7 +70,9 @@ if [ "$release_dir" = "$current_dir" ]; then
   { [ "$managed_ref" = "$descriptor_ref" ] || [ "$transaction_ref" = "$descriptor_ref" ]; } || die "managed current release descriptor does not match installed state"
 fi
 
-allowed_keys=' STACK_FORMAT_VERSION STACK_VERSION STACK_REVISION DITTOBENCH_REVISION COMPATIBILITY_EPOCH UPDATE_PROTOCOL COMPOSE_SCHEMA HEARTBEAT_PROTOCOL VALIDATOR_IMAGE SANDBOX_DOCKER_IMAGE DITTOBENCH_API_IMAGE PYLON_IMAGE '
+required_keys=' STACK_FORMAT_VERSION STACK_VERSION STACK_REVISION DITTOBENCH_REVISION COMPATIBILITY_EPOCH UPDATE_PROTOCOL COMPOSE_SCHEMA HEARTBEAT_PROTOCOL VALIDATOR_IMAGE SANDBOX_DOCKER_IMAGE DITTOBENCH_API_IMAGE PYLON_IMAGE '
+optional_legacy_keys=' MODEL_RELAY_IMAGE OLLAMA_IMAGE '
+allowed_keys="$required_keys$optional_legacy_keys"
 seen_keys='|'
 while IFS= read -r line || [ -n "$line" ]; do
   [ -n "$line" ] || continue
@@ -82,7 +84,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   seen_keys="${seen_keys}${key}|"
 done <"$manifest_file"
 
-for key in $allowed_keys; do
+for key in $required_keys; do
   [[ "$seen_keys" == *"|$key|"* ]] || die "manifest is missing $key"
 done
 
@@ -102,6 +104,12 @@ export VALIDATOR_IMAGE="$(manifest_value VALIDATOR_IMAGE)"
 export SANDBOX_DOCKER_IMAGE="$(manifest_value SANDBOX_DOCKER_IMAGE)"
 export DITTOBENCH_API_IMAGE="$(manifest_value DITTOBENCH_API_IMAGE)"
 export PYLON_IMAGE="$(manifest_value PYLON_IMAGE)"
+if [[ "$seen_keys" == *"|MODEL_RELAY_IMAGE|"* ]]; then
+  export MODEL_RELAY_IMAGE="$(manifest_value MODEL_RELAY_IMAGE)"
+fi
+if [[ "$seen_keys" == *"|OLLAMA_IMAGE|"* ]]; then
+  export OLLAMA_IMAGE="$(manifest_value OLLAMA_IMAGE)"
+fi
 export VALIDATOR_STACK_DESCRIPTOR_REF="$descriptor_ref"
 
 wallets_dir="${DITTO_BITTENSOR_WALLETS_DIR:-}"

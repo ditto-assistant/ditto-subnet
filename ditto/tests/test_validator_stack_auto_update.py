@@ -41,12 +41,29 @@ SERVICE_IMAGE_KEYS = {
     "dittobench-api": "DITTOBENCH_API_IMAGE",
     "pylon": "PYLON_IMAGE",
 }
+RELEASE_IMAGES = {
+    **MANAGED_IMAGES,
+    "MODEL_RELAY_IMAGE": "ghcr.io/ditto-assistant/dittobench-api-relay",
+    "OLLAMA_IMAGE": "docker.io/ollama/ollama",
+}
+RELEASE_SERVICE_IMAGE_KEYS = {
+    **SERVICE_IMAGE_KEYS,
+    "model-relay": "MODEL_RELAY_IMAGE",
+    "ollama": "OLLAMA_IMAGE",
+}
 
 
 def _images() -> dict[str, str]:
     return {
         key: f"{repository}@sha256:{index:064x}"
         for index, (key, repository) in enumerate(MANAGED_IMAGES.items(), start=1)
+    }
+
+
+def _release_images() -> dict[str, str]:
+    return {
+        key: f"{repository}@sha256:{index:064x}"
+        for index, (key, repository) in enumerate(RELEASE_IMAGES.items(), start=1)
     }
 
 
@@ -59,7 +76,10 @@ def _build_command(output: Path, **overrides: str) -> list[str]:
         "update-protocol": "1",
         "compose-schema": "1",
         "heartbeat-protocol": "6",
-        **{key.lower().replace("_", "-"): value for key, value in _images().items()},
+        **{
+            key.lower().replace("_", "-"): value
+            for key, value in _release_images().items()
+        },
         **overrides,
     }
     command = [
@@ -112,7 +132,7 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         "UPDATE_PROTOCOL": "1",
         "HEARTBEAT_PROTOCOL": "6",
         "COMPOSE_SCHEMA": "1",
-        **_images(),
+        **_release_images(),
     }
     # Every build-time extension is dropped: a managed release pulls signed
     # digests and never builds, so a source pin left behind could only mislead.
@@ -122,7 +142,7 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         "x-dittobench-software-version",
     ):
         assert extension not in compose
-    for service, image_key in SERVICE_IMAGE_KEYS.items():
+    for service, image_key in RELEASE_SERVICE_IMAGE_KEYS.items():
         rendered = compose["services"][service]
         assert rendered["image"] == manifest[image_key]
         assert rendered["pull_policy"] == "never"
@@ -145,11 +165,24 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         "VALIDATOR_STACK_COMPONENT_DITTO_SUBNET": manifest["VALIDATOR_IMAGE"],
         "VALIDATOR_STACK_COMPONENT_DITTOBENCH_API": manifest["DITTOBENCH_API_IMAGE"],
         "VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER": manifest["SANDBOX_DOCKER_IMAGE"],
+        "VALIDATOR_STACK_COMPONENT_MODEL_RELAY": manifest["MODEL_RELAY_IMAGE"],
+        "VALIDATOR_STACK_COMPONENT_OLLAMA": manifest["OLLAMA_IMAGE"],
         "VALIDATOR_STACK_COMPONENT_PYLON": manifest["PYLON_IMAGE"],
     }
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
     assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == "0.10.0"
     assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == REVISION
+
+    # Frozen compat-2 updaters require the historical six-service descriptor.
+    # The retired services remain isolated compatibility shims: no active
+    # service depends on them and the relay receives no operator credential.
+    assert set(compose["services"]) == set(RELEASE_SERVICE_IMAGE_KEYS)
+    for service in compose["services"].values():
+        assert "model-relay" not in service.get("depends_on", {})
+        assert "ollama" not in service.get("depends_on", {})
+    assert compose["services"]["model-relay"]["environment"]["RELAY_API_KEY"] == (
+        "retired-compatibility-shim"
+    )
 
     # A release must be usable without a Git checkout or a build daemon on the
     # validator host. No remote/local build contexts may survive rendering.

@@ -12,6 +12,8 @@ import yaml
 IMAGE_KEYS = {
     "ditto-subnet": "VALIDATOR_IMAGE",
     "sandbox-docker": "SANDBOX_DOCKER_IMAGE",
+    "model-relay": "MODEL_RELAY_IMAGE",
+    "ollama": "OLLAMA_IMAGE",
     "dittobench-api": "DITTOBENCH_API_IMAGE",
     "pylon": "PYLON_IMAGE",
 }
@@ -58,6 +60,36 @@ def main() -> None:
 
     compose = yaml.safe_load(args.compose.read_text())
     services = compose.get("services", {})
+
+    # compat-2 is also the discovery channel used by the original managed-stack
+    # updater. That frozen client validates an exact six-service/14-field
+    # descriptor before it drains the validator. Keep the retired inference
+    # images as isolated compatibility shims until hosts have an explicit way to
+    # upgrade the host-side updater itself. Nothing depends on these services,
+    # and the dummy relay credential cannot authorize an upstream request.
+    services.setdefault(
+        "model-relay",
+        {
+            "restart": "unless-stopped",
+            "environment": {
+                "RELAY_PROVIDER": "openrouter",
+                "RELAY_API_KEY": "retired-compatibility-shim",
+                "PORT": "11435",
+            },
+            "read_only": True,
+            "security_opt": ["no-new-privileges:true"],
+            "cap_drop": ["ALL"],
+        },
+    )
+    services.setdefault(
+        "ollama",
+        {
+            "restart": "unless-stopped",
+            "read_only": True,
+            "security_opt": ["no-new-privileges:true"],
+            "cap_drop": ["ALL"],
+        },
+    )
     missing = sorted(set(IMAGE_KEYS) - set(services))
     if missing:
         raise ValueError(f"compose file is missing managed services: {missing}")
@@ -96,6 +128,8 @@ def main() -> None:
             "VALIDATOR_STACK_COMPONENT_DITTO_SUBNET": images["VALIDATOR_IMAGE"],
             "VALIDATOR_STACK_COMPONENT_DITTOBENCH_API": images["DITTOBENCH_API_IMAGE"],
             "VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER": images["SANDBOX_DOCKER_IMAGE"],
+            "VALIDATOR_STACK_COMPONENT_MODEL_RELAY": images["MODEL_RELAY_IMAGE"],
+            "VALIDATOR_STACK_COMPONENT_OLLAMA": images["OLLAMA_IMAGE"],
             "VALIDATOR_STACK_COMPONENT_PYLON": images["PYLON_IMAGE"],
         }
     )
