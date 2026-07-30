@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from ditto.validator.crn import confirmation_seeds
 from ditto.validator.weights import (
     _beats,
     _dethrone_band_scale,
@@ -174,6 +175,40 @@ class TestVersionedHighScoreBandDecay:
 
 
 class TestTop5ConfirmationSet:
+    def test_extends_past_the_legacy_sixteen_seed_horizon(self) -> None:
+        champion = _e(
+            "champ",
+            0.9,
+            bench_version=6,
+        )
+        seed_family = confirmation_seeds([str(champion.agent_id)], version=6, count=17)
+        champion.confirmation_composites = [0.9] * 16
+        champion.confirmation_seeds = seed_family[:16]
+        tail = _e(
+            "tail",
+            0.8,
+            bench_version=6,
+            minutes=1,
+            confirmations=[0.8] * 16,
+            seeds=seed_family[:16],
+        )
+
+        plan = top5_confirmation_set(
+            [tail, champion],
+            current_version=6,
+            margin=0.02,
+            dethrone_z=1.64,
+            tail_size=4,
+            baseline_seeds=3,
+            max_seeds=16,
+        )
+
+        assert plan is not None
+        assert plan.anchor_seeds == tuple(seed_family)
+        assert {member.seeds_to_score for member in plan.members} == {
+            (seed_family[16],)
+        }
+
     def test_bootstraps_champion_and_catches_up_tail(self) -> None:
         champion = _e("champ", 0.9, bench_version=6)
         tail = _e("tail", 0.8, bench_version=6, minutes=1)

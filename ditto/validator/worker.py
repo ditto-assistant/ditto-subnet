@@ -806,16 +806,17 @@ class ValidatorWorker:
         # requires the exact live ticket deadline. The only autonomous-looking
         # follow-up below is also platform-leased through the dedicated top-five
         # claim endpoint and appends evidence without replacing canonical scores.
-        # Continual top-five confirmation is strictly spare-capacity work. If
-        # this sweep claimed even one canonical quorum job, let the ordinary
-        # queue keep the validator until a later sweep proves it is empty.
+        # Continual confirmation is strictly spare-capacity work: every healthy
+        # slot above has polled the ordinary queue empty and all sibling leases
+        # have finished before the gather returns. ``queue_depth`` is only the
+        # historical claim count for this sweep. Gating on it made one completed
+        # ordinary job suppress every idle retest slot until a later sweep.
         # Spare-capacity work is still work: a constrained host must not claim
         # a confirmation ticket either, so gate the lane on admission directly
         # rather than relying on the (now empty) healthy-slot set.
         if (
             scoring_available
             and self._admission == "accepting"
-            and queue_depth == 0
             and not self._new_work_blocked(stop_requested, drain_requested)
         ):
             await self._run_top5_confirmation_lane(

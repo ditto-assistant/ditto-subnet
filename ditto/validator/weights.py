@@ -450,7 +450,15 @@ def top5_confirmation_set(
     requested = tail_size if cohort_size is None else int(cohort_size) - 1
     cohort_tail = min(max(requested, tail_size), max(1, int(max_cohort_size)) - 1)
     members = [champion, *_tail(scored, champion, cohort_tail)]
-    cap = max(1, int(max_seeds))
+    # The old hard 16-seed horizon permanently exhausted the lane. Extend past
+    # every seed already observed so one fresh deterministic anchor seed always
+    # exists, while retaining ``max_seeds`` as the compatibility minimum.
+    observed_seeds: set[int] = set()
+    for member in members:
+        member_map = _entry_seed_composites(member)
+        if member_map is not None:
+            observed_seeds.update(member_map)
+    cap = max(1, int(max_seeds), len(observed_seeds) + 1)
     full = confirmation_seeds(
         [str(champion.agent_id)], version=current_version, count=cap
     )

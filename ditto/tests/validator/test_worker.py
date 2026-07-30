@@ -1178,7 +1178,9 @@ class TestRunOnce:
         platform.request_top5_confirmation_job.assert_awaited_once()
         confirm_and_submit.assert_not_awaited()
 
-    async def test_canonical_queue_work_defers_continual_retests(self) -> None:
+    async def test_canonical_queue_work_then_uses_spare_capacity_for_retests(
+        self,
+    ) -> None:
         job = _job("5MinerA" + "x" * 41)
         platform = _platform_with_ledger(
             jobs=[job], ledger=[_entry("5MinerB" + "x" * 41, 0.9)]
@@ -1197,8 +1199,8 @@ class TestRunOnce:
 
         assert outcome.queue_depth == 1
         platform.submit_score.assert_awaited_once()
-        platform.get_ledger.assert_not_awaited()
-        platform.request_top5_confirmation_job.assert_not_awaited()
+        platform.get_ledger.assert_awaited_once()
+        platform.request_top5_confirmation_job.assert_awaited_once()
 
     async def test_scores_queue_and_sets_weights_from_ledger(self) -> None:
         job = _job("5MinerA" + "x" * 41)
@@ -3238,8 +3240,8 @@ class TestRunOnce:
         chain.put_weights.assert_awaited_once()
 
     async def test_set_weights_false_scores_without_touching_weights(self) -> None:
-        # Canonical work consumes this sweep, so the lower-priority top-five
-        # lane is not inspected and chain weights remain untouched.
+        # Canonical work is claimed first. Once every slot has observed that
+        # queue empty, spare capacity may inspect retests in the same sweep.
         job = _job("5MinerA" + "x" * 41)
         ledger = [_entry("5MinerA" + "x" * 41, 0.9)]
         platform = _platform_with_ledger(jobs=[job], ledger=ledger)
@@ -3260,7 +3262,7 @@ class TestRunOnce:
         n = await worker.run_once(set_weights=False)
         assert n.queue_depth == 1
         assert platform.submit_score.await_count == 1
-        platform.get_ledger.assert_not_awaited()
+        platform.get_ledger.assert_awaited_once()
         chain.put_weights.assert_not_awaited()
 
     async def test_one_agent_failure_does_not_block_weights(self) -> None:
