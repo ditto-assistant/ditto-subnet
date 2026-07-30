@@ -55,6 +55,7 @@ from ditto.miner_cli.preferences import (
     clear_pending_payment,
     load_agent_name,
     load_pending_payment,
+    load_pending_payments_for_hotkey,
     load_previous_agent_wallet,
     save_agent_name,
     save_agent_wallet,
@@ -265,6 +266,7 @@ def _run_upload(
     # second transfer. The key includes the local tar digest; no tar bytes, paths,
     # source, or remote artifact access are stored.
     receipt = explicit_recovery_receipt
+    reassigned_payment = None
     receipt_source = "explicit" if receipt is not None else None
     if receipt is None:
         receipt = load_pending_payment(
@@ -275,6 +277,20 @@ def _run_upload(
         )
         if receipt is not None:
             receipt_source = "saved"
+        else:
+            candidates = load_pending_payments_for_hotkey(
+                network=network_name,
+                hotkey=handle.hotkey_ss58,
+            )
+            if len(candidates) > 1:
+                raise MinerCliError(
+                    "multiple unconsumed payments are saved for this hotkey; "
+                    "rerun with the intended --payment-block-* proof flags"
+                )
+            if candidates:
+                reassigned_payment = candidates[0]
+                receipt = reassigned_payment.payment
+                receipt_source = "saved_reassigned"
 
     with ApiClient(base_url=network_api_url) as client:
         # Step 4: pre-payment check
@@ -286,6 +302,9 @@ def _run_upload(
                 signature=signature_hex,
                 allow_identical_rescore=allow_identical_rescore,
                 reserve_submission_slot=True,
+                payment_block_hash=receipt.block_hash if receipt else None,
+                payment_block_number=receipt.block_number if receipt else None,
+                payment_extrinsic_index=receipt.extrinsic_index if receipt else None,
             )
         )
         if not check_response.ok:
@@ -303,6 +322,34 @@ def _run_upload(
                 "progress; retry shortly."
             )
         admission_token = check_response.admission_token
+        if receipt is not None and check_response.payment_required:
+            raise PreCheckRejectedError(
+                "platform did not recognize the finalized payment as reusable; "
+                "no new payment was sent"
+            )
+
+        if reassigned_payment is not None:
+            assert receipt is not None
+            if not save_pending_payment(
+                network=network_name,
+                hotkey=handle.hotkey_ss58,
+                name=agent_name,
+                sha256=preflight.sha256,
+                payment=receipt,
+            ):
+                print(
+                    "warning: platform reassigned the payment but the new local "
+                    "recovery record could not be saved; keep the printed proof",
+                    file=sys.stderr,
+                )
+            else:
+                clear_pending_payment(
+                    network=reassigned_payment.network,
+                    hotkey=reassigned_payment.hotkey,
+                    name=reassigned_payment.name,
+                    sha256=reassigned_payment.sha256,
+                    payment=reassigned_payment.payment,
+                )
 
         # Step 5: verify the payment coldkey owns the claimed hotkey. This is
         # intentionally before pricing/confirmation and is never bypassed by
@@ -362,7 +409,17 @@ def _run_upload(
                     "found a saved finalized payment for this exact submission; "
                     "no new transfer will be sent"
                     if receipt_source == "saved"
-                    else "reusing finalized payment proof; no new transfer will be sent"
+                    else (
+                        "found an unconsumed finalized payment for this hotkey; "
+                        f"applying it to {agent_name} and the new archive. "
+                        "The prior archive reservation is cancelled and no new "
+                        "transfer will be sent"
+                        if receipt_source == "saved_reassigned"
+                        else (
+                            "reusing finalized payment proof; no new transfer "
+                            "will be sent"
+                        )
+                    )
                 ),
                 file=sys.stderr,
             )
@@ -391,8 +448,9 @@ def _run_upload(
             print(
                 f"\nupload could not be confirmed after payment. "
                 f"Your finalized payment was saved and can be reused.\n"
-                f"Run the same upload command again; the CLI will reuse this "
-                f"proof and will not send another transfer.\n"
+                f"Rerun upload with this hotkey using either the same archive or "
+                f"a replacement; the CLI will reuse this proof and will not send "
+                f"another transfer.\n"
                 f"If the saved proof is unavailable, rerun with:\n"
                 f"  --payment-block-hash {receipt.block_hash} "
                 f"--payment-block-number {receipt.block_number} "

@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ditto.miner_cli.models import PaymentReceipt
+from ditto.miner_cli.models import PaymentReceipt, PendingUploadPayment
 
 
 @dataclass(frozen=True)
@@ -178,6 +178,55 @@ def load_pending_payment(
     )
 
 
+def load_pending_payments_for_hotkey(
+    *, network: str, hotkey: str
+) -> tuple[PendingUploadPayment, ...]:
+    """Discover reusable credits saved by compatible clients for one hotkey."""
+    raw = _load_preferences()
+    payments = raw.get("pending_upload_payments")
+    if not isinstance(payments, dict):
+        return ()
+    found: list[PendingUploadPayment] = []
+    for value in payments.values():
+        if not isinstance(value, dict):
+            continue
+        if value.get("network") != network or value.get("hotkey") != hotkey:
+            continue
+        name = value.get("name")
+        sha256 = value.get("sha256")
+        block_hash = value.get("block_hash")
+        block_number = value.get("block_number")
+        extrinsic_index = value.get("extrinsic_index")
+        if (
+            not isinstance(name, str)
+            or not 1 <= len(name) <= 64
+            or not isinstance(sha256, str)
+            or len(sha256) != 64
+            or not isinstance(block_hash, str)
+            or not block_hash.startswith("0x")
+            or len(block_hash) != 66
+            or not isinstance(block_number, int)
+            or block_number < 1
+            or not isinstance(extrinsic_index, int)
+            or extrinsic_index < 0
+        ):
+            continue
+        found.append(
+            PendingUploadPayment(
+                network=network,
+                hotkey=hotkey,
+                name=name,
+                sha256=sha256,
+                payment=PaymentReceipt(
+                    block_hash=block_hash,
+                    block_number=block_number,
+                    extrinsic_index=extrinsic_index,
+                ),
+            )
+        )
+    return tuple(found)
+
+
 def save_pending_payment(
     *,
     network: str,
@@ -194,6 +243,10 @@ def save_pending_payment(
     payments[
         _pending_payment_key(network=network, hotkey=hotkey, name=name, sha256=sha256)
     ] = {
+        "network": network,
+        "hotkey": hotkey,
+        "name": name,
+        "sha256": sha256,
         "block_hash": payment.block_hash,
         "block_number": payment.block_number,
         "extrinsic_index": payment.extrinsic_index,
@@ -222,7 +275,9 @@ def clear_pending_payment(
         "block_number": payment.block_number,
         "extrinsic_index": payment.extrinsic_index,
     }
-    if current != expected:
+    if not isinstance(current, dict) or any(
+        current.get(field) != value for field, value in expected.items()
+    ):
         return True
     del payments[key]
     raw["pending_upload_payments"] = payments

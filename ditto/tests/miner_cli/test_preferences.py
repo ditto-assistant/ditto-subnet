@@ -10,6 +10,7 @@ from ditto.miner_cli.preferences import (
     clear_pending_payment,
     load_agent_name,
     load_pending_payment,
+    load_pending_payments_for_hotkey,
     load_previous_agent_wallet,
     preferences_path,
     save_agent_name,
@@ -118,6 +119,12 @@ def test_pending_payment_round_trip_is_exact_and_private(
     raw = config.read_text()
     assert "tar" not in raw.lower()
     assert config.stat().st_mode & 0o777 == 0o600
+
+    discovered = load_pending_payments_for_hotkey(network="finney", hotkey="hk")
+    assert len(discovered) == 1
+    assert discovered[0].name == "agent"
+    assert discovered[0].sha256 == "cd" * 32
+    assert discovered[0].payment == payment
 
     assert clear_pending_payment(
         network="finney",

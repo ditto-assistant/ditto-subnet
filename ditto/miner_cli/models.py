@@ -115,6 +115,17 @@ class PaymentReceipt:
 
 
 @dataclass(frozen=True)
+class PendingUploadPayment:
+    """Locally saved, unconsumed payment with non-secret upload metadata."""
+
+    network: str
+    hotkey: str
+    name: str
+    sha256: str
+    payment: PaymentReceipt
+
+
+@dataclass(frozen=True)
 class UploadResult:
     """Server response from ``POST /upload/agent``."""
 

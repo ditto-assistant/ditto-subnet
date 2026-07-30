@@ -176,7 +176,7 @@ class ApiClient:
         response = self._request(
             "POST",
             "/api/v1/upload/check",
-            json=body.model_dump(mode="json"),
+            json=body.model_dump(mode="json", exclude_none=True),
         )
         if response.status_code != 200:
             raise PreCheckRejectedError(_format_error(response, prefix="upload-check"))

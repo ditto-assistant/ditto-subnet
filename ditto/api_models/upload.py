@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ditto.api_models.agent_status import AgentStatus
 
@@ -63,6 +63,22 @@ class UploadCheckRequest(BaseModel):
 
     reserve_submission_slot: bool = False
     """Ask the platform to reserve eligibility before any payment is sent."""
+
+    payment_block_hash: Annotated[str, Field(pattern=_BLOCK_HASH_PATTERN)] | None = None
+    payment_block_number: Annotated[int, Field(ge=1)] | None = None
+    payment_extrinsic_index: Annotated[int, Field(ge=0)] | None = None
+
+    @model_validator(mode="after")
+    def finalized_payment_proof_is_all_or_none(self) -> UploadCheckRequest:
+        """A finalized proof authorizes reuse; partial identity never can."""
+        supplied = (
+            self.payment_block_hash is not None,
+            self.payment_block_number is not None,
+            self.payment_extrinsic_index is not None,
+        )
+        if any(supplied) and not all(supplied):
+            raise ValueError("finalized payment proof fields must be supplied together")
+        return self
 
 
 class UploadCheckResponse(BaseModel):

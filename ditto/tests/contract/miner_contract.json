@@ -231,6 +231,42 @@
         "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
         "type": "string"
       },
+      "payment_block_hash": {
+        "anyOf": [
+          {
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "payment_block_number": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "payment_extrinsic_index": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "reserve_submission_slot": {
         "default": false,
         "type": "boolean"
