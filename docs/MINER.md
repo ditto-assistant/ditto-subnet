@@ -221,6 +221,9 @@ Use it when you have already rotated keys and a new submission is being
 copy-flagged against work you submitted from the other hotkey. A normal upload
 does not need one.
 
+For a short copy-paste runbook, including the exact command for signing both
+sides with coldkeys, see [Link hotkeys after rotating wallets](OWNER-LINKS.md).
+
 ### Both ends sign, and either key can prove an end
 
 The link is symmetric: it says *these two hotkeys are the same operator*. There

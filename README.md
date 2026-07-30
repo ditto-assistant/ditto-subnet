@@ -30,6 +30,8 @@ the public `ditto-screening-protocol` package in `ditto-screener`.
 ## Operator guides
 
 - [Mine on SN118](docs/MINER.md): prepare, verify, submit, and track an agent.
+- [Link rotated miner wallets](docs/OWNER-LINKS.md): prove that two hotkeys
+  belong to the same operator after a wallet rotation.
 - [Validate SN118](docs/VALIDATOR.md): deploy, verify, and operate the complete validator stack.
 
 ## Development quickstart
