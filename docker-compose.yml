@@ -6,8 +6,8 @@
 # pin — must be this one anchor. A hardcoded copy that could drift from the
 # build context is exactly what let a cached scorer image assert a revision it
 # was not built from (see docs/VALIDATOR.md, "Stale scorer image").
-x-dittobench-revision: &dittobench-revision 25e8f296a573673ea47610c7a133e50660f2f416
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=25e8f296a573673ea47610c7a133e50660f2f416}
+x-dittobench-revision: &dittobench-revision cf1057b26218c67c16ba16a3231589bc4cd68c7d
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=cf1057b26218c67c16ba16a3231589bc4cd68c7d}
 x-dittobench-software-version: &dittobench-software-version ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
 # Shared secret for the validator -> scorer inference control plane
 # (POST/DELETE /v1/inference/session*). The scorer joins sandbox-docker's
@@ -60,26 +60,30 @@ services:
           create_host_path: false
       - pylon-data:/data
 
-  # The scorer receives an isolated nested Docker daemon. The validator host's
-  # Docker socket is never mounted, so the scorer cannot control the host daemon.
+  # The scorer receives an isolated nested rootless Docker daemon. The outer
+  # container retains only the privilege required to create the user namespace;
+  # dockerd and every miner container run as the empty rootless identity. The
+  # validator host's Docker socket is never mounted.
   sandbox-docker:
     build:
       context: .
       dockerfile: Dockerfile.sandbox-docker
     restart: unless-stopped
     privileged: true
-    # dittobench-api joins this container's network namespace
-    # (network_mode: service:sandbox-docker) and therefore SHARES this /etc/hosts
-    # file, so the mapping must live here — extra_hosts on the joining service is
-    # ignored. Inner harnesses receive their own mapping to the source-bound
-    # broker and embedding forwarder.
-    extra_hosts:
-      - "host.docker.internal:127.0.0.1"
+    # Rootless Docker-in-Docker cannot delegate per-child cgroups without a
+    # systemd user session. Keep the ordinary per-run flags as defense in depth,
+    # but make the outer executor cgroup the authoritative host resource guard.
+    # Exhausting it fails the affected runs as infrastructure and the platform
+    # retries them; it cannot consume the validator wallet/API containers or the
+    # rest of the host.
+    mem_limit: ${VALIDATOR_SANDBOX_EXECUTOR_MEMORY_LIMIT:-32g}
+    cpus: ${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-16}
+    pids_limit: ${VALIDATOR_SANDBOX_EXECUTOR_PIDS_LIMIT:-8192}
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
       DOCKER_TLS_CERTDIR: ""
     volumes:
-      - sandbox-docker-rootful-data:/var/lib/docker
+      - sandbox-docker-rootless-data:/home/rootless/.local/share/docker
     healthcheck:
       test: [CMD-SHELL, "docker info >/dev/null 2>&1"]
       interval: 10s
@@ -101,14 +105,14 @@ services:
         DITTOBENCH_SOFTWARE_VERSION: *dittobench-software-version
     restart: unless-stopped
     network_mode: service:sandbox-docker
-    # host.docker.internal -> 127.0.0.1 is set on the sandbox-docker service: this
-    # container joins its network namespace and shares its /etc/hosts, so an
-    # extra_hosts here would be ignored. See the mapping + rationale there.
+    # The API discovers the shared namespace's eth0 address and gives only that
+    # broker address to inner rootless containers as host.docker.internal.
     depends_on:
       sandbox-docker:
         condition: service_healthy
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
+      DITTOBENCH_REQUIRE_ROOTLESS_DOCKER: "1"
       DITTOBENCH_SANDBOX_HARDEN: "1"
       DITTOBENCH_SANDBOX_EGRESS_NETWORK: ditto-sandbox
       # Production opt-in for platform-verified screened archives. Keep the
@@ -276,12 +280,12 @@ services:
       # v2 retains source-build fallback; v3 requires screened images by contract.
       VALIDATOR_SCREENED_IMAGES: "1"
       VALIDATOR_SANDBOX_EGRESS_RESTRICTED: "1"
-      VALIDATOR_EXECUTOR_ISOLATION: privileged_dind
+      VALIDATOR_EXECUTOR_ISOLATION: rootless_dind
       VALIDATOR_STACK_UPDATER: ${VALIDATOR_STACK_AUTO_UPDATE:-false}
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:25e8f296a573673ea47610c7a133e50660f2f416
+      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:cf1057b26218c67c16ba16a3231589bc4cd68c7d
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
       VALIDATOR_STACK_COMPONENT_PYLON: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
@@ -335,5 +339,5 @@ services:
 
 volumes:
   pylon-data:
-  sandbox-docker-rootful-data:
+  sandbox-docker-rootless-data:
   validator-update-bootstrap:

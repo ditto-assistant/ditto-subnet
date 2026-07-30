@@ -15,7 +15,7 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 ComponentProvenance = Literal["signed_descriptor", "committed_pin", "local_unverified"]
 ExecutorIsolation = Literal[
-    "unknown", "privileged_dind", "rootless_host", "ephemeral_vm"
+    "unknown", "privileged_dind", "rootless_dind", "rootless_host", "ephemeral_vm"
 ]
 StackMode = Literal["source", "managed"]
 ScorerBenchmarkStatus = Literal[

@@ -30,17 +30,18 @@ def test_retired_local_inference_sidecars_are_absent() -> None:
     assert "model-relay" not in compose["services"]
 
 
-def test_sandbox_image_pins_dind_and_installs_curl() -> None:
+def test_sandbox_image_pins_rootless_dind_and_installs_guard_tools() -> None:
     dockerfile = SANDBOX_DOCKERFILE_PATH.read_text()
 
     assert dockerfile.startswith(
-        "FROM docker.io/library/docker:29-dind@"
-        "sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515"
+        "FROM docker.io/library/docker:29-dind-rootless@"
+        "sha256:212a9e782c7119fd6a212beaab6b7665a29b663d894d0f6201710c89575ad0ae"
     )
-    assert "RUN apk add --no-cache curl socat" in dockerfile
+    assert "RUN apk add --no-cache curl socat su-exec" in dockerfile
+    assert "USER root" in dockerfile
 
 
-def test_sandbox_health_requires_only_the_isolated_docker_daemon() -> None:
+def test_sandbox_health_reports_the_isolated_rootless_daemon() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
     probe = " ".join(sandbox["healthcheck"]["test"])
@@ -48,8 +49,22 @@ def test_sandbox_health_requires_only_the_isolated_docker_daemon() -> None:
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
-    assert "TCP-LISTEN:11434" not in entrypoint
+    assert "TCP-LISTEN:11434" in entrypoint
     assert "TCP-LISTEN:11435" not in entrypoint
+    assert "sandbox-docker-health-once" in entrypoint
+
+
+def test_rootless_executor_has_an_authoritative_outer_resource_cgroup() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    sandbox = compose["services"]["sandbox-docker"]
+
+    # Nested rootless Docker lacks a delegated systemd cgroup on the supported
+    # Compose path. The outer service limits are therefore the host-protection
+    # boundary; inner per-run flags remain useful on stronger executors but are
+    # not treated as the only guard here.
+    assert sandbox["mem_limit"] == "${VALIDATOR_SANDBOX_EXECUTOR_MEMORY_LIMIT:-32g}"
+    assert sandbox["cpus"] == "${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-16}"
+    assert sandbox["pids_limit"] == ("${VALIDATOR_SANDBOX_EXECUTOR_PIDS_LIMIT:-8192}")
 
 
 def test_validator_probes_the_live_sandbox_network_namespace() -> None:
@@ -120,7 +135,9 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
 
-    assert sandbox["volumes"] == ["sandbox-docker-rootful-data:/var/lib/docker"]
+    assert sandbox["volumes"] == [
+        "sandbox-docker-rootless-data:/home/rootless/.local/share/docker"
+    ]
     # `docker system prune` also removes unused networks, which would delete the
     # idle ditto-sandbox bridge between benchmarks and break every harness run.
     # Reclaim containers, images, and build cache explicitly; never system-prune.
@@ -139,16 +156,12 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert env["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
     assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
+    assert env["DITTOBENCH_REQUIRE_ROOTLESS_DOCKER"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
-    # The source-bound ticket broker is reached on loopback, so
-    # host.docker.internal must resolve there. The scorer joins sandbox-docker's
-    # netns and SHARES its /etc/hosts, so the mapping lives on sandbox-docker (an
-    # extra_hosts on the joining dittobench-api service would be ignored).
+    # The API and rootless daemon share one outer namespace. The API discovers
+    # eth0 and injects that exact broker address into each inner container.
     assert "extra_hosts" not in service
-    assert (
-        "host.docker.internal:127.0.0.1"
-        in compose["services"]["sandbox-docker"]["extra_hosts"]
-    )
+    assert "extra_hosts" not in compose["services"]["sandbox-docker"]
     assert env["DITTOBENCH_REQUIRE_TICKET_INFERENCE"] == "true"
     assert env["DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL"] == (
         "${DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL:-"
@@ -185,24 +198,14 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
-    assert "com.docker.network.bridge.name=ditto-sandbox0" in entrypoint
-    assert "network_driver" in entrypoint
-    assert "[ \"$network_driver\" != 'bridge' ]" in entrypoint
-    assert "bridge_name" in entrypoint
-    assert "[ \"$bridge_name\" != 'ditto-sandbox0' ]" in entrypoint
-    assert "unsafe ditto-sandbox network" in entrypoint
-    # The network + firewall are provisioned through one idempotent function that
-    # also runs inside the maintenance loop, so a missing bridge self-heals.
-    assert "ensure_sandbox_network" in entrypoint
-    assert entrypoint.count("ensure_sandbox_network") >= 3
-    assert "DITTO-SANDBOX-EGRESS" in entrypoint
-    assert "--dst-type LOCAL -p tcp --dport 11434 -j ACCEPT" not in entrypoint
-    assert "--dst-type LOCAL -p tcp --dport 11435 -j ACCEPT" not in entrypoint
-    assert "--dst-type LOCAL -p tcp --dport 11436 -j ACCEPT" in entrypoint
-    assert "-i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS" in entrypoint
-    assert "com.docker.network.bridge.enable_icc=false" in entrypoint
-    assert "-i 'dtj+' -j DITTO-SANDBOX-EGRESS" in entrypoint
-    assert "ditto-sandbox-deny" in entrypoint
+    assert "su-exec rootless" in entrypoint
+    assert "DITTO-ROOTLESS-EGRESS" in entrypoint
+    assert '--uid-owner "$executor_uid"' in entrypoint
+    assert '-d "$host_gateway_ip"' in entrypoint
+    assert "--dport 11436 -j ACCEPT" in entrypoint
+    assert "--dport 11434 -j ACCEPT" not in entrypoint
+    assert "--dport 11435 -j ACCEPT" not in entrypoint
+    assert "ditto-rootless-deny" in entrypoint
     # Denied egress must fail fast: a silent DROP costs a full SYN timeout per
     # connect (~53 s of dead time per benchmark check), which burns the whole
     # ticket and starves the scoring slot. The allowlist is unchanged.
@@ -223,7 +226,7 @@ def test_screened_image_capability_is_enabled_without_a_global_requirement() -> 
     assert "VALIDATOR_REQUIRE_SCREENED_IMAGE" not in validator
     assert validator["NETUID"] == "118"
     assert validator["VALIDATOR_STACK_MODE"] == "source"
-    assert validator["VALIDATOR_EXECUTOR_ISOLATION"] == "privileged_dind"
+    assert validator["VALIDATOR_EXECUTOR_ISOLATION"] == "rootless_dind"
 
 
 def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
@@ -249,7 +252,7 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     # The checksum must remain the exact current main commit. A moving branch
     # paired with a stale checksum makes the documented local Compose build
     # fail before the release materializer can replace the source context.
-    assert checksum == "25e8f296a573673ea47610c7a133e50660f2f416"
+    assert checksum == "cf1057b26218c67c16ba16a3231589bc4cd68c7d"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]

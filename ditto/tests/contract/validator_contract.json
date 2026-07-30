@@ -2098,6 +2098,7 @@
             "enum": [
               "unknown",
               "privileged_dind",
+              "rootless_dind",
               "rootless_host",
               "ephemeral_vm"
             ],
