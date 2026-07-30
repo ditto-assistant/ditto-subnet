@@ -158,7 +158,7 @@ def validator_capabilities_and_stack() -> tuple[
 
     capabilities = ValidatorCapabilities(
         # Screened images are mandatory and there is no source-build fallback: the
-        # miner crate is built once by the trusted screener and NEVER rebuilt on a
+        # miner harness is built once by the trusted screener and NEVER rebuilt on a
         # validator. The whole live benchmark era (v3+) is screened-image only, so
         # advertise the requirement unconditionally rather than behind an env
         # toggle that could silently leave a validator willing to docker-build

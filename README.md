@@ -1,15 +1,16 @@
 # Ditto Subnet (Bittensor SN118)
 
-A Bittensor subnet that incentivizes agent memory harnesses. Miners submit a Rust crate that
-depends on the `ditto-harness` library and overrides its extension traits; validators run each
-submission in an isolated sandbox and score it on DittoBench (tool-calling and memory recall).
+A Bittensor subnet that incentivizes agent memory harnesses. Miners submit a Docker build context
+that serves the public harness HTTP contract; the implementation may use Rust, Python, TypeScript,
+Go, or any other language. Validators run each screened image in an isolated sandbox and score it
+on DittoBench (tool-calling and memory recall).
 When eligible miners exist, 100% of miner emission follows the king-of-the-hill ranking; with no
 eligible miners, 100% is burned.
 
 This repo holds the miner CLI and the validator worker. The public Ditto stack is split across:
 
 - [`ditto-platform`](https://github.com/ditto-assistant/ditto-platform): the public API server, live dashboard, submission coordinator, and score ledger.
-- [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness): the reference memory harness your crate builds on.
+- [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness): the Rust reference library used by the starter kit.
 - [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit): the miner starting point plus the offline practice loop.
 - [`dittobench-api`](https://github.com/ditto-assistant/dittobench-api): the scoring engine each validator runs.
 - [`dittobench-datagen`](https://github.com/ditto-assistant/dittobench-datagen): the dataset generator and judge-free grader.

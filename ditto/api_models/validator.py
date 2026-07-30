@@ -902,10 +902,10 @@ class ScoreReport(BaseModel):
         Field(
             default=None,
             description=(
-                "Optional AST-level structural sketch of the crate, computed by the "
-                "scoring engine. Advisory anti-copy metadata; not covered by the "
-                "signature and never affects the score. Null on the local "
-                "harness_url path or when the crate has no parseable Rust."
+                "Optional language-aware structural sketch of the harness, computed "
+                "by the scoring engine. Advisory anti-copy metadata; not covered by "
+                "the signature and never affects the score. Null on the local "
+                "harness_url path or when no supported source structure is available."
             ),
         ),
     ]

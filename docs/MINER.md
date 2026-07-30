@@ -1,15 +1,17 @@
 # Miner guide (SN118)
 
-SN118 is a best-artifact competition. Miners improve a Rust agent-memory
-harness, practice locally, and submit the complete crate for independent
-validators to score. You are rewarded for improving the best artifact, not for
-serving live inference.
+SN118 is a best-artifact competition. Miners improve an agent-memory harness,
+practice locally, and submit its complete Docker build context for independent
+validators to score. A harness may use Rust, Python, TypeScript, Go, or any
+other language that can serve the public HTTP contract. You are rewarded for
+improving the best artifact, not for serving live inference.
 
 > **Start in the
 > [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit).**
-> It is the harness you edit, the local practice environment, and the crate you
-> package. You do not need `ditto-subnet`, Python, a wallet, or TAO until you are
-> ready to verify and submit to Finney.
+> It is the supported Rust reference harness and local practice environment.
+> You may use it directly or implement the same container/HTTP contract in
+> another language. You do not need `ditto-subnet`, Python, a wallet, or TAO
+> until you are ready to verify and submit to Finney.
 
 ## Contents
 
@@ -27,7 +29,8 @@ serving live inference.
 
 Follow the starter kit's
 [`SETUP.md`](https://github.com/ditto-assistant/dittobench-starter-kit/blob/main/SETUP.md)
-for Rust, model, and embedding setup. The shortest path is:
+for the Rust reference implementation, model, and embedding setup. Its shortest
+path is:
 
 ```sh
 git clone https://github.com/ditto-assistant/dittobench-starter-kit
@@ -40,11 +43,12 @@ cargo run -- evaluate           # fixed local benchmark for iteration
 cargo run -- practice --n 20   # rotating cases, closer to production
 ```
 
-Edit and test this repository until you are ready to submit. Docker is strongly
-recommended for the final local check because production screening builds your
-crate as an image and probes `GET /health` on port 8080.
+Edit and test this repository until you are ready to submit. If you implement
+the contract in another language, use its normal build and test tools. Docker
+is required by the submission contract because production screening builds the
+provided context as an image and probes `GET /health` on port 8080.
 
-Package the complete crate:
+The Rust reference packages its complete build context with:
 
 ```sh
 cargo run -- submit
@@ -63,7 +67,7 @@ To submit, you need:
 - enough TAO for the dynamic evaluation fee
 
 The coldkey pays the fee. The hotkey signs the artifact and receives incentive.
-Never put wallet secrets in the crate.
+Never put wallet secrets in the build context.
 
 ## Install the submission CLI
 
@@ -87,9 +91,10 @@ uv run ditto verify \
   --path ../dittobench-starter-kit/dittobench-submission.tgz
 ```
 
-The archive must be a gzip-compressed tarball no larger than 20 MiB, with the
-crate and `Dockerfile` at its root. It must use safe relative paths and contain
-no links or special files.
+The archive must be a gzip-compressed tarball no larger than 20 MiB, with its
+`Dockerfile` at the root. It must use safe relative paths and contain no links
+or special files. Cargo metadata is part of the Rust reference implementation,
+not a submission requirement.
 
 Submit to Finney:
 
@@ -160,7 +165,7 @@ result.
   inference boundary with reasoning pinned on. Tune your prompting and
   reasoning budget for the active benchmark model; `GET
   /api/v1/public/bench/config` reports the authoritative contract. Your local
-  practice key and model are not included in the submitted crate.
+  practice key and model are not included in the submitted build context.
 - The validator self-checks its `tool_endpoint` before scoring. A platform
   listener failure aborts and retries the run; if the listener is healthy and
   your harness never calls it, the run completes with the corresponding

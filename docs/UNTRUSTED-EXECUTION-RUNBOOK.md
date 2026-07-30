@@ -39,6 +39,12 @@ network-reachable from a miner container. A host-root Docker socket must never
 be exposed to a miner container. Privileged DinD is an explicitly reported
 interim boundary, not the target architecture.
 
+The scorer therefore keeps V7 available during the additive migration but
+withholds V8 from its live capability response until its configured Docker
+endpoint both requires and verifies rootless mode. Backroom cannot route V8 to
+this interim executor merely because the installed scorer binary contains the
+V8 dataset contract.
+
 Heartbeat protocol 18 reports screened-image mode, executor isolation, and the
 four component identities. This is signed routing and observability data. It is
 not remote attestation: a compromised host can still lie using its validator

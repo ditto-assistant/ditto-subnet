@@ -1,4 +1,4 @@
-"""Ditto Subnet (Bittensor SN118): Rust agent memory harness incentive layer."""
+"""Ditto Subnet (Bittensor SN118): agent memory harness incentive layer."""
 
 from __future__ import annotations
 
