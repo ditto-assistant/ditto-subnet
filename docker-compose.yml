@@ -218,9 +218,11 @@ services:
       # possibly satisfy it.
       VALIDATOR_SCORER_REQUIRE_BINARY_PROVENANCE: "1"
       # Heartbeat v10+ per-component health probes. Private-network URLs only —
-      # they are configuration, never part of the public payload. The sandbox
-      # probe exercises the sandbox daemon's harness-facing listener.
-      VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:11434/
+      # they are configuration, never part of the public payload. The scorer
+      # shares sandbox-docker's network namespace, so this endpoint proves that
+      # namespace remains reachable without probing the retired inference
+      # listener on port 11434.
+      VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:8000/health
       VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS: "2"
       VALIDATOR_STACK_HEALTH_CACHE_SECONDS: "60"
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}

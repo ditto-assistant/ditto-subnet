@@ -52,6 +52,17 @@ def test_sandbox_health_requires_only_the_isolated_docker_daemon() -> None:
     assert "TCP-LISTEN:11435" not in entrypoint
 
 
+def test_validator_probes_the_live_sandbox_network_namespace() -> None:
+    services = yaml.safe_load(COMPOSE_PATH.read_text())["services"]
+    validator = services["ditto-subnet"]["environment"]
+
+    assert (
+        validator["VALIDATOR_SANDBOX_DOCKER_PROBE_URL"]
+        == "http://sandbox-docker:8000/health"
+    )
+    assert ":11434" not in validator["VALIDATOR_SANDBOX_DOCKER_PROBE_URL"]
+
+
 def test_scorer_capability_probe_needs_no_operator_secret() -> None:
     services = yaml.safe_load(COMPOSE_PATH.read_text())["services"]
 
