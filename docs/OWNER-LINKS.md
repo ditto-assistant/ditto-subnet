@@ -4,8 +4,8 @@ Use an owner-link attestation when copy screening holds a new submission because
 it resembles your own earlier work submitted from another hotkey. The
 `ditto attest` command proves that both hotkeys belong to the same operator.
 
-An owner link is not needed for an ordinary submission. It only resolves
-near-duplicate copy screening between the two hotkeys named in the link.
+An owner link is not needed for an ordinary submission. It resolves copy
+screening between the two hotkeys named in the link.
 
 ## Before you start
 
@@ -74,17 +74,15 @@ operator review, send the operator:
 - the held submission's agent UUID; and
 - the earlier submission's agent UUID.
 
-The link affects screening performed after it is recorded. A held submission
-still needs to be reviewed or rescreened; creating the link does not silently
-change an existing decision.
+The link affects future screening and automatically clears existing pending
+copy-review holds between the two directly linked hotkeys.
 
 ## Scope and limits
 
 An owner link:
 
-- exempts near-duplicate plagiarism screening only between the two named
-  hotkeys;
-- does not allow byte-identical or repacked resubmissions;
+- exempts plagiarism screening only between the two named hotkeys, including
+  byte-identical and repacked generations;
 - does not create another emission slot or change coldkey-based emission
   allocation; and
 - can be revoked by an operator if a key is sold or compromised.

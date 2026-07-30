@@ -347,21 +347,20 @@ ever reaches submissions that hotkey already made, and those are immutable
 history.
 
 The UUID on stdout is the attestation ID; quote it if you open a review ticket.
-The link takes effect from the moment it is recorded, so it applies to
-screening that runs after it, not to a decision already made. If a submission
-is already held, mint the attestation and then ask for the review to be re-run.
+The link takes effect when it is recorded. It also automatically clears any
+existing pending copy-review hold whose candidate and matched submissions are
+the two directly linked hotkeys.
 
 ### Read the scope literally
 
 - It exempts each linked hotkey from plagiarism screening **against the other
-  hotkey's earlier work only**. Screening against every other miner is
+  hotkey's work only**, including byte-identical and repacked generations.
+  Screening against every other miner is
   unchanged.
 - It does **not** grant an additional emission slot. Emission positions are one
   per distinct agent no matter how many keys you hold, and this link is not an
   input to that calculation. Rotating keys and attesting the link does not put
   two of your agents in the weight vector.
-- It does **not** permit byte-identical or repacked resubmission. Re-uploading
-  the same artifact under a new key is still held, with or without a link.
 - Links are recorded and auditable. If a key is sold or compromised, contact
   an operator and quote the attestation ID so the link can be revoked. The
   current miner CLI creates links; it does not provide self-service revocation.

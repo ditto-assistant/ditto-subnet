@@ -101,14 +101,17 @@ class OwnerLinkResponse(BaseModel):
     """
 
     created_at: datetime
-    """When the link became active. Screening from this point on sees it."""
+    """When the link became active."""
+
+    cleared_copy_review_count: Annotated[int, Field(ge=0)] = 0
+    """Pending direct-pair copy holds automatically cleared by this link."""
 
     scope: Literal["plagiarism-screening-only"] = "plagiarism-screening-only"
     """What the link does. Stated on the wire so nobody has to infer it.
 
-    It exempts each linked hotkey from the near-duplicate copy-screening rules
-    when compared against the other's earlier submissions. It does **not**
-    exempt byte-identical or repacked resubmission, and it does **not** touch
+    It exempts each linked hotkey from copy screening against the other's
+    submissions, including byte-identical and repacked generations, and clears
+    existing pending copy holds for this direct pair. It does **not** touch
     emission-slot allocation.
     """
 

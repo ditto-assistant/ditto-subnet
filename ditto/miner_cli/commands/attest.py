@@ -15,8 +15,9 @@ does not build or submit any extrinsic.
 
 Scope, stated once and repeated in the confirmation and the ``--help``: the
 link exempts each hotkey from **plagiarism screening against the linked
-hotkey's earlier work only**. It does not grant an additional emission slot,
-and it does not permit byte-identical or repacked resubmission.
+hotkey's work only**, including byte-identical and repacked generations, and
+clears existing pending copy holds for the direct pair. It does not grant an
+additional emission slot.
 
 Walk:
 
@@ -69,10 +70,11 @@ _NO_TRANSFER = (
 
 _SCOPE_SUMMARY = (
     "The link exempts each hotkey from plagiarism screening against the "
-    "linked hotkey's earlier work ONLY. It does NOT grant an additional "
+    "linked hotkey's work ONLY, including byte-identical and repacked "
+    "generations, and clears existing pending copy holds for the direct pair. "
+    "It does NOT grant an additional "
     "emission slot (one slot per distinct agent, however many keys you hold), "
-    "and it does NOT permit byte-identical or repacked resubmission, which is "
-    "still held for review. Links are recorded and auditable; an operator can "
+    "Links are recorded and auditable; an operator can "
     "revoke a link if either key is sold or compromised. The "
     "evidence grade (coldkey-coldkey / mixed / hotkey-hotkey) is reviewer "
     "context and does not change whether the exemption applies."

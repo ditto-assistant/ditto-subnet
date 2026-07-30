@@ -239,10 +239,11 @@ class TestAttestFlagWiring:
         assert "Signing does NOT transfer any TAO" in out
         assert (
             "exempts each hotkey from plagiarism screening against the linked "
-            "hotkey's earlier work ONLY" in out
+            "hotkey's work ONLY, including byte-identical and repacked generations"
+            in out
         )
+        assert "clears existing pending copy holds for the direct pair" in out
         assert "does NOT grant an additional emission slot" in out
-        assert "does NOT permit byte-identical or repacked resubmission" in out
         assert "recorded and auditable; an operator can revoke a link" in out
         assert (
             "evidence grade (coldkey-coldkey / mixed / hotkey-hotkey) is "
