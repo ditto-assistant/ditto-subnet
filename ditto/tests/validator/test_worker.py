@@ -406,6 +406,70 @@ def _platform_with_ledger(
 
 
 class TestTop5ConfirmationLane:
+    async def test_idle_slots_catch_up_distinct_members_concurrently(self) -> None:
+        entries = [
+            _entry(f"5Miner{index}" + "x" * 40, 0.90 - index * 0.01).model_copy(
+                update={"bench_version": 1}
+            )
+            for index in range(3)
+        ]
+        platform = _platform_with_ledger(jobs=[], ledger=entries)
+        slot_by_agent = {
+            entry.agent_id: f"slot-{index}" for index, entry in enumerate(entries)
+        }
+
+        async def request_job(
+            *, champion_agent_id: UUID, member_agent_id: UUID
+        ) -> JobResponse:
+            assert champion_agent_id in slot_by_agent
+            entry = next(item for item in entries if item.agent_id == member_agent_id)
+            return _job(
+                entry.miner_hotkey, slot_id=slot_by_agent[member_agent_id]
+            ).model_copy(
+                update={
+                    "agent_id": member_agent_id,
+                    "bench_version": 1,
+                    "deadline": datetime.now(UTC) + timedelta(hours=3),
+                }
+            )
+
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 3
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        all_started = asyncio.Event()
+        active = 0
+        max_active = 0
+
+        async def evaluate(
+            _agent_id: UUID, _sha256: str, *, seed: int, **_: object
+        ) -> ScoreReport:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            if active == len(entries):
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=1)
+            active -= 1
+            return _report(str(seed), 0.8).model_copy(
+                update={"seed": seed, "bench_version": 1}
+            )
+
+        worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
+
+        await worker._run_top5_confirmation_lane()
+
+        assert max_active == len(entries)
+        assert platform.request_top5_confirmation_job.await_count == len(entries)
+        assert platform.submit_top5_confirmation_score.await_count == len(entries)
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
     async def test_appends_multi_seed_receipt_without_replacing_score(self) -> None:
         entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
             update={"bench_version": 1}

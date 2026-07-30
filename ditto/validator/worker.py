@@ -91,6 +91,7 @@ from ditto.validator.transform_audit import (
 from ditto.validator.update_control import write_update_state
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
+    Top5ConfirmationPlan,
     _entry_has_seeds,
     agents_needing_rescore,
     apply_miner_emission_cap,
@@ -1506,31 +1507,69 @@ class ValidatorWorker:
         *,
         stop_requested: asyncio.Event | None = None,
         drain_requested: asyncio.Event | None = None,
+        _member_agent_id: UUID | None = None,
+        _plan: Top5ConfirmationPlan | None = None,
     ) -> None:
-        """Claim and execute bounded append-only work for the current top five."""
-        try:
-            ledger = await self._platform.get_ledger()
-        except PlatformError as exc:
-            logger.warning("top-five confirmation ledger fetch failed: %s", exc)
-            return
-        plan = top5_confirmation_set(
-            ledger.entries,
-            current_version=self._current_bench_version,
-            margin=self._config.koth_margin,
-            dethrone_z=self._config.koth_dethrone_z,
-            tail_size=self._config.koth_tail_size,
-            baseline_seeds=self._config.koth_confirmation_seeds,
-            max_seeds=self._config.top5_max_confirmation_seeds,
-            catch_up_rate=self._config.top5_catch_up_rate,
-            # Operator policy, re-read on every ledger poll so a Backroom change
-            # reaches the fleet without a validator restart. A stale
-            # last-known-good ledger omits it and falls back to the emission set.
-            cohort_size=ledger.continual_retest_cohort_size,
-            max_cohort_size=self._config.top5_max_cohort_size,
-        )
+        """Claim and execute bounded append-only work for the current top five.
+
+        The outer invocation fans the cohort out concurrently. Each child asks
+        the platform for one member and binds execution to the distinct slot the
+        platform leases back. This lets an idle multi-slot host help several
+        members at once, while the platform remains authoritative for the
+        operator cap, seed uniqueness, and one live lease per slot.
+        """
+        plan = _plan
+        if plan is None:
+            try:
+                ledger = await self._platform.get_ledger()
+            except PlatformError as exc:
+                logger.warning("top-five confirmation ledger fetch failed: %s", exc)
+                return
+            plan = top5_confirmation_set(
+                ledger.entries,
+                current_version=self._current_bench_version,
+                margin=self._config.koth_margin,
+                dethrone_z=self._config.koth_dethrone_z,
+                tail_size=self._config.koth_tail_size,
+                baseline_seeds=self._config.koth_confirmation_seeds,
+                max_seeds=self._config.top5_max_confirmation_seeds,
+                catch_up_rate=self._config.top5_catch_up_rate,
+                # Operator policy, re-read on every ledger poll so a Backroom
+                # change reaches the fleet without a validator restart. A stale
+                # last-known-good ledger omits it and falls back to emissions.
+                cohort_size=ledger.continual_retest_cohort_size,
+                max_cohort_size=self._config.top5_max_cohort_size,
+            )
         if plan is None:
             return
+        if _member_agent_id is None:
+            # Ordinary queue work has already polled empty before this lane is
+            # entered. Use every locally healthy slot for catch-up rather than
+            # serializing the cohort through slot-0. The platform may grant
+            # fewer leases than we ask for (operator cap, global fairness, or a
+            # sibling validator already covering the seed); those 409s are
+            # harmless and the next sweep reconciles from durable evidence.
+            #
+            # One member appears once in this fan-out, so a single validator
+            # never runs two seeds for the same agent concurrently. Different
+            # validators can -- and do -- take distinct missing seeds for that
+            # agent, giving a five-validator fleet five-way per-agent catch-up
+            # while up to five cohort members run on each host.
+            await asyncio.gather(
+                *(
+                    self._run_top5_confirmation_lane(
+                        stop_requested=stop_requested,
+                        drain_requested=drain_requested,
+                        _member_agent_id=member.entry.agent_id,
+                        _plan=plan,
+                    )
+                    for member in plan.members
+                )
+            )
+            return
         for member in plan.members:
+            if member.entry.agent_id != _member_agent_id:
+                continue
             if self._new_work_blocked(stop_requested, drain_requested):
                 return
             entry = member.entry
