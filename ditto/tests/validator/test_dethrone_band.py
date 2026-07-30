@@ -337,6 +337,21 @@ class TestEffectiveComposite:
         # mean of the original three observations plus those two full waves.
         assert _effective_composite(entry) == pytest.approx(0.78)
 
+    def test_every_retained_seed_contributes_without_a_cohort_gate(self) -> None:
+        entry = _e(
+            "a",
+            0.8,
+            quorum_scores=[0.7, 0.8, 0.9],
+            # These identities need not overlap any current top-N member. They
+            # are accepted evidence for this agent and remain in its mean.
+            wave_scores={101: [0.4], 202: [0.6], 303: [1.0]},
+            continual_method="mean_after_quorum",
+        )
+
+        assert _effective_composite(entry) == pytest.approx(
+            (0.7 + 0.8 + 0.9 + 0.4 + 0.6 + 1.0) / 6
+        )
+
     def test_no_activation_marker_preserves_legacy_wave_median(self) -> None:
         entry = _e(
             "a",

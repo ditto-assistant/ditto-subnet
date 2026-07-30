@@ -312,9 +312,12 @@ def _effective_composite(entry: LedgerEntry) -> float:
     """Return the platform-activated continual score used by the weight fold.
 
     Protocol v14 starts with the three signed quorum observations and, after a
-    full top-five cohort wave completes, appends exactly one per-seed aggregate.
-    The arithmetic mean therefore moves up or down one completed wave at a time.
-    The platform filters partial waves before serving ``confirmation_history``.
+    per-agent seed result is accepted, appends exactly one median aggregate for
+    that seed. The arithmetic mean therefore moves once per retained sample.
+    Scheduling cohort membership is irrelevant to accepted evidence: the
+    platform serves the agent's complete append-only ``confirmation_history``.
+    Cross-agent decisions stay paired because :func:`_paired_dethrone` separately
+    intersects the two agents' seed maps.
 
     Before the platform sends the additive activation marker, retain the legacy
     confirmation median byte-for-byte. This makes the client-first v14 rollout
