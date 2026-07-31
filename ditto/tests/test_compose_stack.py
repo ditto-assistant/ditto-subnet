@@ -140,7 +140,7 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     assert sandbox["volumes"] == [
         "sandbox-docker-rootless-data:/home/rootless/.local/share/docker"
     ]
-    assert sandbox["security_opt"] == ["apparmor=unconfined"]
+    assert "security_opt" not in sandbox
     # `docker system prune` also removes unused networks, which would delete the
     # idle ditto-sandbox bridge between benchmarks and break every harness run.
     # Reclaim containers, images, and build cache explicitly; never system-prune.
