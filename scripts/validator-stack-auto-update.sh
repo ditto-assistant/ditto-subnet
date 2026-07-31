@@ -370,18 +370,39 @@ new_bootstrap_token() {
   printf '%s' "$token"
 }
 
+compose_up_until_ready() {
+  local dir="$1" timeout="$2" interval="$3" force_recreate="$4"
+  shift 4
+  local deadline services=("$@") options=(-d --no-build --pull never)
+  [ "$force_recreate" = true ] && options+=(--force-recreate)
+  deadline=$((SECONDS+timeout))
+  while true; do
+    if DITTO_ALLOW_MANAGED_STACK_MUTATION=true VALIDATOR_START_DRAINED=true \
+      VALIDATOR_BOOTSTRAP_TOKEN="$VALIDATOR_BOOTSTRAP_TOKEN" compose "$dir" up \
+        "${options[@]}" "${services[@]}"; then
+      return 0
+    fi
+    ((SECONDS<deadline)) || return 1
+    log "release services are not ready yet; retrying in ${interval}s"
+    sleep "$interval"
+    # Preserve the containers from the first attempt. In particular, Compose
+    # may return as soon as a dependency's first health probe fails even though
+    # that same container becomes healthy inside the readiness budget.
+    options=(-d --no-build --pull never)
+  done
+}
+
 deploy_release() {
   local dir="$1" token service sidecars=()
   token="$(new_bootstrap_token)" || return 1
   while IFS= read -r service; do
     [ "$service" = ditto-subnet ] || sidecars+=("$service")
   done < <(release_services "$dir")
-  DITTO_ALLOW_MANAGED_STACK_MUTATION=true VALIDATOR_START_DRAINED=true \
-    VALIDATOR_BOOTSTRAP_TOKEN="$token" compose "$dir" up -d --no-build --pull never \
-      --remove-orphans --force-recreate "${sidecars[@]}" || return 1
-  DITTO_ALLOW_MANAGED_STACK_MUTATION=true VALIDATOR_START_DRAINED=true \
-    VALIDATOR_BOOTSTRAP_TOKEN="$token" compose "$dir" up -d --no-deps --no-build \
-      --pull never --force-recreate ditto-subnet
+  VALIDATOR_BOOTSTRAP_TOKEN="$token" compose_up_until_ready \
+    "$dir" "$ready_timeout" "$check_seconds" true --remove-orphans "${sidecars[@]}" \
+    || return 1
+  VALIDATOR_BOOTSTRAP_TOKEN="$token" compose_up_until_ready \
+    "$dir" "$ready_timeout" "$check_seconds" true --no-deps ditto-subnet
 }
 
 restore_release() {

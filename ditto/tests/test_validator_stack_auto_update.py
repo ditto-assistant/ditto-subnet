@@ -587,6 +587,7 @@ elif args[:1] == ["up"]:
         "dittobench-api": "DITTOBENCH_API_IMAGE", "ditto-subnet": "VALIDATOR_IMAGE",
     }
     services = [value for value in args if value in mapping]
+    start_failures = state.get("compose_start_failures_remaining", 0)
     for service in services:
         container = state["containers"][service + "-container"]
         container["image"] = state["images"][manifest[mapping[service]]]
@@ -597,12 +598,19 @@ elif args[:1] == ["up"]:
             if is_candidate and state.get("fail_health_service") == service
             else "healthy"
         )
+        if start_failures and service == state.get("transient_health_service"):
+            container["health"] = "unhealthy"
     if "ditto-subnet" in services:
         state["runtime_state"]["state"] = "drained"
         state["runtime_state"]["platform_accepted"] = not (
             is_candidate and state.get("fail_validator_acceptance", False)
         )
         state["current_install_version"] = manifest["STACK_VERSION"]
+    if start_failures:
+        state["compose_start_failures_remaining"] = start_failures - 1
+        with open(state_path, "w") as handle:
+            json.dump(state, handle)
+        raise SystemExit("dependency failed to start")
 elif args[:2] == ["config", "--services"]:
     with open(os.path.join(release_dir, "manifest.env")) as handle:
         values = dict(line.rstrip().split("=", 1) for line in handle)
@@ -1121,6 +1129,39 @@ def test_unhealthy_candidate_sidecar_rolls_back_every_service_and_is_suppressed(
     suppressed = json.loads(state_path.read_text())
     assert not any(call[0] in {"kill", "stop"} for call in suppressed["calls"])
     assert not any("up" in call for call in suppressed["compose_calls"])
+
+
+def test_transient_dependency_health_failure_is_retried_without_recreating(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["compose_start_failures_remaining"] = 1
+    state["transient_health_service"] = "sandbox-docker"
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    env = {
+        **env,
+        "VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS": "3",
+        "VALIDATOR_AUTO_UPDATE_CHECK_SECONDS": "1",
+    }
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.1"
+    final = json.loads(state_path.read_text())
+    candidate_sidecar_ups = [
+        call
+        for call in final["compose_calls"]
+        if "up" in call and "sandbox-docker" in call and "ditto-subnet" not in call
+    ]
+    assert len(candidate_sidecar_ups) == 2
+    assert "--force-recreate" in candidate_sidecar_ups[0]
+    assert "--force-recreate" not in candidate_sidecar_ups[1]
+    assert final["runtime_state"]["state"] == "working"
 
 
 def test_candidate_validator_rejection_rolls_back_complete_stack(
