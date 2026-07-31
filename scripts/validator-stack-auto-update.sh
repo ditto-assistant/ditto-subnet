@@ -513,6 +513,12 @@ recover_transaction() {
 perform_update() {
   local candidate_ref="$1" allow_downgrade="$2" previous_ref current_version candidate_version old_container current_container
   previous_ref="$(managed_release)"
+  # The immutable descriptor is updater metadata, not a runtime component, so
+  # routine Docker cleanup may remove its local image after installation. Pull
+  # and re-authenticate it before validating the persisted current release.
+  # Candidate verification remains independent and fail closed below.
+  verify_descriptor_signature "$previous_ref" || die "managed current descriptor publisher identity is invalid"
+  docker pull "$previous_ref" >/dev/null || die "managed current descriptor is unavailable"
   [ -d "$CURRENT_DIR" ] && validate_descriptor "$previous_ref" "$CURRENT_DIR" || die "managed current descriptor is missing or invalid"
   assert_stack_matches "$CURRENT_DIR" || die "running stack has drifted from its managed release"
   current_container="$(service_container "$CURRENT_DIR" ditto-subnet)"

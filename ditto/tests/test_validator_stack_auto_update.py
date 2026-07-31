@@ -488,6 +488,8 @@ def die(message="fake docker failure"):
 if args[:1] == ["pull"]:
     if args[1] == state.get("fail_pull"):
         die()
+    if args[1] in state.get("missing_local_images", []):
+        state["missing_local_images"].remove(args[1])
 elif args[:1] == ["create"]:
     state["extracting"] = args[1]
     print("descriptor-container")
@@ -503,6 +505,8 @@ elif args[:1] == ["cp"]:
             shutil.copy2(source_path, destination_path)
 elif args[:2] == ["image", "inspect"]:
     ref = args[-1]
+    if ref in state.get("missing_local_images", []):
+        die("missing image")
     if "--format" not in args:
         if ref not in state["images"]:
             die("missing image")
@@ -1007,6 +1011,34 @@ def test_success_replaces_and_commits_the_complete_stack(
     assert up_calls[1][-1] == "ditto-subnet"
     assert state["runtime_state"]["state"] == "working"
     assert "unrelated-container" not in {call[-1] for call in state["calls"] if call}
+
+
+def test_update_reacquires_pruned_current_descriptor_before_validation(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["cosign_calls"] = []
+    state["missing_local_images"] = [OLD_STACK_DIGEST]
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.1"
+    final = json.loads(state_path.read_text())
+    current_pull = final["calls"].index(["pull", OLD_STACK_DIGEST])
+    current_inspect = next(
+        index
+        for index, call in enumerate(final["calls"])
+        if call[:2] == ["image", "inspect"] and call[-1] == OLD_STACK_DIGEST
+    )
+    assert current_pull < current_inspect
+    assert any(OLD_STACK_DIGEST in call for call in final["cosign_calls"])
 
 
 def test_waits_for_busy_validator_before_replacing_stack(
