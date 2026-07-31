@@ -133,3 +133,29 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
         "assemble-stack",
         "smoke-validator-arm64",
     ]
+
+
+def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    steps = workflow["jobs"]["assemble-stack"]["steps"]
+    render_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("name") == "Render the digest-bound stack bundle"
+    )
+    smoke_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("name") == "Boot the exact release runtime dependencies"
+    )
+    publish_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("name") == "Build and publish the immutable stack descriptor"
+    )
+
+    assert render_index < smoke_index < publish_index
+    assert (
+        "scripts/test-validator-stack-release-runtime.sh" in steps[smoke_index]["run"]
+    )
+    assert "build/stack-release/compose.yml" in steps[smoke_index]["run"]

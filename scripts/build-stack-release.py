@@ -86,6 +86,9 @@ def main() -> None:
         {
             "restart": "unless-stopped",
             "read_only": True,
+            # Ollama initializes this directory even when it is retained only
+            # as an inert compatibility service for frozen updaters.
+            "tmpfs": ["/root/.ollama:rw,noexec,nosuid,nodev,mode=0700"],
             "security_opt": ["no-new-privileges:true"],
             "cap_drop": ["ALL"],
         },

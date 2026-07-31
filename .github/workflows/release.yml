@@ -512,6 +512,11 @@ jobs:
           test "$(grep -c '^' build/stack-release/manifest.env)" = 14
           ! grep -qE '(^|[[:space:]])build:' build/stack-release/compose.yml
 
+      - name: Boot the exact release runtime dependencies
+        run: |
+          scripts/test-validator-stack-release-runtime.sh \
+            build/stack-release/compose.yml
+
       - name: Build and publish the immutable stack descriptor
         id: stack
         uses: useblacksmith/build-push-action@v2

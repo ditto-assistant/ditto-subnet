@@ -183,6 +183,13 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
     assert compose["services"]["model-relay"]["environment"]["RELAY_API_KEY"] == (
         "retired-compatibility-shim"
     )
+    assert compose["services"]["sandbox-docker"]["security_opt"] == [
+        "apparmor=unconfined"
+    ]
+    assert compose["services"]["ollama"]["read_only"] is True
+    assert compose["services"]["ollama"]["tmpfs"] == [
+        "/root/.ollama:rw,noexec,nosuid,nodev,mode=0700"
+    ]
 
     # A release must be usable without a Git checkout or a build daemon on the
     # validator host. No remote/local build contexts may survive rendering.

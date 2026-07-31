@@ -70,6 +70,12 @@ services:
       dockerfile: Dockerfile.sandbox-docker
     restart: unless-stopped
     privileged: true
+    # Ubuntu's AppArmor user-namespace restriction can otherwise reject
+    # RootlessKit's /proc/self/exe bootstrap even inside this privileged DinD
+    # boundary. The nested daemon and miner containers still run as the
+    # unprivileged rootless identity, and no host Docker socket is mounted.
+    security_opt:
+      - apparmor=unconfined
     # Rootless Docker-in-Docker cannot delegate per-child cgroups without a
     # systemd user session. Keep the ordinary per-run flags as defense in depth,
     # but make the outer executor cgroup the authoritative host resource guard.
