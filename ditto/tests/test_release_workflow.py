@@ -63,9 +63,21 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
     assert relay["with"]["context"] == "${{ runner.temp }}/model-relay-source"
     assert relay["with"]["file"] == ("${{ runner.temp }}/model-relay-source/Dockerfile")
     assert (
+        "org.opencontainers.image.revision="
+        "${{ steps.dittobench-source.outputs.revision }}" in relay["with"]["labels"]
+    )
+    assert (
+        "io.heyditto.validator.compat-source-revision="
         "${{ steps.dittobench-source.outputs.relay_compat_revision }}"
         in relay["with"]["labels"]
     )
+
+    assembly = _step(
+        workflow["jobs"]["assemble-stack"]["steps"],
+        "Verify every first-party multi-platform index",
+    )["run"]
+    assert '["$MODEL_RELAY_REPOSITORY"]="$DITTOBENCH_REVISION"' in assembly
+    assert "io.heyditto.validator.compat-source-revision" in assembly
 
 
 def test_validator_release_smokes_each_architecture_natively_before_promotion() -> None:

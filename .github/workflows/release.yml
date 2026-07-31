@@ -324,10 +324,14 @@ jobs:
           target: relay
           platforms: linux/amd64,linux/arm64
           push: true
+          # Frozen compat-2 updaters require every dittobench-api image to
+          # advertise the descriptor's active dittobench revision. Preserve
+          # the bridge's actual frozen source in a separate label.
           labels: |
             org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.relay_compat_revision }}
+            org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
+            io.heyditto.validator.compat-source-revision=${{ steps.dittobench-source.outputs.relay_compat_revision }}
             io.heyditto.validator.stack-version=${{ needs.release.outputs.version }}
             io.heyditto.validator.stack-revision=${{ needs.release.outputs.commit_sha }}
             io.heyditto.validator.stack-service=model-relay
@@ -413,7 +417,7 @@ jobs:
             ["$VALIDATOR_REPOSITORY"]="$REVISION"
             ["$SANDBOX_DOCKER_REPOSITORY"]="$REVISION"
             ["$DITTOBENCH_API_REPOSITORY"]="$DITTOBENCH_REVISION"
-            ["$MODEL_RELAY_REPOSITORY"]="$MODEL_RELAY_COMPAT_REVISION"
+            ["$MODEL_RELAY_REPOSITORY"]="$DITTOBENCH_REVISION"
           )
           declare -A services=(
             ["$SANDBOX_DOCKER_REPOSITORY"]="sandbox-docker"
@@ -447,6 +451,9 @@ jobs:
             if [ "$repository" = "$DITTOBENCH_API_REPOSITORY" ]; then
               test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-version" }}' "$child")" = "$VERSION"
               test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-revision" }}' "$child")" = "$REVISION"
+            fi
+            if [ "$repository" = "$MODEL_RELAY_REPOSITORY" ]; then
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compat-source-revision" }}' "$child")" = "$MODEL_RELAY_COMPAT_REVISION"
             fi
           done
 
