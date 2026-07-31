@@ -516,6 +516,12 @@ elif args[:1] == ["inspect"]:
     elif ".State.Health" in fmt:
         print(container.get("health", "none"))
 elif args[:1] == ["exec"]:
+    if state.get("drain_requested"):
+        checks_remaining = state.get("busy_checks_remaining", 0)
+        if checks_remaining > 0:
+            state["busy_checks_remaining"] = checks_remaining - 1
+        else:
+            state["runtime_state"]["state"] = "drained"
     print(json.dumps(state["runtime_state"], separators=(",", ":")))
 elif args[:1] == ["kill"]:
     signal_name = next(
@@ -523,7 +529,15 @@ elif args[:1] == ["kill"]:
         for value in args
         if value.startswith("--signal=")
     )
-    state["runtime_state"]["state"] = "drained" if signal_name == "USR1" else "working"
+    if signal_name == "USR1" and "busy_checks_remaining" in state:
+        state["drain_requested"] = True
+    else:
+        state["runtime_state"]["state"] = (
+            "drained" if signal_name == "USR1" else "working"
+        )
+        if signal_name == "USR2":
+            state.pop("drain_requested", None)
+            state.pop("busy_checks_remaining", None)
 elif args[:1] == ["stop"]:
     state["containers"][args[-1]]["running"] = False
 elif args[:2] == ["rm", "-f"]:
@@ -976,6 +990,32 @@ def test_success_replaces_and_commits_the_complete_stack(
     assert up_calls[1][-1] == "ditto-subnet"
     assert state["runtime_state"]["state"] == "working"
     assert "unrelated-container" not in {call[-1] for call in state["calls"] if call}
+
+
+def test_waits_for_busy_validator_before_replacing_stack(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """A candidate cannot interrupt work; replacement starts after quiescence."""
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    env = {**env, "VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS": "5"}
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["compose_calls"] = []
+    state["busy_checks_remaining"] = 2
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.1"
+    state = json.loads(state_path.read_text())
+    assert "drain_requested" not in state
+    assert "busy_checks_remaining" not in state
+    assert state["runtime_state"]["state"] == "working"
+    assert any("up" in call for call in state["compose_calls"])
 
 
 def test_four_service_candidate_can_roll_back_to_legacy_six_service_release(

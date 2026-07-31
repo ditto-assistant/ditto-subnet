@@ -1,0 +1,11 @@
+services:
+  sandbox-docker:
+    build: !reset null
+    image: alpine:3.22
+    pull_policy: missing
+    command: ["sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 1; done"]
+    restart: "no"
+    privileged: false
+    environment: !reset {}
+    volumes: !reset []
+    healthcheck: !reset null

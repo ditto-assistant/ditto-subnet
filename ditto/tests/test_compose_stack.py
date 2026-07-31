@@ -63,10 +63,9 @@ def test_rootless_executor_has_an_authoritative_outer_resource_cgroup() -> None:
     # boundary; inner per-run flags remain useful on stronger executors but are
     # not treated as the only guard here.
     assert sandbox["mem_limit"] == "${VALIDATOR_SANDBOX_EXECUTOR_MEMORY_LIMIT:-32g}"
-    # The shipped default must run on the documented four-vCPU minimum host.
-    # Larger validators may raise this explicitly without making the release
-    # undeployable on conforming machines.
-    assert sandbox["cpus"] == "${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-4}"
+    # The executor uses every CPU available by default. Operators may still
+    # impose an explicit quota without making releases host-size-specific.
+    assert sandbox["cpus"] == "${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-0}"
     assert sandbox["pids_limit"] == ("${VALIDATOR_SANDBOX_EXECUTOR_PIDS_LIMIT:-8192}")
 
 

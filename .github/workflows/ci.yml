@@ -54,6 +54,29 @@ jobs:
             >/tmp/resolved-compose.json
           python3 scripts/check_netns_incompatible.py /tmp/resolved-compose.json
 
+  validator-stack-runtime-e2e:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Exercise updater and candidate Compose on four CPUs
+        run: ./scripts/test-validator-stack-auto-update-e2e.sh
+
   lint-and-test:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
