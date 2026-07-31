@@ -12,6 +12,9 @@ COMPOSE_WRAPPER_PATH = Path(__file__).parents[2] / "scripts/validator-compose.sh
 SANDBOX_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile.sandbox-docker"
 DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
+SANDBOX_ENTRYPOINT_PATH = (
+    Path(__file__).parents[2] / "scripts/sandbox-docker-entrypoint.sh"
+)
 
 
 def _compose_default(expression: str) -> str:
@@ -150,6 +153,17 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     assert "docker builder prune --all --force" in entrypoint
     assert "docker volume prune --all --force" in entrypoint
     assert "sleep 21600" in entrypoint
+
+
+def test_sandbox_egress_policy_installs_before_rootless_dockerd_starts() -> None:
+    entrypoint = SANDBOX_ENTRYPOINT_PATH.read_text()
+
+    policy_install = 'iptables -I OUTPUT 1 -m owner --uid-owner "$executor_uid"'
+    daemon_start = "exec su-exec rootless env"
+    assert policy_install in entrypoint
+    assert daemon_start in entrypoint
+    assert entrypoint.index(policy_install) < entrypoint.index(daemon_start)
+    assert "docker network prune" not in entrypoint
 
 
 def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:

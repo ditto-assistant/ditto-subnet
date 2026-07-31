@@ -37,7 +37,10 @@ def test_public_screener_dependency_needs_no_private_authentication() -> None:
         ci_workflow["jobs"]["lint-and-test"]["steps"], "Install dependencies"
     )
 
-    assert install == {"name": "Install dependencies", "run": "uv sync --group dev"}
+    assert install == {
+        "name": "Install dependencies",
+        "run": "uv sync --locked --group dev",
+    }
     assert "env" not in release
     for workflow_path in (CI_WORKFLOW_PATH, RELEASE_WORKFLOW_PATH):
         text = workflow_path.read_text()

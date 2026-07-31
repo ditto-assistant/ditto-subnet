@@ -72,7 +72,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: Exercise updater and candidate Compose on four CPUs
         run: ./scripts/test-validator-stack-auto-update-e2e.sh
@@ -97,7 +97,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: ruff format check
         run: uv run ruff format --check .
