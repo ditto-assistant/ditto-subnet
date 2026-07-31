@@ -1,0 +1,9 @@
+#include <tunables/global>
+
+# The outer sandbox executor is already a privileged container. Ubuntu 24.04's
+# host-wide restricted-userns policy additionally requires an AppArmor rule
+# before RootlessKit may create the inner, unprivileged user namespace.
+# Keep the exception attached only to this explicitly selected Docker profile.
+profile ditto-rootless-dind flags=(unconfined) {
+  userns,
+}

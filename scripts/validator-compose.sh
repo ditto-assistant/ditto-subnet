@@ -8,6 +8,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 STATE_DIR="${DITTO_VALIDATOR_UPDATE_STATE_DIR:-$ROOT_DIR/.validator-update}"
+source "$ROOT_DIR/scripts/validator-sandbox-apparmor.sh"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -50,6 +51,7 @@ fi
 
 docker info >/dev/null 2>&1 || die "Docker Engine is not reachable"
 docker buildx version >/dev/null 2>&1 || die "Docker Buildx is not installed"
+configure_validator_sandbox_apparmor || exit 1
 
 # Read-only/lifecycle commands do not consume a build context. Keep them usable
 # with already-built images and during a GitHub outage; ancestry is verified

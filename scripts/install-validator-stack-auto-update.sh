@@ -24,6 +24,7 @@ service_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 PATH="$service_path" command -v cosign >/dev/null 2>&1 || \
   die "install the pinned cosign verifier in the system PATH before enabling stack updates"
 [ -f "$ROOT_DIR/.env" ] || die "create $ROOT_DIR/.env first"
+"$ROOT_DIR/scripts/install-validator-sandbox-apparmor.sh"
 grep -Eq '^VALIDATOR_STACK_AUTO_UPDATE=(true|1|yes)$' "$ROOT_DIR/.env" || die "set VALIDATOR_STACK_AUTO_UPDATE=true only after supervised stack adoption"
 if grep -Eq '^VALIDATOR_AUTO_UPDATE=(true|1|yes)$' "$ROOT_DIR/.env"; then
   die "the retired validator-only updater is still enabled: stop ditto-validator-auto-update.timer and remove VALIDATOR_AUTO_UPDATE from .env"

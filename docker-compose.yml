@@ -70,9 +70,11 @@ services:
       dockerfile: Dockerfile.sandbox-docker
     restart: unless-stopped
     privileged: true
-    # Do not override the engine's security profile here. In particular,
-    # apparmor=unconfined prevents RootlessKit from booting on some managed
-    # Ubuntu hosts even though Docker's privileged-container defaults work.
+    security_opt:
+      - apparmor=${DITTO_SANDBOX_APPARMOR_PROFILE:-docker-default}
+    # Keep the engine default unless the host installer selects Ditto's narrow
+    # RootlessKit profile for Ubuntu's restricted-userns policy. Do not use
+    # apparmor=unconfined here; it breaks RootlessKit on some managed hosts.
     # Rootless Docker-in-Docker cannot delegate per-child cgroups without a
     # systemd user session. Keep the ordinary per-run flags as defense in depth,
     # but make the outer executor cgroup the authoritative host resource guard.

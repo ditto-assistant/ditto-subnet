@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${DITTO_SUBNET_ENV_FILE:-$ROOT_DIR/.env}"
 STATE_DIR="${DITTO_VALIDATOR_STACK_UPDATE_STATE_DIR:-$ROOT_DIR/.validator-stack-update}"
+source "$ROOT_DIR/scripts/validator-sandbox-apparmor.sh"
 
 die() {
   printf 'validator-stack-compose: error: %s\n' "$*" >&2
@@ -122,6 +123,7 @@ export DITTO_BITTENSOR_WALLETS_DIR="$wallets_dir"
 
 command -v docker >/dev/null 2>&1 || die "Docker is not installed"
 docker info >/dev/null 2>&1 || die "Docker Engine is not reachable"
+configure_validator_sandbox_apparmor || exit 1
 compose_version="$(docker compose version --short 2>/dev/null)" || die "Docker Compose plugin v2 or newer is required"
 compose_version="${compose_version#v}"
 compose_major="${compose_version%%.*}"

@@ -183,9 +183,11 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
     assert compose["services"]["model-relay"]["environment"]["RELAY_API_KEY"] == (
         "retired-compatibility-shim"
     )
-    # Preserve Docker's privileged-container security defaults. An explicit
-    # AppArmor override breaks RootlessKit on managed Ubuntu validators.
-    assert "security_opt" not in compose["services"]["sandbox-docker"]
+    # Ubuntu's restricted-userns policy requires a named, host-loaded profile.
+    # Other hosts retain Docker's default profile.
+    assert compose["services"]["sandbox-docker"]["security_opt"] == [
+        "apparmor=${DITTO_SANDBOX_APPARMOR_PROFILE:-docker-default}"
+    ]
     assert compose["services"]["ollama"]["read_only"] is True
     assert compose["services"]["ollama"]["tmpfs"] == [
         "/root/.ollama:rw,noexec,nosuid,nodev,mode=0700"
