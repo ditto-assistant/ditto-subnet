@@ -394,12 +394,10 @@ systemctl list-timers ditto-validator-stack-auto-update.timer
 ./scripts/validator-stack-auto-update.sh status
 ```
 
-The installer also loads a dedicated `ditto-rootless-dind` AppArmor profile on
-Ubuntu hosts. This keeps Ubuntu 24.04's restricted unprivileged-user-namespace
-setting enabled while permitting RootlessKit only for the privileged sandbox
-executor. If a managed host predates this profile, run
-`sudo ./scripts/install-validator-sandbox-apparmor.sh` once; the next updater
-poll can then validate the candidate without weakening the host-wide policy.
+The current compatibility stack does not require a host AppArmor profile or
+unprivileged-user-namespace exception. Keep the host dedicated to validation;
+the nested executor remains privileged while stronger rootless/AppArmor
+isolation is redesigned as a separately migrated security boundary.
 
 Compatible patch and minor releases then install automatically: the updater
 drains the validator (an active benchmark finishes first), replaces all four

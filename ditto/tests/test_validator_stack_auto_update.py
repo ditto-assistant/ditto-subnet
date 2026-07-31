@@ -183,11 +183,9 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
     assert compose["services"]["model-relay"]["environment"]["RELAY_API_KEY"] == (
         "retired-compatibility-shim"
     )
-    # Ubuntu's restricted-userns policy requires a named, host-loaded profile.
-    # Other hosts retain Docker's default profile.
-    assert compose["services"]["sandbox-docker"]["security_opt"] == [
-        "apparmor=${DITTO_SANDBOX_APPARMOR_PROFILE:-docker-default}"
-    ]
+    # The v0.41-compatible executor does not require a host-loaded AppArmor
+    # profile, so frozen updaters can recreate it across existing hosts.
+    assert "security_opt" not in compose["services"]["sandbox-docker"]
     assert compose["services"]["ollama"]["read_only"] is True
     assert compose["services"]["ollama"]["tmpfs"] == [
         "/root/.ollama:rw,noexec,nosuid,nodev,mode=0700"

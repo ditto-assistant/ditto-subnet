@@ -22,35 +22,25 @@ no miner source, credentials, or runnable exploit payloads.
 
 ## Executor boundary and residual risk
 
-The `sandbox-docker` service runs a rootless nested daemon. Its outer container
-retains the privilege required to establish subordinate user namespaces, but
-the daemon and every miner container run as the empty `rootless` identity. The
-validator host socket is never mounted. RootlessKit traffic from that identity
-is restricted to the ticket broker; the trusted API uses a different uid and
-retains its platform path.
+The compatibility executor is a privileged outer container running a rootful
+nested Docker daemon. This deliberately restores the v0.41 deployment contract
+while rootless DinD, reviewed AppArmor/seccomp profiles, and portable aggregate
+cgroup defaults are redesigned behind an explicit migration gate. The
+validator host socket is never mounted, and miner containers still run non-root
+with the per-run restrictions above.
 
-The supported nested-rootless image has no systemd user session, so its inner
-daemon cannot authoritatively delegate a separate cgroup to each miner. The
-outer executor service therefore has mandatory aggregate memory, CPU, and PID
-limits enforced by the validator host. Per-run Docker limits remain enabled for
-stronger executors, but are not the only host guard here. If one malicious run
-exhausts the aggregate boundary, sibling runs fail as retryable infrastructure;
-none of those partial results are accepted as miner scores. Operators should
-size the aggregate at or below the dedicated benchmark capacity, never the
-whole host.
+The nested daemon is reachable only inside the executor namespace. Its
+`ditto-sandbox` bridge permits the source-bound ticket broker on port 11436 and
+rejects all other miner egress. Operators must dedicate the validator host to
+this workload and treat the privileged executor as a residual risk until the
+deferred isolation work lands without breaking existing managed validators.
 
-This removes the former privileged rootful daemon. A dedicated host-rootless
-daemon or an ephemeral VM/microVM with an independent service identity remains
-a stronger future boundary because nested Docker still has an outer privileged
-bootstrap container.
-
-The scorer may hold that dedicated executor's socket because it is trusted
+The scorer may hold the nested executor's socket because it is trusted
 control-plane code. The socket must never be mounted into, proxied to, or made
 network-reachable from a miner container. A host-root Docker socket must never
-be exposed to a miner container. The scorer keeps V7 available during rollout
-but withholds V8 from its live capability response unless its configured Docker
-endpoint both requires and verifies rootless mode. Backroom cannot route V8
-merely because the installed scorer binary contains the V8 dataset contract.
+be exposed to a miner container. Backroom must route work from the signed
+capability response rather than merely because the installed scorer binary
+contains a dataset contract.
 
 Heartbeat protocol 18 reports screened-image mode, executor isolation, and the
 four component identities. This is signed routing and observability data. It is
@@ -63,16 +53,16 @@ wallet, so the platform must not treat a heartbeat as proof of host integrity.
    preflight and that its canary quarantines before any Docker build event.
 2. Confirm the platform assigns v7/v8 only to validators whose signed capability
    heartbeat advertises screened-image support and a freshly verified scorer.
-3. Inspect and record the executor daemon security options. Enable the reviewed
-   seccomp and AppArmor profiles where the host supports them.
-4. Confirm the outer executor service has finite memory, CPU, and PID limits and
-   leaves reserved capacity for the validator, wallet signer, and scorer API.
+3. Record that the temporary compatibility executor is privileged rootful DinD
+   and confirm the host is dedicated to validator work.
+4. Confirm each miner run receives the scorer's memory, CPU, PID, filesystem,
+   capability, and deadline limits.
 5. Verify the executor account cannot read validator wallet paths, service
    `.env` files, SSH/cloud configuration, or other users' homes.
 6. Run the inert canary suite. It must show Docker control absent, host-root and
    credential paths unreadable, host writes impossible, metadata blocked, and
    outbound connections denied except the ticket broker.
-7. Confirm `ditto-rootless-deny` events reach the operator log/alert sink without
+7. Confirm `ditto-sandbox-deny` events reach the operator log/alert sink without
    including request bodies, credentials, or private source.
 8. Confirm the required `dittobench-api` change is merged and the deployed
    scorer checksum identifies its actual post-merge commit in `main` history.

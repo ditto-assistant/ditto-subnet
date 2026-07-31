@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Locally reproducible release/update gate. This combines the production
 # updater's transactional process tests with a real Docker daemon creation of
-# the candidate Compose service that carries the outer sandbox resource limits.
+# the candidate Compose service on the documented minimum host shape.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,10 +47,5 @@ test -n "$container_id"
 test "$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$container_id")" = "0"
 "${compose[@]}" start sandbox-docker
 test "$(docker inspect --format '{{.State.Running}}' "$container_id")" = "true"
-
-"${compose[@]}" rm --stop --force sandbox-docker
-VALIDATOR_SANDBOX_EXECUTOR_CPUS=2 "${compose[@]}" create --no-build sandbox-docker
-container_id="$("${compose[@]}" ps --all -q sandbox-docker)"
-test "$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$container_id")" = "2000000000"
 
 echo "validator stack updater release gate passed"

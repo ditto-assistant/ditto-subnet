@@ -30,43 +30,31 @@ def test_retired_local_inference_sidecars_are_absent() -> None:
     assert "model-relay" not in compose["services"]
 
 
-def test_sandbox_image_pins_rootless_dind_and_installs_guard_tools() -> None:
+def test_sandbox_image_pins_compatible_rootful_dind_and_installs_guard_tools() -> None:
     dockerfile = SANDBOX_DOCKERFILE_PATH.read_text()
 
     assert dockerfile.startswith(
-        "FROM docker.io/library/docker:29-dind-rootless@"
-        "sha256:212a9e782c7119fd6a212beaab6b7665a29b663d894d0f6201710c89575ad0ae"
+        "FROM docker.io/library/docker:29-dind@"
+        "sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515"
     )
-    assert "RUN apk add --no-cache curl socat su-exec" in dockerfile
-    assert "USER root" in dockerfile
+    assert "RUN apk add --no-cache curl socat" in dockerfile
 
 
-def test_sandbox_health_reports_the_isolated_rootless_daemon() -> None:
+def test_sandbox_health_reports_the_isolated_daemon() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
     probe = " ".join(sandbox["healthcheck"]["test"])
     assert "docker info" in probe
-    entrypoint = (
-        COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
-    ).read_text()
-    assert "TCP-LISTEN:11434" in entrypoint
-    assert "TCP-LISTEN:11435" not in entrypoint
-    assert "sandbox-docker-health-once" in entrypoint
+    assert "docker info >/dev/null 2>&1" in probe
 
 
-def test_rootless_executor_has_an_authoritative_outer_resource_cgroup() -> None:
+def test_compatibility_executor_does_not_require_host_specific_outer_limits() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
 
-    # Nested rootless Docker lacks a delegated systemd cgroup on the supported
-    # Compose path. The outer service limits are therefore the host-protection
-    # boundary; inner per-run flags remain useful on stronger executors but are
-    # not treated as the only guard here.
-    assert sandbox["mem_limit"] == "${VALIDATOR_SANDBOX_EXECUTOR_MEMORY_LIMIT:-32g}"
-    # The executor uses every CPU available by default. Operators may still
-    # impose an explicit quota without making releases host-size-specific.
-    assert sandbox["cpus"] == "${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-0}"
-    assert sandbox["pids_limit"] == ("${VALIDATOR_SANDBOX_EXECUTOR_PIDS_LIMIT:-8192}")
+    assert "mem_limit" not in sandbox
+    assert "cpus" not in sandbox
+    assert "pids_limit" not in sandbox
 
 
 def test_validator_probes_the_live_sandbox_network_namespace() -> None:
@@ -137,22 +125,25 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
 
-    assert sandbox["volumes"] == [
-        "sandbox-docker-rootless-data:/home/rootless/.local/share/docker"
-    ]
-    assert sandbox["security_opt"] == [
-        "apparmor=${DITTO_SANDBOX_APPARMOR_PROFILE:-docker-default}"
-    ]
+    assert sandbox["volumes"] == ["sandbox-docker-rootful-data:/var/lib/docker"]
+    assert "security_opt" not in sandbox
     # `docker system prune` also removes unused networks, which would delete the
     # idle ditto-sandbox bridge between benchmarks and break every harness run.
     # Reclaim containers, images, and build cache explicitly; never system-prune.
     assert "docker system prune" not in entrypoint
+    assert "docker network prune" not in entrypoint
     assert "docker container prune --force" in entrypoint
     assert "docker image prune --all --force --filter 'until=24h'" in entrypoint
     assert "docker builder prune --all --force" in entrypoint
     assert "docker volume prune --all --force" in entrypoint
     assert "sleep 21600" in entrypoint
     assert "dockerd-entrypoint.sh --feature containerd-snapshotter=false" in entrypoint
+    assert entrypoint.index("ensure_sandbox_network") < entrypoint.index(
+        "docker container prune --force"
+    )
+    assert "--dport 11436 -j ACCEPT" in entrypoint
+    assert "--dport 11434 -j ACCEPT" not in entrypoint
+    assert "--dport 11435 -j ACCEPT" not in entrypoint
 
 
 def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
@@ -162,12 +153,13 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert env["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
     assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
-    assert env["DITTOBENCH_REQUIRE_ROOTLESS_DOCKER"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
-    # The API and rootless daemon share one outer namespace. The API discovers
-    # eth0 and injects that exact broker address into each inner container.
+    # The API and daemon share one outer namespace. The rootful compatibility
+    # daemon resolves the broker through the namespace-local host gateway.
     assert "extra_hosts" not in service
-    assert "extra_hosts" not in compose["services"]["sandbox-docker"]
+    assert compose["services"]["sandbox-docker"]["extra_hosts"] == [
+        "host.docker.internal:127.0.0.1"
+    ]
     assert env["DITTOBENCH_REQUIRE_TICKET_INFERENCE"] == "true"
     assert env["DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL"] == (
         "${DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL:-"
@@ -204,14 +196,12 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
-    assert "su-exec rootless" in entrypoint
-    assert "DITTO-ROOTLESS-EGRESS" in entrypoint
-    assert '--uid-owner "$executor_uid"' in entrypoint
-    assert '-d "$host_gateway_ip"' in entrypoint
+    assert "su-exec rootless" not in entrypoint
+    assert "DITTO-SANDBOX-EGRESS" in entrypoint
     assert "--dport 11436 -j ACCEPT" in entrypoint
     assert "--dport 11434 -j ACCEPT" not in entrypoint
     assert "--dport 11435 -j ACCEPT" not in entrypoint
-    assert "ditto-rootless-deny" in entrypoint
+    assert "ditto-sandbox-deny" in entrypoint
     # Denied egress must fail fast: a silent DROP costs a full SYN timeout per
     # connect (~53 s of dead time per benchmark check), which burns the whole
     # ticket and starves the scoring slot. The allowlist is unchanged.
@@ -232,7 +222,7 @@ def test_screened_image_capability_is_enabled_without_a_global_requirement() -> 
     assert "VALIDATOR_REQUIRE_SCREENED_IMAGE" not in validator
     assert validator["NETUID"] == "118"
     assert validator["VALIDATOR_STACK_MODE"] == "source"
-    assert validator["VALIDATOR_EXECUTOR_ISOLATION"] == "rootless_dind"
+    assert validator["VALIDATOR_EXECUTOR_ISOLATION"] == "privileged_dind"
 
 
 def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:

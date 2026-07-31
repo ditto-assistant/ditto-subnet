@@ -60,37 +60,24 @@ services:
           create_host_path: false
       - pylon-data:/data
 
-  # The scorer receives an isolated nested rootless Docker daemon. The outer
-  # container retains only the privilege required to create the user namespace;
-  # dockerd and every miner container run as the empty rootless identity. The
-  # validator host's Docker socket is never mounted.
+  # The scorer receives an isolated nested Docker daemon. This temporarily
+  # retains the v0.41 rootful-DinD runtime contract so validators with the
+  # original stack updater can adopt current benchmark releases. The daemon is
+  # still isolated from the host Docker socket and its miner networks retain
+  # the broker-only egress policy installed by the entrypoint.
   sandbox-docker:
     build:
       context: .
       dockerfile: Dockerfile.sandbox-docker
     restart: unless-stopped
     privileged: true
-    security_opt:
-      - apparmor=${DITTO_SANDBOX_APPARMOR_PROFILE:-docker-default}
-    # Keep the engine default unless the host installer selects Ditto's narrow
-    # RootlessKit profile for Ubuntu's restricted-userns policy. Do not use
-    # apparmor=unconfined here; it breaks RootlessKit on some managed hosts.
-    # Rootless Docker-in-Docker cannot delegate per-child cgroups without a
-    # systemd user session. Keep the ordinary per-run flags as defense in depth,
-    # but make the outer executor cgroup the authoritative host resource guard.
-    # Exhausting it fails the affected runs as infrastructure and the platform
-    # retries them; it cannot consume the validator wallet/API containers or the
-    # rest of the host.
-    mem_limit: ${VALIDATOR_SANDBOX_EXECUTOR_MEMORY_LIMIT:-32g}
-    # Docker treats zero as no CPU quota, so the executor uses every CPU the
-    # host makes available unless an operator deliberately sets a cap.
-    cpus: ${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-0}
-    pids_limit: ${VALIDATOR_SANDBOX_EXECUTOR_PIDS_LIMIT:-8192}
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
       DOCKER_TLS_CERTDIR: ""
+    extra_hosts:
+      - host.docker.internal:127.0.0.1
     volumes:
-      - sandbox-docker-rootless-data:/home/rootless/.local/share/docker
+      - sandbox-docker-rootful-data:/var/lib/docker
     healthcheck:
       test: [CMD-SHELL, "docker info >/dev/null 2>&1"]
       interval: 10s
@@ -112,14 +99,13 @@ services:
         DITTOBENCH_SOFTWARE_VERSION: *dittobench-software-version
     restart: unless-stopped
     network_mode: service:sandbox-docker
-    # The API discovers the shared namespace's eth0 address and gives only that
-    # broker address to inner rootless containers as host.docker.internal.
+    # The API and nested daemon share a network namespace. The daemon maps
+    # host.docker.internal to that namespace's loopback for the local broker.
     depends_on:
       sandbox-docker:
         condition: service_healthy
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
-      DITTOBENCH_REQUIRE_ROOTLESS_DOCKER: "1"
       DITTOBENCH_SANDBOX_HARDEN: "1"
       DITTOBENCH_SANDBOX_EGRESS_NETWORK: ditto-sandbox
       # Production opt-in for platform-verified screened archives. Keep the
@@ -287,7 +273,7 @@ services:
       # v2 retains source-build fallback; v3 requires screened images by contract.
       VALIDATOR_SCREENED_IMAGES: "1"
       VALIDATOR_SANDBOX_EGRESS_RESTRICTED: "1"
-      VALIDATOR_EXECUTOR_ISOLATION: rootless_dind
+      VALIDATOR_EXECUTOR_ISOLATION: privileged_dind
       VALIDATOR_STACK_UPDATER: ${VALIDATOR_STACK_AUTO_UPDATE:-false}
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
@@ -346,5 +332,5 @@ services:
 
 volumes:
   pylon-data:
-  sandbox-docker-rootless-data:
+  sandbox-docker-rootful-data:
   validator-update-bootstrap:

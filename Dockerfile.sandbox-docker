@@ -1,8 +1,6 @@
-FROM docker.io/library/docker:29-dind-rootless@sha256:212a9e782c7119fd6a212beaab6b7665a29b663d894d0f6201710c89575ad0ae
+FROM docker.io/library/docker:29-dind@sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515
 
-USER root
-RUN apk add --no-cache curl socat su-exec
-COPY --chmod=0755 scripts/sandbox-docker-entrypoint.sh /usr/local/bin/sandbox-docker-entrypoint
-COPY --chmod=0755 scripts/sandbox-docker-health-once.sh /usr/local/bin/sandbox-docker-health-once
+RUN apk add --no-cache curl socat
+COPY scripts/sandbox-docker-entrypoint.sh /usr/local/bin/sandbox-docker-entrypoint
 
 ENTRYPOINT ["sandbox-docker-entrypoint"]

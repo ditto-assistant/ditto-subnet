@@ -15,7 +15,6 @@ pytestmark = pytest.mark.integration
 
 ROOT = Path(__file__).parents[2]
 COMPOSE_WRAPPER = ROOT / "scripts/validator-compose.sh"
-APPARMOR_HELPER = ROOT / "scripts/validator-sandbox-apparmor.sh"
 
 
 FAKE_WRAPPER_DOCKER = r"""#!/usr/bin/env python3
@@ -135,97 +134,6 @@ def _compose_calls(capture: Path) -> list[list[str]]:
 
 def _built_revision_marker(env: dict[str, str]) -> Path:
     return Path(env["DITTO_VALIDATOR_UPDATE_STATE_DIR"]) / "dittobench-built-revision"
-
-
-def test_restricted_userns_requires_loaded_service_profile(tmp_path: Path) -> None:
-    profiles = tmp_path / "profiles"
-    profiles.write_text("")
-    command = f"""
-source {APPARMOR_HELPER!s}
-sysctl() {{ printf '1\\n'; }}
-configure_validator_sandbox_apparmor
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", command],
-        env={**os.environ, "DITTO_APPARMOR_PROFILES_PATH": str(profiles)},
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "install-validator-sandbox-apparmor.sh" in result.stderr
-
-
-def test_restricted_userns_selects_loaded_service_profile(tmp_path: Path) -> None:
-    profiles = tmp_path / "profiles"
-    profiles.write_text("ditto-rootless-dind (enforce)\n")
-    command = f"""
-source {APPARMOR_HELPER!s}
-sysctl() {{ printf '1\\n'; }}
-configure_validator_sandbox_apparmor
-printf '%s' "$DITTO_SANDBOX_APPARMOR_PROFILE"
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", command],
-        env={**os.environ, "DITTO_APPARMOR_PROFILES_PATH": str(profiles)},
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "ditto-rootless-dind"
-
-
-def test_restricted_userns_defers_unreadable_profile_check_to_docker(
-    tmp_path: Path,
-) -> None:
-    command = f"""
-source {APPARMOR_HELPER!s}
-sysctl() {{ printf '1\\n'; }}
-configure_validator_sandbox_apparmor
-printf '%s' "$DITTO_SANDBOX_APPARMOR_PROFILE"
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", command],
-        env={
-            **os.environ,
-            "DITTO_APPARMOR_PROFILES_PATH": str(tmp_path / "root-only-profiles"),
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "ditto-rootless-dind"
-
-
-def test_restricted_userns_defers_profile_read_error_to_docker(tmp_path: Path) -> None:
-    profiles = tmp_path / "profiles"
-    profiles.write_text("ditto-rootless-dind (enforce)\n")
-    command = f"""
-source {APPARMOR_HELPER!s}
-sysctl() {{ printf '1\\n'; }}
-grep() {{ return 2; }}
-configure_validator_sandbox_apparmor
-printf '%s' "$DITTO_SANDBOX_APPARMOR_PROFILE"
-"""
-
-    result = subprocess.run(
-        ["bash", "-c", command],
-        env={**os.environ, "DITTO_APPARMOR_PROFILES_PATH": str(profiles)},
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "ditto-rootless-dind"
 
 
 def test_compose_config_forwards_wallets_dir(tmp_path: Path) -> None:
