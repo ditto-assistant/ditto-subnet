@@ -46,6 +46,28 @@ def test_public_screener_dependency_needs_no_private_authentication() -> None:
         assert "insteadOf" not in text
 
 
+def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    relay_revision = workflow["env"]["MODEL_RELAY_COMPAT_REVISION"]
+    assert len(relay_revision) == 40
+    assert all(character in "0123456789abcdef" for character in relay_revision)
+
+    build = workflow["jobs"]["build-dittobench"]
+    source = _step(build["steps"], "Materialize the reviewed dittobench-api source")
+    relay = _step(
+        build["steps"], "Build and publish the retired relay compatibility index"
+    )
+
+    assert "model-relay-source" in source["run"]
+    assert "relay_compat_revision" in source["run"]
+    assert relay["with"]["context"] == "${{ runner.temp }}/model-relay-source"
+    assert relay["with"]["file"] == ("${{ runner.temp }}/model-relay-source/Dockerfile")
+    assert (
+        "${{ steps.dittobench-source.outputs.relay_compat_revision }}"
+        in relay["with"]["labels"]
+    )
+
+
 def test_validator_release_smokes_each_architecture_natively_before_promotion() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]

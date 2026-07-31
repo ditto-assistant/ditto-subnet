@@ -18,6 +18,11 @@ env:
   SANDBOX_DOCKER_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker
   DITTOBENCH_API_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-sandbox
   MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
+  # Frozen compat-2 updaters still require a relay-shaped image in their signed
+  # descriptor. Build that isolated shim from the final reviewed API revision
+  # that still contained the relay target; current API source intentionally does
+  # not carry or execute the retired validator-owned inference path.
+  MODEL_RELAY_COMPAT_REVISION: c0cac04970523326738cc704aa1bd60cd2623b22
   STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
   PYLON_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
   OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
@@ -215,6 +220,7 @@ jobs:
       id-token: write
     outputs:
       revision: ${{ steps.dittobench-source.outputs.revision }}
+      relay_compat_revision: ${{ steps.dittobench-source.outputs.relay_compat_revision }}
       scorer_digest: ${{ steps.dittobench-api.outputs.digest }}
       relay_digest: ${{ steps.model-relay.outputs.digest }}
     steps:
@@ -245,6 +251,17 @@ jobs:
           git -C "$RUNNER_TEMP/dittobench-source" checkout --quiet --detach "$revision"
           test -z "$(git -C "$RUNNER_TEMP/dittobench-source" status --porcelain)"
           printf 'revision=%s\n' "$revision" >>"$GITHUB_OUTPUT"
+
+          relay_revision="$MODEL_RELAY_COMPAT_REVISION"
+          [[ "$relay_revision" =~ ^[0-9a-f]{40}$ ]]
+          git -C "$RUNNER_TEMP/dittobench-source" cat-file -e "$relay_revision^{commit}"
+          git -C "$RUNNER_TEMP/dittobench-source" merge-base --is-ancestor \
+            "$relay_revision" origin/main
+          git -C "$RUNNER_TEMP/dittobench-source" worktree add --quiet --detach \
+            "$RUNNER_TEMP/model-relay-source" "$relay_revision"
+          grep -q '^FROM .* AS relay$' "$RUNNER_TEMP/model-relay-source/Dockerfile"
+          test -z "$(git -C "$RUNNER_TEMP/model-relay-source" status --porcelain)"
+          printf 'relay_compat_revision=%s\n' "$relay_revision" >>"$GITHUB_OUTPUT"
 
       - name: Set up the scorer toolchain
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -302,15 +319,15 @@ jobs:
         id: model-relay
         uses: useblacksmith/build-push-action@v2
         with:
-          context: ${{ runner.temp }}/dittobench-source
-          file: ${{ runner.temp }}/dittobench-source/Dockerfile
+          context: ${{ runner.temp }}/model-relay-source
+          file: ${{ runner.temp }}/model-relay-source/Dockerfile
           target: relay
           platforms: linux/amd64,linux/arm64
           push: true
           labels: |
             org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
+            org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.relay_compat_revision }}
             io.heyditto.validator.stack-version=${{ needs.release.outputs.version }}
             io.heyditto.validator.stack-revision=${{ needs.release.outputs.commit_sha }}
             io.heyditto.validator.stack-service=model-relay
@@ -378,6 +395,7 @@ jobs:
           VERSION: ${{ needs.release.outputs.version }}
           REVISION: ${{ needs.release.outputs.commit_sha }}
           DITTOBENCH_REVISION: ${{ needs.build-dittobench.outputs.revision }}
+          MODEL_RELAY_COMPAT_REVISION: ${{ needs.build-dittobench.outputs.relay_compat_revision }}
         run: |
           declare -A artifacts=(
             ["$VALIDATOR_REPOSITORY"]="${{ needs.build-validator.outputs.digest }}"
@@ -395,7 +413,7 @@ jobs:
             ["$VALIDATOR_REPOSITORY"]="$REVISION"
             ["$SANDBOX_DOCKER_REPOSITORY"]="$REVISION"
             ["$DITTOBENCH_API_REPOSITORY"]="$DITTOBENCH_REVISION"
-            ["$MODEL_RELAY_REPOSITORY"]="$DITTOBENCH_REVISION"
+            ["$MODEL_RELAY_REPOSITORY"]="$MODEL_RELAY_COMPAT_REVISION"
           )
           declare -A services=(
             ["$SANDBOX_DOCKER_REPOSITORY"]="sandbox-docker"
