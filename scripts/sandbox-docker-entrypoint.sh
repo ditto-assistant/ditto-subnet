@@ -64,8 +64,15 @@ mkdir -p "$runtime_dir"
 chown rootless:rootless "$runtime_dir"
 chmod 0700 "$runtime_dir"
 
+# Docker 29 defaults fresh daemons to the containerd image store, whose
+# externally reported image ID is a manifest digest. Screened artifacts retain
+# the portable Docker-save contract used by pre-0.42 validators and sign the
+# image-config digest instead. Keep the nested executor on the classic store so
+# every supported validator generation observes that same immutable identity.
+# This changes only the private named volume's storage backend; rootless uid,
+# egress, cgroup, and seccomp/AppArmor isolation remain unchanged.
 exec su-exec rootless env \
   HOME=/home/rootless \
   XDG_RUNTIME_DIR="$runtime_dir" \
   DOCKER_HOST="$DOCKER_HOST" \
-  dockerd-entrypoint.sh "$@"
+  dockerd-entrypoint.sh --feature containerd-snapshotter=false "$@"

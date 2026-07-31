@@ -152,6 +152,7 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     assert "docker builder prune --all --force" in entrypoint
     assert "docker volume prune --all --force" in entrypoint
     assert "sleep 21600" in entrypoint
+    assert "dockerd-entrypoint.sh --feature containerd-snapshotter=false" in entrypoint
 
 
 def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
