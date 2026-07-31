@@ -9,6 +9,8 @@ on:
   pull_request:
   push:
     branches: [main]
+permissions:
+  contents: read
 jobs:
   compose-config:
     runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404. Nonstandard GitHub runner label detected, changed to default Depot runner.
@@ -26,6 +28,8 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      - name: Enforce workflow security policy
+        run: python3 .github/scripts/check_workflow_security.py
       - name: Install pinned Docker Compose ${{ matrix.compose-version }}
         env:
           COMPOSE_VERSION: ${{ matrix.compose-version }}
