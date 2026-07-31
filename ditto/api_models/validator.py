@@ -1181,9 +1181,8 @@ class LedgerEntry(BaseModel):
                 "for this entry (bench_version >= 7). Populated only while the "
                 "platform's DITTO_EFFICIENCY_BONUS_FOLD_ENABLED flag is on; "
                 "absent otherwise so existing folds are byte-identical. "
-                "Advisory until the subnet's weight fold ships a consensus "
-                "change that consumes it — a validator must never fold this "
-                "field unilaterally."
+                "The weight fold applies it after the continual aggregate, "
+                "including paired shared-seed comparisons."
             ),
         ),
     ] = None
@@ -1194,9 +1193,10 @@ class LedgerEntry(BaseModel):
             ge=0.0,
             le=1.1,
             description=(
-                "composite * (1 + efficiency_bonus), the platform-side ranking "
-                "score with the frozen bonus applied. Additive-optional, gated "
-                "with efficiency_bonus; the signed composite is never modified."
+                "Platform-projected ranking score with the frozen bonus applied. "
+                "The validator independently derives the consensus value from "
+                "the continual evidence and efficiency_bonus; the signed "
+                "composite is never modified."
             ),
         ),
     ] = None

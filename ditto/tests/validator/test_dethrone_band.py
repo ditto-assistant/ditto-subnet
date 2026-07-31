@@ -42,6 +42,7 @@ def _e(
     quorum_scores: list[float] | None = None,
     wave_scores: dict[int, list[float]] | None = None,
     continual_method: str | None = None,
+    efficiency_bonus: float | None = None,
     bench_version: int | None = None,
     minutes: int = 0,
 ) -> Any:
@@ -72,6 +73,8 @@ def _e(
         ]
     if continual_method is not None:
         ns.continual_aggregate_method = continual_method
+    if efficiency_bonus is not None:
+        ns.efficiency_bonus = efficiency_bonus
     if bench_version is not None:
         ns.bench_version = bench_version
     return ns
@@ -397,6 +400,24 @@ class TestEffectiveComposite:
 
         assert _effective_composite(entry) == pytest.approx(0.75)
 
+    def test_efficiency_bonus_multiplies_the_continual_mean(self) -> None:
+        entry = _e(
+            "a",
+            0.8,
+            quorum_scores=[0.7, 0.8, 0.9],
+            wave_scores={10: [0.6], 20: [0.9]},
+            continual_method="mean_after_quorum",
+            efficiency_bonus=0.1,
+        )
+
+        assert _effective_composite(entry) == pytest.approx(0.78 * 1.1)
+
+    @pytest.mark.parametrize("bonus", [-0.1, 0.1001, float("nan")])
+    def test_invalid_efficiency_bonus_fails_closed(self, bonus: float) -> None:
+        assert _effective_composite(
+            _e("a", 0.73, efficiency_bonus=bonus)
+        ) == pytest.approx(0.73)
+
 
 class TestBeatsWithConfirmations:
     def test_a_lucky_single_seed_lead_does_not_dethrone_on_the_median(self) -> None:
@@ -413,6 +434,25 @@ class TestBeatsWithConfirmations:
         chal = _e("chal", 0.90, confirmations=[0.90, 0.88, 0.92], minutes=1)
         # median(chal)=0.90 vs median(champ)=0.80, lead 0.10 > flat 0.05 → dethrone.
         assert _beats(chal, champ, 0.05, 0.0)
+
+    def test_efficiency_bonus_applies_to_shared_seed_comparisons(self) -> None:
+        champ = _e(
+            "champ",
+            0.80,
+            confirmations=[0.80, 0.80, 0.80],
+            seeds=[1, 2, 3],
+            minutes=0,
+        )
+        chal = _e(
+            "chal",
+            0.78,
+            confirmations=[0.78, 0.78, 0.78],
+            seeds=[1, 2, 3],
+            efficiency_bonus=0.1,
+            minutes=1,
+        )
+
+        assert _beats(chal, champ, 0.05, 1.64)
 
 
 class TestBeats:

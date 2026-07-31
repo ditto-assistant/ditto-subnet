@@ -308,8 +308,26 @@ def _entry_confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
     return {seed: _median(values) for seed, values in grouped.items()}
 
 
-def _effective_composite(entry: LedgerEntry) -> float:
-    """Return the platform-activated continual score used by the weight fold.
+def _efficiency_multiplier(entry: LedgerEntry) -> float:
+    """Return the bounded, platform-awarded relative-efficiency multiplier.
+
+    The platform omits ``efficiency_bonus`` until the operator activates the
+    fold.  Missing or malformed values therefore preserve the pre-bonus fold
+    byte-for-byte; a valid frozen bonus is strictly upside and capped at 10%.
+    """
+    bonus = getattr(entry, "efficiency_bonus", None)
+    if (
+        isinstance(bonus, bool)
+        or not isinstance(bonus, (int, float))
+        or not math.isfinite(bonus)
+        or not 0.0 <= bonus <= 0.1
+    ):
+        return 1.0
+    return 1.0 + float(bonus)
+
+
+def _continual_composite(entry: LedgerEntry) -> float:
+    """Return the platform-activated continual score before efficiency.
 
     Protocol v14 starts with the three signed quorum observations and, after a
     per-agent seed result is accepted, appends exactly one median aggregate for
@@ -349,6 +367,18 @@ def _effective_composite(entry: LedgerEntry) -> float:
     if vals is None or len(vals) < 2:
         return entry.composite
     return _median(vals)
+
+
+def _effective_composite(entry: LedgerEntry) -> float:
+    """Return the score used by the weight fold.
+
+    Continual retest evidence is aggregated first.  When the platform exposes
+    a frozen relative-efficiency bonus, that bonus then multiplies the same
+    continual score used everywhere else in KOTH.  This ordering lets the two
+    independently activated mechanisms compose without rewriting signed
+    validator scores or reviving the legacy pre-v7 token penalty.
+    """
+    return _continual_composite(entry) * _efficiency_multiplier(entry)
 
 
 def _entry_stderr(entry: LedgerEntry) -> float | None:
@@ -522,10 +552,15 @@ def _paired_dethrone(
     common = sorted(set(chall_map) & set(champ_map))
     if len(common) < 2:
         return None
-    diffs = [chall_map[s] - champ_map[s] for s in common]
+    chall_multiplier = _efficiency_multiplier(challenger)
+    champ_multiplier = _efficiency_multiplier(champion)
+    diffs = [
+        chall_map[s] * chall_multiplier - champ_map[s] * champ_multiplier
+        for s in common
+    ]
     n = len(diffs)
     mean_diff = sum(diffs) / n
-    champ_ref = sum(champ_map[s] for s in common) / n
+    champ_ref = sum(champ_map[s] * champ_multiplier for s in common) / n
     var = sum((d - mean_diff) ** 2 for d in diffs) / (n - 1)
     se_diff = math.sqrt(var / n)
     return mean_diff, champ_ref, se_diff
@@ -568,6 +603,8 @@ def _beats(
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)
         if se_c is not None and se_champ is not None:
+            se_c *= _efficiency_multiplier(challenger)
+            se_champ *= _efficiency_multiplier(champion)
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
