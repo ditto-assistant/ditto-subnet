@@ -612,6 +612,12 @@ class ValidatorWorker:
             # which is what makes the wakeup impossible to miss: a sibling that
             # has not yet decremented is a sibling whose ``set`` is still to come.
             lease_finished = asyncio.Event()
+            # Only one idle slot needs to fan out the host-level continual
+            # retest lane.  Platform claims remain slot-bound, so that one
+            # dispatcher can fill every currently free slot while ordinary
+            # sibling leases continue running.  Other idle slot loops keep
+            # polling the canonical queue instead of lining up behind it.
+            idle_retest_dispatch = asyncio.Lock()
 
             async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
                 nonlocal claimed, running
@@ -649,6 +655,22 @@ class ValidatorWorker:
                                 # sweep and let the ordinary sweep cadence bring
                                 # the whole pool back at once.
                                 break
+                            # Canonical work was checked first for this slot.
+                            # Use the otherwise-idle gap for continual retests
+                            # now, rather than waiting for every sibling's
+                            # (potentially ninety-minute) ordinary lease to
+                            # finish before reaching the post-gather lane.
+                            #
+                            # The lane itself asks the platform for durable,
+                            # per-slot leases.  A single host-level dispatcher
+                            # is therefore enough to fan out across all free
+                            # slots without duplicate local fanouts.
+                            if not idle_retest_dispatch.locked():
+                                async with idle_retest_dispatch:
+                                    await self._run_top5_confirmation_lane(
+                                        stop_requested=stop_requested,
+                                        drain_requested=drain_requested,
+                                    )
                             # A sibling still holds a lease, and ``asyncio.gather``
                             # below does not return until it does -- up to the
                             # full ninety-minute lease. Breaking here would retire

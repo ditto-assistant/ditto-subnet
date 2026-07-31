@@ -972,6 +972,68 @@ class TestRunOnce:
         assert outcome.queue_depth == 2
         assert pending == {}
 
+    async def test_idle_slot_dispatches_retests_while_sibling_holds_canonical_lease(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Spare slots must not wait for the whole canonical sweep to drain."""
+        long_job = _job("5MinerA" + "x" * 41, slot_id="slot-0")
+        claimed = False
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            nonlocal claimed
+            if slot_id == "slot-0" and not claimed:
+                claimed = True
+                return long_job
+            return None
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 2
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 2
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        monkeypatch.setattr(
+            worker_mod, "_IDLE_SLOT_REPOLL_SECONDS", 0.01, raising=False
+        )
+        canonical_started = asyncio.Event()
+        release_canonical = asyncio.Event()
+        retest_dispatched = asyncio.Event()
+        retest_calls = 0
+
+        async def score(_job: JobResponse) -> ScoreReport:
+            canonical_started.set()
+            await release_canonical.wait()
+            return _report("run-slot-0", 0.7)
+
+        async def run_retests(**_kwargs: object) -> None:
+            nonlocal retest_calls
+            retest_calls += 1
+            # This must happen while slot-0 still owns its canonical lease.
+            if retest_calls == 1:
+                assert not release_canonical.is_set()
+                retest_dispatched.set()
+
+        monkeypatch.setattr(worker, "_score_job", score)
+        monkeypatch.setattr(worker, "_run_top5_confirmation_lane", run_retests)
+
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.wait_for(canonical_started.wait(), timeout=2)
+        await asyncio.wait_for(retest_dispatched.wait(), timeout=2)
+        release_canonical.set()
+        outcome = await asyncio.wait_for(sweep, timeout=5)
+
+        assert outcome.queue_depth == 1
+        # Every retest dispatch was preceded by an empty canonical poll; the
+        # ordinary queue therefore keeps strict first refusal on spare slots.
+        assert platform.request_job.await_count >= 2
+
     async def test_idle_slots_end_the_sweep_when_nothing_is_running(self) -> None:
         """With no lease in flight an empty poll still ends the sweep at once.
 
