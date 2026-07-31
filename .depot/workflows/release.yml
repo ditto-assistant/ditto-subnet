@@ -34,7 +34,7 @@ env:
 jobs:
   release:
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     outputs:
@@ -44,7 +44,7 @@ jobs:
       commit_sha: ${{ steps.semantic-release.outputs.commit_sha }}
     steps:
       - name: Check out the merged commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
@@ -65,7 +65,7 @@ jobs:
         run: |
           if ! git tag --list 'v[0-9]*' | grep -q .; then
             release_setup_commit=$(git log --diff-filter=A --format=%H -- \
-              .github/workflows/release.yml | tail -1)
+              .depot/workflows/release.yml | tail -1)
             baseline_commit=$(git rev-parse "${release_setup_commit}^")
             git tag --annotate v0.1.0 "$baseline_commit" \
               --message "Ditto Subnet v0.1.0"
@@ -89,7 +89,7 @@ jobs:
   verify-source:
     needs: release
     if: needs.release.outputs.released == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
@@ -121,7 +121,7 @@ jobs:
   build-validator:
     needs: release
     if: needs.release.outputs.released == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       packages: write
@@ -139,7 +139,7 @@ jobs:
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -150,7 +150,7 @@ jobs:
 
       - name: Build and publish the validator index
         id: validator
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: .
           file: Dockerfile
@@ -167,7 +167,7 @@ jobs:
   build-sandbox-docker:
     needs: release
     if: needs.release.outputs.released == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       packages: write
@@ -185,7 +185,7 @@ jobs:
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -196,7 +196,7 @@ jobs:
 
       - name: Build and publish the sandbox daemon index
         id: sandbox-docker
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: .
           file: Dockerfile.sandbox-docker
@@ -213,7 +213,7 @@ jobs:
   build-dittobench:
     needs: release
     if: needs.release.outputs.released == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       packages: write
@@ -277,7 +277,7 @@ jobs:
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -288,7 +288,7 @@ jobs:
 
       - name: Build and publish the scorer index
         id: dittobench-api
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: ${{ runner.temp }}/dittobench-source
           file: ${{ runner.temp }}/dittobench-source/Dockerfile
@@ -317,7 +317,7 @@ jobs:
       # scorer and validator; it is not part of the active inference path.
       - name: Build and publish the retired relay compatibility index
         id: model-relay
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: ${{ runner.temp }}/model-relay-source
           file: ${{ runner.temp }}/model-relay-source/Dockerfile
@@ -352,7 +352,7 @@ jobs:
       - build-sandbox-docker
       - build-dittobench
     if: needs.release.outputs.released == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       packages: write
@@ -382,7 +382,7 @@ jobs:
         run: uv sync --locked --group dev
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -514,7 +514,7 @@ jobs:
 
       - name: Build and publish the immutable stack descriptor
         id: stack
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: .
           file: Dockerfile.stack-release
@@ -567,13 +567,13 @@ jobs:
   smoke-validator-arm64:
     needs: [release, build-validator]
     if: needs.release.outputs.released == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404-arm
     permissions:
       contents: read
       packages: read
     steps:
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -619,13 +619,13 @@ jobs:
   promote-stack-release:
     needs: [release, assemble-stack, smoke-validator-arm64]
     if: needs.release.outputs.released == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: depot-ubuntu-latest # was: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       packages: write
     steps:
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
