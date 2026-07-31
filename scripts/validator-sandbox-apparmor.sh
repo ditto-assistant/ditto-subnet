@@ -9,7 +9,11 @@ configure_validator_sandbox_apparmor() {
   fi
 
   profiles="${DITTO_APPARMOR_PROFILES_PATH:-/sys/kernel/security/apparmor/profiles}"
-  if [ ! -r "$profiles" ] || ! grep -q '^ditto-rootless-dind ' "$profiles"; then
+  # Unprivileged systemd services cannot read the kernel profile list on some
+  # hardened hosts.  When it is readable, keep the early diagnostic; when it
+  # is not, select the required profile and let the Docker daemon enforce that
+  # it is actually loaded when the sandbox container is created.
+  if [ -r "$profiles" ] && ! grep -q '^ditto-rootless-dind ' "$profiles"; then
     printf '%s\n' \
       'error: restricted unprivileged user namespaces require the ditto-rootless-dind AppArmor profile' \
       'run: sudo ./scripts/install-validator-sandbox-apparmor.sh' >&2
