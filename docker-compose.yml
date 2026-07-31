@@ -77,7 +77,7 @@ services:
     # retries them; it cannot consume the validator wallet/API containers or the
     # rest of the host.
     mem_limit: ${VALIDATOR_SANDBOX_EXECUTOR_MEMORY_LIMIT:-32g}
-    cpus: ${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-16}
+    cpus: ${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-0}
     pids_limit: ${VALIDATOR_SANDBOX_EXECUTOR_PIDS_LIMIT:-8192}
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375

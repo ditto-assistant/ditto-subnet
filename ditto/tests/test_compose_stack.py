@@ -63,7 +63,10 @@ def test_rootless_executor_has_an_authoritative_outer_resource_cgroup() -> None:
     # boundary; inner per-run flags remain useful on stronger executors but are
     # not treated as the only guard here.
     assert sandbox["mem_limit"] == "${VALIDATOR_SANDBOX_EXECUTOR_MEMORY_LIMIT:-32g}"
-    assert sandbox["cpus"] == "${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-16}"
+    # Zero is Docker's unlimited value: the default uses the host's available
+    # CPUs instead of requesting more CPUs than a conforming host may have.
+    # Operators may still set an explicit outer cgroup cap.
+    assert sandbox["cpus"] == "${VALIDATOR_SANDBOX_EXECUTOR_CPUS:-0}"
     assert sandbox["pids_limit"] == ("${VALIDATOR_SANDBOX_EXECUTOR_PIDS_LIMIT:-8192}")
 
 
