@@ -95,9 +95,9 @@ cat >"$TIMER" <<'EOF'
 Description=Poll for compatible complete Ditto validator-stack releases
 
 [Timer]
-OnBootSec=15m
-OnUnitInactiveSec=15m
-RandomizedDelaySec=5m
+OnBootSec=5m
+OnUnitInactiveSec=5m
+RandomizedDelaySec=1m
 Persistent=true
 Unit=ditto-validator-stack-auto-update.service
 

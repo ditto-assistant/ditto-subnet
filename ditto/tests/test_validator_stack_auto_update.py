@@ -458,6 +458,9 @@ def test_stack_bootstrap_persists_registry_wallet_and_signature_context() -> Non
     assert 'find "$sigstore_dir" -type d -exec chmod 0700 {} +' in installer
     assert 'find "$sigstore_dir" -type f -exec chmod 0600 {} +' in installer
     assert "VALIDATOR_STACK_AUTO_UPDATE=true" in installer
+    assert "OnBootSec=5m" in installer
+    assert "OnUnitInactiveSec=5m" in installer
+    assert "RandomizedDelaySec=1m" in installer
     assert "DITTO_BITTENSOR_WALLETS_DIR" in compose
     assert (
         "managed stack mutation must run through validator-stack-auto-update.sh"
