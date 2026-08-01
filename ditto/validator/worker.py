@@ -152,6 +152,12 @@ _ACTIVE_HEARTBEAT_SECONDS = 10.0
 _PROGRESS_UPDATE_SECONDS = 5.0
 # Active ticket work must never wait on the platform client's normal HTTP timeout.
 _ACTIVE_TELEMETRY_TIMEOUT_SECONDS = 2.0
+# The caller stops waiting after the short budget above, but that must not cancel
+# a signed snapshot already on its way to the platform.  Capability probes and a
+# burst of sibling slots can legitimately take longer than two seconds.  Keep
+# the send alive in the background under this separate hard bound so telemetry
+# remains fail-open without leaking a hung task forever.
+_ACTIVE_TELEMETRY_HARD_TIMEOUT_SECONDS = 30.0
 # Hard bound on the signed ticket hand-back. It is reached from the lease-abort
 # path with only ``LEASE_REPORT_MARGIN_SECONDS`` (120s) left, and it shares that
 # margin with the scorer-run cancellation (``_CANCEL_TIMEOUT_SECONDS``, 15s):
@@ -381,6 +387,7 @@ class ValidatorWorker:
         self._pending_heartbeat_state: ValidatorRuntimeState | None = None
         self._pending_heartbeat_progress: dict[str, BenchmarkProgress] = {}
         self._coalesced_heartbeat_task: asyncio.Task[bool] | None = None
+        self._background_heartbeat_tasks: set[asyncio.Task[bool]] = set()
         self._platform_accepted = False
         # Cooperative updater drains are acknowledged only after both the
         # independent scoring and weight loops have finished their current
@@ -1205,17 +1212,66 @@ class ValidatorWorker:
         """Attempt one active heartbeat and remember its aggregate progress."""
         sent_progress = self._benchmark_progress
         active_snapshot = (self._active_agent_id, sent_progress)
-        try:
-            delivered = await asyncio.wait_for(
+        task = asyncio.create_task(
+            asyncio.wait_for(
                 self._report_heartbeat(
                     "running_benchmark", active_snapshot=active_snapshot
                 ),
+                timeout=_ACTIVE_TELEMETRY_HARD_TIMEOUT_SECONDS,
+            ),
+            name="validator-active-heartbeat",
+        )
+        try:
+            delivered = await asyncio.wait_for(
+                asyncio.shield(task),
                 timeout=_ACTIVE_TELEMETRY_TIMEOUT_SECONDS,
             )
         except TimeoutError:
-            logger.warning("validator progress heartbeat timed out; scoring continues")
+            # ``wait_for`` used to cancel the send here. During a parallel claim
+            # burst the heartbeat lock serializes siblings, so a healthy send
+            # could cross the two-second caller budget before it even reached
+            # the network. Its first ``preparing`` snapshot then vanished until
+            # the scorer's later progress loop started, making occupied slots
+            # read as "Benchmark progress not reported". Detach the bounded task
+            # instead: scoring continues now and the all-slot snapshot still has
+            # a chance to land.
+            self._background_heartbeat_tasks.add(task)
+            task.add_done_callback(self._finish_background_heartbeat)
+            logger.warning(
+                "validator progress heartbeat exceeded caller budget; "
+                "delivery continues in background"
+            )
             delivered = False
+        except asyncio.CancelledError:
+            # Worker shutdown is different from the caller's telemetry budget:
+            # do not leave a detached send behind when the owning task is gone.
+            task.cancel()
+            raise
         return delivered
+
+    def _finish_background_heartbeat(self, task: asyncio.Task[bool]) -> None:
+        """Consume one detached heartbeat result and release its strong ref."""
+        self._background_heartbeat_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            delivered = task.result()
+        except TimeoutError:
+            logger.warning(
+                "validator progress heartbeat reached the background hard "
+                "timeout; scoring continues"
+            )
+        except Exception as error:  # noqa: BLE001 - telemetry remains fail-open
+            logger.warning(
+                "validator background progress heartbeat failed; scoring continues: %s",
+                error,
+            )
+        else:
+            if not delivered:
+                logger.warning(
+                    "validator background progress heartbeat was not accepted; "
+                    "scoring continues"
+                )
 
     async def _report_heartbeat_bounded(
         self,

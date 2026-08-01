@@ -2635,6 +2635,7 @@ class TestRunOnce:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(worker_mod, "_ACTIVE_TELEMETRY_TIMEOUT_SECONDS", 0.001)
+        monkeypatch.setattr(worker_mod, "_ACTIVE_TELEMETRY_HARD_TIMEOUT_SECONDS", 0.01)
         job = _job("5MinerA" + "x" * 41)
         platform = _platform_with_ledger(jobs=[], ledger=[])
 
@@ -2656,6 +2657,54 @@ class TestRunOnce:
 
         assert report.composite == 0.9
         platform.submit_score.assert_awaited_once()
+        # Detached sends remain hard-bounded even when the transport never
+        # returns, so the worker does not accumulate telemetry tasks.
+        await asyncio.sleep(0.02)
+        assert not worker._background_heartbeat_tasks
+
+    async def test_slow_preparing_heartbeat_finishes_after_caller_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A busy heartbeat lane must not erase the first slot snapshot."""
+        monkeypatch.setattr(worker_mod, "_ACTIVE_TELEMETRY_TIMEOUT_SECONDS", 0.001)
+        monkeypatch.setattr(worker_mod, "_ACTIVE_TELEMETRY_HARD_TIMEOUT_SECONDS", 1.0)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        send_started = asyncio.Event()
+        allow_send = asyncio.Event()
+        accepted = ValidatorHeartbeatResponse(accepted=True, seen_at=datetime.now(UTC))
+
+        async def slow_send(_: object) -> ValidatorHeartbeatResponse:
+            send_started.set()
+            await allow_send.wait()
+            return accepted
+
+        platform.submit_heartbeat = AsyncMock(side_effect=slow_send)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        agent_id = uuid4()
+        deadline = datetime.now(UTC) + timedelta(hours=1)
+
+        await worker._begin_active_ticket(agent_id, deadline)
+
+        await send_started.wait()
+        assert worker._background_heartbeat_tasks
+        request = platform.submit_heartbeat.await_args.args[0]
+        assert request.active_agent_id == agent_id
+        assert request.benchmark_progress is not None
+        assert request.benchmark_progress.stage == "preparing"
+
+        allow_send.set()
+        for _ in range(100):
+            if not worker._background_heartbeat_tasks:
+                break
+            await asyncio.sleep(0)
+        assert not worker._background_heartbeat_tasks
+        assert worker._last_progress_heartbeat_monotonic is not None
 
     async def test_unticketed_rescore_has_no_agent_or_progress(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
