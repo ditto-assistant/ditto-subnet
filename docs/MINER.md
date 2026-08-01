@@ -64,10 +64,14 @@ To submit, you need:
 - Python 3.11+ and [`uv`](https://docs.astral.sh/uv/)
 - a funded Bittensor coldkey
 - a hotkey registered on Finney netuid 118
-- enough TAO for the dynamic evaluation fee
+- enough TAO for the platform-controlled evaluation fee (currently 0.04 TAO,
+  or 40,000,000 rao)
 
 The coldkey pays the fee. The hotkey signs the artifact and receives incentive.
-Never put wallet secrets in the build context.
+The fee is configured in TAO through Backroom. TAO/USD pricing is recorded only
+for internal revenue reporting; it neither determines the amount due nor takes
+part in payment or admission validation. Never put wallet secrets in the build
+context.
 
 ## Install the submission CLI
 
@@ -106,19 +110,23 @@ uv run ditto --network finney upload \
   --hotkey default
 ```
 
-The CLI runs preflight and obtains a short-lived platform admission reservation
-before it displays pricing or sends payment. This makes the owner cooldown and
-concurrent submissions fail before funds move. It then asks for confirmation,
-pays on chain, uploads the signed archive, and prints the agent ID. Use `-y`
-only when automation is intended to accept the live fee without an interactive
-confirmation.
+The CLI runs preflight and obtains a platform admission reservation before it
+displays pricing or sends payment. An unpaid reservation gives that coldkey an
+exclusive submission slot for 15 minutes, preventing concurrent attempts from
+sending multiple transfers. If no payment is finalized, a new attempt may
+replace the abandoned reservation after those 15 minutes. It then asks for
+confirmation, pays on chain, uploads the signed archive, and prints the agent
+ID. Use `-y` only when automation is intended to accept the live TAO fee without
+an interactive confirmation.
 
 The CLI saves a finalized payment proof locally before uploading and retries
 short-lived gateway and service failures automatically. If every attempt fails,
 run the same command again with the same local tarball, hotkey, and agent name;
-the CLI detects the pending proof and does not submit another transfer. It
-stores only the proof and a hash of the upload identity—never tar contents,
-source paths, or an artifact URL.
+the CLI detects the pending proof and does not submit another transfer. The
+platform keeps that finalized proof recoverable for the same bound upload for
+24 hours. This 24-hour window is how long the payment may be reused, not how
+long the coldkey is blocked. The CLI stores only the proof and a hash of the
+upload identity—never tar contents, source paths, or an artifact URL.
 
 For a payment made by an older CLI, or when moving recovery to another machine,
 use the printed proof (`block_hash`, `block_number`, `extrinsic_index`):
@@ -134,13 +142,18 @@ uv run ditto --network finney upload \
   --payment-extrinsic-index 7
 ```
 
-All three recovery flags are required together. The proof is single-use and
-bound to the authenticated artifact; an exact retry returns the original agent
-ID if the first response was lost. Never run a normal upload merely to recover
-from a post-payment error, because that would submit a second transfer.
-Recovery still obtains a fresh admission reservation. If the platform reports a
-cooldown, wait until its exact UTC retry time and rerun the same recovery
-command; the existing proof remains reusable and no new transfer is sent.
+All three recovery flags are required together. The proof may be presented
+again during recovery, but it authorizes only its bound, authenticated upload;
+an exact retry returns the original agent ID if the first response was lost.
+Recovery obtains usable admission immediately during the 24-hour payment
+window, even when the coldkey would otherwise be in a submission cooldown, and
+does not send a new transfer.
+
+A separate owner submission cooldown can still apply after a genuinely
+completed upload. It prevents the same coldkey from paying for a distinct new
+submission until the platform's exact UTC retry time. Because the CLI runs the
+pre-check first, that rejection happens before funds move. It does not delay
+recovery of the already-paid upload described above.
 
 ## Track your submission
 
@@ -412,8 +425,10 @@ Minted attestations expire, so submit it the same day or mint a fresh one.
 
 ## Common questions
 
-**How much does evaluation cost?** The fee is dynamic. The CLI fetches and shows
-the exact TAO amount before confirmation.
+**How much does evaluation cost?** The Backroom-controlled fee is denominated in
+TAO and is currently **0.04 TAO (40,000,000 rao)**. The CLI fetches and shows
+the authoritative TAO amount before confirmation. TAO/USD pricing is used only
+for internal revenue reporting and cannot change whether a payment is accepted.
 
 **How long does scoring take?** Screening and a full benchmark both involve
 container work. Expect minutes to hours depending on queue and build time.
