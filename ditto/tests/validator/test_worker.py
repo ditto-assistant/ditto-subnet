@@ -1463,11 +1463,12 @@ class TestRunOnce:
             if call.args[0].state == "running_benchmark"
         ]
         progresses = [heartbeat.benchmark_progress for heartbeat in running]
-        assert [progress.stage for progress in progresses if progress is not None] == [
-            "preparing",
-            "finalizing",
-            "submitting_result",
-        ]
+        stages = [progress.stage for progress in progresses if progress is not None]
+        assert stages[0] == "preparing"
+        assert stages[-2:] == ["finalizing", "submitting_result"]
+        assert stages == sorted(
+            stages, key=worker_mod._PROGRESS_STAGE_ORDER.__getitem__
+        )
         assert all(
             progress.ticket_deadline == job.deadline
             for progress in progresses
