@@ -1,0 +1,144 @@
+
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #0b0d0c;
+  color: #f3f6f1;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --ink: #0b0d0c;
+  --sidebar: #0f1210;
+  --panel: #131714;
+  --panel-raised: #191e1a;
+  --panel-soft: #101310;
+  --line: #303631;
+  --line-strong: #434b45;
+  --muted: #a5afa9;
+  --muted-strong: #c6cec9;
+  --acid: #ccf56a;
+  --acid-hover: #d9ff83;
+  --acid-dim: #202a17;
+  --amber: #f3bc63;
+  --amber-dim: #2a2114;
+  --red: #ff8178;
+  --red-dim: #2b1716;
+  --cyan: #80d4ee;
+  --cyan-dim: #15262c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--ink);
+  color: #f3f6f1;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  outline: none;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  box-shadow: 0 0 0 2px var(--ink), 0 0 0 4px var(--acid);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: var(--acid);
+  color: var(--ink);
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.84);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+.summary-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.summary-strip > * + * {
+  border-left: 1px solid var(--line);
+}
+
+.scrollbar-thin {
+  scrollbar-color: #39413e transparent;
+  scrollbar-width: thin;
+}
+
+@media (max-width: 767px) {
+  .summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summary-strip > * + * {
+    border-left: 0;
+  }
+
+  .summary-strip > :nth-child(even) {
+    border-left: 1px solid var(--line);
+  }
+
+  .summary-strip > :nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

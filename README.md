@@ -27,6 +27,7 @@ engine. Other public Ditto stack components currently live in:
 - `services/dittobench-api/`: the Go scorer used by validators and hosted practice.
 - `services/screener-orchestrator/`: Targon-first screener capacity and build control.
 - `apps/platform/`: the subnet API, durable queue, dashboard, and control plane.
+- `apps/backroom/`: the public-source SN118 operations console.
 - `workers/screener/`: the provider-neutral screening worker runtime.
 - `packages/ditto-screening-protocol/`: shared screening wire and signing contract.
 
