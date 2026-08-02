@@ -1,0 +1,347 @@
+"""Operator-tunable admission policy for the hosted v7 inference lanes.
+
+This board governs the **hosted** embedding route
+(``perplexity/pplx-embed-v1-0.6b`` through the platform proxy) plus the two
+per-grant chat allowances: the request budget and the token budget.
+
+* The chat lane's **concurrency and rate** limits keep their boot-time config.
+  They were never sized against a local resource, they are already 8/24/72, and
+  they are not what is throttling a v7 run.
+* The chat lane's **request and token budgets** are here because they are
+  per-lease resource allowances, not rates. See ``chat_request_budget`` and
+  ``chat_token_budget`` for why each moved.
+* The **local Ollama** lane (bench_version 2-6, one container per validator
+  host) is not reachable from here at all. dittobench-api #93 made v7 bypass it
+  (``inference_broker.go``: ``if benchVersion < 7 { acquire b.embeddingSlots }``),
+  and ``DITTOBENCH_MAX_CONCURRENT_MEMORY_PHASES`` still pins it at one. Nothing
+  in this module can widen it.
+
+Why the shipped defaults are much larger than the values they replace:
+
+The old numbers (1 / 8 / 32) were sized when v7 embeddings still ran against
+that local Ollama container -- a scarce, host-local, single-tenant resource. The
+embedding route is now a hosted, network-bound provider call, so per-ticket
+serialisation is protecting nothing. Embeddings are roughly 63% of a v7 run's
+~1,067 inference requests (671 of them), and at ``per_ticket = 1`` every one of
+them is strictly serial.
+
+The defaults below are chosen so the **validator** is the binding limit, not the
+platform: dittobench-api admits 8 concurrent embeddings per run, so a per-ticket
+ceiling of 12 is pure headroom that is never reached in normal operation. That
+ordering is intentional. A limit that binds at the platform costs a network
+round trip to discover, while the same limit enforced in the broker is a local
+semaphore -- and, until the fleet carries a capacity-aware build, a platform
+decline is the more expensive way to find out.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# The shipped values. Every one of these is a raise -- there is no configuration
+# of this board that reproduces the old serialised behaviour by default, because
+# a knob whose default is the old value is a knob nobody turns.
+DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY = 12
+DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY = 48
+DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY = 96
+
+# Ceilings, not recommendations. 128 is the same bound `check_config` already
+# enforces on the boot-time embedding limits, kept deliberately identical so the
+# board can never accept a value the boot check would have rejected. It exists
+# because a fat-fingered revision must not point the whole fleet at a number
+# that saturates the admission path (see `ditto/db/queries/inference.py`: a
+# reservation no longer serialises fleet-wide, but it still takes a grant-row
+# `FOR UPDATE` plus the cross-grant admission aggregates on every call).
+#
+# THESE STAY AT 128, AND THE REASON IS MEASURED RATHER THAN CAUTIOUS.
+#
+# The standing hypothesis was that embedding serialisation is what makes a v7
+# run take 62-71 minutes, and that the fix is a bigger ceiling. Reconstructing
+# in-flight intervals from `inference_requests` over 12h of production
+# (start/complete event stream, running sum) says otherwise, decisively:
+#
+#   * peak in-flight embeddings FLEET-WIDE:            14   (ceiling 128)
+#   * p99 in-flight fleet-wide:                         6
+#   * p50 in-flight fleet-wide:                         1
+#   * peak in-flight for any single GRANT:              8   (ceiling 128)
+#
+# The per-grant peak of exactly 8 is not a coincidence and not a platform
+# effect: it is dittobench-api's own per-run embedding semaphore, described at
+# the top of this module. The validator never asks for a ninth slot, so the
+# per-ticket ceiling has never once bound -- it is already 16x the largest
+# demand the fleet is capable of expressing. A ceiling above 128 would widen a
+# valve that nothing is pressing against.
+#
+# Nor is the wait large enough to matter. Summed embedding service time for the
+# heaviest embedding grant in 72h (2,627 calls) is 242 seconds against a
+# 742-second grant span -- an achieved embedding concurrency of 0.33, i.e. no
+# embedding is in flight at all for two thirds of the run. Driving that to zero
+# saves ~4 minutes of a 62-71 minute run, and only if the run were blocked on
+# it, which the 0.33 says it is not.
+#
+# The provider is not the constraint either, and this is the measurement that
+# rules out "raise it and see". Across 24h, p50 embedding latency against our
+# own offered load:
+#
+#   2.07 req/s -> 75 ms      1.34 req/s -> 129 ms     0.20 req/s -> 104 ms
+#   2.06 req/s -> 73 ms      0.99 req/s -> 153 ms     0.18 req/s -> 112 ms
+#
+# Latency is flat-to-INVERSE in our throughput over a 10x range: the busiest
+# hours are the fastest. Latency excursions are uncorrelated with our load, so
+# they are provider-side variance we cannot schedule around. (Latency does rise
+# with observed in-flight count -- 76 ms at 1, 129 ms at 12 -- but that is
+# Little's law read backwards: slow provider periods CAUSE requests to overlap.
+# The throughput series above is the same question without the confound.)
+#
+# What per-agent latency differences actually track is payload size, not
+# queueing: <2000 prompt tokens p50 77 ms, >=2000 p50 302 ms.
+#
+# So the honest ordering of binding constraints for embeddings today is
+# (1) the broker's own 8-slot per-run semaphore, in ditto-subnet and not
+# reachable from here, (2) provider latency variance, and (3) nothing else
+# close. Raising these numbers cannot move any of them; it can only queue more
+# work deeper into a provider that is already answering in 75 ms.
+#
+# `ditto_inference_admission_at_capacity_total{lane="embedding"}` now exports
+# this directly. Before raising a ceiling, look at that counter: if it is zero,
+# the ceiling is not what is slow.
+MAX_EMBEDDING_PER_TICKET_CONCURRENCY = 128
+MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY = 128
+MAX_EMBEDDING_GLOBAL_CONCURRENCY = 128
+
+# The chat request budget, sized against the observed distribution rather than
+# against the round number it replaces (1024, which was never justified against
+# a real run).
+#
+#   * a typical v7 agent spends ~1.25 chat requests per check, ~355 per run
+#   * Jupiter and KOTH_v7_1 spend ~3.85 per check, ~1090 per run
+#   * a run is 279-283 checks depending on the dataset
+#
+# 1024 sat *below* the heaviest observed strategy, so those agents exhausted
+# around check 266 and had every remaining call refused -- a resource limit
+# behaving as a run failure. 8192 is ~23x the median run, ~7.5x the heaviest
+# run observed, and ~29 requests per check at 283 checks. It is a real raise
+# (8x) rather than a nudge, which is the point: a ceiling that a legitimate
+# strategy can reach by being thorough is a ceiling in the wrong place.
+DEFAULT_CHAT_REQUEST_BUDGET = 8192
+
+# The ceiling is 2x the default, not unbounded. The request budget is not the
+# only thing bounding a grant's spend -- ``chat_token_budget`` is the other, and
+# the two are now deliberately sized so that neither is vestigial (see below).
+# Keeping a finite request ceiling matters regardless: it is the bound that
+# survives a pathological loop of tiny requests, which the token budget would
+# absorb slowly and the concurrency board would not catch at all.
+MAX_CHAT_REQUEST_BUDGET = 16384
+
+# The chat *token* budget, which is what actually ended the runs #473 set out to
+# save. #473 raised the request budget to 8192 and the same agents kept failing,
+# because the request count was never the binding allowance:
+#
+#   * 1009 consecutive chat declines on one lease, every one of them the
+#     unnamed 4100 -- never 4102 ("spent its request budget"), never 4101
+#     ("revoked") -- with 1h21m still on the lease
+#   * 1009 chat declines and *zero* embedding declines on the same grant, and
+#     the token budget is the only per-lane quantity in the system (chat 4M vs
+#     ``embedding_token_budget`` 1B)
+#
+# Sizing, and why this number is larger than it first looks. The old 4,000,000
+# was never four million *real* tokens. Admission reserves ``max_tokens +
+# len(body)`` and byte length is roughly 4x the token count of the same JSON, so
+# a 4M allowance permitted only ~1M tokens an agent could actually spend. The
+# reservation is honest as of the companion change, so this number is now a
+# true token count and the two effects multiply.
+#
+# Against observed usage:
+#
+#   * a v7 run's chat traffic measures ~2,300 tokens per call (the calibration
+#     fleet's own accounting: 92% prompt, 8% completion)
+#   * the heaviest observed strategies (Jupiter, KOTH_v7_1) spend ~1090 calls,
+#     so ~2.7-3.8M real tokens for a complete run
+#
+# 25,000,000 is therefore ~7x the heaviest run observed -- deliberately the same
+# safety factor #473 chose on the request axis (8192 vs ~1090). The two
+# allowances cross over at ~3,050 tokens a call: below that the request budget
+# binds first, above it the token budget does. That crossover sits right at the
+# observed median, which is the point -- at the old pairing (4M / 8192) the
+# crossover was 488 tokens a call, so the token budget bound *everything* and
+# the request budget was decoration.
+DEFAULT_CHAT_TOKEN_BUDGET = 25_000_000
+
+# 2x the default, matching the request budget's idiom. This is also the bound
+# ``check_config`` enforces at boot -- imported there rather than repeated, so a
+# revision this board accepts can never be a value the next restart rejects.
+MAX_CHAT_TOKEN_BUDGET = 50_000_000
+
+
+class InferenceConcurrencySettings(BaseModel):
+    """The whole hosted-inference admission policy, stored as one object.
+
+    The three embedding limits are a strict hierarchy: one ticket may not exceed
+    its validator's allowance, and no validator may exceed the fleet's. The
+    validator enforces the same hierarchy from below, so under normal operation
+    the platform numbers are headroom rather than the operative valve.
+
+    ``chat_request_budget`` and ``chat_token_budget`` stand apart from the
+    three. Neither is a rate and neither is enforced fleet-wide at admission --
+    each is *stamped onto a grant when the grant is minted* and thereafter read
+    from the grant's own row. That is deliberate, and it is what makes both
+    fields safe to sit on a live board: a revision changes what the **next**
+    lease is issued, never what a running lease is already spending against. An
+    operator cannot exhaust a run in flight by lowering either number, which is
+    exactly the hazard that forced the embedding limits to grow a
+    capacity-decline path.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    chat_request_budget: Annotated[int, Field(ge=1, le=MAX_CHAT_REQUEST_BUDGET)] = (
+        DEFAULT_CHAT_REQUEST_BUDGET
+    )
+    """Chat completions one scoring ticket's grant may spend, in total.
+
+    Raising this is the lever for "let a heavier strategy finish"; lowering it is
+    the lever for "stop paying for a runaway". Neither takes effect on a lease
+    that has already been minted -- see the class docstring.
+    """
+
+    chat_token_budget: Annotated[int, Field(ge=1, le=MAX_CHAT_TOKEN_BUDGET)] = (
+        DEFAULT_CHAT_TOKEN_BUDGET
+    )
+    """Chat tokens (prompt + completion) one scoring ticket's grant may spend.
+
+    The other half of "let a heavier strategy finish", and empirically the half
+    that was actually binding: raising ``chat_request_budget`` alone left the
+    heaviest agents failing in exactly the same place, because they were running
+    out of tokens rather than out of calls.
+
+    This is the number to move when a legitimate strategy stuffs large contexts.
+    Note that it is a *cap*, not a spend: an agent is charged what it consumes,
+    so raising the ceiling changes only which runs are permitted to finish.
+    """
+
+    embedding_per_ticket_concurrency: Annotated[
+        int, Field(ge=1, le=MAX_EMBEDDING_PER_TICKET_CONCURRENCY)
+    ] = DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY
+    """Concurrent hosted embedding requests one scoring ticket's grant may hold.
+
+    This is the number the old ``1`` lived at, and the one an operator will
+    actually turn. Lowering it is the emergency brake: it takes effect on the
+    next admission fleet-wide, with no release and no restart.
+    """
+
+    embedding_per_validator_concurrency: Annotated[
+        int, Field(ge=1, le=MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY)
+    ] = DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY
+    """Concurrent hosted embedding requests summed over one validator's grants.
+
+    Sized as four slots at the per-ticket allowance, which is the wire contract's
+    practical ceiling on concurrent benchmark slots per host.
+    """
+
+    embedding_global_concurrency: Annotated[
+        int, Field(ge=1, le=MAX_EMBEDDING_GLOBAL_CONCURRENCY)
+    ] = DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY
+    """Concurrent hosted embedding requests across the whole fleet.
+
+    The one number to move cautiously. It is enforced by a **cross-grant**
+    aggregate over every in-flight request, so unlike the per-ticket limit it
+    is best-effort under a simultaneous burst: concurrent admissions can
+    overshoot it by at most the number of racers. Size it as a load-shedding
+    backstop with headroom, not as an exact valve.
+    """
+
+    @model_validator(mode="after")
+    def _hierarchy_holds(self) -> InferenceConcurrencySettings:
+        if (
+            self.embedding_per_ticket_concurrency
+            > self.embedding_per_validator_concurrency
+        ):
+            raise ValueError(
+                "embedding_per_ticket_concurrency "
+                f"({self.embedding_per_ticket_concurrency}) may not exceed "
+                "embedding_per_validator_concurrency "
+                f"({self.embedding_per_validator_concurrency}): a ticket cannot "
+                "be allowed more concurrency than the validator hosting it"
+            )
+        if self.embedding_per_validator_concurrency > self.embedding_global_concurrency:
+            raise ValueError(
+                "embedding_per_validator_concurrency "
+                f"({self.embedding_per_validator_concurrency}) may not exceed "
+                f"embedding_global_concurrency ({self.embedding_global_concurrency}): "
+                "a single validator cannot be allowed more concurrency than the fleet"
+            )
+        return self
+
+
+class InferenceConcurrencySettingsRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revision: int
+    parent_revision: int
+    scope: str
+    settings: InferenceConcurrencySettings
+    reason: str
+    actor: str
+    created_at: datetime
+    checksum: str
+
+
+class EffectiveInferenceConcurrencySettings(BaseModel):
+    """What the admission path is enforcing right now, and where it came from."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revision: int
+    scope: str
+    settings: InferenceConcurrencySettings
+    checksum: str
+    source: str
+    """``"revision"`` when an operator revision governs, ``"default"`` otherwise."""
+
+
+class AdminInferenceConcurrencySettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    scope: str = "*"
+    expected_revision: Annotated[int, Field(ge=0)]
+    settings: InferenceConcurrencySettings
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+    @model_validator(mode="after")
+    def _require_complete_policy(self) -> AdminInferenceConcurrencySettingsRequest:
+        """Reject a partial policy on a whole-object store.
+
+        Every field has a default, which is what makes an empty board behave
+        like the shipped configuration. On a *write* that is a footgun: a
+        revision stores the whole policy, so sending only
+        ``{"embedding_global_concurrency": 512}`` would silently reset the two
+        limits below it to their defaults while the operator believed they
+        changed one number. ``expected_revision`` cannot catch that -- they hold
+        the current revision, they just under-specified the body.
+        """
+        missing = sorted(
+            set(InferenceConcurrencySettings.model_fields)
+            - self.settings.model_fields_set
+        )
+        if missing:
+            raise ValueError(
+                "an inference concurrency revision stores the WHOLE policy, so "
+                f"every field must be sent explicitly; missing {missing}. Read "
+                "GET /admin/inference-concurrency-settings, change the fields "
+                "you want, and send back the complete object."
+            )
+        return self
+
+
+class AdminInferenceConcurrencySettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    current: list[InferenceConcurrencySettingsRevision]
+    history: list[InferenceConcurrencySettingsRevision]
+    default: InferenceConcurrencySettings
+    effective: EffectiveInferenceConcurrencySettings

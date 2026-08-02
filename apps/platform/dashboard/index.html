@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ditto SN118 · Subnet Leaderboard</title>
+    <meta
+      name="description"
+      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
+    />
+    <link rel="canonical" href="https://platform-api.heyditto.ai/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Ditto" />
+    <meta property="og:title" content="Ditto SN118 · Subnet Leaderboard" />
+    <meta
+      property="og:description"
+      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
+    />
+    <meta property="og:url" content="https://platform-api.heyditto.ai/" />
+    <meta
+      property="og:image"
+      content="https://platform-api.heyditto.ai/assets/paperditto-512.png"
+    />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="Ditto paper mascot" />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Ditto SN118 · Subnet Leaderboard" />
+    <meta
+      name="twitter:description"
+      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
+    />
+    <meta
+      name="twitter:image"
+      content="https://platform-api.heyditto.ai/assets/paperditto-512.png"
+    />
+    <meta name="twitter:image:alt" content="Ditto paper mascot" />
+
+    <!--
+    Public transparency dashboard for Bittensor Subnet 118 (Ditto).
+
+    Static SPA built with Vite + SolidJS (npm run build -> dist/). No external
+    requests at runtime, no secrets. All data comes from the platform's PUBLIC,
+    aggregate-only read API and (for the deep dive) wandb.
+
+    Configure the API base (in priority order):
+      1. ?api=https://api.example.com/api/v1   (query string, handy for testing)
+      2. <meta name="ditto:api-base" content="…">  (edit the tag below to bake in)
+      3. same-origin "/api/v1"                  (default: dashboard served next to the API)
+
+    wandb project link is configured the same way via ?wandb= or the meta tag.
+
+    If the API can't be reached, the page renders an explicit unavailable state.
+    It never substitutes example values for live subnet data.
+  -->
+    <meta name="ditto:api-base" content="" />
+    <meta name="ditto:wandb-url" content="https://wandb.ai/" />
+
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%94%B7%3C/text%3E%3C/svg%3E"
+    />
+
+    <script>
+      // Apply the saved theme before CSS paints to avoid a light/dark flash.
+      (function () {
+        "use strict";
+        var STORAGE_KEY = "ditto:dashboard-theme";
+        var MODES = { system: true, light: true, dark: true, time: true };
+
+        function fromHour(hour) {
+          if (hour >= 5 && hour < 8) return "dawn";
+          if (hour >= 8 && hour < 12) return "morning";
+          if (hour >= 12 && hour < 17) return "afternoon";
+          if (hour >= 17 && hour < 20) return "dusk";
+          return "night";
+        }
+
+        function readMode() {
+          try {
+            var saved = localStorage.getItem(STORAGE_KEY);
+            return MODES[saved] ? saved : "system";
+          } catch (e) {
+            return "system";
+          }
+        }
+
+        function apply(mode) {
+          var next = MODES[mode] ? mode : "system";
+          var root = document.documentElement;
+          root.dataset.theme = next;
+          root.dataset.systemTheme =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          root.dataset.timePhase = fromHour(new Date().getHours());
+          return next;
+        }
+
+        window.__dittoDashboardTheme = {
+          storageKey: STORAGE_KEY,
+          fromHour: fromHour,
+          readMode: readMode,
+          apply: apply,
+        };
+        apply(readMode());
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

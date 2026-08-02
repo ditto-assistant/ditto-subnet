@@ -1,0 +1,628 @@
+// Parity tests for the scoring formulas (assert-inventory rows 36–38).
+//
+// From the original TestDashboardScoringTransparency docstring: consensus
+// parameters (the incumbent margin, the champion share, the tail size, the
+// authority-switch threshold, the benchmark version) are served by the API
+// and can change without touching this code. A literal in the markup is a
+// claim that silently stops being true, which is worse than no claim at all:
+// a miner reads it as the rule they are being judged by. Every function here
+// therefore derives from payload values, and these tests feed those values in.
+
+import { describe, expect, it } from "vitest";
+
+import {
+  COMPOSITE_CALC_HEADING,
+  COMPOSITE_CALC_NOTE,
+  boardEntryCompare,
+  caseVerdict,
+  chainChampionCompare,
+  chainWeightLabel,
+  cohortMedian,
+  compositeCalculationRows,
+  compositeCalculationHeading,
+  compositeEquationText,
+  continualSampleCount,
+  continualWaves,
+  dethroneBandScale,
+  dethroneFloor,
+  displayComposite,
+  embargoHours,
+  emissionsSplit,
+  errBandBounds,
+  foldChainWeights,
+  isEligible,
+  isFinalized,
+  isOlderRun,
+  isRegistered,
+  maxTokenPenaltyPct,
+  qualityGateChipLabel,
+  rankEntries,
+  rolloutQuorum,
+  rolloutSettledView,
+  scoreClass,
+  scoreQuorum,
+  showsCompositeErrBand,
+  tokenPenaltyChipLabel,
+  trendDirection,
+  unrankedKind,
+  vectorChampion,
+} from "./scoring";
+import type { CompositeBreakdown } from "../types";
+
+describe("rolloutSettledView", () => {
+  it("is true only for an authoritative view with an open active < desired rollout", () => {
+    expect(
+      rolloutSettledView({
+        selection_mode: "current",
+        active_bench_version: 6,
+        desired_bench_version: 7,
+      }),
+    ).toBe(true);
+  });
+
+  it("is false for historical views, settled versions, and missing values", () => {
+    expect(
+      rolloutSettledView({
+        selection_mode: "historical",
+        active_bench_version: 6,
+        desired_bench_version: 7,
+      }),
+    ).toBe(false);
+    expect(
+      rolloutSettledView({
+        selection_mode: "current",
+        active_bench_version: 6,
+        desired_bench_version: 6,
+      }),
+    ).toBe(false);
+    // Number(null) is 0, Number(undefined) is NaN — neither opens the view.
+    expect(rolloutSettledView({ selection_mode: "current", desired_bench_version: 7 })).toBe(false);
+    expect(rolloutSettledView({ selection_mode: "current", active_bench_version: 6 })).toBe(false);
+  });
+});
+
+describe("displayComposite", () => {
+  it("prefers official_composite over composite outside a rollout", () => {
+    expect(displayComposite({ composite: 0.5, official_composite: 0.6 })).toBe(0.6);
+    expect(displayComposite({ composite: 0.5 })).toBe(0.5);
+    expect(displayComposite({ composite: 0.5, official_composite: null })).toBe(0.5);
+  });
+
+  it("ranks by the settled active-version median mid-rollout", () => {
+    const entry = { composite: 0.7, official_composite: 0.7, settled_composite: 0.65 };
+    expect(displayComposite(entry, true)).toBe(0.65);
+    // An agent first scored during the rollout has no settled median and
+    // falls back to its authoritative value.
+    expect(displayComposite({ composite: 0.7, settled_composite: null }, true)).toBe(0.7);
+    expect(displayComposite(entry, false)).toBe(0.7);
+  });
+});
+
+describe("dethroneBandScale", () => {
+  const emissions = {
+    band_decay_min_bench_version: 6,
+    band_decay_start_composite: 0.8,
+    band_decay_rate: 2,
+  };
+
+  it("returns 1 when the decay parameters are absent or inert", () => {
+    expect(dethroneBandScale(null, { bench_version: 7 }, 0.9)).toBe(1);
+    expect(dethroneBandScale({}, { bench_version: 7 }, 0.9)).toBe(1);
+    expect(dethroneBandScale({ ...emissions, band_decay_rate: 0 }, { bench_version: 7 }, 0.9)).toBe(
+      1,
+    );
+    expect(
+      dethroneBandScale({ ...emissions, band_decay_rate: -1 }, { bench_version: 7 }, 0.9),
+    ).toBe(1);
+    // Champion version unknown → not finite → no decay.
+    expect(dethroneBandScale(emissions, {}, 0.9)).toBe(1);
+  });
+
+  it("returns 1 below the minimum bench version", () => {
+    expect(dethroneBandScale(emissions, { bench_version: 5 }, 0.9)).toBe(1);
+  });
+
+  it("uses the LOWER of champion and challenger versions", () => {
+    // Challenger still on v5 pulls the pair below the v6 floor.
+    expect(dethroneBandScale(emissions, { bench_version: 7 }, 0.9, { bench_version: 5 })).toBe(1);
+    expect(
+      dethroneBandScale(emissions, { bench_version: 7 }, 0.9, { bench_version: 6 }),
+    ).toBeCloseTo(Math.exp(-2 * (0.9 - 0.8)), 12);
+  });
+
+  it("decays exponentially from the start composite, bounded to [start, 1]", () => {
+    // Below the decay start, scale stays exactly 1 (exp(0)).
+    expect(dethroneBandScale(emissions, { bench_version: 7 }, 0.75)).toBe(1);
+    expect(dethroneBandScale(emissions, { bench_version: 7 }, 0.9)).toBeCloseTo(
+      Math.exp(-2 * 0.1),
+      12,
+    );
+    // A composite above 1 is bounded at 1 before decaying.
+    expect(dethroneBandScale(emissions, { bench_version: 7 }, 1.2)).toBeCloseTo(
+      Math.exp(-2 * 0.2),
+      12,
+    );
+  });
+});
+
+describe("dethroneFloor", () => {
+  it("is ADDITIVE: champComposite + effectiveMargin, never champ * (1 + margin)", () => {
+    // The old Python suite asserted the literal "champComposite * (1 + margin)"
+    // was ABSENT from the source; this unit test on the correct math is its
+    // translation. With champ 0.9 and margin 0.02 the two formulas disagree
+    // (0.92 vs 0.918), so the assertion genuinely discriminates.
+    const result = dethroneFloor({ margin: 0.02 }, { composite: 0.9 });
+    expect(result).not.toBeNull();
+    const floor = (result as NonNullable<typeof result>).floor;
+    expect(floor).toBeCloseTo(0.9 + 0.02, 12);
+    expect(floor).not.toBeCloseTo(0.9 * (1 + 0.02), 12);
+  });
+
+  it("scales the margin (not the floor) by the decay band", () => {
+    const emissions = {
+      margin: 0.02,
+      band_decay_min_bench_version: 6,
+      band_decay_start_composite: 0.8,
+      band_decay_rate: 2,
+    };
+    const result = dethroneFloor(emissions, { composite: 0.9, bench_version: 7 });
+    expect(result).not.toBeNull();
+    const scale = Math.exp(-2 * (0.9 - 0.8));
+    expect(result?.scale).toBeCloseTo(scale, 12);
+    expect(result?.effectiveMargin).toBeCloseTo(0.02 * scale, 12);
+    // Still additive after scaling.
+    expect(result?.floor).toBeCloseTo(0.9 + 0.02 * scale, 12);
+  });
+
+  it("returns null without emissions, a champion, or a finite margin", () => {
+    expect(dethroneFloor(null, { composite: 0.9 })).toBeNull();
+    expect(dethroneFloor({ margin: 0.02 }, null)).toBeNull();
+    expect(dethroneFloor({}, { composite: 0.9 })).toBeNull();
+    expect(dethroneFloor({ margin: NaN }, { composite: 0.9 })).toBeNull();
+  });
+
+  it("surfaces dethrone_z only when finite and positive", () => {
+    expect(dethroneFloor({ margin: 0.02, dethrone_z: 1.96 }, { composite: 0.9 })?.z).toBe(1.96);
+    expect(dethroneFloor({ margin: 0.02, dethrone_z: 0 }, { composite: 0.9 })?.z).toBeNull();
+    expect(dethroneFloor({ margin: 0.02 }, { composite: 0.9 })?.z).toBeNull();
+  });
+
+  it("measures the champion by its settled composite mid-rollout", () => {
+    const champion = { composite: 0.95, settled_composite: 0.9 };
+    expect(dethroneFloor({ margin: 0.02 }, champion, true)?.champComposite).toBe(0.9);
+    expect(dethroneFloor({ margin: 0.02 }, champion, false)?.champComposite).toBe(0.95);
+  });
+});
+
+describe("emissionsSplit", () => {
+  it("gives the champion its share and the tail the remainder", () => {
+    const split = emissionsSplit({
+      champion_share: 0.9,
+      tail_size: 4,
+      rank_shares: [0.05, 0.03, NaN, 0.02],
+      margin: 0.02,
+      dethrone_z: 1.64,
+    });
+    expect(split).not.toBeNull();
+    expect(split?.championShare).toBe(0.9);
+    expect(split?.tailShare).toBeCloseTo(0.1, 12);
+    expect(split?.tailSize).toBe(4);
+    // Non-finite ranked shares are filtered, order preserved (descending).
+    expect(split?.rankShares).toEqual([0.05, 0.03, 0.02]);
+    expect(split?.margin).toBe(0.02);
+    expect(split?.dethroneZ).toBe(1.64);
+  });
+
+  it("returns null when the fold has no finite champion share", () => {
+    expect(emissionsSplit(null)).toBeNull();
+    expect(emissionsSplit({})).toBeNull();
+  });
+
+  it("keeps a zero tail and gates margin / z exactly like the original copy", () => {
+    const split = emissionsSplit({ champion_share: 1, tail_size: 0, dethrone_z: 0 });
+    expect(split?.tailSize).toBe(0); // "there is no participation tail"
+    expect(split?.margin).toBeNull();
+    expect(split?.dethroneZ).toBeNull(); // z must be > 0 to be published
+  });
+});
+
+describe("rolloutQuorum", () => {
+  it("reads the fleet-wide gate raw and coerces the cohort sizes", () => {
+    const q = rolloutQuorum({
+      ranked_quorum_agents: 12,
+      min_ranked_quorum_agents: 30,
+      priority_cohort_size: 5,
+      cohort_size: 25,
+      cohort_ready_count: 7,
+      members: [
+        { position: 1, score_count: 3 },
+        { position: 2, score_count: 2 }, // below the 3-score per-agent quorum
+        { position: 5, score_count: 4 },
+        { position: 6, score_count: 3 }, // outside the first-five barrier
+      ],
+    });
+    expect(q.ready).toBe(12);
+    expect(q.needed).toBe(30);
+    expect(q.prioritySize).toBe(5);
+    expect(q.cohortSize).toBe(25);
+    expect(q.priorityReady).toBe(2);
+    expect(q.cohortReadyCount).toBe(7);
+  });
+
+  it("preserves the Number() || defaults (5 priority, 0 cohort)", () => {
+    const q = rolloutQuorum({});
+    expect(q.prioritySize).toBe(5);
+    expect(q.cohortSize).toBe(0);
+    expect(q.priorityReady).toBe(0);
+    expect(q.ready).toBeNull();
+    expect(q.needed).toBeNull();
+    // Number(0) || 5 → 5: a zero-size priority cohort still defaults.
+    expect(rolloutQuorum({ priority_cohort_size: 0 }).prioritySize).toBe(5);
+    expect(rolloutQuorum(null).cohortSize).toBe(0);
+  });
+});
+
+describe("cohortMedian", () => {
+  it("takes the middle score for odd counts, the mean of the two middles for even", () => {
+    expect(cohortMedian([{ composite: 0.3 }, { composite: 0.1 }, { composite: 0.2 }])).toBe(0.2);
+    expect(cohortMedian([{ composite: 0.4 }, { composite: 0.1 }])).toBeCloseTo(0.25, 12);
+  });
+
+  it("coerces composites with Number() like the original", () => {
+    expect(cohortMedian([{ composite: "0.3" }, { composite: "0.1" }, { composite: "0.2" }])).toBe(
+      0.2,
+    );
+  });
+});
+
+describe("eligibility predicates", () => {
+  it("treats a missing eligible/finalized flag as true (older APIs omit them)", () => {
+    expect(isEligible({})).toBe(true);
+    expect(isEligible({ eligible: true })).toBe(true);
+    expect(isEligible({ eligible: false })).toBe(false);
+    expect(isEligible(null)).toBe(true);
+    expect(isFinalized({})).toBe(true);
+    expect(isFinalized({ finalized: false })).toBe(false);
+  });
+
+  it("requires a strict registered === true (null/missing is unknown, not false)", () => {
+    expect(isRegistered({ registered: true })).toBe(true);
+    expect(isRegistered({ registered: null })).toBe(false);
+    expect(isRegistered({})).toBe(false);
+    expect(isRegistered(null)).toBe(false);
+  });
+});
+
+describe("unrankedKind", () => {
+  it("is null for eligible entries", () => {
+    expect(unrankedKind({ eligible: true, n: 200 })).toBeNull();
+    expect(unrankedKind({})).toBeNull();
+  });
+
+  it("labels a full run (n >= 100) 'zero' — it scored a non-positive composite", () => {
+    // Mirrors the backend two-gate rule: never mislabel a zero-scoring full
+    // run as a small practice run.
+    expect(unrankedKind({ eligible: false, n: 100 })).toBe("zero");
+    expect(unrankedKind({ eligible: false, n: 250 })).toBe("zero");
+  });
+
+  it("labels smaller or unreported profiles 'provisional'", () => {
+    expect(unrankedKind({ eligible: false, n: 99 })).toBe("provisional");
+    expect(unrankedKind({ eligible: false, n: null })).toBe("provisional");
+    expect(unrankedKind({ eligible: false })).toBe("provisional");
+  });
+});
+
+describe("boardEntryCompare / rankEntries", () => {
+  const finalizedLow = { composite: 0.4 };
+  const finalizedHigh = { composite: 0.6 };
+  const provisional = { composite: 0.9, finalized: false };
+  const ineligible = { composite: 0.95, eligible: false };
+
+  it("ranks finalized ahead of provisional and eligible ahead of ineligible", () => {
+    // Finalized submissions always rank ahead of pre-quorum feedback, even
+    // when the provisional composite is higher.
+    expect(boardEntryCompare(finalizedLow, provisional)).toBeLessThan(0);
+    expect(boardEntryCompare(ineligible, finalizedLow)).toBeGreaterThan(0);
+    expect(boardEntryCompare(finalizedHigh, finalizedLow)).toBeLessThan(0);
+  });
+
+  it("assigns dual rank counters and nulls for ineligible rows", () => {
+    const ranked = rankEntries([provisional, finalizedLow, ineligible, finalizedHigh]);
+    // The finalized tier is checked first, so a finalized-but-ineligible row
+    // still sits above pre-quorum feedback; eligibility orders within a tier.
+    expect(ranked.map((e) => e.composite)).toEqual([0.6, 0.4, 0.95, 0.9]);
+    // Eligible finalized rows count 1..n; provisional rows restart at 1
+    // (rendered "P1"); ineligible rows carry no rank at all.
+    expect(ranked.map((e) => e.rank)).toEqual([1, 2, null, 1]);
+  });
+
+  it("does not mutate the input entries (the original wrote e.rank in place)", () => {
+    const input = [{ composite: 0.4 }];
+    rankEntries(input);
+    expect("rank" in (input[0] as object)).toBe(false);
+  });
+
+  it("orders by the settled composite mid-rollout so scales never interleave", () => {
+    const flipped = { composite: 0.9, official_composite: 0.9, settled_composite: 0.5 };
+    const settled = { composite: 0.6 };
+    expect(boardEntryCompare(flipped, settled, true)).toBeGreaterThan(0);
+    expect(boardEntryCompare(flipped, settled, false)).toBeLessThan(0);
+  });
+});
+
+describe("isOlderRun", () => {
+  it("marks finalized runs below the settled version, or with no version at all", () => {
+    expect(isOlderRun({ bench_version: 5 }, 6)).toBe(true);
+    expect(isOlderRun({ bench_version: null }, 6)).toBe(true);
+    expect(isOlderRun({ bench_version: 6 }, 6)).toBe(false);
+    // A provisional run is not "older", it is pending.
+    expect(isOlderRun({ bench_version: 5, finalized: false }, 6)).toBe(false);
+    // No settled version known yet → only the missing-version case matches.
+    expect(isOlderRun({ bench_version: 5 }, null)).toBe(false);
+    expect(isOlderRun({ bench_version: null }, null)).toBe(true);
+  });
+});
+
+describe("quorum coercions", () => {
+  it("scoreQuorum defaults to 3 and floors at 1", () => {
+    expect(scoreQuorum(null)).toBe(3);
+    expect(scoreQuorum(undefined)).toBe(3);
+    expect(scoreQuorum(0)).toBe(3); // Number(0) || 3
+    expect(scoreQuorum(5)).toBe(5);
+    expect(scoreQuorum(0.5)).toBe(1); // Math.max(1, …)
+    expect(scoreQuorum("4")).toBe(4);
+  });
+
+  it("continualWaves prefers retained_sample_count over completed_wave_count", () => {
+    expect(continualWaves({ retained_sample_count: 7, completed_wave_count: 4 })).toBe(7);
+    expect(continualWaves({ retained_sample_count: null, completed_wave_count: 4 })).toBe(4);
+    expect(continualWaves({})).toBe(0);
+  });
+
+  it("continualSampleCount falls back to the initial three scores plus waves", () => {
+    expect(continualSampleCount({ aggregate_sample_count: 11 })).toBe(11);
+    expect(continualSampleCount({ completed_wave_count: 4 })).toBe(7);
+    expect(continualSampleCount({})).toBe(3);
+  });
+});
+
+describe("chain-observation champion", () => {
+  it("orders by weight value descending with uid ascending as tiebreak", () => {
+    const a = { hotkey: "a", value: 0.5, uid: 9 };
+    const b = { hotkey: "b", value: 0.5, uid: 3 };
+    const c = { hotkey: "c", value: 0.7, uid: 20 };
+    expect(
+      [a, b, c]
+        .slice()
+        .sort(chainChampionCompare)
+        .map((w) => w.hotkey),
+    ).toEqual(["c", "b", "a"]);
+    expect(vectorChampion([a, b])?.hotkey).toBe("b");
+    expect(vectorChampion([])).toBeNull();
+  });
+
+  it("folds vectors excluding the owner and non-positive weights", () => {
+    const fold = foldChainWeights({
+      owner_hotkey: "owner",
+      vectors: [
+        {
+          weights: [
+            { hotkey: "m1", value: 0.6, uid: 1 },
+            { hotkey: "m2", value: 0.4, uid: 2 },
+            { hotkey: "owner", value: 0.9, uid: 0 },
+            { hotkey: "m3", value: 0, uid: 3 },
+          ],
+        },
+        {
+          weights: [
+            { hotkey: "m2", value: 0.8, uid: 2 },
+            { hotkey: "m1", value: 0.2, uid: 1 },
+          ],
+        },
+        // Owner-only vector carries no miner weight and is skipped entirely.
+        { weights: [{ hotkey: "owner", value: 1, uid: 0 }] },
+      ],
+    });
+    expect(fold).not.toBeNull();
+    expect(fold?.minerVectors).toBe(2);
+    expect(fold?.championCounts).toEqual({ m1: 1, m2: 1 });
+    expect(fold?.byHotkey["m1"]).toEqual({ weighted: 2, champion: 1, vectors: 2 });
+    expect(fold?.byHotkey["m2"]).toEqual({ weighted: 2, champion: 1, vectors: 2 });
+    expect(fold?.byHotkey["m3"]).toBeUndefined();
+    // Ties on crown count break lexicographically.
+    expect(fold?.leaders).toEqual(["m1", "m2"]);
+  });
+
+  it("returns null when the chain snapshot has no vectors array", () => {
+    expect(foldChainWeights(null)).toBeNull();
+    expect(foldChainWeights({})).toBeNull();
+  });
+
+  it("labels rows 'Validator top choice · c/v' or 'Validator support · w/v'", () => {
+    expect(chainWeightLabel({ weighted: 3, champion: 2, vectors: 5 })).toBe(
+      "Validator top choice · 2/5",
+    );
+    expect(chainWeightLabel({ weighted: 3, champion: 0, vectors: 5 })).toBe(
+      "Validator support · 3/5",
+    );
+    expect(chainWeightLabel({ weighted: 3, champion: 1, vectors: 0 })).toBe("");
+    expect(chainWeightLabel(null)).toBe("");
+  });
+});
+
+describe("chip thresholds", () => {
+  it("shows the quality-gate chip only when the reduction meaningfully bites", () => {
+    expect(qualityGateChipLabel({ benchmark_quality_multiplier: 0.95 } as CompositeBreakdown)).toBe(
+      "gates −5%",
+    );
+    // A reduction at or below the 0.005 dead-band is hidden (0.996 keeps the
+    // float below it; 1 − 0.995 lands a hair ABOVE 0.005 in floating point
+    // and legitimately shows, matching the original).
+    expect(
+      qualityGateChipLabel({ benchmark_quality_multiplier: 0.996 } as CompositeBreakdown),
+    ).toBeNull();
+    expect(
+      qualityGateChipLabel({ benchmark_quality_multiplier: 1 } as CompositeBreakdown),
+    ).toBeNull();
+    expect(qualityGateChipLabel(null)).toBeNull();
+  });
+
+  it("labels the token penalty above the 0.00005 dead-band, else 'token no penalty'", () => {
+    expect(tokenPenaltyChipLabel({ token_penalty: 0.015 } as CompositeBreakdown)).toEqual({
+      label: "token −1.5%",
+      penalized: true,
+    });
+    expect(tokenPenaltyChipLabel({ token_penalty: 0.00004 } as CompositeBreakdown)).toEqual({
+      label: "token no penalty",
+      penalized: false,
+    });
+    expect(tokenPenaltyChipLabel({ token_penalty: null } as CompositeBreakdown)).toBeNull();
+    expect(tokenPenaltyChipLabel(null)).toBeNull();
+  });
+
+  it("clamps the SE band to [0, 100] with a 0.6% minimum width", () => {
+    expect(errBandBounds(0.5, 0.1)).toEqual({ lo: 40, hi: 60, width: 20 });
+    const tiny = errBandBounds(0.5, 0.001);
+    expect(tiny?.width).toBe(0.6);
+    const clamped = errBandBounds(0.99, 0.05);
+    expect(clamped?.hi).toBe(100);
+    expect(errBandBounds(0.5, 0)).toBeNull();
+    expect(errBandBounds(0.5, null)).toBeNull();
+  });
+
+  it("attaches the band only to the authoritative composite, never a continual mean", () => {
+    expect(showsCompositeErrBand({ composite: 0.5 })).toBe(true);
+    // Mid-rollout the cell shows the settled value: the stashed stderr would
+    // describe the wrong number, so the band is dropped.
+    expect(showsCompositeErrBand({ composite: 0.5, settled_composite: 0.45 }, true)).toBe(false);
+    expect(showsCompositeErrBand({ composite: 0.5, aggregate_method: "continual_mean" })).toBe(
+      false,
+    );
+  });
+
+  it("uses the ±0.0005 trend dead-band and the 0.8/0.5 score bands", () => {
+    expect(trendDirection(0.001)).toBe("up");
+    expect(trendDirection(-0.001)).toBe("down");
+    expect(trendDirection(0.0005)).toBe("flat");
+    expect(trendDirection(-0.0005)).toBe("flat");
+    expect(scoreClass(0.8)).toBe("good");
+    expect(scoreClass(0.5)).toBe("mid");
+    expect(scoreClass(0.49)).toBe("low");
+    expect(scoreClass(null)).toBe("");
+  });
+
+  it("grades case verdicts: binary for memory, 0.999/0.001 thresholds for tool", () => {
+    expect(caseVerdict({ kind: "memory", correct: true })).toBe("pass");
+    expect(caseVerdict({ kind: "memory", correct: false })).toBe("fail");
+    expect(caseVerdict({ kind: "memory", correct: null })).toBe("partial");
+    expect(caseVerdict({ kind: "tool", tool_score: 1 })).toBe("pass");
+    expect(caseVerdict({ kind: "tool", tool_score: 0.999 })).toBe("pass");
+    expect(caseVerdict({ kind: "tool", tool_score: 0 })).toBe("fail");
+    expect(caseVerdict({ kind: "tool", tool_score: 0.5 })).toBe("partial");
+  });
+});
+
+describe("composite equations (row 38: quality and token adjustments stay separate)", () => {
+  const breakdown: CompositeBreakdown = {
+    base_accuracy: 0.62,
+    benchmark_quality_multiplier: 0.9,
+    pre_token_composite: 0.558,
+    final_composite: 0.5468,
+    token_penalty: 0.02,
+    token_efficiency_multiplier: 0.98,
+    maximum_token_penalty: null,
+  };
+
+  it("renders the inline equation with 'n/a' for a missing token multiplier", () => {
+    expect(compositeEquationText(breakdown)).toBe("0.620 × 0.900 × 0.980 = 0.547");
+    expect(compositeEquationText({ ...breakdown, token_efficiency_multiplier: null })).toBe(
+      "0.620 × 0.900 × n/a = 0.547",
+    );
+    expect(compositeEquationText(null)).toBe("");
+  });
+
+  it("separates the quality gates from the bounded token adjustment", () => {
+    const rows = compositeCalculationRows({
+      tool_mean: 0.7,
+      memory_mean: 0.54,
+      composite_breakdown: breakdown,
+      token_efficiency: {
+        observed_total_tokens: 120000,
+        baseline_total_tokens: 100000,
+        budget_percentile: 0.95,
+      },
+    });
+    expect(rows).not.toBeNull();
+    const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
+    // Row 37 mirror: the base IS the ½·tool + ½·memory average.
+    expect(byKey["Tool/memory base"]).toBe("0.5 × 0.700 + 0.5 × 0.540 = 0.620");
+    expect(byKey["Benchmark quality gates"]).toBe("× 0.900 (−10.0%)");
+    expect(byKey["Pre-token composite"]).toBe("0.558");
+    // A missing maximum_token_penalty reads as the 10% contract bound.
+    expect(byKey["Token efficiency"]).toBe("× 0.980 (−2.0%; max 10%)");
+    expect(byKey["Final composite"]).toBe("0.547");
+    expect(byKey["Observed token use"]).toBe(
+      (120000).toLocaleString() + " / " + (100000).toLocaleString() + " p95 baseline",
+    );
+  });
+
+  it("shows the post-continual efficiency fold as separate ranking provenance", () => {
+    const rows = compositeCalculationRows({
+      tool_mean: 0.8,
+      memory_mean: 0.6,
+      bench_version: 7,
+      aggregate_method: "continual_mean",
+      composite: 0.7,
+      official_composite: 0.756,
+      pre_efficiency_composite: 0.72,
+      efficiency_bonus: 0.05,
+      composite_breakdown: { ...breakdown, final_composite: 0.7 },
+    });
+    const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
+    expect(byKey["Initial quorum signed composite"]).toBe("0.700");
+    expect(byKey["Continual aggregate"]).toBe("0.720");
+    expect(byKey["Relative token-efficiency bonus"]).toBe("+5.0% · frozen cohort award");
+    expect(byKey["Folded ranking score"]).toBe("0.756 · used for rank, KOTH, and emissions");
+    expect(byKey["Token efficiency"]).toBeUndefined();
+    expect(compositeCalculationHeading({ pre_efficiency_composite: 0.72 })).toBe(
+      "Score provenance and ranking fold",
+    );
+  });
+
+  it("says 'not applied or unavailable' when the token multiplier is absent", () => {
+    const rows = compositeCalculationRows({
+      tool_mean: 0.7,
+      memory_mean: 0.54,
+      composite_breakdown: { ...breakdown, token_efficiency_multiplier: null },
+    });
+    const tokenRow = rows?.find((row) => row.k === "Token efficiency");
+    expect(tokenRow?.v).toBe("not applied or unavailable");
+    // No token-efficiency payload → no observed-use row.
+    expect(rows?.some((row) => row.k === "Observed token use")).toBe(false);
+  });
+
+  it("returns null without a breakdown (the block does not render)", () => {
+    expect(compositeCalculationRows({ tool_mean: 0.7, memory_mean: 0.5 })).toBeNull();
+  });
+
+  it("carries the block heading and the bounded-penalty note verbatim", () => {
+    expect(COMPOSITE_CALC_HEADING).toBe("Composite calculation");
+    expect(COMPOSITE_CALC_NOTE).toContain("Bench v7+ relative-efficiency awards are upside");
+  });
+
+  it("maxTokenPenaltyPct defaults to 10% only when the API omits the bound", () => {
+    expect(maxTokenPenaltyPct(null)).toBe(10);
+    expect(maxTokenPenaltyPct(undefined)).toBe(10);
+    expect(maxTokenPenaltyPct(0.15)).toBeCloseTo(15, 12);
+  });
+});
+
+describe("embargoHours", () => {
+  it("defaults the source-release embargo to 48 hours", () => {
+    expect(embargoHours({})).toBe(48);
+    expect(embargoHours(null)).toBe(48);
+    expect(embargoHours({ embargo_hours: 0 })).toBe(48); // Number(0) || 48
+    expect(embargoHours({ embargo_hours: 72 })).toBe(72);
+  });
+});

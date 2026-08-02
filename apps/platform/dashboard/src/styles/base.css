@@ -1,0 +1,169 @@
+/* Ported verbatim from the monolith <style> block: reset + accessibility
+   (lines 98-129), shared entity links (729-731), the hide-md/hide-sm
+   column utilities (1216-1224), the gridded-gradient ground (1354-1378),
+   and .sr-only (1995-2005). Order follows the monolith. */
+
+/* The palette lives in tokens.css — it defines every token for the light,
+   dark, and time-of-day themes. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Accessibility ──────────────────────────────────────── */
+/* One visible keyboard focus ring for every interactive element. Only shows
+   for keyboard users (:focus-visible), never on mouse click. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+tr[data-i]:focus-visible,
+tr[data-activity-i]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* Screen-reader-only text: present in the accessibility tree, invisible on screen. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+/* Skip link: first tab stop, jumps keyboard users past the header to the board. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  z-index: 100;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: top 0.15s;
+}
+.skip-link:focus {
+  top: 8px;
+}
+/* Honour a user's reduced-motion preference: kill the pulse and long transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.entity-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition:
+    color 0.16s ease-out,
+    text-decoration-color 0.16s ease-out;
+}
+.entity-link:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+.entity-link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+/* Responsive column hiding. Page-scoped rules re-assert or undo these per
+   board (the hide-md/hide-sm tri-state contract), so which rule wins depends
+   solely on the current ancestor. */
+@media (max-width: 960px) {
+  .hide-md {
+    display: none;
+  }
+}
+@media (max-width: 720px) {
+  .hide-sm {
+    display: none;
+  }
+}
+
+/* Ground: the ruled grid over corner washes that the marketing site uses on
+   the DittoBench board (landing-astro src/pages/dittobench.astro). The
+   geometry is copied as-is; the colours resolve through this dashboard's own
+   theme tokens, so it reads as ink-on-paper in the light themes and as faint
+   light rules over the night ground in dark. */
+body {
+  /* The landing board has no sidebar, so its 16% wash origin would sit
+     behind our 240px rail. Offset by the rail width to put it 16% into the
+     content column instead; below 960px the rail becomes a top bar and the
+     raw 16% is right again. */
+  --wash-x: calc(240px + 16%);
+  background:
+    linear-gradient(
+        90deg,
+        color-mix(in oklch, var(--text) var(--grid-rule-v), transparent) 1px,
+        transparent 1px
+      )
+      0 0 / 4.5rem 4.5rem,
+    linear-gradient(
+        0deg,
+        color-mix(in oklch, var(--text) var(--grid-rule-h), transparent) 1px,
+        transparent 1px
+      )
+      0 0 / 4.5rem 4.5rem,
+    radial-gradient(
+      circle at var(--wash-x) 62%,
+      color-mix(in oklch, var(--good) 20%, transparent),
+      transparent 30rem
+    ),
+    radial-gradient(
+      circle at 90% 60%,
+      color-mix(in oklch, var(--gold) 28%, transparent),
+      transparent 30rem
+    ),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+@media (max-width: 960px) {
+  body {
+    --wash-x: 16%;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

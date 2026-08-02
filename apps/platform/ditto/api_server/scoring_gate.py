@@ -1,0 +1,422 @@
+"""Anti-copy moderation gate for the score-write path.
+
+SN118 artifacts are downloadable, so the central threat is copying: download
+the current best harness and resubmit it (verbatim or lightly tweaked) to
+dethrone the original. The KOTH+ATH fold is *supposed* to defeat a verbatim copy
+by tying the incumbent and never clearing the fixed composite-point margin, with
+first-seen protecting the original — but on bench_version 7 a verbatim copy does
+not tie: two normalized-identical artifacts measured 0.0768 apart (see
+``_DEFAULT_SCORE_TOL``), so it can clear the margin in either direction on
+benchmark noise alone. That makes this gate, not the fold, the load-bearing
+defense. This gate adds cheap signals against a *lightly-tweaked*
+copy that nudges its score just past the incumbent: such a submission matches on
+the *lexical* fingerprint channel — a
+reference-aware sketch of the tarball text (:mod:`ditto.api_server.fingerprint`,
+official starter-kit scaffolding subtracted before sketching), which survives
+reindent/reformat/localized-edit and junk-file padding, compared by Jaccard
+(edit-in-place) or containment (padded copy). The *structural* sketch of the
+crate's AST shape (computed by dittobench, arriving on the score report) and the
+prompt sketch corroborate a hold's audit reason but never trigger one: both are
+whole-crate, so they saturate between independent starter-kit derivatives until
+they are reference-aware too. Tarball-size proximity is a fallback for rows with
+no comparable fingerprints only.
+
+This is **moderation, not weight logic** — it decides only whether a suspicious
+high-scorer is held in ``ath_pending_review`` for human review (see
+:func:`ditto.db.queries.agents.resolve_review`), never who the champion is. The
+KOTH fold itself lives in the validator. The function is pure and deterministic
+so re-scoring the same agent yields the same verdict.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+from ditto.api_server.fingerprint import content_similarity
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from ditto.db.queries.scores import LedgerRow
+
+# Score-proximity tolerance for the two rules that still use one: the
+# *inconclusive* branch of rule 2 and the legacy size fallback (rule 3). It is
+# deliberately NOT used by the lexical near-duplicate match itself — see rule 2.
+#
+# History and why it no longer gates the fingerprint match. This started as
+# "a challenger scoring within this of the incumbent it surpasses is a hair past",
+# sized as ~3σ of between-seed composite noise on the DittoBench v2 target of
+# σ ≤ 0.01 (BENCHMARK-V2 §6.2, B8; it was 0.02 for v1). That noise model is
+# falsified by production. On bench_version 7, two *normalized-identical*
+# artifacts — ditto-v7 (69ad... uploaded 2026-07-25T12:26Z, composite 0.914322)
+# and dittoTop-v0 (uploaded 50 minutes later, composite 0.837497) — scored
+# 0.0768 apart, with per-agent composite_stderr in the 0.016–0.020 band rather
+# than ≤ 0.01. Identical code therefore routinely lands ~2.5x outside this
+# window, so using score proximity as a precondition on fingerprint evidence made
+# detection probability *inversely* proportional to how lucky a copy got: the
+# luckier the re-roll, the further the score drifted, the less likely the copy was
+# ever compared. dittoTop-v0 was never held for exactly this reason.
+#
+# Where it survives, score proximity is a co-signal on weak or absent evidence
+# (archive size, or an uncomparable fingerprint pair), not a gate on strong
+# evidence — see the rule 2 inconclusive branch and rule 3. Widening it there
+# would only add holds whose sole other signal is tarball size, so it stays at
+# the historical value pending the KOTH-parameter validation task.
+_DEFAULT_SCORE_TOL = 0.03
+# A tweaked copy differs from the original by at most a few edited lines, so its
+# gzipped tarball size barely moves. 8 KiB comfortably covers small edits.
+_DEFAULT_SIZE_TOL = 8192
+# Content-fingerprint (shingle-sketch) thresholds. Jaccard catches a copy edited
+# in place; containment (overlap coefficient) catches one padded with junk files
+# to dilute Jaccard. Containment's bar is higher because it is the more
+# false-positive-prone of the two on shared reference-harness scaffolding — only a
+# near-total subset should trip it. Both are paired with score proximity below, and
+# a hold only routes to *human* review, so these are deliberately conservative
+# signals, not an autoban. They want tuning against a real score/similarity corpus
+# (see the subnet's KOTH-parameter validation task).
+_DEFAULT_JACCARD_TOL = 0.75
+_DEFAULT_CONTAINMENT_TOL = 0.95
+# Structural (AST) thresholds gate the ADVISORY structural annotation on a hold
+# (see _structural_note): higher than the lexical ones because the structural
+# sketch discards identifiers + formatting, so two independent crates built on the
+# same reference harness share far more of their parse-tree shape than their text.
+_DEFAULT_STRUCTURAL_JACCARD_TOL = 0.85
+_DEFAULT_STRUCTURAL_CONTAINMENT_TOL = 0.98
+# prompt overlap above which a hold's audit reason notes the corroboration.
+# Advisory only: the prompt sketch (``compute_prompt_fingerprint``) does *not* hold
+# an agent on its own — honest agents on the same reference harness share
+# scaffolding prompts (the convergent case in ``ditto.anticopy.calibration`` scores
+# ~0.8 there), and the signals orthogonal to that convergence (behavioral /
+# code-embedding) are not built yet. So the prompt fingerprint runs in shadow mode:
+# it enriches the moderator's audit trail on a hold another rule already fired, and
+# its per-agent sketch is stored for calibration, but the active fusion hold waits
+# on an orthogonal signal (the code-embedding or behavioral channel).
+_PROMPT_ADVISORY_TOL = 0.5
+
+
+@dataclass(frozen=True)
+class ReviewDecision:
+    """Outcome of the anti-copy gate for one just-scored agent.
+
+    ``held`` routes the agent to ``ath_pending_review`` with ``duplicate_of``
+    (the earlier submission it appears to copy) and ``reason`` recorded as the
+    moderation audit trail. ``held=False`` lets the normal ``evaluating ->
+    scored`` transition proceed.
+    """
+
+    held: bool
+    duplicate_of: UUID | None = None
+    reason: str | None = None
+
+
+_NOT_HELD = ReviewDecision(held=False)
+
+
+def _utc(dt: datetime) -> datetime:
+    """Normalize database timestamps for deterministic chronology comparisons."""
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+
+def _fingerprint_versions_incompatible(a: dict | None, b: dict | None) -> bool:
+    """Whether two present sketches use incomparable algorithms or corpora."""
+    return bool(
+        a
+        and b
+        and a.get("v") is not None
+        and b.get("v") is not None
+        and (a.get("v") != b.get("v") or a.get("corpus") != b.get("corpus"))
+    )
+
+
+def _fingerprint_corpora_incompatible(a: dict | None, b: dict | None) -> bool:
+    """Whether equal-version sketches subtract different reference corpora.
+
+    A corpus mismatch is transition metadata, not evidence that either submission
+    copied the other.  It commonly occurs while a refreshed official starter-kit
+    corpus is being backfilled.  The pair must be skipped rather than sent to ATH
+    review; exact-byte comparison still runs before this check and same-corpus
+    lexical comparisons remain active.
+    """
+    return bool(
+        a
+        and b
+        and a.get("v") is not None
+        and a.get("v") == b.get("v")
+        and a.get("corpus") != b.get("corpus")
+    )
+
+
+def _structural_note(
+    structural_fingerprint: dict | None,
+    e: LedgerRow,
+    *,
+    jaccard_tol: float,
+    containment_tol: float,
+) -> str:
+    """Advisory structural-overlap suffix for a hold's audit reason.
+
+    The structural (AST-shape) sketch arrives from dittobench computed over the
+    WHOLE crate — ``astfp`` performs no reference subtraction — so on
+    starter-kit-derived submissions it saturates between independent miners
+    exactly like the pre-reference lexical channel did (measured on the audited
+    corpus: 12 of the 66 current holds sit at/above the structural thresholds,
+    concentrated in the smallest-edit submissions, which the lexical
+    residual-cardinality floor deliberately routes past the lexical check).
+    Until dittobench ships reference-subtracted structural sketches this
+    channel corroborates a hold that already fired; it never triggers one.
+    """
+    j, c = content_similarity(structural_fingerprint, e.structural_fingerprint)
+    if j >= jaccard_tol or c >= containment_tol:
+        return f"; structural jaccard {j:.3f}, containment {c:.3f}"
+    return ""
+
+
+def _prompt_note(prompt_fingerprint: dict | None, e: LedgerRow) -> str:
+    """Shadow-mode the prompt fingerprint suffix for a hold's audit reason.
+
+    Returns ``"; prompt jaccard X.XXX"`` when the just-scored agent and the matched
+    agent ``e`` both carry a prompt sketch overlapping at or above
+    ``_PROMPT_ADVISORY_TOL``, else ``""``. Observability only — this never affects
+    whether the agent is held.
+    """
+    j, c = content_similarity(prompt_fingerprint, e.prompt_fingerprint)
+    if max(j, c) >= _PROMPT_ADVISORY_TOL:
+        return f"; prompt jaccard {j:.3f}, containment {c:.3f}"
+    return ""
+
+
+def evaluate_duplicate_signals(
+    *,
+    agent_id: UUID,
+    miner_hotkey: str,
+    submitted_at: datetime,
+    sha256: str,
+    composite: float,
+    size_bytes: int | None,
+    eligible: Sequence[LedgerRow],
+    normalized_source_hash: str | None = None,
+    content_fingerprint: dict | None = None,
+    structural_fingerprint: dict | None = None,
+    prompt_fingerprint: dict | None = None,
+    miner_coldkey: str | None = None,
+    linked_owner_hotkeys: frozenset[str] = frozenset(),
+    score_tol: float = _DEFAULT_SCORE_TOL,
+    size_tol: int = _DEFAULT_SIZE_TOL,
+    jaccard_tol: float = _DEFAULT_JACCARD_TOL,
+    containment_tol: float = _DEFAULT_CONTAINMENT_TOL,
+    structural_jaccard_tol: float = _DEFAULT_STRUCTURAL_JACCARD_TOL,
+    structural_containment_tol: float = _DEFAULT_STRUCTURAL_CONTAINMENT_TOL,
+) -> ReviewDecision:
+    """Decide whether a just-scored agent should be held for copy review.
+
+    Copying is only a threat *across* owners, so every rule ignores the agent's
+    own submissions and other agents paid for by the same coldkey (an owner
+    iterating through different names or hotkeys is not a copier). Legacy rows
+    without payment provenance still fall back to same-hotkey exclusion.
+
+    ``linked_owner_hotkeys`` extends that same principle to an owner who
+    rotated keys, which coldkey equality cannot see. Each entry is a hotkey
+    cryptographically proven to be the same operator as this miner: both
+    endpoints signed the link, each with its own hotkey or the coldkey bound to
+    it (see :mod:`ditto.api_server.attestation`). All copy rules skip those
+    attested predecessors, including byte-identical and canonicalized-source
+    matches. Copy moderation answers whether one owner took another owner's
+    work; a cryptographically proven same owner cannot plagiarize itself.
+    Emission-slot deduplication is a separate policy and must not be enforced by
+    holding legitimate same-owner generations in copy review.
+
+    Originality attribution also follows upload chronology,
+    not score-finalization order: normalized-source and near-duplicate rules compare
+    only with another miner's strictly earlier submission. Equal timestamps use the
+    UUID as a deterministic tie-break. Held iff:
+
+    1. **Exact copy** — same ``sha256``. Byte-identical resubmission.
+    1b. **Exact repack** — same ``normalized_source_hash``: the same source
+       canonicalized (comments/whitespace stripped, files sorted), so a reformat /
+       re-comment / file rename+reorder repack that changes ``sha256`` still
+       matches. Like rule 1, held on the hash equality alone — no score proximity,
+       because an exact-source match is copy evidence regardless of the score it
+       happened to land.
+    2. **Near-duplicate lexical fingerprint** — the lexical channel
+       (``content_fingerprint``, reference-aware) at least ``jaccard_tol`` Jaccard
+       or ``containment_tol`` contained — survives re-indent / reformat /
+       localized edits / junk-file padding. Like rules 1 and 1b this is held on the
+       fingerprint alone: **no score proximity**. Score similarity is not evidence
+       of copying and score dissimilarity is not evidence of independence — see
+       ``_DEFAULT_SCORE_TOL`` for the production measurement that retired the
+       precondition. Structural (``structural_fingerprint``, whole-crate AST from
+       dittobench — measured at/above its thresholds for 12 of the 66 audited
+       holds, concentrated in the smallest-edit submissions) and prompt overlap
+       annotate the hold's audit reason as corroboration; neither triggers until
+       reference-aware. When the two lexical sketches are *uncomparable* (different
+       algorithm version) the pair is inconclusive rather than matched, and that
+       branch keeps ``score_tol`` — there the tolerance triages pairs with no
+       evidence either way instead of gating evidence that already exists.
+
+    3. **Size near-duplicate fallback** — composites within ``score_tol`` and
+       tarball sizes within ``size_tol``, but only when neither lexical nor
+       structural fingerprints are comparable. A valid negative fingerprint is
+       evidence of distinct content and must not be overridden by similar archive
+       size. The fallback remains for legacy or unreadable artifacts, and keeps
+       score proximity because archive size alone is too weak to hold on.
+
+    Rules 2 and 3 check *every earlier* other-miner eligible agent, in either score
+    direction, so a genuine unrelated agent scoring in between cannot mask the
+    copy. A genuine improvement is never held by rule 2 as long as its
+    miner-authored residual is its own: after reference subtraction, clearing
+    ``jaccard_tol`` / ``containment_tol`` means sharing another miner's custom
+    surface, not the shared starter kit. Rule 3 additionally requires a different
+    size or a comparable fingerprint. Pure + deterministic: candidates are ordered
+    by upload chronology, so the reported ``duplicate_of`` is the oldest matching
+    submission.
+
+    ``prompt_fingerprint`` participates in **shadow mode only**: when a hold
+    fires for another reason, a high prompt overlap with the matched agent is
+    appended to the audit reason (``_PROMPT_ADVISORY_TOL``). It never creates a hold
+    on its own — a prompt match alone is not copy evidence, because honest agents on
+    the same reference harness share scaffolding prompts. The active prompt-fusion
+    hold is deferred until an orthogonal-to-convergence signal (behavioral /
+    code-embedding) exists to corroborate it.
+    """
+    other_miners = [
+        e
+        for e in eligible
+        if e.agent_id != agent_id
+        and e.miner_hotkey != miner_hotkey
+        and not (miner_coldkey is not None and e.miner_coldkey == miner_coldkey)
+    ]
+    submitted_key = (_utc(submitted_at), agent_id.int)
+    earlier_others = sorted(
+        (
+            e
+            for e in other_miners
+            if (_utc(e.first_seen), e.agent_id.int) < submitted_key
+        ),
+        key=lambda e: (_utc(e.first_seen), e.agent_id.int),
+    )
+    # Every copy rule drops hotkeys cryptographically proven to be the same
+    # operator. Emission-slot allocation is enforced elsewhere; this gate only
+    # answers whether a submission copied a different owner.
+    earlier_unattested = (
+        earlier_others
+        if not linked_owner_hotkeys
+        else [e for e in earlier_others if e.miner_hotkey not in linked_owner_hotkeys]
+    )
+
+    # 1. Exact byte-identical copy of another miner's eligible artifact.
+    # This is a defense-in-depth mirror of the separate admission-time exact-byte
+    # guard. It uses the same upload chronology so a later-finalized row can never
+    # become the retroactive original of an earlier submission.
+    for e in earlier_unattested:
+        if e.sha256 == sha256:
+            return ReviewDecision(
+                held=True,
+                duplicate_of=e.agent_id,
+                reason=f"exact sha256 match of agent {e.agent_id}",
+            )
+
+    # 1b. Exact-repack copy: same canonicalized source (comments/whitespace
+    #     stripped, files sorted) even when the tarball bytes differ. An equality
+    #     match, held unconditionally like sha256 — no score-proximity requirement.
+    #     Both hashes must be present (null = "no repack match", never a hit).
+    if normalized_source_hash is not None:
+        for e in earlier_unattested:
+            if e.normalized_source_hash == normalized_source_hash:
+                return ReviewDecision(
+                    held=True,
+                    duplicate_of=e.agent_id,
+                    reason=f"normalized-source (repack) match of agent {e.agent_id}",
+                )
+
+    # 2. Near-dup fingerprint: a matching lexical sketch, on its own.
+    #    Checked before the size rule because a fingerprint is the stronger,
+    #    size-independent signal. The structural (whole-crate AST) channel
+    #    saturates between independent starter-kit derivatives — astfp performs
+    #    no reference subtraction — so it corroborates the audit reason instead
+    #    of triggering until its sketches are reference-aware.
+    #
+    #    There is deliberately NO score-proximity precondition here. Two
+    #    normalized-identical bench_version 7 artifacts (ditto-v7 / dittoTop-v0)
+    #    scored 0.0768 apart in production, so a 0.03 window skipped the
+    #    comparison precisely when the copy got the luckiest re-roll. See
+    #    ``_DEFAULT_SCORE_TOL``. The composite delta is still reported in the
+    #    audit reason as context for the reviewer.
+    for e in earlier_unattested:
+        # A refreshed starter-kit corpus changes what is subtracted from the
+        # sketch.  During the bounded metadata backfill, old and new corpus IDs
+        # coexist.  That pair is incomparable, but incomparability is not copy
+        # evidence and must not itself create an operator hold.
+        if _fingerprint_corpora_incompatible(
+            content_fingerprint, e.content_fingerprint
+        ):
+            continue
+        if _fingerprint_versions_incompatible(
+            content_fingerprint, e.content_fingerprint
+        ):
+            # Absence of evidence, not evidence: the sketches cannot be compared
+            # at all, so nothing here says "copy". Score proximity stays on this
+            # branch as triage — it decides which uncomparable pairs are worth an
+            # operator's time, rather than gating a fingerprint match that already
+            # stands on its own. Without it, every cross-version pair in the
+            # ledger would open an inconclusive review during an algorithm
+            # rollout.
+            if abs(composite - e.composite) > score_tol:
+                continue
+            return ReviewDecision(
+                held=True,
+                duplicate_of=e.agent_id,
+                reason=(
+                    f"anti-copy comparison inconclusive with agent {e.agent_id}: "
+                    "incompatible lexical fingerprint version or corpus; "
+                    "individual operator review required"
+                ),
+            )
+        lex_j, lex_c = content_similarity(content_fingerprint, e.content_fingerprint)
+        if lex_j >= jaccard_tol or lex_c >= containment_tol:
+            return ReviewDecision(
+                held=True,
+                duplicate_of=e.agent_id,
+                reason=(
+                    f"content near-duplicate of agent {e.agent_id}: "
+                    f"composite delta {abs(composite - e.composite):.4f}, "
+                    f"jaccard {lex_j:.3f}, containment {lex_c:.3f}"
+                    + _structural_note(
+                        structural_fingerprint,
+                        e,
+                        jaccard_tol=structural_jaccard_tol,
+                        containment_tol=structural_containment_tol,
+                    )
+                    + _prompt_note(prompt_fingerprint, e)
+                ),
+            )
+
+    # 3. Size near-dup of another miner: a legacy fallback only when both rows
+    #    predate every lexical/structural fingerprint. A versioned empty sketch is
+    #    affirmative evidence that reference subtraction found too little custom
+    #    surface; cross-version sketches likewise must fail open during backfill.
+    if size_bytes is not None:
+        for e in earlier_unattested:
+            if (
+                e.size_bytes is not None
+                and abs(composite - e.composite) <= score_tol
+                and abs(size_bytes - e.size_bytes) <= size_tol
+                and content_fingerprint is None
+                and e.content_fingerprint is None
+                and structural_fingerprint is None
+                and e.structural_fingerprint is None
+            ):
+                return ReviewDecision(
+                    held=True,
+                    duplicate_of=e.agent_id,
+                    reason=(
+                        f"near-duplicate of agent {e.agent_id}: "
+                        f"composite delta {abs(composite - e.composite):.4f}, "
+                        f"size delta {abs(size_bytes - e.size_bytes)}B"
+                        + _prompt_note(prompt_fingerprint, e)
+                    ),
+                )
+
+    return _NOT_HELD

@@ -1,0 +1,43 @@
+title = "ditto-platform Gitleaks configuration"
+minVersion = "v8.30.1"
+
+[extend]
+useDefault = true
+
+# Public SS58 address used by the integration-test fixture. An address is not a
+# credential; require both the exact value and exact fixture path so no other
+# generic API-key finding is suppressed.
+[[allowlists]]
+description = "Public integration-test coldkey address"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm$''']
+paths = ['''^ditto/tests/integration/test_upload_agent_integration\.py$''']
+
+# Fixed, non-secret literals used to exercise token validation and coldkey
+# grouping. These were added after the original repository audit and are each
+# constrained to an exact value, rule, and test file.
+[[allowlists]]
+description = "Deterministic benchmark run-token test fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^0123456789abcdef$''']
+paths = ['''^ditto/tests/api_models/test_benchmark_progress\.py$''']
+
+[[allowlists]]
+description = "Deliberately invalid coldkey owner test fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^5ColdkeyOwner$''']
+paths = ['''^ditto/tests/db/queries/test_scores\.py$''']
+
+[[allowlists]]
+description = "Git revision used by the dashboard entity-panel test fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{40}$''']
+paths = ['''^dashboard/src/components/EntityPanel\.stack\.test\.tsx$''']

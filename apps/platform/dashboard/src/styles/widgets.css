@@ -1,0 +1,955 @@
+/* Ported verbatim from the monolith <style> block: shared widget rules used
+   across pages and the entity modal — pills/buttons, cards, section heads,
+   shared chips (.tip, .submission-version, .bench-badge), modal stats,
+   sha/trend/copy, metric bars + sparklines, empty states, stage pills,
+   pager, activity-filter pills, and the shared tooltip bubble.
+   Source lines: 152-195, 354-355, 388, 428-518, 667-678, 732-740, 746-795,
+   1156-1186, 1218, 1460-1475, 1593-1618, 1828-1830, 1890-1892, 1950-1952,
+   and the widget slice of the 1958-1990 @720 block. Order follows the
+   monolith so the themed second declarations of .pill/.btn/.cards/
+   .section-head keep their original winners. */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.pill.live .dot {
+  background: var(--good);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+  animation: pulse 2s infinite;
+}
+.pill.error .dot {
+  background: var(--danger);
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    transform 0.05s;
+}
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  border-color: var(--border);
+  background: transparent;
+  transform: none;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+
+/* ── Network snapshot ───────────────────────────────────── */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
+  margin: 22px 0;
+}
+.card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  position: relative;
+  overflow: hidden;
+}
+.card .label {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+}
+.card .value {
+  font-size: 27px;
+  font-weight: 700;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.card .value small {
+  font-size: 14px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.card .glow {
+  position: absolute;
+  right: -30px;
+  top: -30px;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  filter: blur(28px);
+  opacity: 0.5;
+}
+
+/* ── Section heading ────────────────────────────────────── */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 30px 0 14px;
+}
+.section-head h2 {
+  font-size: 16px;
+  margin: 0;
+  letter-spacing: 0.2px;
+}
+
+/* A term with a hover explanation, dotted underline + help cursor cue it. */
+.tip {
+  position: relative;
+  border-bottom: 1px dotted rgba(148, 163, 184, 0.5);
+  cursor: help;
+}
+
+.submission-version {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  font: 650 9.5px/1.4 var(--mono);
+  letter-spacing: 0.15px;
+  white-space: nowrap;
+}
+
+/* Board-wide benchmark-version badge in the header subtitle. */
+.bench-badge {
+  display: none;
+  margin-left: 10px;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--accent-2);
+  background: color-mix(in oklab, var(--accent-2) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent-2) 42%, transparent);
+  border-radius: 6px;
+  padding: 2px 8px;
+  vertical-align: middle;
+  text-transform: uppercase;
+}
+.bench-badge.show {
+  display: inline-block;
+}
+/* Section heading. Sections are separated by whitespace and this heading, not
+   by a rule, so there is never a divider line stacking against a row border.
+   Sized up and coloured so it clearly outranks the rows beneath it. */
+.stat-head {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+/* Two-column flow for the modal's row-based sections, so the wide modal uses
+   its horizontal space instead of one tall column. Rows/heads never split
+   across the column break. Collapses to one column on narrow viewports. */
+.stat-cols {
+  column-count: 2;
+  column-gap: 34px;
+}
+/* Each labelled section is one unit: it never splits across the column break,
+   so a heading and its rows always stay together. */
+.stat-group {
+  break-inside: avoid;
+  margin-bottom: 12px;
+}
+/* Row rules divide rows *within* a section only. Drop the trailing one so it
+   never dangles at a section's foot or stacks against the next heading. */
+.stat-group .stat-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+@media (max-width: 720px) {
+  .stat-cols {
+    column-count: 1;
+  }
+}
+.pc-block {
+  margin-top: 22px;
+}
+.pc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 0 30px;
+}
+.pc-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 52%, transparent);
+  font-size: 12.5px;
+}
+.pc-k {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-v {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.pc-v.good {
+  color: var(--good);
+}
+.pc-v.mid {
+  color: var(--text);
+}
+.pc-v.low {
+  color: var(--danger);
+}
+
+/* Full-width dataset hash: the whole 64-char SHA on one monospace line,
+   scrollable on narrow viewports rather than truncated. */
+.sha-row {
+  margin-top: 18px;
+}
+.sha-row .k {
+  display: block;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.sha-row code {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 11px;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+/* Labelled composite-trend chart. A grid keeps the plot in column 2 so the
+   y-axis (column 1) and the x-axis caption (row 2, column 2) line up exactly
+   with the plotted line rather than spanning the whole width. */
+.trend .chart {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 9px;
+  margin-top: 6px;
+}
+.trend .yaxis {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: right;
+  padding: 1px 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.trend svg.spark {
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  height: 58px;
+}
+.trend .xcap {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.stat-row .v.up {
+  color: var(--good);
+}
+.stat-row .v.down {
+  color: var(--danger);
+}
+.stat-row .v.flat {
+  color: var(--text-dim);
+}
+.copyable {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.sha-row .copyable {
+  display: flex;
+  gap: 4px;
+}
+.copy {
+  flex: none;
+  margin-left: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    color 0.12s;
+  background: none;
+  border: 0;
+  padding: 4px;
+  font-family: inherit;
+}
+tr:hover .copy,
+.copyable:hover .copy,
+.copy:focus-visible,
+.copy.copied {
+  opacity: 1;
+}
+.modal .copy,
+.sha-row .copy {
+  opacity: 1;
+}
+.copy:hover,
+.copy:focus-visible {
+  color: var(--accent);
+}
+/* Copied confirmation: swap the glyph for a check without shifting layout. */
+.copy.copied {
+  color: var(--good);
+}
+.copy.copied > span {
+  display: none;
+}
+.copy.copied::after {
+  content: "✓";
+}
+.copy.failed {
+  color: var(--danger);
+  opacity: 1;
+}
+.review-copy-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.review-copy {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  margin-left: 0;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  opacity: 1;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.review-copy:hover,
+.review-copy:focus-visible {
+  border-color: var(--accent);
+  background: var(--bg-elev);
+}
+.review-copy.copied::after {
+  content: "Copied ✓";
+}
+@media (max-width: 520px) {
+  .review-copy {
+    width: 100%;
+    justify-content: center;
+    min-height: 44px;
+  }
+}
+@media (hover: none) {
+  .copy {
+    opacity: 1;
+  }
+}
+
+.metric {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 150px;
+}
+.metric .barwrap {
+  flex: 1;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--bg-elev-2);
+  position: relative;
+}
+.metric .bar {
+  height: 100%;
+  border-radius: 4px;
+  position: relative;
+  z-index: 1;
+}
+.metric .mval {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  min-width: 46px;
+  text-align: right;
+  color: var(--text);
+}
+.bar.composite {
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.bar.tool {
+  background: var(--tool);
+}
+.bar.memory {
+  background: var(--memory);
+}
+.muted {
+  color: var(--text-dim);
+}
+
+/* Composite uncertainty: a ±SE band overlaid on the bar track, with end ticks. */
+.err {
+  position: absolute;
+  top: -2px;
+  height: 11px;
+  z-index: 2;
+  background: color-mix(in oklch, var(--text) 16%, transparent);
+  border-left: 1px solid color-mix(in oklch, var(--text) 48%, transparent);
+  border-right: 1px solid color-mix(in oklch, var(--text) 48%, transparent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+/* Composite cell = bar row + optional sparkline stacked. */
+.cwrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* The cell's second line: sparklines and score chips. Its layout lives
+   here rather than inline on the element so page-scoped rules can size
+   and hide what sits inside it — an inline `display` wins over any
+   stylesheet selector (see .overview-main). */
+.cline2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 16px;
+}
+.spark {
+  display: block;
+}
+.spark path {
+  fill: none;
+  stroke: var(--accent-2);
+  stroke-width: 1.5;
+}
+.spark .dot {
+  fill: var(--accent-2);
+}
+.spark .area {
+  fill: color-mix(in oklab, var(--accent-2) 14%, transparent);
+  stroke: none;
+}
+
+/* Rank movement arrow next to the rank badge (since last view). */
+.rankmove {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+.rankmove.up {
+  color: var(--good);
+}
+.rankmove.down {
+  color: var(--danger);
+}
+.rankmove.flat {
+  color: var(--text-faint);
+}
+.rankmove.new {
+  color: var(--accent-2);
+}
+
+/* Latency + case-count cell. */
+.lat {
+  font-variant-numeric: tabular-nums;
+}
+.lat .cases {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-dim);
+}
+/* A full-colspan message ("No miners scored yet…") lives inside a min-width
+   table, so on a narrow screen its centered text is pushed off the right edge
+   by the horizontal scroll. The sticky sits on an inner .empty-msg wrapper:
+   the colspan cell spans the table's full min-width, so the narrower inner
+   div has slack to stick and pins to the visible left edge at 375px.
+   (Sticky directly on the full-width td has no room to move, so it would
+   scroll away with the table.) */
+@media (max-width: 720px) {
+  td.empty {
+    padding: 0;
+  }
+  td.empty .empty-msg {
+    position: sticky;
+    left: 0;
+    box-sizing: border-box;
+    width: calc(100vw - 32px);
+    padding: 32px 20px;
+    white-space: normal;
+  }
+}
+
+.stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+}
+.stage::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.stage.progress {
+  color: var(--accent-2);
+  border-color: color-mix(in oklab, var(--accent-2) 38%, transparent);
+  background: color-mix(in oklab, var(--accent-2) 10%, transparent);
+}
+.stage.good {
+  color: var(--good);
+  border-color: color-mix(in oklab, var(--good) 38%, transparent);
+  background: color-mix(in oklab, var(--good) 10%, transparent);
+}
+.stage.warn {
+  color: var(--warn);
+  border-color: color-mix(in oklab, var(--warn) 40%, transparent);
+  background: color-mix(in oklab, var(--warn) 10%, transparent);
+}
+.stage.bad {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 40%, transparent);
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
+}
+/* A capped slot is a deliberate operator setting, not a fault: dimmer than
+   idle so it reads as "switched off", never as an alert. */
+.stage.capped {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.pager {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in oklab, var(--bg-elev-2) 38%, var(--bg-elev));
+}
+.pager[hidden] {
+  display: none;
+}
+.pager.top {
+  border-bottom: 1px solid var(--border);
+}
+.pager.bottom {
+  border-top: 1px solid var(--border);
+}
+.pager .btn {
+  min-width: 94px;
+  min-height: 38px;
+  padding: 7px 12px;
+}
+.pager .btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.pager .btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.page-status {
+  min-width: 104px;
+  text-align: center;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.activity-filters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--bg-elev-2) 38%, var(--bg-elev));
+}
+.activity-filter-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.activity-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font: 650 11px/1.2 var(--sans);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+.activity-filter:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.activity-filter[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.activity-filter-count {
+  min-width: 18px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: color-mix(in oklab, currentColor 12%, transparent);
+  font: 700 10px/1 var(--mono);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.activity-filter[aria-pressed="true"] .activity-filter-count {
+  background: color-mix(in oklab, var(--on-accent) 18%, transparent);
+}
+.activity-filter-meta {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+.activity-filter-summary {
+  color: var(--text-dim);
+  font: 10.5px/1.4 var(--mono);
+  white-space: nowrap;
+}
+.activity-clear {
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: 650 11px/1.2 var(--sans);
+  cursor: pointer;
+}
+.activity-clear[hidden] {
+  display: none;
+}
+.activity-clear:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.activity[aria-busy="true"] .activity-filter-summary {
+  color: var(--text-faint);
+}
+
+/* Shared CSS tooltip bubble: keyboard- and touch-accessible (reveals on
+   :focus-visible), used by the circular .retry-info marker and the
+   dotted-underline .tip terms on stat cards and table headers. */
+/* Chips (gate/token/rollout/quorum/prov/rankmove) share the bubble via
+   .tip-chip: hover bubble for pointer users, aria-describedby text for
+   screen readers (wired by wireTips). They stay out of the tab order —
+   the row itself opens the full breakdown for keyboard users. */
+.tip-chip {
+  cursor: help;
+}
+/* One fixed-position bubble serves every [data-tooltip] trigger,
+   positioned by script from the trigger's screen rect. Pseudo-element
+   bubbles could never escape an overflow ancestor, and the page is a
+   nest of scroll containers (panes, the board, the rail); a fixed
+   element ignores them all and clamps to the viewport instead. */
+#tip-bubble {
+  position: fixed;
+  z-index: 90;
+  max-width: min(270px, calc(100vw - 16px));
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--text);
+  box-shadow: 0 4px 8px color-mix(in oklch, var(--bg) 45%, transparent);
+  color: var(--bg-elev);
+  font: 500 11.5px/1.45 var(--sans);
+  letter-spacing: 0;
+  pointer-events: none;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+}
+.retry-info:focus-visible,
+.tip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+@media (max-width: 960px) {
+  .cards {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.pill {
+  min-height: 32px;
+  padding: 5px 11px;
+  border-color: var(--border);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.dot {
+  width: 7px;
+  height: 7px;
+}
+.pill.live .dot {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--good) 18%, transparent);
+}
+.btn {
+  min-height: 34px;
+  padding: 7px 12px;
+  border-radius: 5px;
+  border-color: var(--border-strong);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 80ms ease;
+}
+.btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-hover);
+}
+.btn.ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn.ghost:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elev-2);
+}
+
+.cards {
+  /* Six columns because the snapshot holds exactly nine tiles: the primary
+     card spans 2x2 and the remaining eight fill four cells on each of its
+     two rows. Adding or removing a tile changes this arithmetic, so re-check
+     the column count rather than leaving a gap in the last row. */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin: 0 0 36px;
+  border: 1px solid var(--border);
+  background: var(--border);
+}
+.card {
+  min-width: 0;
+  padding: 18px;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-elev);
+  overflow: visible;
+}
+.card.primary {
+  grid-column: span 2;
+  grid-row: span 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in oklch, var(--accent) 8%, var(--bg-elev));
+}
+.card .glow {
+  display: none;
+}
+.card .label {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.card .value {
+  margin-top: 8px;
+  font-family: var(--display);
+  font-size: 29px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.card.primary .label {
+  color: var(--accent);
+  font-size: 11px;
+}
+.card.primary .value {
+  margin-top: 12px;
+  font-size: 52px;
+}
+.card.primary .context {
+  max-width: 20ch;
+  margin-top: 12px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.section-head {
+  align-items: flex-end;
+  margin: 34px 0 10px;
+}
+.section-head h2 {
+  font-family: var(--display);
+  font-size: 21px;
+  font-weight: 400;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.section-head .hint {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.bar {
+  background: var(--bg-elev-2);
+  border-color: var(--border);
+}
+
+.stage {
+  background: var(--bg-elev-2);
+}
+
+@media (max-width: 900px) {
+  .cards {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .card.primary {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    min-height: 152px;
+  }
+  .card.primary .value {
+    font-size: 44px;
+  }
+  .section-head {
+    display: block;
+  }
+  .section-head .hint {
+    display: block;
+    margin-top: 6px;
+    line-height: 1.5;
+  }
+  .pager {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .pager .btn {
+    min-width: 84px;
+    padding-inline: 9px;
+  }
+  .page-status {
+    min-width: 94px;
+  }
+  .activity-filters {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 12px;
+  }
+  .activity-filter-list {
+    width: 100%;
+  }
+  .activity-filter {
+    min-height: 44px;
+  }
+  .activity-filter-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .activity-filter-summary {
+    white-space: normal;
+  }
+}

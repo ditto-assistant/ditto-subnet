@@ -1,0 +1,41 @@
+context-docs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+dist/
+build/
+*.egg-info/
+
+# pm2 process logs
+logs/
+
+# Tooling caches
+node_modules/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Env files
+.env
+.env.deploy
+.env.local
+
+# IDE
+.idea/
+
+# Local operator secrets — never commit (hotkey mnemonic, OpenRouter/GitHub keys)
+docs/validator/or_gh_secrets.yml
+*secrets*.yml
+*secrets*.yaml
+
+# Local compose overrides (localnet e2e etc.) must never ship to the VMs:
+# scripts/update.sh resets the deploy checkout to origin, and a committed
+# override repoints prod Pylon at a nonexistent local subtensor (2026-07-16).
+docker-compose.override.yml
+dashboard-refactor-notes/

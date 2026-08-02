@@ -1,0 +1,11 @@
+{
+  "name": "ditto-platform",
+  "private": true,
+  "scripts": {
+    "lint:copy": "faircopy lint"
+  },
+  "devDependencies": {
+    "@faircopy/astro": "1.15.0",
+    "faircopy": "1.15.0"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ditto Platform Prod DB Reader"
+  short_description: "Safely query the prod platform Postgres DB"
+  default_prompt: "Use $gcloud-ditto-platform-db-readonly to answer a question from the production ditto-platform PostgreSQL database without modifying it."
