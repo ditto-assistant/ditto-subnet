@@ -1,0 +1,5 @@
+{
+  "repository": "ditto-assistant/ditto-subnet",
+  "path": "apps/platform",
+  "contract": "same-monorepo-release"
+}

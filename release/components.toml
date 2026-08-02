@@ -106,6 +106,13 @@ paths = [
   "apps/platform/**",
 ]
 
+[components.backroom]
+description = "Subnet operations console"
+depends_on = ["platform"]
+paths = [
+  "apps/backroom/**",
+]
+
 [components.screener]
 description = "Screening worker"
 depends_on = ["screening_protocol"]

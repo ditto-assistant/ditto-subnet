@@ -88,7 +88,7 @@ def test_platform_change_does_not_release_validator_stack(
 ) -> None:
     assert selected(
         components, ignored_paths, "apps/platform/ditto/api_server/factory.py"
-    ) == {"platform"}
+    ) == {"platform", "backroom"}
 
 
 def test_screener_change_does_not_release_validator_stack(
@@ -122,6 +122,7 @@ def test_screening_contract_change_propagates_to_every_consumer(
         "validator",
         "validator_stack",
         "platform",
+        "backroom",
         "screener",
         "screener_orchestrator",
     }
