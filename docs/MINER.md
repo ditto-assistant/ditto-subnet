@@ -7,7 +7,7 @@ other language that can serve the public HTTP contract. You are rewarded for
 improving the best artifact, not for serving live inference.
 
 > **Start in the
-> [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit).**
+> [`miners/dittobench-starter-kit`](../miners/dittobench-starter-kit/README.md).**
 > It is the supported Rust reference harness and local practice environment.
 > You may use it directly or implement the same container/HTTP contract in
 > another language. You do not need `ditto-subnet`, Python, a wallet, or TAO
@@ -27,14 +27,13 @@ improving the best artifact, not for serving live inference.
 
 ## Build and practice locally
 
-Follow the starter kit's
-[`SETUP.md`](https://github.com/ditto-assistant/dittobench-starter-kit/blob/main/SETUP.md)
+Follow the starter kit's [`SETUP.md`](../miners/dittobench-starter-kit/SETUP.md)
 for the Rust reference implementation, model, and embedding setup. Its shortest
 path is:
 
 ```sh
-git clone https://github.com/ditto-assistant/dittobench-starter-kit
-cd dittobench-starter-kit
+git clone https://github.com/ditto-assistant/ditto-subnet
+cd ditto-subnet/miners/dittobench-starter-kit
 cp .env.example .env
 
 cargo run -- seed-user          # one-time local memory setup
@@ -75,11 +74,11 @@ context.
 
 ## Install the submission CLI
 
-Clone `ditto-subnet` only when you are ready to verify, upload, or check status:
+Return to the `ditto-subnet` root when you are ready to verify, upload, or check
+status:
 
 ```sh
-git clone https://github.com/ditto-assistant/ditto-subnet
-cd ditto-subnet
+cd ../..
 uv sync
 ```
 
@@ -92,7 +91,7 @@ From `ditto-subnet`, verify the tarball before paying:
 
 ```sh
 uv run ditto verify \
-  --path ../dittobench-starter-kit/dittobench-submission.tgz
+  --path miners/dittobench-starter-kit/dittobench-submission.tgz
 ```
 
 The archive must be a gzip-compressed tarball no larger than 20 MiB, with its
@@ -104,7 +103,7 @@ Submit to Finney:
 
 ```sh
 uv run ditto --network finney upload \
-  --path ../dittobench-starter-kit/dittobench-submission.tgz \
+  --path miners/dittobench-starter-kit/dittobench-submission.tgz \
   --name my-agent \
   --coldkey default \
   --hotkey default
@@ -133,7 +132,7 @@ use the printed proof (`block_hash`, `block_number`, `extrinsic_index`):
 
 ```sh
 uv run ditto --network finney upload \
-  --path ../dittobench-starter-kit/dittobench-submission.tgz \
+  --path miners/dittobench-starter-kit/dittobench-submission.tgz \
   --name my-agent \
   --coldkey default \
   --hotkey default \
@@ -162,7 +161,7 @@ currently reserved TAO fee. For non-interactive recovery, opt in explicitly:
 
 ```sh
 uv run ditto --network finney upload \
-  --path ../dittobench-starter-kit/dittobench-submission.tgz \
+  --path miners/dittobench-starter-kit/dittobench-submission.tgz \
   --name my-agent \
   --coldkey default \
   --hotkey default \

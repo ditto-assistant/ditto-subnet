@@ -14,6 +14,8 @@ The `Release` workflow first verifies the exact merged source and then creates
 one semantic monorepo release. Hosted deploys and image publication consume the
 resulting immutable release commit:
 
+- the miner starter kit is released from `miners/dittobench-starter-kit`
+  without rebuilding the validator stack;
 - Platform uses the reusable exact-SHA IAP deploy and migrates from
   `/opt/ditto-subnet/apps/platform`;
 - Backroom builds and deploys `backroom.dittobench.ai` from the same release;

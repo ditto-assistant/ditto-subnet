@@ -29,6 +29,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         == plan["outputs"]
     )
     assert {
+        "miner_starter_kit",
         "dittobench_api",
         "dittobench_datagen",
         "platform",
@@ -38,6 +39,10 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     } <= plan["outputs"].keys()
     assert "scripts/release-plan.py" in resolver["run"]
     assert jobs["release"]["needs"] == ["plan", "verify-source"]
+    assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
+    assert (
+        "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["verify-source"]["if"]
+    )
 
     image_jobs = (
         "build-validator",
@@ -74,6 +79,15 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     verification = _step(verify_steps, "Gate the release on exact merge source")
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
     assert workflow["jobs"]["release"]["needs"] == ["plan", "verify-source"]
+
+    starter_verification = _step(
+        verify_steps, "Gate starter-kit release on exact merge source"
+    )
+    assert starter_verification["if"] == (
+        "needs.plan.outputs.miner_starter_kit == 'true'"
+    )
+    assert "cargo build --locked --verbose" in starter_verification["run"]
+    assert "cargo test --locked --verbose" in starter_verification["run"]
 
 
 def test_screener_runner_fallback_requires_platform_authorization() -> None:

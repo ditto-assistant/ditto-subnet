@@ -1,0 +1,879 @@
+[
+  {
+    "question_id": "01493427",
+    "question_type": "knowledge-update",
+    "query": "How many new postcards have I added to my collection since I started collecting again?",
+    "answer": "25",
+    "answer_pair_ids": [
+      "lme_01493427_s000_r000",
+      "lme_01493427_s000_r001",
+      "lme_01493427_s000_r002",
+      "lme_01493427_s000_r003",
+      "lme_01493427_s000_r004",
+      "lme_01493427_s000_r005",
+      "lme_01493427_s001_r000",
+      "lme_01493427_s001_r001",
+      "lme_01493427_s001_r002",
+      "lme_01493427_s001_r003",
+      "lme_01493427_s001_r004",
+      "lme_01493427_s001_r005"
+    ]
+  },
+  {
+    "question_id": "00ca467f",
+    "question_type": "multi-session",
+    "query": "How many doctor's appointments did I go to in March?",
+    "answer": 2,
+    "answer_pair_ids": [
+      "lme_00ca467f_s000_r000",
+      "lme_00ca467f_s000_r001",
+      "lme_00ca467f_s000_r002",
+      "lme_00ca467f_s000_r003",
+      "lme_00ca467f_s000_r004",
+      "lme_00ca467f_s000_r005",
+      "lme_00ca467f_s001_r000",
+      "lme_00ca467f_s001_r001",
+      "lme_00ca467f_s001_r002",
+      "lme_00ca467f_s001_r003",
+      "lme_00ca467f_s001_r004",
+      "lme_00ca467f_s001_r005",
+      "lme_00ca467f_s002_r000",
+      "lme_00ca467f_s002_r001",
+      "lme_00ca467f_s002_r002",
+      "lme_00ca467f_s002_r003",
+      "lme_00ca467f_s002_r004",
+      "lme_00ca467f_s002_r005"
+    ]
+  },
+  {
+    "question_id": "0e5e2d1a",
+    "question_type": "single-session-assistant",
+    "query": "I wanted to follow up on our previous conversation about binaural beats for anxiety and depression. Can you remind me how many subjects were in the study published in the journal Music and Medicine that found significant reductions in symptoms of depression, anxiety, and stress?",
+    "answer": "38 subjects",
+    "answer_pair_ids": [
+      "lme_0e5e2d1a_s000_r000",
+      "lme_0e5e2d1a_s000_r001",
+      "lme_0e5e2d1a_s000_r002"
+    ]
+  },
+  {
+    "question_id": "06878be2",
+    "question_type": "single-session-preference",
+    "query": "Can you suggest some accessories that would complement my current photography setup?",
+    "answer": "The user would prefer suggestions of Sony-compatible accessories or high-quality photography gear that can enhance their photography experience. They may not prefer suggestions of other brands' equipment or low-quality gear.",
+    "answer_pair_ids": [
+      "lme_06878be2_s000_r000",
+      "lme_06878be2_s000_r001",
+      "lme_06878be2_s000_r002",
+      "lme_06878be2_s000_r003",
+      "lme_06878be2_s000_r004",
+      "lme_06878be2_s000_r005",
+      "lme_06878be2_s000_r006",
+      "lme_06878be2_s000_r007"
+    ]
+  },
+  {
+    "question_id": "001be529",
+    "question_type": "single-session-user",
+    "query": "How long did I wait for the decision on my asylum application?",
+    "answer": "over a year",
+    "answer_pair_ids": [
+      "lme_001be529_s000_r000",
+      "lme_001be529_s000_r001",
+      "lme_001be529_s000_r002",
+      "lme_001be529_s000_r003",
+      "lme_001be529_s000_r004",
+      "lme_001be529_s000_r005"
+    ]
+  },
+  {
+    "question_id": "08f4fc43",
+    "question_type": "temporal-reasoning",
+    "query": "How many days had passed between the Sunday mass at St. Mary's Church and the Ash Wednesday service at the cathedral?",
+    "answer": "30 days. 31 days (including the last day) is also acceptable.",
+    "answer_pair_ids": [
+      "lme_08f4fc43_s000_r000",
+      "lme_08f4fc43_s000_r001",
+      "lme_08f4fc43_s000_r002",
+      "lme_08f4fc43_s000_r003",
+      "lme_08f4fc43_s000_r004",
+      "lme_08f4fc43_s001_r000",
+      "lme_08f4fc43_s001_r001",
+      "lme_08f4fc43_s001_r002",
+      "lme_08f4fc43_s001_r003",
+      "lme_08f4fc43_s001_r004",
+      "lme_08f4fc43_s001_r005"
+    ]
+  },
+  {
+    "question_id": "031748ae",
+    "question_type": "knowledge-update",
+    "query": "How many engineers do I lead when I just started my new role as Senior Software Engineer? How many engineers do I lead now?",
+    "answer": "When you just started your new role as Senior Software Engineer, you led 4 engineers. Now, you lead 5 engineers",
+    "answer_pair_ids": [
+      "lme_031748ae_s000_r000",
+      "lme_031748ae_s000_r001",
+      "lme_031748ae_s000_r002",
+      "lme_031748ae_s000_r003",
+      "lme_031748ae_s000_r004",
+      "lme_031748ae_s000_r005",
+      "lme_031748ae_s001_r000",
+      "lme_031748ae_s001_r001",
+      "lme_031748ae_s001_r002",
+      "lme_031748ae_s001_r003",
+      "lme_031748ae_s001_r004",
+      "lme_031748ae_s001_r005"
+    ]
+  },
+  {
+    "question_id": "0100672e",
+    "question_type": "multi-session",
+    "query": "How much did I spend on each coffee mug for my coworkers?",
+    "answer": "$12",
+    "answer_pair_ids": [
+      "lme_0100672e_s000_r000",
+      "lme_0100672e_s000_r001",
+      "lme_0100672e_s000_r002",
+      "lme_0100672e_s000_r003",
+      "lme_0100672e_s000_r004",
+      "lme_0100672e_s000_r005",
+      "lme_0100672e_s001_r000",
+      "lme_0100672e_s001_r001",
+      "lme_0100672e_s001_r002",
+      "lme_0100672e_s001_r003",
+      "lme_0100672e_s001_r004",
+      "lme_0100672e_s001_r005"
+    ]
+  },
+  {
+    "question_id": "1568498a",
+    "question_type": "single-session-assistant",
+    "query": "I'm looking back at our previous chess game and I was wondering, what was the move you made after 27. Kg2 Bd5+?",
+    "answer": "28. Kg3",
+    "answer_pair_ids": [
+      "lme_1568498a_s000_r000",
+      "lme_1568498a_s000_r001",
+      "lme_1568498a_s000_r002",
+      "lme_1568498a_s000_r003",
+      "lme_1568498a_s000_r004",
+      "lme_1568498a_s000_r005",
+      "lme_1568498a_s000_r006",
+      "lme_1568498a_s000_r007",
+      "lme_1568498a_s000_r008",
+      "lme_1568498a_s000_r009",
+      "lme_1568498a_s000_r010",
+      "lme_1568498a_s000_r011"
+    ]
+  },
+  {
+    "question_id": "06f04340",
+    "question_type": "single-session-preference",
+    "query": "What should I serve for dinner this weekend with my homegrown ingredients?",
+    "answer": "The user would prefer dinner suggestions that incorporate their homegrown cherry tomatoes and herbs like basil and mint, highlighting recipes that showcase their garden produce. They might not prefer suggestions that do not utilize these specific ingredients or do not emphasize the use of homegrown elements.",
+    "answer_pair_ids": [
+      "lme_06f04340_s000_r000",
+      "lme_06f04340_s000_r001",
+      "lme_06f04340_s000_r002",
+      "lme_06f04340_s000_r003",
+      "lme_06f04340_s000_r004",
+      "lme_06f04340_s000_r005",
+      "lme_06f04340_s000_r006"
+    ]
+  },
+  {
+    "question_id": "0862e8bf",
+    "question_type": "single-session-user",
+    "query": "What is the name of my cat?",
+    "answer": "Luna",
+    "answer_pair_ids": [
+      "lme_0862e8bf_s000_r000",
+      "lme_0862e8bf_s000_r001",
+      "lme_0862e8bf_s000_r002",
+      "lme_0862e8bf_s000_r003",
+      "lme_0862e8bf_s000_r004",
+      "lme_0862e8bf_s000_r005"
+    ]
+  },
+  {
+    "question_id": "0bb5a684",
+    "question_type": "temporal-reasoning",
+    "query": "How many days before the team meeting I was preparing for did I attend the workshop on 'Effective Communication in the Workplace'?",
+    "answer": "7 days. 8 days (including the last day) is also acceptable.",
+    "answer_pair_ids": [
+      "lme_0bb5a684_s000_r000",
+      "lme_0bb5a684_s000_r001",
+      "lme_0bb5a684_s000_r002",
+      "lme_0bb5a684_s000_r003",
+      "lme_0bb5a684_s000_r004",
+      "lme_0bb5a684_s000_r005",
+      "lme_0bb5a684_s001_r000",
+      "lme_0bb5a684_s001_r001",
+      "lme_0bb5a684_s001_r002",
+      "lme_0bb5a684_s001_r003",
+      "lme_0bb5a684_s001_r004",
+      "lme_0bb5a684_s001_r005"
+    ]
+  },
+  {
+    "question_id": "031748ae_abs",
+    "question_type": "knowledge-update",
+    "query": "How many engineers do I lead when I just started my new role as Software Engineer Manager?",
+    "answer": "The information provided is not enough. You mentioned starting the role as Senior Software Engineer but not Software Engineer Manager.",
+    "answer_pair_ids": [
+      "lme_031748ae_abs_s000_r000",
+      "lme_031748ae_abs_s000_r001",
+      "lme_031748ae_abs_s000_r002",
+      "lme_031748ae_abs_s000_r003",
+      "lme_031748ae_abs_s000_r004",
+      "lme_031748ae_abs_s000_r005",
+      "lme_031748ae_abs_s001_r000",
+      "lme_031748ae_abs_s001_r001",
+      "lme_031748ae_abs_s001_r002",
+      "lme_031748ae_abs_s001_r003",
+      "lme_031748ae_abs_s001_r004",
+      "lme_031748ae_abs_s001_r005"
+    ]
+  },
+  {
+    "question_id": "078150f1",
+    "question_type": "multi-session",
+    "query": "How much more money did I raise than my initial goal in the charity cycling event?",
+    "answer": "$50",
+    "answer_pair_ids": [
+      "lme_078150f1_s000_r000",
+      "lme_078150f1_s000_r001",
+      "lme_078150f1_s000_r002",
+      "lme_078150f1_s000_r003",
+      "lme_078150f1_s000_r004",
+      "lme_078150f1_s000_r005",
+      "lme_078150f1_s001_r000",
+      "lme_078150f1_s001_r001",
+      "lme_078150f1_s001_r002",
+      "lme_078150f1_s001_r003",
+      "lme_078150f1_s001_r004",
+      "lme_078150f1_s001_r005"
+    ]
+  },
+  {
+    "question_id": "16c90bf4",
+    "question_type": "single-session-assistant",
+    "query": "I'm looking back at our previous conversation about the Seco de Cordero recipe from Ancash. You mentioned using a light or medium-bodied beer, but I was wondering if you could remind me what type of beer you specifically recommended?",
+    "answer": "I recommended using a Pilsner or Lager for the recipe.",
+    "answer_pair_ids": [
+      "lme_16c90bf4_s000_r000",
+      "lme_16c90bf4_s000_r001",
+      "lme_16c90bf4_s000_r002",
+      "lme_16c90bf4_s000_r003",
+      "lme_16c90bf4_s000_r004"
+    ]
+  },
+  {
+    "question_id": "07b6f563",
+    "question_type": "single-session-preference",
+    "query": "Can you suggest some useful accessories for my phone?",
+    "answer": "The user would prefer suggestions of accessories that are compatible with an iPhone 13 Pro, such as high-quality screen protectors, durable cases, portable power banks, or phone wallet cases. They may not prefer suggestions of accessories that are not compatible with Apple products or do not enhance the functionality or protection of their phone.",
+    "answer_pair_ids": [
+      "lme_07b6f563_s000_r000",
+      "lme_07b6f563_s000_r001",
+      "lme_07b6f563_s000_r002",
+      "lme_07b6f563_s000_r003",
+      "lme_07b6f563_s000_r004",
+      "lme_07b6f563_s000_r005",
+      "lme_07b6f563_s000_r006"
+    ]
+  },
+  {
+    "question_id": "0862e8bf_abs",
+    "question_type": "single-session-user",
+    "query": "What is the name of my hamster?",
+    "answer": "You did not mention this information. You mentioned your cat Luna but not your hamster.",
+    "answer_pair_ids": [
+      "lme_0862e8bf_abs_s000_r000",
+      "lme_0862e8bf_abs_s000_r001",
+      "lme_0862e8bf_abs_s000_r002",
+      "lme_0862e8bf_abs_s000_r003",
+      "lme_0862e8bf_abs_s000_r004",
+      "lme_0862e8bf_abs_s000_r005"
+    ]
+  },
+  {
+    "question_id": "0bc8ad92",
+    "question_type": "temporal-reasoning",
+    "query": "How many months have passed since I last visited a museum with a friend?",
+    "answer": 5,
+    "answer_pair_ids": [
+      "lme_0bc8ad92_s000_r000",
+      "lme_0bc8ad92_s000_r001",
+      "lme_0bc8ad92_s000_r002",
+      "lme_0bc8ad92_s000_r003",
+      "lme_0bc8ad92_s000_r004",
+      "lme_0bc8ad92_s001_r000",
+      "lme_0bc8ad92_s001_r001",
+      "lme_0bc8ad92_s001_r002",
+      "lme_0bc8ad92_s001_r003",
+      "lme_0bc8ad92_s001_r004",
+      "lme_0bc8ad92_s002_r000",
+      "lme_0bc8ad92_s002_r001",
+      "lme_0bc8ad92_s002_r002",
+      "lme_0bc8ad92_s002_r003",
+      "lme_0bc8ad92_s002_r004",
+      "lme_0bc8ad92_s002_r005"
+    ]
+  },
+  {
+    "question_id": "06db6396",
+    "question_type": "knowledge-update",
+    "query": "How many projects have I completed since starting painting classes?",
+    "answer": "5",
+    "answer_pair_ids": [
+      "lme_06db6396_s000_r000",
+      "lme_06db6396_s000_r001",
+      "lme_06db6396_s000_r002",
+      "lme_06db6396_s000_r003",
+      "lme_06db6396_s000_r004",
+      "lme_06db6396_s000_r005",
+      "lme_06db6396_s001_r000",
+      "lme_06db6396_s001_r001",
+      "lme_06db6396_s001_r002",
+      "lme_06db6396_s001_r003",
+      "lme_06db6396_s001_r004",
+      "lme_06db6396_s001_r005"
+    ]
+  },
+  {
+    "question_id": "099778bb",
+    "question_type": "multi-session",
+    "query": "What percentage of leadership positions do women hold in the my company?",
+    "answer": "20%",
+    "answer_pair_ids": [
+      "lme_099778bb_s000_r000",
+      "lme_099778bb_s000_r001",
+      "lme_099778bb_s000_r002",
+      "lme_099778bb_s000_r003",
+      "lme_099778bb_s000_r004",
+      "lme_099778bb_s000_r005",
+      "lme_099778bb_s001_r000",
+      "lme_099778bb_s001_r001",
+      "lme_099778bb_s001_r002",
+      "lme_099778bb_s001_r003",
+      "lme_099778bb_s001_r004",
+      "lme_099778bb_s001_r005"
+    ]
+  },
+  {
+    "question_id": "18dcd5a5",
+    "question_type": "single-session-assistant",
+    "query": "I'm going back to our previous chat about the Lost Temple of the Djinn one-shot. Can you remind me how many mummies the party will face in the temple?",
+    "answer": "4",
+    "answer_pair_ids": [
+      "lme_18dcd5a5_s000_r000"
+    ]
+  },
+  {
+    "question_id": "09d032c9",
+    "question_type": "single-session-preference",
+    "query": "I've been having trouble with the battery life on my phone lately. Any tips?",
+    "answer": "The user would prefer responses that build upon their previous mention of purchasing a portable power bank, such as suggestions on how to optimize its use, like ensuring it's fully charged before use. They might also appreciate tips on utilizing battery-saving features on their phone. The user may not prefer responses that suggest alternative solutions or unrelated advice.",
+    "answer_pair_ids": [
+      "lme_09d032c9_s000_r000",
+      "lme_09d032c9_s000_r001",
+      "lme_09d032c9_s000_r002",
+      "lme_09d032c9_s000_r003",
+      "lme_09d032c9_s000_r004",
+      "lme_09d032c9_s000_r005",
+      "lme_09d032c9_s000_r006",
+      "lme_09d032c9_s000_r007",
+      "lme_09d032c9_s000_r008",
+      "lme_09d032c9_s000_r009"
+    ]
+  },
+  {
+    "question_id": "118b2229",
+    "question_type": "single-session-user",
+    "query": "How long is my daily commute to work?",
+    "answer": "45 minutes each way",
+    "answer_pair_ids": [
+      "lme_118b2229_s000_r000",
+      "lme_118b2229_s000_r001",
+      "lme_118b2229_s000_r002",
+      "lme_118b2229_s000_r003",
+      "lme_118b2229_s000_r004",
+      "lme_118b2229_s000_r005"
+    ]
+  },
+  {
+    "question_id": "0bc8ad93",
+    "question_type": "temporal-reasoning",
+    "query": "I mentioned visiting a museum two months ago. Did I visit with a friend or not?",
+    "answer": "No, you did not visit with a friend.",
+    "answer_pair_ids": [
+      "lme_0bc8ad93_s000_r000",
+      "lme_0bc8ad93_s000_r001",
+      "lme_0bc8ad93_s000_r002",
+      "lme_0bc8ad93_s000_r003",
+      "lme_0bc8ad93_s000_r004",
+      "lme_0bc8ad93_s000_r005",
+      "lme_0bc8ad93_s001_r000",
+      "lme_0bc8ad93_s001_r001",
+      "lme_0bc8ad93_s001_r002",
+      "lme_0bc8ad93_s001_r003",
+      "lme_0bc8ad93_s001_r004",
+      "lme_0bc8ad93_s002_r000",
+      "lme_0bc8ad93_s002_r001",
+      "lme_0bc8ad93_s002_r002",
+      "lme_0bc8ad93_s002_r003",
+      "lme_0bc8ad93_s002_r004",
+      "lme_0bc8ad93_s002_r005"
+    ]
+  },
+  {
+    "question_id": "07741c44",
+    "question_type": "knowledge-update",
+    "query": "Where do I initially keep my old sneakers?",
+    "answer": "under my bed",
+    "answer_pair_ids": [
+      "lme_07741c44_s000_r000",
+      "lme_07741c44_s000_r001",
+      "lme_07741c44_s000_r002",
+      "lme_07741c44_s000_r003",
+      "lme_07741c44_s000_r004",
+      "lme_07741c44_s000_r005",
+      "lme_07741c44_s001_r000",
+      "lme_07741c44_s001_r001",
+      "lme_07741c44_s001_r002",
+      "lme_07741c44_s001_r003",
+      "lme_07741c44_s001_r004",
+      "lme_07741c44_s001_r005"
+    ]
+  },
+  {
+    "question_id": "09ba9854",
+    "question_type": "multi-session",
+    "query": "How much will I save by taking the train from the airport to my hotel instead of a taxi?",
+    "answer": "$50",
+    "answer_pair_ids": [
+      "lme_09ba9854_s000_r000",
+      "lme_09ba9854_s000_r001",
+      "lme_09ba9854_s000_r002",
+      "lme_09ba9854_s000_r003",
+      "lme_09ba9854_s000_r004",
+      "lme_09ba9854_s000_r005",
+      "lme_09ba9854_s001_r000",
+      "lme_09ba9854_s001_r001",
+      "lme_09ba9854_s001_r002",
+      "lme_09ba9854_s001_r003",
+      "lme_09ba9854_s001_r004"
+    ]
+  },
+  {
+    "question_id": "1903aded",
+    "question_type": "single-session-assistant",
+    "query": "I think we discussed work from home jobs for seniors earlier. Can you remind me what was the 7th job in the list you provided?",
+    "answer": "Transcriptionist.",
+    "answer_pair_ids": [
+      "lme_1903aded_s000_r000"
+    ]
+  },
+  {
+    "question_id": "0a34ad58",
+    "question_type": "single-session-preference",
+    "query": "I\u2019m a bit anxious about getting around Tokyo. Do you have any helpful tips?",
+    "answer": "The user would prefer responses that utilize their existing resources, such as their Suica card and TripIt app, to provide personalized tips for navigating Tokyo's public transportation. They might not prefer general tips or recommendations that do not take into account their prior preparations.",
+    "answer_pair_ids": [
+      "lme_0a34ad58_s000_r000",
+      "lme_0a34ad58_s000_r001",
+      "lme_0a34ad58_s000_r002",
+      "lme_0a34ad58_s000_r003",
+      "lme_0a34ad58_s000_r004",
+      "lme_0a34ad58_s000_r005",
+      "lme_0a34ad58_s000_r006",
+      "lme_0a34ad58_s000_r007",
+      "lme_0a34ad58_s000_r008",
+      "lme_0a34ad58_s000_r009"
+    ]
+  },
+  {
+    "question_id": "15745da0",
+    "question_type": "single-session-user",
+    "query": "How long have I been collecting vintage cameras?",
+    "answer": "three months",
+    "answer_pair_ids": [
+      "lme_15745da0_s000_r000",
+      "lme_15745da0_s000_r001",
+      "lme_15745da0_s000_r002",
+      "lme_15745da0_s000_r003",
+      "lme_15745da0_s000_r004",
+      "lme_15745da0_s000_r005"
+    ]
+  },
+  {
+    "question_id": "0db4c65d",
+    "question_type": "temporal-reasoning",
+    "query": "How many days had passed since I finished reading 'The Seven Husbands of Evelyn Hugo' when I attended the book reading event at the local library, where the author of 'The Silent Patient' is discussing her latest thriller novel?",
+    "answer": "18 days. 19 days (including the last day) is also acceptable.",
+    "answer_pair_ids": [
+      "lme_0db4c65d_s000_r000",
+      "lme_0db4c65d_s000_r001",
+      "lme_0db4c65d_s000_r002",
+      "lme_0db4c65d_s000_r003",
+      "lme_0db4c65d_s000_r004",
+      "lme_0db4c65d_s000_r005",
+      "lme_0db4c65d_s001_r000",
+      "lme_0db4c65d_s001_r001",
+      "lme_0db4c65d_s001_r002",
+      "lme_0db4c65d_s001_r003",
+      "lme_0db4c65d_s001_r004",
+      "lme_0db4c65d_s001_r005"
+    ]
+  },
+  {
+    "question_id": "07741c45",
+    "question_type": "knowledge-update",
+    "query": "Where do I currently keep my old sneakers?",
+    "answer": "in a shoe rack in my closet",
+    "answer_pair_ids": [
+      "lme_07741c45_s000_r000",
+      "lme_07741c45_s000_r001",
+      "lme_07741c45_s000_r002",
+      "lme_07741c45_s000_r003",
+      "lme_07741c45_s000_r004",
+      "lme_07741c45_s000_r005",
+      "lme_07741c45_s001_r000",
+      "lme_07741c45_s001_r001",
+      "lme_07741c45_s001_r002",
+      "lme_07741c45_s001_r003",
+      "lme_07741c45_s001_r004",
+      "lme_07741c45_s001_r005"
+    ]
+  },
+  {
+    "question_id": "09ba9854_abs",
+    "question_type": "multi-session",
+    "query": "How much will I save by taking the bus from the airport to my hotel instead of a taxi?",
+    "answer": "The information provided is not enough. You did not mention how much will the bus take.",
+    "answer_pair_ids": [
+      "lme_09ba9854_abs_s000_r000",
+      "lme_09ba9854_abs_s000_r001",
+      "lme_09ba9854_abs_s000_r002",
+      "lme_09ba9854_abs_s000_r003",
+      "lme_09ba9854_abs_s000_r004",
+      "lme_09ba9854_abs_s000_r005",
+      "lme_09ba9854_abs_s001_r000",
+      "lme_09ba9854_abs_s001_r001",
+      "lme_09ba9854_abs_s001_r002",
+      "lme_09ba9854_abs_s001_r003",
+      "lme_09ba9854_abs_s001_r004"
+    ]
+  },
+  {
+    "question_id": "1b9b7252",
+    "question_type": "single-session-assistant",
+    "query": "I wanted to follow up on our previous conversation about mindfulness techniques. You mentioned some great resources for guided imagery exercises, can you remind me of the website that had free exercises like 'The Mountain Meditation' and 'The Body Scan Meditation'?",
+    "answer": "Mindful.org.",
+    "answer_pair_ids": [
+      "lme_1b9b7252_s000_r000",
+      "lme_1b9b7252_s000_r001",
+      "lme_1b9b7252_s000_r002",
+      "lme_1b9b7252_s000_r003"
+    ]
+  },
+  {
+    "question_id": "0edc2aef",
+    "question_type": "single-session-preference",
+    "query": "Can you suggest a hotel for my upcoming trip to Miami?",
+    "answer": "The user would prefer suggestions of hotels in Miami that offer great views, possibly of the ocean or the city skyline, and have unique features such as a rooftop pool or a hot tub on the balcony. They may not prefer suggestions of basic or budget hotels without these features.",
+    "answer_pair_ids": [
+      "lme_0edc2aef_s000_r000",
+      "lme_0edc2aef_s000_r001",
+      "lme_0edc2aef_s000_r002",
+      "lme_0edc2aef_s000_r003",
+      "lme_0edc2aef_s000_r004",
+      "lme_0edc2aef_s000_r005",
+      "lme_0edc2aef_s000_r006",
+      "lme_0edc2aef_s000_r007",
+      "lme_0edc2aef_s000_r008",
+      "lme_0edc2aef_s000_r009"
+    ]
+  },
+  {
+    "question_id": "15745da0_abs",
+    "question_type": "single-session-user",
+    "query": "How long have I been collecting vintage films?",
+    "answer": "You did not mention this information. You mentioned collecting vintage cameras but not vintage films.",
+    "answer_pair_ids": [
+      "lme_15745da0_abs_s000_r000",
+      "lme_15745da0_abs_s000_r001",
+      "lme_15745da0_abs_s000_r002",
+      "lme_15745da0_abs_s000_r003",
+      "lme_15745da0_abs_s000_r004",
+      "lme_15745da0_abs_s000_r005"
+    ]
+  },
+  {
+    "question_id": "2a1811e2",
+    "question_type": "temporal-reasoning",
+    "query": "How many days had passed between the Hindu festival of Holi and the Sunday mass at St. Mary's Church?",
+    "answer": "21 days. 22 days (including the last day) is also acceptable.",
+    "answer_pair_ids": [
+      "lme_2a1811e2_s000_r000",
+      "lme_2a1811e2_s000_r001",
+      "lme_2a1811e2_s000_r002",
+      "lme_2a1811e2_s000_r003",
+      "lme_2a1811e2_s000_r004",
+      "lme_2a1811e2_s000_r005",
+      "lme_2a1811e2_s001_r000",
+      "lme_2a1811e2_s001_r001",
+      "lme_2a1811e2_s001_r002",
+      "lme_2a1811e2_s001_r003",
+      "lme_2a1811e2_s001_r004",
+      "lme_2a1811e2_s001_r005"
+    ]
+  },
+  {
+    "question_id": "08e075c7",
+    "question_type": "knowledge-update",
+    "query": "How long have I been using my Fitbit Charge 3?",
+    "answer": "9 months",
+    "answer_pair_ids": [
+      "lme_08e075c7_s000_r000",
+      "lme_08e075c7_s000_r001",
+      "lme_08e075c7_s000_r002",
+      "lme_08e075c7_s000_r003",
+      "lme_08e075c7_s000_r004",
+      "lme_08e075c7_s000_r005",
+      "lme_08e075c7_s001_r000",
+      "lme_08e075c7_s001_r001",
+      "lme_08e075c7_s001_r002",
+      "lme_08e075c7_s001_r003",
+      "lme_08e075c7_s001_r004",
+      "lme_08e075c7_s001_r005"
+    ]
+  },
+  {
+    "question_id": "0a995998",
+    "question_type": "multi-session",
+    "query": "How many items of clothing do I need to pick up or return from a store?",
+    "answer": 3,
+    "answer_pair_ids": [
+      "lme_0a995998_s000_r000",
+      "lme_0a995998_s000_r001",
+      "lme_0a995998_s000_r002",
+      "lme_0a995998_s000_r003",
+      "lme_0a995998_s000_r004",
+      "lme_0a995998_s000_r005",
+      "lme_0a995998_s001_r000",
+      "lme_0a995998_s001_r001",
+      "lme_0a995998_s001_r002",
+      "lme_0a995998_s001_r003",
+      "lme_0a995998_s001_r004",
+      "lme_0a995998_s001_r005",
+      "lme_0a995998_s002_r000",
+      "lme_0a995998_s002_r001",
+      "lme_0a995998_s002_r002",
+      "lme_0a995998_s002_r003",
+      "lme_0a995998_s002_r004"
+    ]
+  },
+  {
+    "question_id": "1d4da289",
+    "question_type": "single-session-assistant",
+    "query": "I was thinking about our previous conversation about data privacy and security. You mentioned that companies use two-factor authentication to enhance security. Can you remind me what kind of two-factor authentication methods you were referring to?",
+    "answer": "I mentioned biometric authentication or one-time passwords (OTP) as examples of two-factor authentication methods.",
+    "answer_pair_ids": [
+      "lme_1d4da289_s000_r000",
+      "lme_1d4da289_s000_r001",
+      "lme_1d4da289_s000_r002"
+    ]
+  },
+  {
+    "question_id": "195a1a1b",
+    "question_type": "single-session-preference",
+    "query": "Can you suggest some activities that I can do in the evening?",
+    "answer": "The user would prefer suggestions that involve relaxing activities that can be done in the evening, preferably before 9:30 pm. They would not prefer suggestions that involve using their phone or watching TV, as these activities have been affecting their sleep quality.",
+    "answer_pair_ids": [
+      "lme_195a1a1b_s000_r000",
+      "lme_195a1a1b_s000_r001",
+      "lme_195a1a1b_s000_r002",
+      "lme_195a1a1b_s000_r003",
+      "lme_195a1a1b_s000_r004",
+      "lme_195a1a1b_s000_r005",
+      "lme_195a1a1b_s000_r006",
+      "lme_195a1a1b_s000_r007"
+    ]
+  },
+  {
+    "question_id": "19b5f2b3",
+    "question_type": "single-session-user",
+    "query": "How long was I in Japan for?",
+    "answer": "two weeks",
+    "answer_pair_ids": [
+      "lme_19b5f2b3_s000_r000",
+      "lme_19b5f2b3_s000_r001",
+      "lme_19b5f2b3_s000_r002",
+      "lme_19b5f2b3_s000_r003",
+      "lme_19b5f2b3_s000_r004",
+      "lme_19b5f2b3_s000_r005"
+    ]
+  },
+  {
+    "question_id": "2c63a862",
+    "question_type": "temporal-reasoning",
+    "query": "How many days did it take for me to find a house I loved after starting to work with Rachel?",
+    "answer": "14 days. 15 days (including the last day) is also acceptable.",
+    "answer_pair_ids": [
+      "lme_2c63a862_s000_r000",
+      "lme_2c63a862_s000_r001",
+      "lme_2c63a862_s000_r002",
+      "lme_2c63a862_s000_r003",
+      "lme_2c63a862_s000_r004",
+      "lme_2c63a862_s000_r005",
+      "lme_2c63a862_s001_r000",
+      "lme_2c63a862_s001_r001",
+      "lme_2c63a862_s001_r002",
+      "lme_2c63a862_s001_r003",
+      "lme_2c63a862_s001_r004",
+      "lme_2c63a862_s001_r005"
+    ]
+  },
+  {
+    "question_id": "0977f2af",
+    "question_type": "knowledge-update",
+    "query": "What new kitchen gadget did I invest in before getting the Air Fryer?",
+    "answer": "Instant Pot",
+    "answer_pair_ids": [
+      "lme_0977f2af_s000_r000",
+      "lme_0977f2af_s000_r001",
+      "lme_0977f2af_s000_r002",
+      "lme_0977f2af_s000_r003",
+      "lme_0977f2af_s000_r004",
+      "lme_0977f2af_s000_r005",
+      "lme_0977f2af_s001_r000",
+      "lme_0977f2af_s001_r001",
+      "lme_0977f2af_s001_r002",
+      "lme_0977f2af_s001_r003",
+      "lme_0977f2af_s001_r004",
+      "lme_0977f2af_s001_r005"
+    ]
+  },
+  {
+    "question_id": "0ea62687",
+    "question_type": "multi-session",
+    "query": "How much more miles per gallon was my car getting a few months ago compared to now?",
+    "answer": "2",
+    "answer_pair_ids": [
+      "lme_0ea62687_s000_r000",
+      "lme_0ea62687_s000_r001",
+      "lme_0ea62687_s000_r002",
+      "lme_0ea62687_s000_r003",
+      "lme_0ea62687_s000_r004",
+      "lme_0ea62687_s000_r005",
+      "lme_0ea62687_s001_r000",
+      "lme_0ea62687_s001_r001",
+      "lme_0ea62687_s001_r002",
+      "lme_0ea62687_s001_r003",
+      "lme_0ea62687_s001_r004",
+      "lme_0ea62687_s001_r005"
+    ]
+  },
+  {
+    "question_id": "1de5cff2",
+    "question_type": "single-session-assistant",
+    "query": "I was going through our previous conversation about high-end fashion brands, and I was wondering if you could remind me of the brand that uses wild rubber sourced from the Amazon rainforest?",
+    "answer": "Veja",
+    "answer_pair_ids": [
+      "lme_1de5cff2_s000_r000",
+      "lme_1de5cff2_s000_r001",
+      "lme_1de5cff2_s000_r002",
+      "lme_1de5cff2_s000_r003",
+      "lme_1de5cff2_s000_r004",
+      "lme_1de5cff2_s000_r005"
+    ]
+  },
+  {
+    "question_id": "1a1907b4",
+    "question_type": "single-session-preference",
+    "query": "I've been thinking about making a cocktail for an upcoming get-together, but I'm not sure which one to choose. Any suggestions?",
+    "answer": "Considering their mixology class background, the user would prefer cocktail suggestions that build upon their existing skills and interests, such as creative variations of classic cocktails or innovative twists on familiar flavors. They might appreciate recommendations that incorporate their experience with refreshing summer drinks like Pimm's Cup. The user would not prefer overly simplistic or basic cocktail recipes, and may not be interested in suggestions that don't take into account their mixology class background.",
+    "answer_pair_ids": [
+      "lme_1a1907b4_s000_r000",
+      "lme_1a1907b4_s000_r001",
+      "lme_1a1907b4_s000_r002",
+      "lme_1a1907b4_s000_r003",
+      "lme_1a1907b4_s000_r004",
+      "lme_1a1907b4_s000_r005",
+      "lme_1a1907b4_s000_r006",
+      "lme_1a1907b4_s000_r007"
+    ]
+  },
+  {
+    "question_id": "19b5f2b3_abs",
+    "question_type": "single-session-user",
+    "query": "How long was I in Korea for?",
+    "answer": "You did not mention this information. You mentioned staying in Japan, but not in Korea.",
+    "answer_pair_ids": [
+      "lme_19b5f2b3_abs_s000_r000",
+      "lme_19b5f2b3_abs_s000_r001",
+      "lme_19b5f2b3_abs_s000_r002",
+      "lme_19b5f2b3_abs_s000_r003",
+      "lme_19b5f2b3_abs_s000_r004",
+      "lme_19b5f2b3_abs_s000_r005"
+    ]
+  },
+  {
+    "question_id": "2ebe6c90",
+    "question_type": "temporal-reasoning",
+    "query": "How many days did it take me to finish 'The Nightingale' by Kristin Hannah?",
+    "answer": "21 days. 22 days (including the last day) is also acceptable.",
+    "answer_pair_ids": [
+      "lme_2ebe6c90_s000_r000",
+      "lme_2ebe6c90_s000_r001",
+      "lme_2ebe6c90_s000_r002",
+      "lme_2ebe6c90_s000_r003",
+      "lme_2ebe6c90_s000_r004",
+      "lme_2ebe6c90_s000_r005",
+      "lme_2ebe6c90_s001_r000",
+      "lme_2ebe6c90_s001_r001",
+      "lme_2ebe6c90_s001_r002",
+      "lme_2ebe6c90_s001_r003",
+      "lme_2ebe6c90_s001_r004"
+    ]
+  },
+  {
+    "question_id": "0ddfec37",
+    "question_type": "knowledge-update",
+    "query": "How many autographed baseballs have I added to my collection in the first three months of collection?",
+    "answer": "15",
+    "answer_pair_ids": [
+      "lme_0ddfec37_s000_r000",
+      "lme_0ddfec37_s000_r001",
+      "lme_0ddfec37_s000_r002",
+      "lme_0ddfec37_s000_r003",
+      "lme_0ddfec37_s000_r004",
+      "lme_0ddfec37_s000_r005",
+      "lme_0ddfec37_s001_r000",
+      "lme_0ddfec37_s001_r001",
+      "lme_0ddfec37_s001_r002",
+      "lme_0ddfec37_s001_r003",
+      "lme_0ddfec37_s001_r004"
+    ]
+  },
+  {
+    "question_id": "10d9b85a",
+    "question_type": "multi-session",
+    "query": "How many days did I spend attending workshops, lectures, and conferences in April?",
+    "answer": "3 days",
+    "answer_pair_ids": [
+      "lme_10d9b85a_s000_r000",
+      "lme_10d9b85a_s000_r001",
+      "lme_10d9b85a_s000_r002",
+      "lme_10d9b85a_s000_r003",
+      "lme_10d9b85a_s000_r004",
+      "lme_10d9b85a_s001_r000",
+      "lme_10d9b85a_s001_r001",
+      "lme_10d9b85a_s001_r002",
+      "lme_10d9b85a_s001_r003",
+      "lme_10d9b85a_s001_r004",
+      "lme_10d9b85a_s001_r005"
+    ]
+  }
+]

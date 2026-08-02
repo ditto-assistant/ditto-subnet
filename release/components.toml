@@ -41,6 +41,12 @@ paths = [
   "ditto/api_models/upload.py",
 ]
 
+[components.miner_starter_kit]
+description = "Miner reference harness and local practice loop"
+paths = [
+  "miners/dittobench-starter-kit/**",
+]
+
 [components.validator]
 description = "Validator worker image"
 depends_on = ["screening_protocol"]

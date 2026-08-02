@@ -39,6 +39,14 @@ def test_miner_only_change_does_not_release_validator_stack(
     ) == {"miner_cli"}
 
 
+def test_starter_kit_change_is_an_isolated_miner_release(
+    components, ignored_paths
+) -> None:
+    assert selected(
+        components, ignored_paths, "miners/dittobench-starter-kit/src/baseline.rs"
+    ) == {"miner_starter_kit"}
+
+
 def test_validator_change_propagates_to_stack(components, ignored_paths) -> None:
     assert selected(components, ignored_paths, "ditto/validator/worker.py") == {
         "validator",

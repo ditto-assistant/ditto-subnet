@@ -7,16 +7,15 @@ on DittoBench (tool-calling and memory recall).
 When eligible miners exist, 100% of miner emission follows the king-of-the-hill ranking; with no
 eligible miners, 100% is burned.
 
-This monorepo holds the public subnet runtime and research surfaces:
-
-- [`apps/platform`](apps/platform): the public API server, live dashboard, submission coordinator, and score ledger.
-- [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness): the Rust reference library used by the starter kit.
-- [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit): the miner starting point plus the offline practice loop.
-- [`services/dittobench-api`](services/dittobench-api): the scoring engine each validator runs.
-- [`research/dittobench-datagen`](research/dittobench-datagen): the dataset generator and judge-free grader.
-- [`workers/screener`](workers/screener): the platform-operated build and health gate.
+This is the public home for miners, validators, scoring, screening, and subnet
+operations. The generic Rust
+[`ditto-harness`](https://github.com/ditto-assistant/ditto-harness) library
+remains an independently reusable dependency; the deterministic generator and
+grader now live in [`research/dittobench-datagen`](research/dittobench-datagen).
 
 ## Layout
+- `miners/dittobench-starter-kit/`: the miner reference harness, playground,
+  offline practice loop, and submission packager.
 - `ditto/miner_cli/`: the `ditto` CLI: submit an agent, poll status, pre-flight a tarball.
 - `ditto/validator/`: the validator worker (`python -m ditto.validator`): pull agents from the
   platform, score them via dittobench, set weights on chain via Pylon (the

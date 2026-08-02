@@ -29,6 +29,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -83,6 +84,7 @@ type Sandbox interface {
 type Source struct {
 	GitURL     string // e.g. https://github.com/<miner>/<harness>
 	GitRef     string // branch, tag, or commit (default: default branch)
+	GitSubdir  string // optional repository-relative Docker context
 	TarballURL string // presigned https URL of a gzipped tar of the harness
 	// TarballSHA256, when non-empty, is verified (hex) against the fetched bytes.
 	// The platform already checks it at upload; re-verifying makes the sandbox
@@ -93,6 +95,37 @@ type Source struct {
 	ScreenedImageID     string
 	ScreenedImageRef    string
 	ScreenedImageSize   int64
+}
+
+func resolveGitContext(workdir, subdir string) (string, error) {
+	root, err := filepath.EvalSymlinks(workdir)
+	if err != nil {
+		return "", fmt.Errorf("resolve git checkout: %w", err)
+	}
+	trimmed := strings.TrimSpace(subdir)
+	if trimmed == "" || trimmed == "." {
+		return root, nil
+	}
+	clean := filepath.Clean(filepath.FromSlash(trimmed))
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("git_subdir must be a repository-relative path")
+	}
+	candidate, err := filepath.EvalSymlinks(filepath.Join(root, clean))
+	if err != nil {
+		return "", fmt.Errorf("resolve git_subdir: %w", err)
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("git_subdir escapes the repository checkout")
+	}
+	info, err := os.Stat(candidate)
+	if err != nil {
+		return "", fmt.Errorf("stat git_subdir: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("git_subdir is not a directory")
+	}
+	return candidate, nil
 }
 
 // Handle references a running harness container.
@@ -368,6 +401,10 @@ func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *p
 		cmd.Env = cloneEnv
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", "", nil, fmt.Errorf("git clone failed: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		contextDir, err = resolveGitContext(workdir, src.GitSubdir)
+		if err != nil {
+			return "", "", nil, err
 		}
 	}
 

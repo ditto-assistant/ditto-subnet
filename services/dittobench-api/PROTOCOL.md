@@ -438,5 +438,5 @@ The gate holds exact/near-exact copies for review (the earlier upload wins by
 first-seen) and requires agreement across independent signals before flagging
 the softer similarity band, so independent convergence on the shared reference
 harness is not penalized. The miner-facing summary is in the
-[starter kit](https://github.com/ditto-assistant/dittobench-starter-kit) README
+[starter kit](../../miners/dittobench-starter-kit/README.md) README
 (*Mining on SN118 → Originality*).
