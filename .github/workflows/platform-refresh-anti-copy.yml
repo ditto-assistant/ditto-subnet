@@ -1,6 +1,10 @@
 name: Refresh Platform anti-copy reference
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - miners/dittobench-starter-kit/**
   schedule:
     - cron: "17 8 * * *"
   workflow_dispatch:
@@ -26,16 +30,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check out official starter kit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ditto-assistant/dittobench-starter-kit
-          path: apps/platform/.reference/dittobench-starter-kit
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Regenerate deterministic reference bundles
-        run: python3 scripts/build_reference_fingerprints.py .reference/dittobench-starter-kit
+        run: python3 scripts/build_reference_fingerprints.py ../../miners/dittobench-starter-kit
 
       - name: Open or refresh reference update PR
         env:
@@ -49,7 +45,7 @@ jobs:
             ditto/anticopy/reference_manifest_v2.json
           )
           if git diff --quiet -- "${outputs[@]}"; then
-            echo "Anti-copy reference already matches official starter-kit main."
+            echo "Anti-copy reference already matches the in-tree starter kit."
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -68,7 +64,7 @@ jobs:
               --base main \
               --head "$BRANCH" \
               --title "chore: refresh starter-kit anti-copy reference" \
-              --body "Refresh the provenance-aware anti-copy bundles from the official starter-kit mainline.\n\nThe automation explicitly dispatches Platform CI and the migration-order guard because pull requests opened with the repository GITHUB_TOKEN do not emit pull_request workflow runs."
+              --body "Refresh the provenance-aware anti-copy bundles from the in-tree starter kit.\n\nThe automation explicitly dispatches Platform CI and the migration-order guard because pull requests opened with the repository GITHUB_TOKEN do not emit pull_request workflow runs."
           fi
           # Events created with GITHUB_TOKEN intentionally do not start other
           # workflows. Dispatch both required guards against the exact branch

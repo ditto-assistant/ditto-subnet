@@ -113,8 +113,8 @@ the on-chain validator run.
 
 ## How it fits with the starter kit
 
-The companion repo
-[`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit)
+The companion monorepo directory
+[`miners/dittobench-starter-kit`](../../miners/dittobench-starter-kit)
 defines the miner harness: an HTTP server exposing `POST /run` (`RunRequest` to
 `RunResponse`), `POST /seed` (load a fresh memory haystack), and `GET /health`.
 You build your harness there, run it, expose it, then point this engine at its
@@ -276,6 +276,19 @@ curl -X POST localhost:8000/v1/submit \
   -H 'Content-Type: application/json' \
   -d '{"git_url":"https://github.com/<you>/<harness>","git_ref":"main","n":30}'
 # {"run_id":"...","status":"queued","poll":"/v1/runs/..."}
+```
+
+For a monorepo, `git_subdir` selects the repository-relative Docker context.
+Absolute paths, parent traversal, non-directories, and symlink escapes are
+rejected after clone:
+
+```json
+{
+  "git_url": "https://github.com/ditto-assistant/ditto-subnet",
+  "git_ref": "main",
+  "git_subdir": "miners/dittobench-starter-kit",
+  "run_size": "small"
+}
 ```
 
 **Full pipeline (`run_size`)**: the complete SN118 evaluation. Generate a fresh

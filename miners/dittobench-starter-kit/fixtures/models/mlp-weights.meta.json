@@ -1,0 +1,8 @@
+{
+  "aux_dim": 17,
+  "num_weights": 7,
+  "with_scale": true,
+  "output_dim": 8,
+  "tensor_count": 15,
+  "source_checkpoint": "model_gemma.pt"
+}

@@ -507,6 +507,10 @@ type submitRequest struct {
 	HarnessURL   string `json:"harness_url,omitempty"`
 	GitURL       string `json:"git_url,omitempty"`
 	GitRef       string `json:"git_ref,omitempty"`
+	// GitSubdir selects a repository-relative Docker context after cloning a
+	// monorepo. It is valid only with GitURL and is resolved without allowing
+	// absolute paths, parent traversal, or symlink escape.
+	GitSubdir string `json:"git_subdir,omitempty"`
 	// TarballURL is a presigned https URL of a gzipped tar of the harness. The
 	// SN118 platform stores miner uploads as tarballs, so the validator hands us
 	// the platform's short-lived download URL instead of a git repo. Mutually
@@ -563,12 +567,13 @@ func inferenceTicketIdentity(req submitRequest) brokerTicketIdentity {
 }
 
 // sourceFromReq builds the sandbox Source for a build submission. git_url and
-// tarball_url are mutually exclusive (enforced in handleSubmit); GitRef applies
-// only to the git path.
+// tarball_url are mutually exclusive (enforced in handleSubmit); GitRef and
+// GitSubdir apply only to the git path.
 func sourceFromReq(req submitRequest) sandbox.Source {
 	return sandbox.Source{
 		GitURL:              req.GitURL,
 		GitRef:              req.GitRef,
+		GitSubdir:           req.GitSubdir,
 		TarballURL:          req.TarballURL,
 		TarballSHA256:       req.TarballSHA256,
 		ScreenedImageURL:    req.ScreenedImageURL,
@@ -577,6 +582,13 @@ func sourceFromReq(req submitRequest) sandbox.Source {
 		ScreenedImageRef:    req.ScreenedImageRef,
 		ScreenedImageSize:   req.ScreenedImageSize,
 	}
+}
+
+func validateGitSourceOptions(req submitRequest) string {
+	if req.GitSubdir != "" && req.GitURL == "" {
+		return "git_subdir requires git_url"
+	}
+	return ""
 }
 
 func validateScreenedImage(req submitRequest) string {
@@ -771,6 +783,10 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "provide only one of harness_url, git_url, or tarball_url")
 		return
 	}
+	if msg := validateGitSourceOptions(req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	if msg := validateScreenedImage(req); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -881,6 +897,10 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if sources != 1 {
 		writeError(w, http.StatusBadRequest, "provide exactly one of harness_url, git_url, or tarball_url")
+		return
+	}
+	if msg := validateGitSourceOptions(req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if msg := validateScreenedImage(req); msg != "" {

@@ -58,6 +58,7 @@ line-length = 88
 target-version = "py311"
 extend-exclude = [
     "apps/platform",
+    "miners/dittobench-starter-kit",
     "packages/ditto-screening-protocol",
     "services/dittobench-api",
     "services/screener-orchestrator",

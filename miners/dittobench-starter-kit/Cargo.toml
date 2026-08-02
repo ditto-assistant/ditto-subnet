@@ -1,0 +1,36 @@
+[package]
+name = "dittobench-starter-kit"
+version = "0.1.0"
+edition = "2021"
+description = "DittoBench (SN118) miner starter kit: a local agent/memory harness over the ditto-harness crate."
+license = "MIT"
+
+[[bin]]
+name = "dittobench-miner"
+path = "src/bin/dittobench-miner.rs"
+
+[dependencies]
+# The Ditto agent + memory harness (public git dep), pinned to a known-good
+# ditto-harness commit for reproducible builds. Bump `rev` deliberately: set it
+# to the new commit, `cargo update -p ditto-harness`, then run the full suite.
+ditto-harness = { git = "https://github.com/ditto-assistant/ditto-harness", rev = "ba5b463aecd8eec38ada6aa9c2e6e8fac9c5be1d" }
+
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+axum = "0.7"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["clock"] }
+
+# Cross-encoder reranker: ONNX Runtime + BERT WordPiece tokenizer. Mirrors the
+# production cross-encoder/ stage 1:1 (TinyBERT-L2 INT8, RRF fusion).
+ort = "=2.0.0-rc.12"
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+ndarray = "0.16"
+dotenvy = "0.15"
+# Outbound HTTP for the playground -> dittobench-api proxy (Submit tab).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
