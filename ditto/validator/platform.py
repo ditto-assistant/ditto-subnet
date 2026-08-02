@@ -61,7 +61,11 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/validator"
 # The scoring ledger lives under a sibling prefix, not /validator.
 _SCORING_PREFIX = "/api/v1/scoring"
-_INFERENCE_EXCHANGE_RETRY_DELAYS = (0.25, 1.0)
+# Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
+# blips, but survive a full relay handover window without throwing away a
+# benchmark ticket. This does not spend inference budget: no model request can
+# begin until the exchange succeeds.
+_INFERENCE_EXCHANGE_RETRY_DELAYS = (0.25, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 
 
 class PlatformClient:
