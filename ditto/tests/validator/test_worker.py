@@ -2689,7 +2689,12 @@ class TestRunOnce:
         platform.submit_score.assert_awaited_once()
         # Detached sends remain hard-bounded even when the transport never
         # returns, so the worker does not accumulate telemetry tasks.
-        await asyncio.sleep(0.02)
+        detached = tuple(worker._background_heartbeat_tasks)
+        if detached:
+            await asyncio.gather(*detached, return_exceptions=True)
+            # Give each task's synchronous done callback one event-loop turn to
+            # consume its result and release the worker's strong reference.
+            await asyncio.sleep(0)
         assert not worker._background_heartbeat_tasks
 
     async def test_slow_preparing_heartbeat_finishes_after_caller_budget(
