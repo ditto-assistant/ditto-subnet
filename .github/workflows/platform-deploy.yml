@@ -1,0 +1,463 @@
+name: Deploy Platform
+
+# Subnet releases call this workflow with their immutable release commit.
+# Operators may also dispatch an exact revision to dev or prod by hand.
+#
+# Persistent infra (VMs, Postgres, buckets, DNS, the deploy SA) is provisioned
+# separately from the monorepo's infra/terraform/stacks/gcp-platform root and
+# infra/ansible playbooks. This
+# workflow only ships new code. The ordinary API deploy authenticates with
+# Workload Identity Federation (no static keys), IAP-SSHes into the matching
+# VM, and runs scripts/update.sh. On main pushes that touch relay runtime paths,
+# a sibling job builds a wheel plus locked dependencies at the same time. After
+# the API deploy has migrated and verified that exact commit, relay-release
+# installs the artifact under a commit-specific path and rolls the two PM2
+# relay services one at a time. There is always one relay left behind Caddy.
+#
+# A green run means the public host answered /health on the revision the deploy
+# put there. It does NOT mean only that a script exited 0: update.sh compares
+# the running process's commit against the checkout, and the health check below
+# compares the public host's against what update.sh reported. Both gates exist
+# because a deploy that stops midway leaves new code checked out and the old
+# process serving, which looks identical to success at the git layer
+# (2026-07-25).
+#
+# GitHub secrets (no values committed):
+#   Repo-level:
+#     GCP_WIF_PROVIDER        full `github` WIF provider resource name
+#                             (gcp-platform output `wif_provider`)
+#     GCP_PLATFORM_DEPLOY_SA  github-actions-platform-deploy@ditto-app-dev.iam.gserviceaccount.com
+#                             (gcp-platform output `platform_deploy_sa_email`)
+#   Per-Environment (`dev` and `prod` GitHub Environments):
+#     DITTO_UPLOAD_PAYMENT_ADDRESS  (secret) the env's SS58 upload-fee receive
+#       address. Injected into the VM's mode-0600 .env.deploy at deploy time
+#       (NOT stored in infra).
+#       The `prod` environment is where you add required reviewers if you want a
+#       manual gate before prod deploys.
+#     DITTO_DASHBOARD_WANDB_URL     (variable, optional) public wandb project URL
+#       shown as the dashboard's "full telemetry" link, e.g.
+#       https://wandb.ai/<entity>/ditto-sn118. Upserted into .env.deploy by
+#       update.sh; unset just leaves the SPA's default link.
+
+on:
+  workflow_call:
+    inputs:
+      revision:
+        description: Exact released monorepo commit
+        type: string
+        required: true
+      environment:
+        description: Target environment
+        type: string
+        default: prod
+      deploy_relay:
+        description: Build and roll the relay from the same revision
+        type: boolean
+        default: true
+      force:
+        description: Permit an explicit non-release operator revision
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+        required: true
+      revision:
+        description: Exact 40-character monorepo commit (empty uses this workflow commit)
+        type: string
+        required: false
+      deploy_relay:
+        description: Build and roll the relay from the same revision
+        type: boolean
+        default: true
+      force:
+        description: Permit an explicit non-release operator revision
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # OIDC -> GCP WIF
+
+env:
+  DEPLOY_REVISION: ${{ inputs.revision || github.sha }}
+  TARGET_ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+  FORCE_DEPLOY: ${{ inputs.force && 'true' || 'false' }}
+
+jobs:
+  changes:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      relay: ${{ steps.paths.outputs.relay }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.DEPLOY_REVISION }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Resolve the release contract
+        id: paths
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$DEPLOY_REVISION^{commit}"
+          if [ "$FORCE_DEPLOY" != true ]; then
+            git tag --points-at "$DEPLOY_REVISION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+'
+          fi
+          echo "relay=${{ inputs.deploy_relay }}" >> "$GITHUB_OUTPUT"
+
+  relay-build:
+    needs: changes
+    if: needs.changes.outputs.relay == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    defaults:
+      run:
+        working-directory: apps/platform
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.DEPLOY_REVISION }}
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Build immutable relay artifact
+        run: |
+          set -euo pipefail
+          mkdir relay-artifact
+          uv build --wheel --out-dir relay-artifact
+          uv export --frozen --no-dev --no-emit-project \
+            --format requirements-txt --output-file relay-artifact/requirements.lock \
+            >/dev/null
+          cp scripts/ecosystem.config.js relay-artifact/ecosystem.config.js
+          cp scripts/deploy-relay-release.sh relay-artifact/deploy-relay-release.sh
+          printf '%s\n' "$DEPLOY_REVISION" > relay-artifact/source-commit
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-relay-${{ env.DEPLOY_REVISION }}
+          path: apps/platform/relay-artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    needs: changes
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Keep API deploys ordered without making a slow relay rollout block a
+    # later API-only release to the same environment.
+    concurrency:
+      group: platform-api-deploy-${{ inputs.environment || 'dev' }}
+      cancel-in-progress: false
+    # GitHub Environment selects the per-env DITTO_UPLOAD_PAYMENT_ADDRESS secret
+    # (and enables optional required-reviewer gating on prod).
+    environment: ${{ inputs.environment || 'dev' }}
+    env:
+      GCP_ZONE: us-central1-a
+    steps:
+      - name: Resolve target from branch
+        id: target
+        run: |
+          if [ "$TARGET_ENVIRONMENT" = "prod" ]; then
+            echo "vm=ditto-platform-prod"        >> "$GITHUB_OUTPUT"
+            echo "host=platform-api.heyditto.ai" >> "$GITHUB_OUTPUT"
+            echo "environment=prod"              >> "$GITHUB_OUTPUT"
+          else
+            echo "vm=ditto-platform-dev"             >> "$GITHUB_OUTPUT"
+            echo "host=platform-api-dev.heyditto.ai" >> "$GITHUB_OUTPUT"
+            echo "environment=dev"                   >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify deploy config
+        # Fail with a legible message if the WIF secrets aren't set, instead of
+        # the opaque "must specify exactly one of workload_identity_provider…".
+        env:
+          WIF: ${{ secrets.GCP_WIF_PROVIDER }}
+          SA: ${{ secrets.GCP_PLATFORM_DEPLOY_SA }}
+        run: |
+          : "${WIF:?GCP_WIF_PROVIDER repo secret is not set — see this workflow's header}"
+          : "${SA:?GCP_PLATFORM_DEPLOY_SA repo secret is not set — see this workflow's header}"
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_PLATFORM_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Register deploy SSH key with OS Login
+        # Every run starts on a fresh runner with no ~/.ssh/google_compute_engine,
+        # so `gcloud compute ssh` would otherwise mint a throwaway keypair AND
+        # open the tunnel in one breath ("You do not have an SSH key for gcloud.
+        # SSH keygen will be executed"). Registering a key with OS Login is
+        # eventually consistent, and run 30179674679 lost that race: the key was
+        # minted and the VM refused it 3.5s later with `Permission denied
+        # (publickey)`, on the runner side of the tunnel, before any command
+        # reached the host. The identical pipeline passed 7 minutes later.
+        #
+        # Minting the key here and registering it as its own step splits that
+        # race into two observable halves: propagation gets the length of this
+        # step plus the tunnel setup to settle, and if it still hasn't, the
+        # retry in the deploy step covers the remainder.
+        #
+        # `--ttl` is the other half of the point. An OS Login profile caps at 32
+        # keys, and a deploy-per-push that registers a permanent key each time
+        # walks into that ceiling and then fails every deploy until someone
+        # prunes by hand. Expiring keys plus the always()-cleanup step below
+        # keep the profile at ~one key.
+        #
+        # Best-effort on purpose: if the SA somehow lacks the self-scoped
+        # oslogin.sshPublicKeys.create, warn and let `gcloud compute ssh` fall
+        # back to its own import path rather than red a deploy over a
+        # pre-warming optimization.
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          if [ ! -f ~/.ssh/google_compute_engine ]; then
+            ssh-keygen -t rsa -b 2048 -N '' -q \
+              -C "gha-deploy-${{ github.run_id }}-${{ github.run_attempt }}" \
+              -f ~/.ssh/google_compute_engine
+          fi
+          if gcloud compute os-login ssh-keys add \
+               --key-file ~/.ssh/google_compute_engine.pub \
+               --ttl 45m >/dev/null; then
+            echo "registered this run's deploy key with OS Login (ttl 45m)"
+          else
+            echo "::warning::could not pre-register the deploy key with OS Login; falling back to gcloud's own key import (the deploy step retries on propagation lag)"
+          fi
+
+      - name: Deploy (IAP SSH -> scripts/update.sh)
+        id: deploy
+        # `sudo -iu deploy bash -lc` runs a LOGIN shell as deploy so uv/pm2/docker
+        # are on PATH (a bare `sudo -u deploy` uses a minimal secure_path and
+        # would fail on `uv`/`pm2`). DITTO_UPLOAD_PAYMENT_ADDRESS is the env-scoped
+        # GitHub secret (a public on-chain receive address); update.sh upserts it
+        # into the VM's .env.deploy before (re)starting. The workflow checks out
+        # the target first so the first deployment of an updater change executes
+        # the new script rather than the old process inode. The optional Taostats
+        # API key is read on the VM from `platform-taostats-api-key` in Secret
+        # Manager via the attached runtime service account, never passed through
+        # this job.
+        #
+        # This checkout deliberately duplicates update.sh's own fetch/reset, and
+        # it is the reason update.sh cannot simply "migrate before checking out":
+        # by the time the script runs, the host is already on the new revision.
+        # update.sh handles that -- it asks the RUNNING process which commit it
+        # is serving before it changes anything, and rolls the checkout back to
+        # that revision if the deploy fails before pm2 restarts.
+        #
+        # `set -o pipefail` is explicit: the default shell for a `run:` block is
+        # `bash -e`, WITHOUT pipefail, so a failing gcloud on the left of the
+        # `tee` pipe below would otherwise be masked by tee's exit 0 -- the same
+        # class of "failure reported as success" this deploy path already had.
+        #
+        # THE RETRY IS NARROW ON PURPOSE (run 30179674679).
+        #
+        # Re-running this command is only safe while nothing on the host has
+        # been touched, and exactly one failure has that property: the runner's
+        # own ssh being refused by OS Login before the tunnel carries a command.
+        # So the loop does not retry "gcloud failed" -- it retries one signature,
+        # and treats everything else as terminal on the first try. A blanket
+        # `retry 3x on non-zero` would re-enter update.sh after a half-finished
+        # deploy, which is precisely the failure mode update.sh's rollback logic
+        # exists to make legible.
+        #
+        # The signature is anchored to `@compute.<numeric-id>:` rather than the
+        # bare `Permission denied (publickey)` because that string is NOT unique
+        # to the runner. The remote command's first act is `git fetch origin`,
+        # and a broken VM-side deploy key makes GitHub print the identical
+        # sentence as `git@github.com: Permission denied (publickey).` -- a real,
+        # non-transient failure that must red on attempt one. The `@compute.`
+        # host is gcloud's IAP pseudo-host, so that form of the line can only
+        # come from the runner's ssh, before the host was reached -- which is
+        # what makes "nothing was half-applied" a checked fact here rather than
+        # an assumption about update.sh being idempotent.
+        run: |
+          set -euo pipefail
+
+          attempt=1
+          max_attempts=3
+          while :; do
+            rc=0
+            gcloud compute ssh "${{ steps.target.outputs.vm }}" \
+              --zone "$GCP_ZONE" \
+              --tunnel-through-iap \
+              --quiet \
+              --command "sudo -iu deploy bash -lc 'cd /opt/ditto-subnet && git fetch --prune origin && git checkout --detach $DEPLOY_REVISION && git reset --hard $DEPLOY_REVISION && cd apps/platform && DITTO_DEPLOY_BRANCH=main DITTO_DEPLOY_COMMIT=$DEPLOY_REVISION DITTO_UPLOAD_PAYMENT_ADDRESS=${{ secrets.DITTO_UPLOAD_PAYMENT_ADDRESS }} DITTO_DASHBOARD_WANDB_URL=${{ vars.DITTO_DASHBOARD_WANDB_URL }} ./scripts/update.sh'" \
+              2>&1 | tee /tmp/deploy.log || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+
+            if ! grep -Eq '@compute\.[0-9]+: Permission denied \(publickey\)' /tmp/deploy.log; then
+              echo "deploy failed (rc=$rc) for a reason other than SSH key propagation; not retrying" >&2
+              exit "$rc"
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "SSH key was still not accepted after $max_attempts attempts; giving up" >&2
+              echo "check the deploy SA's OS Login profile -- a full 32-key profile fails this way too:" >&2
+              echo "  gcloud compute os-login describe-profile --format='value(sshPublicKeys)'" >&2
+              exit "$rc"
+            fi
+            echo "::warning::attempt $attempt/$max_attempts: OS Login has not accepted this run's SSH key yet (nothing ran on the host); retrying in 15s"
+            attempt=$((attempt + 1))
+            sleep 15
+          done
+
+          # update.sh's last line on success. Not github.sha: the host resets to
+          # the immutable monorepo SHA passed to the host.
+          commit="$(sed -n 's/^deployed-commit=//p' /tmp/deploy.log | tail -n 1)"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "host was left on: ${commit:-<not reported>}"
+
+      - name: Health check
+        # Second gate, from outside the VM. update.sh already verified the app is
+        # serving /health on the host's own port AND that the process reports the
+        # commit that was checked out, so this one covers the path the host cannot
+        # see: public DNS, the VM's cert, and -- once relay hosts exist -- whether
+        # the name actually resolves to the host that was just deployed. Window is
+        # generous (≈3 min) for a first/cold deploy (uv build + app import + Caddy
+        # ACME). A red here after a green deploy step points at DNS/cert/Caddy
+        # rather than the app -- but confirm that against the deploy step's own
+        # health output before assuming it.
+        #
+        # A 200 alone is not enough: an old process behind Caddy answers 200 all
+        # day. When update.sh reported a commit, this waits for the public name to
+        # serve that same commit. When it did not (an older update.sh on the host,
+        # or a checkout without git history), the commit assertion is skipped with
+        # a warning rather than failing the deploy on a missing fact.
+        env:
+          EXPECTED_COMMIT: ${{ steps.deploy.outputs.commit }}
+        run: |
+          set -uo pipefail
+          host="${{ steps.target.outputs.host }}"
+          if [ -z "$EXPECTED_COMMIT" ]; then
+            echo "::warning::deploy step reported no commit; checking liveness only"
+          fi
+          for i in $(seq 1 20); do
+            if curl -fsS "https://$host/health" -o /tmp/health.json; then
+              if [ -z "$EXPECTED_COMMIT" ]; then
+                echo "healthy: https://$host/health"; exit 0
+              fi
+              served="$(python3 -c 'import json,sys; print(json.load(open("/tmp/health.json")).get("commit",""))')"
+              if [ "$served" = "$EXPECTED_COMMIT" ]; then
+                echo "healthy: https://$host/health on commit $served"; exit 0
+              fi
+              echo "serving commit ${served:-<none>}, waiting for $EXPECTED_COMMIT ($i/20)…"
+            else
+              echo "waiting for health ($i/20)…"
+            fi
+            sleep 9
+          done
+          echo "health check failed for https://$host/health" >&2
+          echo "expected commit $EXPECTED_COMMIT; last response:" >&2
+          cat /tmp/health.json >&2 || true
+          exit 1
+
+      - name: Deregister deploy SSH key
+        # The runner is thrown away; the OS Login profile is not. Without this,
+        # one key per push accretes on the deploy SA until it hits the 32-key
+        # cap, at which point EVERY deploy fails with the same `Permission
+        # denied (publickey)` the retry above is meant to absorb -- a permanent
+        # failure wearing a transient one's clothes. The `--ttl` on registration
+        # already bounds that; removing the key makes the steady state exactly
+        # zero rather than "however many ran in the last 45 minutes".
+        #
+        # always(), because a key left behind by a FAILED deploy is the one most
+        # likely to be forgotten. Never fails the job: this runs after the gates
+        # that decide whether the deploy was good, and a leaked throwaway key is
+        # not a reason to red a healthy release.
+        if: always()
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ ! -f ~/.ssh/google_compute_engine.pub ]; then
+            echo "no runner key to deregister"; exit 0
+          fi
+          if gcloud compute os-login ssh-keys remove \
+               --key-file ~/.ssh/google_compute_engine.pub >/dev/null 2>&1; then
+            echo "deregistered this run's deploy key"
+          else
+            echo "::warning::could not deregister this run's deploy key; it expires on its own TTL"
+          fi
+
+  relay-release:
+    needs: [changes, relay-build, deploy]
+    if: >-
+      always() &&
+      needs.changes.outputs.relay == 'true' &&
+      needs.relay-build.result == 'success' &&
+      needs.deploy.result == 'success'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Relay rolls remain serialized on their own lane so two releases cannot
+    # touch the same PM2 slots concurrently.
+    concurrency:
+      group: platform-relay-release-${{ inputs.environment || 'dev' }}
+      cancel-in-progress: false
+    environment: ${{ inputs.environment || 'dev' }}
+    env:
+      GCP_ZONE: us-central1-a
+      # gcloud's IAP tunnel can use NumPy for its upload data path. Without
+      # site-package access, even a small relay artifact can take minutes.
+      CLOUDSDK_PYTHON_SITEPACKAGES: "1"
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: platform-relay-${{ env.DEPLOY_REVISION }}
+          path: relay-artifact
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_PLATFORM_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Accelerate IAP artifact upload
+        run: |
+          set -euo pipefail
+          gcloud_python="$(gcloud info --format='value(basic.python_location)')"
+          "$gcloud_python" -m pip install --disable-pip-version-check --quiet \
+            'numpy==2.4.4'
+          "$gcloud_python" -c 'import numpy'
+
+      - name: Register release SSH key
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t rsa -b 2048 -N '' -q \
+            -C "gha-relay-${{ github.run_id }}-${{ github.run_attempt }}" \
+            -f ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub --ttl 45m >/dev/null
+
+      - name: Roll relay services without shared downtime
+        run: |
+          set -euo pipefail
+          if [ "$TARGET_ENVIRONMENT" = "prod" ]; then
+            target_vm=ditto-platform-prod
+          else
+            target_vm=ditto-platform-dev
+          fi
+          remote_artifact="/tmp/platform-relay-$DEPLOY_REVISION"
+          tar --create --gzip --file relay-artifact.tgz --directory relay-artifact .
+          gcloud compute scp relay-artifact.tgz \
+            "$target_vm:$remote_artifact.tgz" \
+            --zone "$GCP_ZONE" --tunnel-through-iap --quiet
+          gcloud compute ssh "$target_vm" \
+            --zone "$GCP_ZONE" --tunnel-through-iap --quiet \
+            --command "mkdir -p '$remote_artifact' && tar --extract --gzip --file '$remote_artifact.tgz' --directory '$remote_artifact' && sudo install -d -o deploy -g ditto /opt/ditto-platform-relay && sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh' '$remote_artifact' '$DEPLOY_REVISION'; code=\$?; rm -rf '$remote_artifact' '$remote_artifact.tgz'; exit \$code"
+
+      - name: Deregister release SSH key
+        if: always()
+        continue-on-error: true
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --key-file ~/.ssh/google_compute_engine.pub >/dev/null 2>&1 || true

@@ -94,6 +94,7 @@ describe('admin API schemas', () => {
     })
     expect(parsed.snapshot?.gce_target).toBe(2)
     expect(parsed.nodes[0].provider_resource_id).toBe('wk-123456')
+    expect(parsed.builds).toEqual([])
   })
 
   it('preserves detailed operator reasons without an upper bound', () => {

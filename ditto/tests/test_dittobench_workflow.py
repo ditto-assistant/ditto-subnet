@@ -3,6 +3,7 @@ from pathlib import Path
 import yaml
 
 WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/dittobench.yml"
+RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 
 
 def _step(steps: list[dict], name: str) -> dict:
@@ -17,7 +18,7 @@ def test_dittobench_workflow_uses_monorepo_contexts_without_repinning() -> None:
     assert "repin" not in text.lower()
     assert "services/dittobench-api/**" in text
 
-    for job_name in ("docker-build", "provenance", "deploy"):
+    for job_name in ("docker-build", "provenance"):
         build = next(
             step
             for step in jobs[job_name]["steps"]
@@ -27,17 +28,20 @@ def test_dittobench_workflow_uses_monorepo_contexts_without_repinning() -> None:
         assert build["with"]["file"] == "services/dittobench-api/Dockerfile"
 
 
-def test_hosted_deploy_remains_push_only_and_commit_stamped() -> None:
-    workflow = yaml.safe_load(WORKFLOW_PATH.read_text())
-    deploy = workflow["jobs"]["deploy"]
-    build = _step(deploy["steps"], "Build and push image")
-    deploy_step = _step(deploy["steps"], "Deploy to Cloud Run")
+def test_hosted_deploy_is_release_only_and_commit_stamped() -> None:
+    component = yaml.safe_load(WORKFLOW_PATH.read_text())
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    deploy = workflow["jobs"]["deploy-dittobench"]
+    build = _step(deploy["steps"], "Publish the hosted runtime from the release commit")
+    deploy_step = _step(deploy["steps"], "Deploy the immutable hosted image")
 
-    assert deploy["if"] == (
-        "github.event_name == 'push' && github.ref == 'refs/heads/main'"
-    )
-    assert "DITTOBENCH_SOURCE_SHA=${{ github.sha }}" in build["with"]["build-args"]
+    assert "deploy" not in component["jobs"]
+    assert "needs.plan.outputs.dittobench_api == 'true'" in deploy["if"]
+    assert "DITTOBENCH_SOURCE_SHA=$SOURCE_SHA" in build["run"]
+    assert "needs.release.outputs.commit_sha" in str(build["env"])
     assert "gcloud run deploy dittobench-api" in deploy_step["run"]
+    assert '--image "$DITTOBENCH_HOSTED_REPOSITORY@$IMAGE_DIGEST"' in deploy_step["run"]
+    assert ":sha-$SOURCE_SHA" not in deploy_step["run"]
 
 
 def test_every_dittobench_surface_triggers_ci() -> None:

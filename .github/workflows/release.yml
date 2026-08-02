@@ -17,6 +17,7 @@ env:
   VALIDATOR_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-validator
   SANDBOX_DOCKER_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker
   DITTOBENCH_API_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-sandbox
+  DITTOBENCH_HOSTED_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/cloud-run-source-deploy/dittobench-api
   MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
   PYLON_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-pylon
   # Frozen compat-2 updaters still require a relay-shaped image in their signed
@@ -27,6 +28,7 @@ env:
   STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
   PYLON_BASE_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
   PYLON_TURBOBT_REVISION: d36d1a28e761ff9d743bbcc83d091309c4d3599e
+  SCREENER_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime/screener
   OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
   COMPATIBILITY_EPOCH: "2"
   UPDATE_PROTOCOL: "1"
@@ -42,6 +44,11 @@ jobs:
     outputs:
       miner_cli: ${{ steps.components.outputs.miner_cli }}
       validator_stack: ${{ steps.components.outputs.validator_stack }}
+      dittobench_api: ${{ steps.components.outputs.dittobench_api }}
+      platform: ${{ steps.components.outputs.platform }}
+      backroom: ${{ steps.components.outputs.backroom }}
+      screener: ${{ steps.components.outputs.screener }}
+      screener_orchestrator: ${{ steps.components.outputs.screener_orchestrator }}
     steps:
       - name: Check out the merged commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -69,8 +76,15 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
   release:
-    needs: plan
-    if: ${{ needs.plan.outputs.miner_cli == 'true' || needs.plan.outputs.validator_stack == 'true' }}
+    needs: [plan, verify-source]
+    if: >-
+      needs.plan.outputs.miner_cli == 'true' ||
+      needs.plan.outputs.validator_stack == 'true' ||
+      needs.plan.outputs.dittobench_api == 'true' ||
+      needs.plan.outputs.platform == 'true' ||
+      needs.plan.outputs.backroom == 'true' ||
+      needs.plan.outputs.screener == 'true' ||
+      needs.plan.outputs.screener_orchestrator == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
@@ -124,16 +138,23 @@ jobs:
   # ---------------------------------------------------------------------------
 
   verify-source:
-    needs: [plan, release]
-    if: needs.release.outputs.released == 'true'
+    needs: plan
+    if: >-
+      needs.plan.outputs.miner_cli == 'true' ||
+      needs.plan.outputs.validator_stack == 'true' ||
+      needs.plan.outputs.dittobench_api == 'true' ||
+      needs.plan.outputs.platform == 'true' ||
+      needs.plan.outputs.backroom == 'true' ||
+      needs.plan.outputs.screener == 'true' ||
+      needs.plan.outputs.screener_orchestrator == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
-      - name: Check out the exact release commit
+      - name: Check out the exact merge commit before release
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ needs.release.outputs.commit_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Install uv
@@ -144,7 +165,7 @@ jobs:
       - name: Set up Python 3.11
         run: uv python install 3.11
 
-      - name: Verify the exact release source
+      - name: Gate the release on exact merge source
         run: |
           uv sync --locked --group dev
           uv run ruff format --check .
@@ -154,6 +175,181 @@ jobs:
           uv run pytest -m integration \
             ditto/tests/test_validator_compose.py \
             ditto/tests/test_validator_stack_auto_update.py
+
+  deploy_platform:
+    needs: [plan, release]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.platform == 'true'
+    uses: ./.github/workflows/platform-deploy.yml
+    with:
+      revision: ${{ needs.release.outputs.commit_sha }}
+      environment: prod
+      deploy_relay: true
+    secrets: inherit
+
+  deploy-backroom:
+    needs: [plan, release]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.backroom == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 20
+    environment: prod
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: apps/backroom
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.34.5
+          run_install: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/backroom/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm generate-routes
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+      - name: Deploy the subnet-only worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy
+
+  build-screener:
+    needs: [plan, release, deploy_platform]
+    if: >-
+      always() &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.screener == 'true' &&
+      (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 90
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SUBNET_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Ask Platform for a Targon Kaniko build
+        id: targon
+        env:
+          SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          token_file="$RUNNER_TEMP/screener-controller-token"
+          umask 077
+          if ! gcloud secrets versions access latest \
+            --secret=screener-controller-api-token-prod \
+            --project=ditto-app-dev >"$token_file"; then
+            echo "::error::controller token unavailable; no provider authorized a fallback"
+            exit 1
+          fi
+          payload="$(jq -cn --arg sha "$SOURCE_SHA" '{component:"screener",source_sha:$sha,reason:"Build the reviewed monorepo release image"}')"
+          if ! response="$(curl -fsS \
+            -H "Authorization: Bearer $(<"$token_file")" \
+            -H 'Content-Type: application/json' \
+            --data "$payload" \
+            https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds)"; then
+            echo "::error::Platform build queue unavailable; no provider authorized a fallback"
+            exit 1
+          fi
+          build_id="$(jq -er .build_id <<<"$response")"
+          echo "build_id=$build_id" >>"$GITHUB_OUTPUT"
+          for _ in $(seq 1 200); do
+            response="$(curl -fsS \
+              -H "Authorization: Bearer $(<"$token_file")" \
+              "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$build_id")"
+            status="$(jq -er .status <<<"$response")"
+            case "$status" in
+              succeeded)
+                echo "mode=targon" >>"$GITHUB_OUTPUT"
+                echo "digest=$(jq -er .image_digest <<<"$response")" >>"$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              fallback_required)
+                echo "mode=fallback" >>"$GITHUB_OUTPUT"
+                echo "reason=$(jq -r '.error_code // "TARGON_BUILD_FAILED"' <<<"$response")" >>"$GITHUB_OUTPUT"
+                echo "controller_epoch=$(jq -er .controller_epoch <<<"$response")" >>"$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              failed|canceled)
+                echo "::error::Platform ended trusted build with terminal status $status"
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+          echo "::error::Targon build timed out without a Platform-issued fallback"
+          exit 1
+
+      - name: Build on the existing runner when Targon is unavailable
+        if: steps.targon.outputs.mode == 'fallback'
+        env:
+          SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker build \
+            --file workers/screener/Dockerfile \
+            --tag "$SCREENER_REPOSITORY:sha-$SOURCE_SHA" \
+            .
+          docker push "$SCREENER_REPOSITORY:sha-$SOURCE_SHA"
+
+      - name: Record immutable screener image identity
+        env:
+          SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+          TARGON_DIGEST: ${{ steps.targon.outputs.digest }}
+          BUILD_ID: ${{ steps.targon.outputs.build_id }}
+          BUILD_EPOCH: ${{ steps.targon.outputs.controller_epoch }}
+        run: |
+          set -euo pipefail
+          digest="$(gcloud artifacts docker images describe \
+            "$SCREENER_REPOSITORY:sha-$SOURCE_SHA" \
+            --format='value(image_summary.digest)')"
+          if [ -n "$TARGON_DIGEST" ] && [ "$digest" != "$TARGON_DIGEST" ]; then
+            echo "::error::Targon-reported digest does not match Artifact Registry"
+            exit 1
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [ -n "$BUILD_ID" ] && [ -z "$TARGON_DIGEST" ]; then
+            token_file="$RUNNER_TEMP/screener-controller-token"
+            payload="$(jq -cn \
+              --arg epoch "$BUILD_EPOCH" \
+              --arg digest "$digest" \
+              --arg resource "github-run-${GITHUB_RUN_ID}" \
+              '{environment:"prod",controller_epoch:$epoch,status:"succeeded",provider:"gcp",provider_resource_id:$resource,image_digest:$digest,error_code:null}')"
+            curl -fsS \
+              -H "Authorization: Bearer $(<"$token_file")" \
+              -H 'Content-Type: application/json' \
+              --request PUT \
+              --data "$payload" \
+              "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$BUILD_ID" \
+              >/dev/null
+          fi
+          echo "screener image: $SCREENER_REPOSITORY@$digest"
 
   build-validator:
     needs: [plan, release]
@@ -410,6 +606,66 @@ jobs:
             io.heyditto.validator.stack-service=model-relay
           tags: |
             ${{ env.MODEL_RELAY_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+
+  deploy-dittobench:
+    needs: [plan, release, build-dittobench]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.dittobench_api == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DITTOBENCH_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Publish the hosted runtime from the release commit
+        id: hosted-image
+        env:
+          SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker build \
+            --file services/dittobench-api/Dockerfile \
+            --target runtime \
+            --build-arg "DITTOBENCH_SOURCE_SHA=$SOURCE_SHA" \
+            --tag "$DITTOBENCH_HOSTED_REPOSITORY:sha-$SOURCE_SHA" \
+            services/dittobench-api
+          docker push "$DITTOBENCH_HOSTED_REPOSITORY:sha-$SOURCE_SHA"
+          digest="$(gcloud artifacts docker images describe \
+            "$DITTOBENCH_HOSTED_REPOSITORY:sha-$SOURCE_SHA" \
+            --format='value(image_summary.digest)')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Deploy the immutable hosted image
+        env:
+          IMAGE_DIGEST: ${{ steps.hosted-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          gcloud run deploy dittobench-api \
+            --image "$DITTOBENCH_HOSTED_REPOSITORY@$IMAGE_DIGEST" \
+            --project ditto-app-dev \
+            --region us-central1 \
+            --allow-unauthenticated \
+            --memory 1Gi \
+            --cpu 1 \
+            --timeout 3600 \
+            --set-env-vars GENERATOR_MODEL=google/gemini-3.1-flash-lite,SCORER_MODEL=google/gemini-3.1-flash-lite \
+            --quiet
 
   # ---------------------------------------------------------------------------
   # Fan-in: every component image exists and the source re-verified. Authenticate

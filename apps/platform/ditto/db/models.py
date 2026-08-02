@@ -1982,6 +1982,85 @@ class ScreenerCapacityEvent(Base):
     )
 
 
+class TrustedImageBuild(Base):
+    """Audited, controller-leased build of one allowlisted monorepo image."""
+
+    __tablename__ = "trusted_image_builds"
+
+    build_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    component: Mapped[str] = mapped_column(Text, nullable=False)
+    source_repository: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    context_path: Mapped[str] = mapped_column(Text, nullable=False)
+    dockerfile_path: Mapped[str] = mapped_column(Text, nullable=False)
+    destination: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    provider: Mapped[str | None] = mapped_column(Text)
+    provider_resource_id: Mapped[str | None] = mapped_column(Text)
+    image_digest: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    controller_epoch: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
+            name="trusted_image_builds_environment_check",
+        ),
+        CheckConstraint(
+            "component IN ('screener')",
+            name="trusted_image_builds_component_check",
+        ),
+        CheckConstraint(
+            "source_sha ~ '^[0-9a-f]{40}$'",
+            name="trusted_image_builds_source_sha_check",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'running', 'succeeded', 'failed', "
+            "'fallback_required', 'canceled')",
+            name="trusted_image_builds_status_check",
+        ),
+        CheckConstraint(
+            "provider IS NULL OR provider IN ('targon', 'gcp')",
+            name="trusted_image_builds_provider_check",
+        ),
+        CheckConstraint(
+            "image_digest IS NULL OR image_digest ~ '^sha256:[0-9a-f]{64}$'",
+            name="trusted_image_builds_digest_check",
+        ),
+        CheckConstraint(
+            "attempt_count BETWEEN 0 AND 10",
+            name="trusted_image_builds_attempt_count_check",
+        ),
+        UniqueConstraint(
+            "environment",
+            "component",
+            "source_sha",
+            name="trusted_image_builds_source_key",
+        ),
+        Index(
+            "trusted_image_builds_queue_idx",
+            "environment",
+            "status",
+            "created_at",
+        ),
+    )
+
+
 class ScreenerReviewSettingsRevision(Base):
     """Append-only, operator-audited L2/L3 settings revision."""
 

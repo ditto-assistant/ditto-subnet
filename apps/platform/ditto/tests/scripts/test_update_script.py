@@ -231,6 +231,7 @@ def _run_update(
             "DITTO_COMPOSE_SERVICES",
             "DITTO_DASHBOARD_WANDB_URL",
             "DITTO_DEPLOY_BRANCH",
+            "DITTO_DEPLOY_COMMIT",
             "DITTO_HEALTH_TIMEOUT",
             "DITTO_TAOSTATS_API_KEY",
             "DITTO_TAOSTATS_SECRET_ID",

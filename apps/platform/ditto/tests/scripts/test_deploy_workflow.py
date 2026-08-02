@@ -6,9 +6,15 @@ from pathlib import Path
 import pytest
 import yaml
 
-ROOT = Path(__file__).parents[3]
-WORKFLOW_PATH = ROOT / ".github" / "workflows" / "deploy.yml"
-RELAY_PATH_FILTER = ROOT / "scripts" / "relay-runtime-changed.sh"
+PLATFORM_ROOT = Path(__file__).parents[3]
+MONOREPO_ROOT = PLATFORM_ROOT.parents[1]
+MONOREPO_WORKFLOW = MONOREPO_ROOT / ".github" / "workflows" / "platform-deploy.yml"
+WORKFLOW_PATH = (
+    MONOREPO_WORKFLOW
+    if MONOREPO_WORKFLOW.is_file()
+    else PLATFORM_ROOT / ".github" / "workflows" / "deploy.yml"
+)
+RELAY_PATH_FILTER = PLATFORM_ROOT / "scripts" / "relay-runtime-changed.sh"
 
 
 def _workflow() -> dict:
@@ -23,11 +29,11 @@ def test_api_and_relay_releases_have_independent_concurrency_lanes() -> None:
 
     assert "concurrency" not in workflow
     assert jobs["deploy"]["concurrency"] == {
-        "group": "platform-api-deploy-${{ github.ref_name }}",
+        "group": "platform-api-deploy-${{ inputs.environment || 'dev' }}",
         "cancel-in-progress": False,
     }
     assert jobs["relay-release"]["concurrency"] == {
-        "group": "platform-relay-release-${{ github.ref_name }}",
+        "group": "platform-relay-release-${{ inputs.environment || 'dev' }}",
         "cancel-in-progress": False,
     }
     assert jobs["relay-build"]["needs"] == "changes"

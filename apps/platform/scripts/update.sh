@@ -11,8 +11,8 @@
 # verification block at the bottom. It must never report success on a dead app,
 # and it must never leave the host looking deployed when it is not.
 # Invoked on the host by the ditto-platform deploy workflow (push dev|main ->
-# IAP SSH). DITTO_DEPLOY_BRANCH defaults to the current branch; CI passes the
-# branch that was pushed so the checkout is deterministic.
+# IAP SSH). Monorepo CI passes DITTO_DEPLOY_COMMIT so the exact reviewed commit,
+# rather than a moving branch tip, is the deploy target.
 #
 # --------------------------------------------------------------------------
 # FAILURE SEMANTICS (the 2026-07-25 near-outage)
@@ -218,14 +218,24 @@ trap 'on_deploy_exit $?' EXIT
 
 deploy_stage="fetch"
 branch="${DITTO_DEPLOY_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
-echo "==> fetching + resetting to origin/$branch"
+deploy_commit="${DITTO_DEPLOY_COMMIT:-}"
+if [ -n "$deploy_commit" ] && ! printf '%s' "$deploy_commit" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "ERROR: DITTO_DEPLOY_COMMIT must be a full lowercase git SHA" >&2
+  exit 1
+fi
+target_ref="${deploy_commit:-origin/$branch}"
+echo "==> fetching + resetting to $target_ref"
 git fetch --prune origin
 # -fB force-(re)points the local branch at origin and checks it out, discarding
 # any host-side tracked-file drift so the deploy can't wedge. .env,
 # .env.deploy, .venv, and logs are gitignored, so they survive (NEVER
 # `git clean -x` here).
-git checkout -fB "$branch" "origin/$branch"
-git reset --hard "origin/$branch"
+if [ -n "$deploy_commit" ]; then
+  git checkout --detach "$deploy_commit"
+else
+  git checkout -fB "$branch" "origin/$branch"
+fi
+git reset --hard "$target_ref"
 deploy_target="$(git rev-parse HEAD)"
 
 # --------------------------------------------------------------------------

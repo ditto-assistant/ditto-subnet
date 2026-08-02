@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKROOM_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 MONOREPO_DIR="$(cd "${BACKROOM_DIR}/../.." && pwd)"
 PLATFORM_DIR="${PLATFORM_DIR:-${MONOREPO_DIR}/apps/platform}"
-PLATFORM_SHA="${PLATFORM_SHA:-$(git -C "${MONOREPO_DIR}" rev-parse HEAD)}"
 
 mkdir -p src/generated .contract-sync
 
@@ -26,7 +25,6 @@ pnpm exec openapi-typescript .contract-sync/platform-openapi.json \
 
 jq -n \
   --arg repository "ditto-assistant/ditto-subnet" \
-  --arg sha "$PLATFORM_SHA" \
   --arg path "apps/platform" \
-  '{repository: $repository, path: $path, sha: $sha}' \
+  '{repository: $repository, path: $path, contract: "same-monorepo-release"}' \
   > src/generated/platform-api.meta.json
