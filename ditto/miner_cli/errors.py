@@ -202,6 +202,14 @@ class PreCheckRejectedError(ApiResponseError):
     pass
 
 
+class PaymentAmountMismatchError(PreCheckRejectedError):
+    """Raised when a finalized receipt does not match its reserved TAO fee."""
+
+
+class PaymentRecoveryExpiredError(PreCheckRejectedError):
+    """Raised when a finalized receipt is outside its recovery window."""
+
+
 class TransientApiError(ApiResponseError):
     """Raised for transport faults and retryable HTTP responses.
 

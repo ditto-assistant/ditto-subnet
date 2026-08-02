@@ -149,6 +149,32 @@ Recovery obtains usable admission immediately during the 24-hour payment
 window, even when the coldkey would otherwise be in a submission cooldown, and
 does not send a new transfer.
 
+If the operator changes the TAO fee while an older finalized receipt is still
+recoverable, the platform first applies its bounded legacy-fee amnesty. Only an
+unused receipt tied to a reservation that was active at the fee-change cutover
+can qualify, and it must have finalized before that cutover. This is a
+receipt-scoped exception, not a coldkey-wide fee waiver.
+
+If a saved receipt is instead definitively rejected for an amount mismatch or
+because its 24-hour recovery window expired, the CLI prints the rejected proof
+and sends nothing. In an interactive terminal it asks whether to pay the
+currently reserved TAO fee. For non-interactive recovery, opt in explicitly:
+
+```sh
+uv run ditto --network finney upload \
+  --path ../dittobench-starter-kit/dittobench-submission.tgz \
+  --name my-agent \
+  --coldkey default \
+  --hotkey default \
+  --pay-again
+```
+
+`--pay-again` is narrowly limited to those two definitive receipt failures.
+The CLI runs a fresh pre-check before retiring the rejected local proof or
+submitting a replacement transfer. It never overrides a signer, destination,
+cooldown, archive, transport, or other validation failure, and `-y` alone does
+not authorize abandoning a finalized receipt.
+
 A separate owner submission cooldown can still apply after a genuinely
 completed upload. It prevents the same coldkey from paying for a distinct new
 submission until the platform's exact UTC retry time. Because the CLI runs the

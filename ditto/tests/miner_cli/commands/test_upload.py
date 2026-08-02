@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -38,9 +38,12 @@ from ditto.miner_cli.commands.upload import (
 )
 from ditto.miner_cli.errors import (
     ApiResponseError,
+    PaymentAmountMismatchError,
     PaymentCancelledError,
     PaymentFinalizationTimeoutError,
+    PaymentRecoveryExpiredError,
     PaymentSubmissionError,
+    PreCheckRejectedError,
     SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
@@ -617,6 +620,257 @@ def _peek_uuid_from_stdout(response):  # type: ignore[no-untyped-def]
 
 
 class TestUploadFailurePaths:
+    def test_saved_mismatch_never_sends_again_without_explicit_authorization(
+        self,
+        good_tar: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.side_effect = PaymentAmountMismatchError(
+            "payment amount mismatch"
+        )
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payment",
+                return_value=receipt,
+            ),
+            patch("ditto.miner_cli.commands.upload.clear_pending_payment") as clear,
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar))
+
+        assert rc == 1
+        assert client.post_upload_check.call_count == 1
+        pay.assert_not_called()
+        clear.assert_not_called()
+        err = capsys.readouterr().err
+        assert "No second transfer has been sent" in err
+        assert "--pay-again" in err
+
+    def test_interactive_replacement_prompt_defaults_to_no(
+        self,
+        good_tar: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.side_effect = PaymentAmountMismatchError(
+            "payment amount mismatch"
+        )
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payment",
+                return_value=receipt,
+            ),
+            patch("ditto.miner_cli.commands.upload.clear_pending_payment") as clear,
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar, yes=False))
+
+        assert rc == 2
+        clear.assert_not_called()
+        pay.assert_not_called()
+
+    def test_pay_again_rechecks_then_uses_reservation_bound_tao_fee(
+        self, good_tar: Path
+    ) -> None:
+        client = MagicMock()
+        bound_check = _ok_check().model_copy(
+            update={
+                "payment_amount_rao": 40_000_000,
+                "payment_send_address": DEST,
+            }
+        )
+        client.post_upload_check.side_effect = [
+            PaymentAmountMismatchError("payment amount mismatch"),
+            bound_check,
+        ]
+        client.post_upload_agent.return_value = _upload_response()
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        rejected_receipt = _payment_receipt()
+        replacement_receipt = PaymentReceipt(
+            block_hash="0x" + "ef" * 32,
+            block_number=43,
+            extrinsic_index=1,
+        )
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payment",
+                return_value=rejected_receipt,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.clear_pending_payment",
+                return_value=True,
+            ) as clear,
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=replacement_receipt,
+            ) as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar, pay_again=True))
+
+        assert rc == 0
+        assert client.post_upload_check.call_count == 2
+        first_check = client.post_upload_check.call_args_list[0].args[0]
+        second_check = client.post_upload_check.call_args_list[1].args[0]
+        assert first_check.payment_block_hash == rejected_receipt.block_hash
+        assert second_check.payment_block_hash is None
+        clear.assert_any_call(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ab" * 32,
+            payment=rejected_receipt,
+        )
+        client.get_eval_pricing.assert_not_called()
+        pay.assert_called_once_with(
+            live_wallet=ANY,
+            subtensor_network="local",
+            amount_rao=40_000_000,
+            dest_address=DEST,
+            chain_endpoint=None,
+        )
+
+    def test_replacement_check_must_succeed_before_saved_proof_is_retired(
+        self, good_tar: Path
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.side_effect = [
+            PaymentRecoveryExpiredError("payment recovery window expired"),
+            _rejected_check(),
+        ]
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payment",
+                return_value=receipt,
+            ),
+            patch("ditto.miner_cli.commands.upload.clear_pending_payment") as clear,
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar, pay_again=True))
+
+        assert rc == 1
+        clear.assert_not_called()
+        pay.assert_not_called()
+
+    def test_pay_again_does_not_override_other_precheck_failures(
+        self, good_tar: Path
+    ) -> None:
+        client = MagicMock()
+        client.post_upload_check.side_effect = PreCheckRejectedError(
+            "destination mismatch"
+        )
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        receipt = _payment_receipt()
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payment",
+                return_value=receipt,
+            ),
+            patch("ditto.miner_cli.commands.upload.clear_pending_payment") as clear,
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar, pay_again=True))
+
+        assert rc == 1
+        assert client.post_upload_check.call_count == 1
+        clear.assert_not_called()
+        pay.assert_not_called()
+
     def test_missing_wallet_args_exits_one_without_running_anything(
         self, good_tar: Path
     ) -> None:

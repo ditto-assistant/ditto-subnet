@@ -7,7 +7,8 @@ Glues every other module together. Walk:
 3. Sign ``f"{hotkey}:{sha256}"``
 4. POST /upload/check; abort on a definitive rejection
 5. Verify the selected coldkey owns the hotkey on chain
-6. GET /upload/eval-pricing for the current fee + destination address
+6. Use the TAO fee + destination atomically bound to the admission reservation
+   (fall back to GET /upload/eval-pricing during an older-server rollout)
 7. Show payment preview + interactive confirm (skipped by --yes)
 8. Submit Balances.transfer_keep_alive extrinsic via raw bittensor SDK
 9. POST /upload/agent with tar + payment proof
@@ -30,15 +31,21 @@ import time
 from pathlib import Path
 from uuid import UUID
 
-from ditto.api_models import UploadAgentResponse, UploadCheckRequest
+from ditto.api_models import (
+    EvalPricingResponse,
+    UploadAgentResponse,
+    UploadCheckRequest,
+)
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.commands.verify import _print_result
 from ditto.miner_cli.confirm import confirm_payment
 from ditto.miner_cli.errors import (
     ApiResponseError,
     MinerCliError,
+    PaymentAmountMismatchError,
     PaymentCancelledError,
     PaymentFinalizationTimeoutError,
+    PaymentRecoveryExpiredError,
     PaymentSubmissionError,
     PreCheckRejectedError,
     SubmissionCooldownError,
@@ -47,7 +54,7 @@ from ditto.miner_cli.errors import (
     UploadAgentRejectedError,
     WalletNotFoundError,
 )
-from ditto.miner_cli.models import PaymentReceipt
+from ditto.miner_cli.models import PaymentReceipt, PendingUploadPayment
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
 from ditto.miner_cli.preferences import (
@@ -158,6 +165,15 @@ def add_subparser(
     recovery.add_argument("--payment-block-hash")
     recovery.add_argument("--payment-block-number", type=int)
     recovery.add_argument("--payment-extrinsic-index", type=int)
+    recovery.add_argument(
+        "--pay-again",
+        action="store_true",
+        help=(
+            "If the platform definitively rejects a saved receipt for amount "
+            "mismatch or expiry, retire it and continue to a newly confirmed "
+            "payment. Never causes a second transfer for other failures."
+        ),
+    )
     parser.set_defaults(func=run)
     return parser
 
@@ -294,19 +310,47 @@ def _run_upload(
 
     with ApiClient(base_url=network_api_url) as client:
         # Step 4: pre-payment check
-        check_response = client.post_upload_check(
-            UploadCheckRequest(
-                hotkey=handle.hotkey_ss58,
-                sha256=preflight.sha256,
-                file_size_bytes=preflight.file_size_bytes,
-                signature=signature_hex,
-                allow_identical_rescore=allow_identical_rescore,
-                reserve_submission_slot=True,
-                payment_block_hash=receipt.block_hash if receipt else None,
-                payment_block_number=receipt.block_number if receipt else None,
-                payment_extrinsic_index=receipt.extrinsic_index if receipt else None,
+        def _check(candidate_receipt: PaymentReceipt | None):
+            return client.post_upload_check(
+                UploadCheckRequest(
+                    hotkey=handle.hotkey_ss58,
+                    sha256=preflight.sha256,
+                    file_size_bytes=preflight.file_size_bytes,
+                    signature=signature_hex,
+                    allow_identical_rescore=allow_identical_rescore,
+                    reserve_submission_slot=True,
+                    payment_block_hash=(
+                        candidate_receipt.block_hash if candidate_receipt else None
+                    ),
+                    payment_block_number=(
+                        candidate_receipt.block_number if candidate_receipt else None
+                    ),
+                    payment_extrinsic_index=(
+                        candidate_receipt.extrinsic_index if candidate_receipt else None
+                    ),
+                )
             )
-        )
+
+        try:
+            check_response = _check(receipt)
+        except (PaymentAmountMismatchError, PaymentRecoveryExpiredError) as error:
+            if receipt is None:
+                raise
+            _authorize_replacement_payment(args=args, error=error, receipt=receipt)
+            check_response = _check(None)
+            if check_response.ok and check_response.admission_token is not None:
+                _retire_rejected_saved_payment(
+                    receipt_source=receipt_source,
+                    reassigned_payment=reassigned_payment,
+                    hotkey=handle.hotkey_ss58,
+                    name=agent_name,
+                    sha256=preflight.sha256,
+                    network=network_name,
+                    payment=receipt,
+                )
+                receipt = None
+                receipt_source = None
+                reassigned_payment = None
         if not check_response.ok:
             for code, msg in zip(
                 check_response.error_codes, check_response.messages, strict=True
@@ -362,8 +406,18 @@ def _run_upload(
         )
 
         if receipt is None:
-            # Step 6: fetch current pricing
-            pricing = client.get_eval_pricing()
+            # Step 6: use the fee atomically bound to this reservation. Fall
+            # back to the legacy pricing endpoint while older servers roll out.
+            if (
+                check_response.payment_amount_rao is not None
+                and check_response.payment_send_address is not None
+            ):
+                pricing = EvalPricingResponse(
+                    amount_rao=check_response.payment_amount_rao,
+                    send_address=check_response.payment_send_address,
+                )
+            else:
+                pricing = client.get_eval_pricing()
 
             # Step 7: confirm payment
             confirm_payment(
@@ -590,6 +644,76 @@ def _offer_owner_link(
             f"warning: automatic owner link failed ({exc}); upload will continue. "
             f"Retry it manually with:\n  {command}",
             file=sys.stderr,
+        )
+
+
+def _authorize_replacement_payment(
+    *,
+    args: argparse.Namespace,
+    error: PaymentAmountMismatchError | PaymentRecoveryExpiredError,
+    receipt: PaymentReceipt,
+) -> None:
+    """Require explicit consent before abandoning a finalized payment proof."""
+    proof = (
+        f"block={receipt.block_number} index={receipt.extrinsic_index} "
+        f"hash={receipt.block_hash}"
+    )
+    print(
+        f"warning: the platform rejected the saved payment proof ({error}).\n"
+        f"Rejected proof: {proof}\n"
+        "No second transfer has been sent.",
+        file=sys.stderr,
+    )
+    if getattr(args, "pay_again", False):
+        return
+    if not sys.stdin.isatty():
+        raise MinerCliError(
+            "rerun with --pay-again to retire this rejected proof and proceed "
+            "to a newly confirmed payment"
+        )
+    response = input(
+        "Pay the currently reserved TAO fee with a new transfer? [y/N]: "
+    ).strip()
+    if response.lower() not in {"y", "yes"}:
+        raise PaymentCancelledError(
+            "new payment not authorized; the rejected proof was retained"
+        )
+
+
+def _retire_rejected_saved_payment(
+    *,
+    receipt_source: str | None,
+    reassigned_payment: PendingUploadPayment | None,
+    network: str,
+    hotkey: str,
+    name: str,
+    sha256: str,
+    payment: PaymentReceipt,
+) -> None:
+    """Remove only the locally saved proof that the platform rejected."""
+    if receipt_source == "saved_reassigned":
+        assert reassigned_payment is not None
+        cleared = clear_pending_payment(
+            network=reassigned_payment.network,
+            hotkey=reassigned_payment.hotkey,
+            name=reassigned_payment.name,
+            sha256=reassigned_payment.sha256,
+            payment=reassigned_payment.payment,
+        )
+    elif receipt_source == "saved":
+        cleared = clear_pending_payment(
+            network=network,
+            hotkey=hotkey,
+            name=name,
+            sha256=sha256,
+            payment=payment,
+        )
+    else:
+        return
+    if not cleared:
+        raise MinerCliError(
+            "could not retire the rejected local payment proof; no new payment "
+            "was sent. Preserve the printed proof and retry."
         )
 
 

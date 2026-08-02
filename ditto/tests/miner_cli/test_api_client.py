@@ -38,6 +38,8 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     AttestationRejectedError,
     HotkeyAgentNotFoundError,
+    PaymentAmountMismatchError,
+    PaymentRecoveryExpiredError,
     PreCheckRejectedError,
     SubmissionCooldownError,
     TransientApiError,
@@ -147,6 +149,24 @@ class TestUploadCheck:
             return _envelope_response(503, 3001, "validation failure")
 
         with make_client(handler) as client, pytest.raises(PreCheckRejectedError):
+            client.post_upload_check(self._body())
+
+    @pytest.mark.parametrize(
+        ("error_code", "error_type"),
+        [
+            (3203, PaymentAmountMismatchError),
+            (3208, PaymentRecoveryExpiredError),
+        ],
+    )
+    def test_definitive_saved_payment_rejections_are_typed(
+        self,
+        error_code: int,
+        error_type: type[PreCheckRejectedError],
+    ) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return _envelope_response(402, error_code, "receipt cannot be reused")
+
+        with make_client(handler) as client, pytest.raises(error_type):
             client.post_upload_check(self._body())
 
 

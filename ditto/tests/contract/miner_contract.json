@@ -383,9 +383,33 @@
       "ok": {
         "type": "boolean"
       },
+      "payment_amount_rao": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "payment_required": {
         "default": true,
         "type": "boolean"
+      },
+      "payment_send_address": {
+        "anyOf": [
+          {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "retry_at": {
         "anyOf": [

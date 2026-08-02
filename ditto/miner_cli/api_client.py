@@ -41,6 +41,8 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     AttestationRejectedError,
     HotkeyAgentNotFoundError,
+    PaymentAmountMismatchError,
+    PaymentRecoveryExpiredError,
     PreCheckRejectedError,
     SubmissionCooldownError,
     TransientApiError,
@@ -65,6 +67,8 @@ UPLOAD_TIMEOUT_S = 180.0
 _ERROR_CODE_AGENT_NOT_FOUND = 1200
 _ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
 _ERROR_CODE_SUBMISSION_COOLDOWN = 1105
+_ERROR_CODE_PAYMENT_AMOUNT_MISMATCH = 3203
+_ERROR_CODE_PAYMENT_RECOVERY_EXPIRED = 3208
 
 # Safe post-payment retry set. These statuses conventionally represent a
 # transient request, capacity, gateway, or service failure. Other 4xx responses
@@ -178,6 +182,21 @@ class ApiClient:
             "/api/v1/upload/check",
             json=body.model_dump(mode="json", exclude_none=True),
         )
+        envelope = _safe_envelope(response)
+        if (
+            response.status_code == 402
+            and envelope.get("error_code") == _ERROR_CODE_PAYMENT_AMOUNT_MISMATCH
+        ):
+            raise PaymentAmountMismatchError(
+                _format_error(response, prefix="upload-check")
+            )
+        if (
+            response.status_code == 402
+            and envelope.get("error_code") == _ERROR_CODE_PAYMENT_RECOVERY_EXPIRED
+        ):
+            raise PaymentRecoveryExpiredError(
+                _format_error(response, prefix="upload-check")
+            )
         if response.status_code != 200:
             raise PreCheckRejectedError(_format_error(response, prefix="upload-check"))
         return UploadCheckResponse.model_validate(response.json())

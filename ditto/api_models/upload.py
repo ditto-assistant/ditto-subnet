@@ -119,6 +119,12 @@ class UploadCheckResponse(BaseModel):
     cooldown_seconds: Annotated[int, Field(ge=60, le=86400)] | None = None
     """Platform-controlled owner cooldown used for this decision."""
 
+    payment_amount_rao: Annotated[int, Field(ge=1)] | None = None
+    """Fee bound to this admission; preferred over a separate live quote."""
+
+    payment_send_address: Annotated[str, Field(pattern=_SS58_PATTERN)] | None = None
+    """Payment destination bound to this admission."""
+
 
 class UploadAgentResponse(BaseModel):
     """Returned by ``POST /upload/agent`` on a successful upload.
