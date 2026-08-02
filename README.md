@@ -25,6 +25,7 @@ engine. Other public Ditto stack components currently live in:
 - `ditto/api_models/`: Pydantic wire shapes shared with the platform (the HTTP contract).
 - `ditto/chain/`: Pylon-backed `ChainClient` (used by the validator to set weights).
 - `services/dittobench-api/`: the Go scorer used by validators and hosted practice.
+- `services/screener-orchestrator/`: Targon-first screener capacity and build control.
 - `apps/platform/`: the subnet API, durable queue, dashboard, and control plane.
 - `workers/screener/`: the provider-neutral screening worker runtime.
 - `packages/ditto-screening-protocol/`: shared screening wire and signing contract.

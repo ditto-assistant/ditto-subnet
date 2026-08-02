@@ -2065,6 +2065,15 @@ class PublicActivityResponse(BaseModel):
     ]
 
 
+class PublicScreenerWatchdogResponse(BaseModel):
+    """Minimal signal used by the independent GCE scale-out watchdog."""
+
+    generated_at: datetime
+    controller_stale: bool
+    activate_fallback: bool
+    reason: Literal["controller_fresh", "controller_stale", "controller_missing"]
+
+
 class PublicScreeningReviewEvidence(BaseModel):
     """One public-safe policy observation from a terminal cheating decision."""
 
@@ -3100,6 +3109,9 @@ class PublicScreenerHeartbeat(BaseModel):
     screener_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Screener's public hotkey.")
     ]
+    provider: Literal["gcp", "targon", "hetzner", "home", "test"] | None = None
+    node_status: Literal["active", "draining", "quarantined", "revoked"] | None = None
+    capacity: Annotated[int, Field(ge=1, le=16)] = 1
     software_version: str
     protocol_version: Annotated[int, Field(ge=1)]
     policy_version: Annotated[int, Field(ge=1)]

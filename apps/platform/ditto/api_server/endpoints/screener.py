@@ -27,7 +27,9 @@ Lifecycle + scope decisions (documented so they're easy to revisit):
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -50,8 +52,19 @@ from ditto.api_models import (
     ScreenedImagePartResponse,
     ScreenedImageUploadRequest,
     ScreenedImageUploadResponse,
+    ScreenerBootstrapGrantRequest,
+    ScreenerBootstrapGrantResponse,
+    ScreenerCapacitySnapshotRequest,
+    ScreenerCapacitySnapshotResponse,
+    ScreenerControllerFenceRequest,
+    ScreenerControllerNodesResponse,
+    ScreenerControllerNodeState,
     ScreenerHeartbeatRequest,
     ScreenerHeartbeatResponse,
+    ScreenerNodeCredentialResponse,
+    ScreenerNodeRefreshRequest,
+    ScreenerNodeRegistrationRequest,
+    ScreenerNodeStatusRequest,
     ScreenerQueueItem,
     ScreenerQueueResponse,
     ScreenResultRequest,
@@ -104,6 +117,11 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     ScreenedImageUpload,
+    ScreenerCapacityEvent,
+    ScreenerCapacitySnapshot,
+    ScreenerHeartbeat,
+    ScreenerNode,
+    ScreenerNodeBootstrapGrant,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
@@ -240,26 +258,528 @@ GeneratorDep = Annotated[DatasetGenerator, Depends(get_dataset_generator)]
 
 async def require_screener(
     request: Request,
+    session: SessionDep,
     x_screener_hotkey: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> str:
-    """Authenticate the dedicated screener by hotkey and bearer token."""
+    """Authenticate a legacy fleet principal or a rotating per-node principal."""
     auth = request.app.state.config.screener_auth
-    expected_hotkey = auth.hotkey
-    expected_token = auth.api_token
-    if expected_hotkey is None or expected_token is None:
-        raise ScreenerAuthError("screener authentication is not configured")
-    if x_screener_hotkey != expected_hotkey:
-        raise ScreenerAuthError("X-Screener-Hotkey is not authorized")
     prefix = "Bearer "
     if authorization is None or not authorization.startswith(prefix):
         raise ScreenerAuthError("missing screener bearer token")
-    if not secrets.compare_digest(authorization[len(prefix) :], expected_token):
+    presented_token = authorization[len(prefix) :]
+    if (
+        auth.hotkey is not None
+        and auth.api_token is not None
+        and x_screener_hotkey == auth.hotkey
+        and secrets.compare_digest(presented_token, auth.api_token)
+    ):
+        request.state.screener_node_id = None
+        request.state.screener_provider = "gcp"
+        request.state.screener_node_status = "active"
+        return auth.hotkey
+    if x_screener_hotkey is None:
+        raise ScreenerAuthError("X-Screener-Hotkey is not authorized")
+    node = await session.scalar(
+        select(ScreenerNode).where(ScreenerNode.screener_hotkey == x_screener_hotkey)
+    )
+    if node is None or node.status == "revoked":
+        raise ScreenerAuthError("X-Screener-Hotkey is not authorized")
+    expected_hash = hashlib.sha256(presented_token.encode()).hexdigest()
+    if not secrets.compare_digest(expected_hash, node.token_hash):
         raise ScreenerAuthError("invalid screener bearer token")
-    return expected_hotkey
+    expires_at = node.token_expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if datetime.now(UTC) >= expires_at:
+        raise ScreenerAuthError("screener bearer token has expired")
+    node_id = node.node_id
+    provider = node.provider
+    status = node.status
+    hotkey = node.screener_hotkey
+    # The dependency shares the request-scoped session with the endpoint. End
+    # its read-only autobegin so handlers can open their explicit transaction.
+    await session.rollback()
+    request.state.screener_node_id = node_id
+    request.state.screener_provider = provider
+    request.state.screener_node_status = status
+    return hotkey
 
 
 ScreenerDep = Annotated[str, Depends(require_screener)]
+
+
+async def require_screener_controller(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
+    expected = request.app.state.config.screener_auth.controller_api_token
+    if expected is None:
+        raise HTTPException(status_code=503, detail="screener controller is disabled")
+    prefix = "Bearer "
+    if authorization is None or not authorization.startswith(prefix):
+        raise HTTPException(status_code=401, detail="missing controller bearer token")
+    if not secrets.compare_digest(authorization[len(prefix) :], expected):
+        raise HTTPException(status_code=401, detail="invalid controller bearer token")
+
+
+ControllerDep = Annotated[None, Depends(require_screener_controller)]
+_CONTROLLER_HEARTBEAT_READY_SECONDS = 180
+_NODE_TOKEN_ROTATION_GRACE_SECONDS = 120
+
+
+def _node_registration_message(payload: ScreenerNodeRegistrationRequest) -> bytes:
+    return (
+        "ditto-screener-node-register:v1:"
+        f"{payload.environment}:{payload.node_id}:{payload.provider}:"
+        f"{payload.provider_resource_id}:"
+        f"{payload.screener_hotkey}:{payload.timestamp}:{payload.registration_id}"
+    ).encode()
+
+
+def _node_refresh_message(payload: ScreenerNodeRefreshRequest) -> bytes:
+    return (
+        "ditto-screener-node-refresh:v1:"
+        f"{payload.node_id}:{payload.screener_hotkey}:{payload.timestamp}:"
+        f"{payload.refresh_id}"
+    ).encode()
+
+
+def _fresh_node_token() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def _idempotent_node_token(*, secret: str, node_id: str, request_id: UUID) -> str:
+    """Derive a retry-stable bearer without persisting recoverable plaintext."""
+    digest = hmac.new(
+        secret.encode(),
+        f"ditto-screener-node-token:v1:{node_id}:{request_id}".encode(),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+async def _require_controller_epoch(
+    session: AsyncSession, *, environment: str, epoch: str, now: datetime
+) -> ScreenerCapacitySnapshot:
+    """Lock and validate the lease held by the current normal writer."""
+    snapshot = await session.scalar(
+        select(ScreenerCapacitySnapshot)
+        .where(ScreenerCapacitySnapshot.environment == environment)
+        .with_for_update()
+    )
+    if snapshot is None or snapshot.controller_epoch != epoch:
+        raise HTTPException(status_code=409, detail="controller epoch is not current")
+    lease_expiry = snapshot.controller_lease_expires_at
+    if lease_expiry.tzinfo is None:
+        lease_expiry = lease_expiry.replace(tzinfo=UTC)
+    if now >= lease_expiry:
+        raise HTTPException(status_code=409, detail="controller lease has expired")
+    return snapshot
+
+
+@router.post(
+    "/controller/bootstrap-grants",
+    response_model=ScreenerBootstrapGrantResponse,
+)
+async def create_bootstrap_grant(
+    payload: ScreenerBootstrapGrantRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+    request: Request,
+) -> ScreenerBootstrapGrantResponse:
+    """Mint one node-bound, single-use registration capability."""
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(
+        seconds=request.app.state.config.screener_auth.bootstrap_ttl_seconds
+    )
+    token = _fresh_node_token()
+    grant = ScreenerNodeBootstrapGrant(
+        grant_id=uuid4(),
+        environment=payload.environment,
+        node_id=payload.node_id,
+        provider=payload.provider,
+        provider_resource_id=payload.provider_resource_id,
+        controller_epoch=payload.controller_epoch,
+        token_hash=hashlib.sha256(token.encode()).hexdigest(),
+        expires_at=expires_at,
+    )
+    async with session.begin():
+        await _require_controller_epoch(
+            session,
+            environment=payload.environment,
+            epoch=payload.controller_epoch,
+            now=now,
+        )
+        session.add(grant)
+    return ScreenerBootstrapGrantResponse(
+        grant_id=grant.grant_id,
+        registration_token=token,
+        expires_at=expires_at,
+    )
+
+
+@router.post("/nodes/register", response_model=ScreenerNodeCredentialResponse)
+async def register_screener_node(
+    payload: ScreenerNodeRegistrationRequest,
+    request: Request,
+    session: SessionDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> ScreenerNodeCredentialResponse:
+    """Exchange a one-time capability and hotkey proof for short-lived authority."""
+    prefix = "Bootstrap "
+    if authorization is None or not authorization.startswith(prefix):
+        raise ScreenerAuthError("missing screener bootstrap token")
+    now = datetime.now(UTC)
+    if abs(int(now.timestamp()) - payload.timestamp) > _HEARTBEAT_MAX_SKEW_SECONDS:
+        raise ScreenerAuthError("node registration timestamp is stale")
+    if not _verify_signature(
+        payload.screener_hotkey,
+        _node_registration_message(payload),
+        payload.signature,
+    ):
+        raise ScreenerAuthError("node registration signature verification failed")
+    token_hash = hashlib.sha256(authorization[len(prefix) :].encode()).hexdigest()
+    controller_secret = request.app.state.config.screener_auth.controller_api_token
+    if controller_secret is None:
+        raise HTTPException(status_code=503, detail="screener controller is disabled")
+    api_token = _idempotent_node_token(
+        secret=controller_secret,
+        node_id=payload.node_id,
+        request_id=payload.registration_id,
+    )
+    expires_at = now + timedelta(
+        seconds=request.app.state.config.screener_auth.node_token_ttl_seconds
+    )
+    async with session.begin():
+        grant = await session.scalar(
+            select(ScreenerNodeBootstrapGrant)
+            .where(ScreenerNodeBootstrapGrant.token_hash == token_hash)
+            .with_for_update()
+        )
+        if grant is None:
+            raise ScreenerAuthError("invalid screener bootstrap token")
+        if grant.consumed_at is not None:
+            existing = await session.get(ScreenerNode, payload.node_id)
+            if (
+                grant.registration_id != payload.registration_id
+                or existing is None
+                or existing.environment != payload.environment
+                or existing.provider != payload.provider
+                or existing.provider_resource_id != payload.provider_resource_id
+                or existing.screener_hotkey != payload.screener_hotkey
+                or not secrets.compare_digest(
+                    existing.token_hash,
+                    hashlib.sha256(api_token.encode()).hexdigest(),
+                )
+            ):
+                raise ScreenerAuthError("invalid or consumed screener bootstrap token")
+            expires_at = existing.token_expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if now >= expires_at:
+                raise ScreenerAuthError("registered screener bearer token has expired")
+        else:
+            grant_expiry = grant.expires_at
+            if grant_expiry.tzinfo is None:
+                grant_expiry = grant_expiry.replace(tzinfo=UTC)
+            if now >= grant_expiry:
+                raise ScreenerAuthError("screener bootstrap token has expired")
+            if (
+                grant.environment != payload.environment
+                or grant.node_id != payload.node_id
+                or grant.provider != payload.provider
+                or grant.provider_resource_id != payload.provider_resource_id
+            ):
+                raise ScreenerAuthError("screener bootstrap identity mismatch")
+            await _require_controller_epoch(
+                session,
+                environment=grant.environment,
+                epoch=grant.controller_epoch,
+                now=now,
+            )
+            existing = await session.get(ScreenerNode, payload.node_id)
+            hotkey_owner = await session.scalar(
+                select(ScreenerNode).where(
+                    ScreenerNode.screener_hotkey == payload.screener_hotkey
+                )
+            )
+            if existing is not None or hotkey_owner is not None:
+                raise ScreenerAuthError("screener node identity is already registered")
+            grant.consumed_at = now
+            grant.registration_id = payload.registration_id
+            session.add(
+                ScreenerNode(
+                    environment=grant.environment,
+                    node_id=payload.node_id,
+                    provider=payload.provider,
+                    provider_resource_id=payload.provider_resource_id,
+                    screener_hotkey=payload.screener_hotkey,
+                    token_hash=hashlib.sha256(api_token.encode()).hexdigest(),
+                    token_expires_at=expires_at,
+                    status="active",
+                    capacity=1,
+                    registered_at=now,
+                    rotated_at=now,
+                )
+            )
+    return ScreenerNodeCredentialResponse(
+        environment=payload.environment,
+        node_id=payload.node_id,
+        screener_hotkey=payload.screener_hotkey,
+        api_token=api_token,
+        expires_at=expires_at,
+    )
+
+
+@router.post("/nodes/refresh", response_model=ScreenerNodeCredentialResponse)
+async def refresh_screener_node(
+    payload: ScreenerNodeRefreshRequest,
+    request: Request,
+    session: SessionDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> ScreenerNodeCredentialResponse:
+    """Rotate a node bearer while it still owns valid signed authority."""
+    prefix = "Bearer "
+    if authorization is None or not authorization.startswith(prefix):
+        raise ScreenerAuthError("missing screener bearer token")
+    now = datetime.now(UTC)
+    if abs(int(now.timestamp()) - payload.timestamp) > _HEARTBEAT_MAX_SKEW_SECONDS:
+        raise ScreenerAuthError("node refresh timestamp is stale")
+    if not _verify_signature(
+        payload.screener_hotkey,
+        _node_refresh_message(payload),
+        payload.signature,
+    ):
+        raise ScreenerAuthError("node refresh signature verification failed")
+    presented_hash = hashlib.sha256(authorization[len(prefix) :].encode()).hexdigest()
+    controller_secret = request.app.state.config.screener_auth.controller_api_token
+    if controller_secret is None:
+        raise HTTPException(status_code=503, detail="screener controller is disabled")
+    api_token = _idempotent_node_token(
+        secret=controller_secret,
+        node_id=payload.node_id,
+        request_id=payload.refresh_id,
+    )
+    expires_at = now + timedelta(
+        seconds=request.app.state.config.screener_auth.node_token_ttl_seconds
+    )
+    async with session.begin():
+        node = await session.scalar(
+            select(ScreenerNode)
+            .where(ScreenerNode.node_id == payload.node_id)
+            .with_for_update()
+        )
+        if node is None or node.screener_hotkey != payload.screener_hotkey:
+            raise ScreenerAuthError("invalid screener node authority")
+        current_matches = secrets.compare_digest(node.token_hash, presented_hash)
+        previous_expiry = node.previous_token_expires_at
+        if previous_expiry is not None and previous_expiry.tzinfo is None:
+            previous_expiry = previous_expiry.replace(tzinfo=UTC)
+        previous_matches = bool(
+            node.previous_token_hash is not None
+            and previous_expiry is not None
+            and now < previous_expiry
+            and secrets.compare_digest(node.previous_token_hash, presented_hash)
+        )
+        same_request = node.last_refresh_id == payload.refresh_id
+        if node.status == "revoked" or not (
+            current_matches or (same_request and previous_matches)
+        ):
+            raise ScreenerAuthError("invalid screener node authority")
+        prior_expiry = node.token_expires_at
+        if prior_expiry.tzinfo is None:
+            prior_expiry = prior_expiry.replace(tzinfo=UTC)
+        if now >= prior_expiry:
+            raise ScreenerAuthError("screener bearer token has expired")
+        derived_hash = hashlib.sha256(api_token.encode()).hexdigest()
+        if same_request:
+            if not secrets.compare_digest(node.token_hash, derived_hash):
+                raise ScreenerAuthError("refresh request identity is inconsistent")
+            expires_at = node.token_expires_at
+        else:
+            # Keep the prior bearer usable only for an identical request. This
+            # closes the response-loss window without granting general overlap.
+            node.previous_token_hash = node.token_hash
+            node.previous_token_expires_at = now + timedelta(
+                seconds=_NODE_TOKEN_ROTATION_GRACE_SECONDS
+            )
+            node.token_hash = derived_hash
+            node.token_expires_at = expires_at
+            node.last_refresh_id = payload.refresh_id
+            node.rotated_at = now
+    return ScreenerNodeCredentialResponse(
+        environment=node.environment,
+        node_id=payload.node_id,
+        screener_hotkey=payload.screener_hotkey,
+        api_token=api_token,
+        expires_at=expires_at,
+    )
+
+
+@router.put(
+    "/controller/capacity",
+    response_model=ScreenerCapacitySnapshotResponse,
+)
+async def update_screener_capacity(
+    payload: ScreenerCapacitySnapshotRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+    request: Request,
+) -> ScreenerCapacitySnapshotResponse:
+    """Persist the controller heartbeat and a bounded append-only event batch."""
+    now = datetime.now(UTC)
+    values = payload.model_dump(mode="python", exclude={"events"})
+    values["controller_heartbeat_at"] = now
+    lease_expires_at = now + timedelta(
+        seconds=request.app.state.config.screener_auth.controller_lease_seconds
+    )
+    values["controller_lease_expires_at"] = lease_expires_at
+    values["updated_at"] = now
+    async with session.begin():
+        row = await session.scalar(
+            select(ScreenerCapacitySnapshot)
+            .where(ScreenerCapacitySnapshot.environment == payload.environment)
+            .with_for_update()
+        )
+        if row is None:
+            row = ScreenerCapacitySnapshot(**values)
+            session.add(row)
+        else:
+            current_expiry = row.controller_lease_expires_at
+            if current_expiry.tzinfo is None:
+                current_expiry = current_expiry.replace(tzinfo=UTC)
+            if (
+                row.controller_epoch != payload.controller_epoch
+                and now < current_expiry
+            ):
+                raise HTTPException(
+                    status_code=409, detail="another controller holds the lease"
+                )
+            for key, value in values.items():
+                setattr(row, key, value)
+        for event in payload.events[:50]:
+            session.add(
+                ScreenerCapacityEvent(
+                    event_id=uuid4(),
+                    environment=payload.environment,
+                    event_type=event.event_type,
+                    provider=event.provider,
+                    node_id=event.node_id,
+                    detail=event.detail,
+                    controller_epoch=payload.controller_epoch,
+                    created_at=now,
+                )
+            )
+    return ScreenerCapacitySnapshotResponse(
+        **payload.model_dump(mode="python"),
+        controller_heartbeat_at=now,
+        controller_lease_expires_at=lease_expires_at,
+        updated_at=now,
+    )
+
+
+@router.post("/controller/fence", response_model=None, status_code=204)
+async def fence_screener_controller(
+    payload: ScreenerControllerFenceRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    """Recheck writer ownership without extending its watchdog lease."""
+    async with session.begin():
+        await _require_controller_epoch(
+            session,
+            environment=payload.environment,
+            epoch=payload.controller_epoch,
+            now=datetime.now(UTC),
+        )
+
+
+@router.put("/controller/nodes/{node_id}", response_model=None, status_code=204)
+async def update_screener_node_status(
+    node_id: str,
+    payload: ScreenerNodeStatusRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    """Drain, quarantine, reactivate, or revoke one enrolled node."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        await _require_controller_epoch(
+            session,
+            environment=payload.environment,
+            epoch=payload.controller_epoch,
+            now=now,
+        )
+        node = await session.scalar(
+            select(ScreenerNode)
+            .where(ScreenerNode.node_id == node_id)
+            .with_for_update()
+        )
+        if node is None:
+            raise HTTPException(status_code=404, detail="screener node not found")
+        if node.status == "revoked" and payload.status != "revoked":
+            raise HTTPException(status_code=409, detail="revoked node is terminal")
+        node.status = payload.status
+        node.status_reason = payload.reason
+        node.revoked_at = now if payload.status == "revoked" else None
+
+
+@router.get("/controller/nodes", response_model=ScreenerControllerNodesResponse)
+async def list_controller_nodes(
+    _controller: ControllerDep,
+    session: SessionDep,
+    environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
+) -> ScreenerControllerNodesResponse:
+    """Return redacted enrollment readiness for provider reconciliation."""
+    now = datetime.now(UTC)
+    nodes = list(
+        await session.scalars(
+            select(ScreenerNode)
+            .where(ScreenerNode.environment == environment)
+            .order_by(ScreenerNode.node_id)
+        )
+    )
+    heartbeats: dict[tuple[str, str], ScreenerHeartbeat] = {}
+    for row in await session.scalars(
+        select(ScreenerHeartbeat).order_by(ScreenerHeartbeat.seen_at.desc())
+    ):
+        heartbeats.setdefault((row.screener_hotkey, row.instance_id), row)
+    active_hotkeys = set(
+        await session.scalars(
+            select(ScreeningAttempt.screener_hotkey).where(
+                ScreeningAttempt.status == "running",
+                ScreeningAttempt.deadline > now,
+            )
+        )
+    )
+    response: list[ScreenerControllerNodeState] = []
+    for node in nodes:
+        heartbeat = heartbeats.get((node.screener_hotkey, node.node_id))
+        seen_at = heartbeat.seen_at if heartbeat is not None else None
+        if seen_at is not None and seen_at.tzinfo is None:
+            seen_at = seen_at.replace(tzinfo=UTC)
+        ready = bool(
+            node.status == "active"
+            and heartbeat is not None
+            and seen_at is not None
+            and now - seen_at <= timedelta(seconds=_CONTROLLER_HEARTBEAT_READY_SECONDS)
+            and heartbeat.policy_version == SCREENING_POLICY_VERSION
+        )
+        response.append(
+            ScreenerControllerNodeState.model_validate(
+                {
+                    "node_id": node.node_id,
+                    "provider_resource_id": node.provider_resource_id,
+                    "provider": node.provider,
+                    "status": node.status,
+                    "ready": ready,
+                    "active_lease": node.screener_hotkey in active_hotkeys,
+                    "heartbeat_seen_at": seen_at,
+                }
+            )
+        )
+    return ScreenerControllerNodesResponse(nodes=tuple(response))
 
 
 def _review_settings_checksum(settings: ScreenerReviewSettings) -> str:
@@ -478,6 +998,9 @@ async def heartbeat(
         raise HTTPException(status_code=413, detail="heartbeat payload too large")
     if request_body.screener_hotkey != screener_hotkey:
         raise ScreenerAuthError("heartbeat body hotkey does not match header")
+    enrolled_node_id = getattr(request.state, "screener_node_id", None)
+    if enrolled_node_id is not None and request_body.instance_id != enrolled_node_id:
+        raise ScreenerAuthError("heartbeat instance does not match enrolled node")
     now = datetime.now(UTC)
     if abs(int(now.timestamp()) - request_body.timestamp) > _HEARTBEAT_MAX_SKEW_SECONDS:
         raise ScreenerAuthError("heartbeat timestamp is stale or too far in the future")
@@ -637,6 +1160,7 @@ async def queue(
     },
 )
 async def claim(
+    request: Request,
     response: Response,
     screener_hotkey: ScreenerDep,
     session: SessionDep,
@@ -645,6 +1169,11 @@ async def claim(
 ) -> ScreenerQueueResponse:
     """Lease pending work and make its active screening state public."""
     response.headers["Cache-Control"] = "no-store"
+    node_status = getattr(request.state, "screener_node_status", "active")
+    if node_status != "active":
+        raise AgentNotScreenableError(
+            f"screener node is {node_status}; no new work may be claimed"
+        )
     if policy_version != SCREENING_POLICY_VERSION:
         raise AgentNotScreenableError(
             "screening policy mismatch before claim: platform requires "

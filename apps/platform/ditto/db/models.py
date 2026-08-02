@@ -1777,6 +1777,211 @@ class ScreenerHeartbeat(Base):
     )
 
 
+class ScreenerNodeBootstrapGrant(Base):
+    """One short-lived, single-use controller-minted enrollment capability."""
+
+    __tablename__ = "screener_node_bootstrap_grants"
+
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_resource_id: Mapped[str] = mapped_column(Text, nullable=False)
+    controller_epoch: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    registration_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
+            name="screener_node_bootstrap_grants_environment_check",
+        ),
+        CheckConstraint(
+            "length(node_id) BETWEEN 1 AND 63",
+            name="screener_node_bootstrap_grants_node_id_length_check",
+        ),
+        CheckConstraint(
+            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            name="screener_node_bootstrap_grants_provider_check",
+        ),
+        CheckConstraint(
+            "length(token_hash) = 64",
+            name="screener_node_bootstrap_grants_token_hash_check",
+        ),
+        Index("screener_node_bootstrap_grants_node_idx", "node_id", "created_at"),
+    )
+
+
+class ScreenerNode(Base):
+    """A uniquely enrolled worker with revocable, rotating authority."""
+
+    __tablename__ = "screener_nodes"
+
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_resource_id: Mapped[str] = mapped_column(Text, nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    previous_token_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    last_refresh_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    token_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    capacity: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    rotated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    status_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
+            name="screener_nodes_environment_check",
+        ),
+        CheckConstraint(
+            "length(node_id) BETWEEN 1 AND 63",
+            name="screener_nodes_node_id_length_check",
+        ),
+        CheckConstraint(
+            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            name="screener_nodes_provider_check",
+        ),
+        CheckConstraint(
+            "length(token_hash) = 64", name="screener_nodes_token_hash_check"
+        ),
+        CheckConstraint(
+            "previous_token_hash IS NULL OR length(previous_token_hash) = 64",
+            name="screener_nodes_previous_token_hash_check",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'draining', 'quarantined', 'revoked')",
+            name="screener_nodes_status_check",
+        ),
+        CheckConstraint(
+            "capacity BETWEEN 1 AND 16", name="screener_nodes_capacity_check"
+        ),
+        Index("screener_nodes_provider_status_idx", "provider", "status"),
+        UniqueConstraint(
+            "environment",
+            "provider",
+            "provider_resource_id",
+            name="screener_nodes_provider_resource_key",
+        ),
+    )
+
+
+class ScreenerCapacitySnapshot(Base):
+    """Latest fenced capacity-reconciler state for one environment."""
+
+    __tablename__ = "screener_capacity_snapshots"
+
+    environment: Mapped[str] = mapped_column(Text, primary_key=True)
+    controller_epoch: Mapped[str] = mapped_column(Text, nullable=False)
+    controller_heartbeat_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    controller_lease_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    runnable_backlog: Mapped[int] = mapped_column(Integer, nullable=False)
+    active_leases: Mapped[int] = mapped_column(Integer, nullable=False)
+    desired_slots: Mapped[int] = mapped_column(Integer, nullable=False)
+    global_cap: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider_ready: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    targon_capability: Mapped[str] = mapped_column(Text, nullable=False)
+    targon_available: Mapped[int] = mapped_column(Integer, nullable=False)
+    targon_healthy: Mapped[int] = mapped_column(Integer, nullable=False)
+    targon_pending: Mapped[int] = mapped_column(Integer, nullable=False)
+    targon_draining: Mapped[int] = mapped_column(Integer, nullable=False)
+    gce_target: Mapped[int] = mapped_column(Integer, nullable=False)
+    gce_healthy: Mapped[int] = mapped_column(Integer, nullable=False)
+    gce_pending: Mapped[int] = mapped_column(Integer, nullable=False)
+    gce_draining: Mapped[int] = mapped_column(Integer, nullable=False)
+    fallback_reason: Mapped[str | None] = mapped_column(Text)
+    last_provider_success_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    last_provider_error_code: Mapped[str | None] = mapped_column(Text)
+    last_provider_error_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "targon_capability IN ('go', 'nogo', 'unknown')",
+            name="screener_capacity_snapshots_targon_capability_check",
+        ),
+        CheckConstraint(
+            "runnable_backlog >= 0 AND active_leases >= 0 AND "
+            "desired_slots >= 0 AND global_cap >= 0",
+            name="screener_capacity_snapshots_nonnegative_demand_check",
+        ),
+        CheckConstraint(
+            "targon_available >= 0 AND targon_healthy >= 0 AND "
+            "targon_pending >= 0 AND targon_draining >= 0",
+            name="screener_capacity_snapshots_nonnegative_targon_check",
+        ),
+        CheckConstraint(
+            "gce_target >= 0 AND gce_healthy >= 0 AND "
+            "gce_pending >= 0 AND gce_draining >= 0",
+            name="screener_capacity_snapshots_nonnegative_gce_check",
+        ),
+    )
+
+
+class ScreenerCapacityEvent(Base):
+    """Append-only provider/controller audit event."""
+
+    __tablename__ = "screener_capacity_events"
+
+    event_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str | None] = mapped_column(Text)
+    node_id: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    controller_epoch: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "provider IS NULL OR "
+            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            name="screener_capacity_events_provider_check",
+        ),
+        Index(
+            "screener_capacity_events_environment_created_idx",
+            "environment",
+            "created_at",
+        ),
+    )
+
+
 class ScreenerReviewSettingsRevision(Base):
     """Append-only, operator-audited L2/L3 settings revision."""
 

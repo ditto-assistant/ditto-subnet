@@ -102,6 +102,13 @@ paths = [
   "workers/screener/**",
 ]
 
+[components.screener_orchestrator]
+description = "Targon-first screener capacity and build controller"
+depends_on = ["screener"]
+paths = [
+  "services/screener-orchestrator/**",
+]
+
 [components.validator_stack]
 description = "Signed, digest-bound validator stack"
 depends_on = ["validator", "sandbox_docker", "dittobench_api"]

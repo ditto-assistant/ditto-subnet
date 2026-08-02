@@ -53,6 +53,11 @@ updates:
     schedule:
       interval: weekly
 
+  - package-ecosystem: pip
+    directory: /services/screener-orchestrator
+    schedule:
+      interval: weekly
+
   - package-ecosystem: docker
     directory: /workers/screener
     schedule:
