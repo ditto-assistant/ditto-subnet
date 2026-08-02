@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-07-23",
+  "scope": "practice",
+  "interpretation": "One shared seed per immutable contract; observational reference, not a confidence interval or payout input.",
+  "subject": {
+    "name": "OpenClaw",
+    "version": "2026.7.1",
+    "upstream_revision": "2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4",
+    "adapter_base_revision": "89b261a5f003721811b5351ffa4fb92b238c33b8",
+    "container_image_id": "sha256:c5daa016a1c2b422fde2755d6e1d1afddde0ea37bdfb4e6a6a85ffb0975584e8"
+  },
+  "profile": {
+    "name": "favorable-native-recall",
+    "memory_engine": "OpenClaw memory-core SQLite FTS5 over workspace Markdown",
+    "native_tool_names": [
+      "search_memories",
+      "search_subjects",
+      "fetch_memories",
+      "search_memories_in_subjects",
+      "save_memory",
+      "update_memory",
+      "delete_memory"
+    ],
+    "memory_search_provider": "none",
+    "search_limit": 20,
+    "external_memory_provider": false,
+    "benchmark_specific_skill": false,
+    "expected_answer_access": false,
+    "max_output_tokens": 8192
+  },
+  "sources": {
+    "dittobench_api_base_revision": "444422cb970f949912eabeacfea3133790023759",
+    "dittobench_datagen_revision": "55343ff961e36ebaa1c7db378dd7e5e0663ff5f3",
+    "provider_relay_revision": "d15b62a00f41fb9e71b71019698b65c13becb2e4"
+  },
+  "contract": {
+    "versions": [
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "run_size": "full",
+    "seed": "3058240546919425205",
+    "model": "qwen/qwen3-32b",
+    "gateway": "OpenRouter",
+    "provider_route": "Nebius only; fallbacks disabled",
+    "profile_revision": "openrouter-nebius-qwen3-32b-no-think-v1",
+    "reasoning": false,
+    "streaming": false,
+    "case_concurrency": 8
+  },
+  "runs": [
+    {
+      "bench_version": 2,
+      "release_date": "2026-07-07",
+      "run_id": "aff3b762-45cf-48e9-9293-9759352b4ab4",
+      "started_at": "2026-07-23T00:11:42.625431-04:00",
+      "finished_at": "2026-07-23T00:21:50.213402-04:00",
+      "dataset_sha256": "965d0668351dc8c9f141e8600d376941e5ea38c14de7697302e26aabf86bfc7b",
+      "transcript_sha256": "8a2217876c617365c3a1a1665195b8159f1526f83fff3f0e0c80b65c590e4d50",
+      "case_count": 114,
+      "tool_case_count": 60,
+      "memory_case_count": 54,
+      "result": {
+        "composite": 0.590278,
+        "tool_mean": 0.8472222500000001,
+        "memory_mean": 0.3333333333333333,
+        "memory_fully_correct": 18,
+        "median_ms": 31871,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 44
+      },
+      "transport": {
+        "requests": 236,
+        "successes": 236,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 1063712,
+        "completion_tokens": 9757,
+        "usage_available": 236,
+        "usage_unavailable": 0
+      }
+    },
+    {
+      "bench_version": 3,
+      "release_date": "2026-07-18",
+      "run_id": "025956de-c312-4cd4-8a04-ca636ffc143a",
+      "started_at": "2026-07-23T00:21:56.192935-04:00",
+      "finished_at": "2026-07-23T00:27:45.420376-04:00",
+      "dataset_sha256": "39f323eb273f4dc49e8916f9bc2a0d12d8fac3a7ad06e5189bac145d36b5cbb9",
+      "transcript_sha256": "979c23b71f6c7ad67a1b4c0c3dd83d625017d673eea4634ce23de8eadef1af13",
+      "case_count": 119,
+      "tool_case_count": 60,
+      "memory_case_count": 59,
+      "result": {
+        "composite": 0.503958,
+        "tool_mean": 0.8672222333333334,
+        "memory_mean": 0.3771186440677966,
+        "memory_fully_correct": 22,
+        "median_ms": 23246,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 42
+      },
+      "transport": {
+        "requests": 230,
+        "successes": 230,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 1023919,
+        "completion_tokens": 8779,
+        "usage_available": 230,
+        "usage_unavailable": 0
+      }
+    },
+    {
+      "bench_version": 4,
+      "release_date": "2026-07-19",
+      "run_id": "37662b1a-fdd2-4135-a790-749750e33b46",
+      "started_at": "2026-07-23T00:27:56.813763-04:00",
+      "finished_at": "2026-07-23T00:34:49.632339-04:00",
+      "dataset_sha256": "ffc90c35a0a779a65ac1afb61ed5aa8fa001b6343f279176ccda82ee04646921",
+      "transcript_sha256": "91fcada320fed4e8869b4f8748849797aaa3969793ffb62624e1ac303fcdf7ba",
+      "case_count": 119,
+      "tool_case_count": 60,
+      "memory_case_count": 59,
+      "result": {
+        "composite": 0.46403,
+        "tool_mean": 0.8605555666666668,
+        "memory_mean": 0.3559322033898305,
+        "memory_fully_correct": 21,
+        "median_ms": 24903,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 46
+      },
+      "transport": {
+        "requests": 246,
+        "successes": 246,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 1108529,
+        "completion_tokens": 10733,
+        "usage_available": 246,
+        "usage_unavailable": 0
+      }
+    },
+    {
+      "bench_version": 5,
+      "release_date": "2026-07-21",
+      "run_id": "bc4cf453-ddce-4e66-ab67-659280143d62",
+      "started_at": "2026-07-23T00:34:57.649803-04:00",
+      "finished_at": "2026-07-23T00:47:11.227671-04:00",
+      "dataset_sha256": "6e8732f7bbcf153a7a257d938afe3c4d93d410a253f2352eb966272d66f30ec0",
+      "transcript_sha256": "2ca10e0c00a0476f9e324baac67479b9a221c92d1718c563e763fdcc3be5be62",
+      "case_count": 206,
+      "tool_case_count": 110,
+      "memory_case_count": 96,
+      "result": {
+        "composite": 0.273869,
+        "tool_mean": 0.860000018181818,
+        "memory_mean": 0.421875,
+        "memory_fully_correct": 40,
+        "median_ms": 26482,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 72
+      },
+      "transport": {
+        "requests": 422,
+        "successes": 422,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 1896954,
+        "completion_tokens": 17549,
+        "usage_available": 422,
+        "usage_unavailable": 0
+      }
+    },
+    {
+      "bench_version": 6,
+      "release_date": "2026-07-21",
+      "run_id": "5fd141aa-25e6-476c-9cc4-1b4279ee6559",
+      "started_at": "2026-07-23T00:47:18.960669-04:00",
+      "finished_at": "2026-07-23T01:01:41.277158-04:00",
+      "dataset_sha256": "f9b8e6eea10f20316a6fc82c2f6b0af0f0cf0bc3f263cf96a760e68cdaa3ea2d",
+      "transcript_sha256": "95af573850fdc945a015d056a745a36d2f0ade549ffaaa32f291377ba04a1553",
+      "case_count": 206,
+      "tool_case_count": 110,
+      "memory_case_count": 96,
+      "result": {
+        "composite": 0.26651,
+        "tool_mean": 0.8704242545454546,
+        "memory_mean": 0.3333333333333333,
+        "memory_fully_correct": 32,
+        "median_ms": 29946,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 67
+      },
+      "transport": {
+        "requests": 418,
+        "successes": 418,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 1876460,
+        "completion_tokens": 18948,
+        "usage_available": 418,
+        "usage_unavailable": 0
+      }
+    }
+  ],
+  "excluded_attempts": [],
+  "artifact_policy": "Raw generated datasets and answer-bearing transcripts remain local; dataset and transcript SHA-256 digests bind the retained evidence."
+}

@@ -1,0 +1,1795 @@
+{
+  "accepted_samples": [
+    {
+      "accounting_sha256": "ce7a4b5262cd131355533e4cf21a151e4748fff67e90904863dfdcbca94c091a",
+      "dataset_sha256": "7aef447e8ad918d177d33922a8e556a2326aa8044d4c9eab3b0e5325b19bac96",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "59c10fb835afa1dde266b61dffceb063244171d316fc4ccdc5342ae96f0f64cc",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 6532,
+        "prompt_tokens": 64777,
+        "requests": 33,
+        "total_tokens": 71309
+      },
+      "seed": 101,
+      "ticket_ledger": {
+        "chat_completion_tokens": 6533,
+        "chat_prompt_tokens": 64851,
+        "chat_total_tokens": 71384,
+        "completed_count": 186,
+        "embedding_prompt_tokens": 2809,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "25a2a252204cff8264481de1fa95c47d390e51cac08daf6b4800ee3edfec2aec",
+      "dataset_sha256": "a2e0b8e0111d72a58f45a36e545eef47e53fef0cd5d40a02a3fe62690d377fa2",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "3acad7a7c8cb1c693f739d46323b76416650a0b62d7b7464bc9ea3ab9e254dea",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 5672,
+        "prompt_tokens": 68320,
+        "requests": 35,
+        "total_tokens": 73992
+      },
+      "seed": 202,
+      "ticket_ledger": {
+        "chat_completion_tokens": 5673,
+        "chat_prompt_tokens": 68394,
+        "chat_total_tokens": 74067,
+        "completed_count": 191,
+        "embedding_prompt_tokens": 2900,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "c0a25eda14787c8d1c9a33b4c49709907bed5cf0dfc6cf32db08a6966f80d1f8",
+      "dataset_sha256": "dfc69c500fc22f1feba0c7a7f5f73b11e973913711f94121e2b66568dd8b87c0",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "5f374ab1ed6613a1a83a1515af2442b3f4335db9da0e19122365a9973bc1da1b",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 4781,
+        "prompt_tokens": 60177,
+        "requests": 31,
+        "total_tokens": 64958
+      },
+      "seed": 303,
+      "ticket_ledger": {
+        "chat_completion_tokens": 4782,
+        "chat_prompt_tokens": 60251,
+        "chat_total_tokens": 65033,
+        "completed_count": 175,
+        "embedding_prompt_tokens": 2721,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "48e176614036e97d16a8d5cfff2214340b1409bf142a51604132bdd1e87a6bb3",
+      "dataset_sha256": "cb9a2a573934edb5b2c5e760709f473bcf9e373e2dbd716b2e73ab2537fb6756",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "ce93e6fd80fecfb5ad0aeafe5db8a81d4e224b9bbff9f41553acf343548c5320",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 5607,
+        "prompt_tokens": 65076,
+        "requests": 33,
+        "total_tokens": 70683
+      },
+      "seed": 404,
+      "ticket_ledger": {
+        "chat_completion_tokens": 5608,
+        "chat_prompt_tokens": 65150,
+        "chat_total_tokens": 70758,
+        "completed_count": 205,
+        "embedding_prompt_tokens": 3119,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "96307439fa87d6c0cb648040b658df5e7715208c99cdfd4d8d42c36f9c2ea67c",
+      "dataset_sha256": "73dd173ba663f666e731466d9f560e59a386abfe5dc25718b32bed0c8ca6e62c",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "eb305571529784971c259497f3f21f452d4e7aaa45121525153688220378b2fa",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 6900,
+        "prompt_tokens": 65305,
+        "requests": 33,
+        "total_tokens": 72205
+      },
+      "seed": 505,
+      "ticket_ledger": {
+        "chat_completion_tokens": 6901,
+        "chat_prompt_tokens": 65379,
+        "chat_total_tokens": 72280,
+        "completed_count": 189,
+        "embedding_prompt_tokens": 2919,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "ebe2ad6c8f151290198da25e66eeacae9dbf9f5ef5730169defd089dec6ed0fb",
+      "dataset_sha256": "5dcb30072518311b6cd89bfff759905b6f160c9fcc5ccec07c204341d20bb9a6",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "90ffd38d83107e1d7ede3dd1a1cca2662017611eb5d2ab433e60fa70de5bb17b",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 4062,
+        "prompt_tokens": 55896,
+        "requests": 29,
+        "total_tokens": 59958
+      },
+      "seed": 606,
+      "ticket_ledger": {
+        "chat_completion_tokens": 4063,
+        "chat_prompt_tokens": 55970,
+        "chat_total_tokens": 60033,
+        "completed_count": 195,
+        "embedding_prompt_tokens": 3086,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "37af1d7f57cce387f2d6fb53dfe0968343f080c9fcc9a5ea6991b4bdce677b83",
+      "dataset_sha256": "8b6a0341f7275d22913e70943e504b782a1019fbdca444db9ee77b1c948b842b",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "6b5cb728913506ac04df9a8da34f9968bd6b4c39b2926179cd71acf796ded035",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 4001,
+        "prompt_tokens": 57997,
+        "requests": 30,
+        "total_tokens": 61998
+      },
+      "seed": 707,
+      "ticket_ledger": {
+        "chat_completion_tokens": 4002,
+        "chat_prompt_tokens": 58071,
+        "chat_total_tokens": 62073,
+        "completed_count": 204,
+        "embedding_prompt_tokens": 3115,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "d256890c4f0c62aec13750140863d635938ef3bc557716296532fd8d68d3abd5",
+      "dataset_sha256": "219f40b7b0eb8db96bd7b7009b29e82eeb6db233d25337034c3cf0f5d80750d1",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "b94d3fce6117b19e7d233e02588f7f775887e0d4ff343661aeb5987414dd0ac5",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 3741,
+        "prompt_tokens": 46373,
+        "requests": 25,
+        "total_tokens": 50114
+      },
+      "seed": 808,
+      "ticket_ledger": {
+        "chat_completion_tokens": 3742,
+        "chat_prompt_tokens": 46447,
+        "chat_total_tokens": 50189,
+        "completed_count": 172,
+        "embedding_prompt_tokens": 2846,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "53bc5ed0c251d1d1bcf36636f9b2ad964713344901677b7a08c225f01afb08d8",
+      "dataset_sha256": "de6ce66002fe46927b31842724f044aecdd17a7f737d98e1abe0ed35b71646d4",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "07bd3a93d27d24405588f381c643ac2bc81cf23757cbdc9ac073530005dda507",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 4995,
+        "prompt_tokens": 62641,
+        "requests": 32,
+        "total_tokens": 67636
+      },
+      "seed": 909,
+      "ticket_ledger": {
+        "chat_completion_tokens": 4996,
+        "chat_prompt_tokens": 62715,
+        "chat_total_tokens": 67711,
+        "completed_count": 201,
+        "embedding_prompt_tokens": 3106,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "baf3bec9a62e454e13324bdd11d2da0efda165f822f1a3a0f95a2f7f5bc8d814",
+      "dataset_sha256": "b985473eee09e3cc7163bcec734ee631ec9f805a980c86aea5fdf2a176fca090",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "2f537a1bd92e8058a6a6b1d4458abc17577d5f8ff4dce59fabed65900c1ba73a",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 4085,
+        "prompt_tokens": 59969,
+        "requests": 30,
+        "total_tokens": 64054
+      },
+      "seed": 1010,
+      "ticket_ledger": {
+        "chat_completion_tokens": 4086,
+        "chat_prompt_tokens": 60043,
+        "chat_total_tokens": 64129,
+        "completed_count": 192,
+        "embedding_prompt_tokens": 3044,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "72172b0a9d99969c5bbf2ad30d063549a9462b0d576c0ff2f392567fc97a4cd2",
+      "dataset_sha256": "b0cfc6e927416c1dc4bd6461bd2d05a83db9d47f341fcd6aa8d5c7e283dc036c",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "996f610e1e5f1065a51afbd4a5a7cedafa174304fa3902e22a3e6303375ecc10",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 4492,
+        "prompt_tokens": 59310,
+        "requests": 31,
+        "total_tokens": 63802
+      },
+      "seed": 1111,
+      "ticket_ledger": {
+        "chat_completion_tokens": 4493,
+        "chat_prompt_tokens": 59384,
+        "chat_total_tokens": 63877,
+        "completed_count": 192,
+        "embedding_prompt_tokens": 2963,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "e82a487b226b75f811f9a337cdec068f47a43f57ea82e6d981a9d2ace2f02d55",
+      "dataset_sha256": "82a6cf75d26f61a7c0714a0ec16812e0e2bc8583b9f503a2adb5ab01c7c78204",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "f36426bd0432879df560a6e3a499c14f15cbfb45f95a129b1cb4153716734448",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 3795,
+        "prompt_tokens": 58903,
+        "requests": 31,
+        "total_tokens": 62698
+      },
+      "seed": 1212,
+      "ticket_ledger": {
+        "chat_completion_tokens": 3796,
+        "chat_prompt_tokens": 58977,
+        "chat_total_tokens": 62773,
+        "completed_count": 185,
+        "embedding_prompt_tokens": 2942,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "525fd486b54f3e5d6340ab2e3bad6e7c45503355d421e1666e0b3383ee281071",
+      "dataset_sha256": "2ceae3c7acaa2cdf2ea6ed16ea79406ac1427a5c29e07bc3ab3699bf7ab715e2",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "0d32cfddebe7f2299932503defded8fb47f5e47a9622192a9edb9bb32f6a9e18",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 3063,
+        "prompt_tokens": 49783,
+        "requests": 26,
+        "total_tokens": 52846
+      },
+      "seed": 1313,
+      "ticket_ledger": {
+        "chat_completion_tokens": 3064,
+        "chat_prompt_tokens": 49857,
+        "chat_total_tokens": 52921,
+        "completed_count": 172,
+        "embedding_prompt_tokens": 2672,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "81bf4e2b560ad57609813830f78466b2b39034e8889c919011e0f51418e0a11c",
+      "dataset_sha256": "b0b0145123d8e4652826b42c08c453fef6a2ec67fe0ec4afd8e21d9e3d506dd3",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "810510b5066281099aa1726da68d2a9444a9c916a99bf605d1b4d4eb8fec2600",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 4630,
+        "prompt_tokens": 54644,
+        "requests": 28,
+        "total_tokens": 59274
+      },
+      "seed": 1414,
+      "ticket_ledger": {
+        "chat_completion_tokens": 4631,
+        "chat_prompt_tokens": 54718,
+        "chat_total_tokens": 59349,
+        "completed_count": 197,
+        "embedding_prompt_tokens": 3188,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "1e682f0f9d1917c306376c94d1ab33eb0f165570bf5cfe4ec23ec83104bd61f3",
+      "dataset_sha256": "0e8cfaeeeed3fab966b21d3391dc76cf5c9d4eafec3dc96465fb40b19da9c171",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "09d7115a6aa2706fc63ffa7e8a8149290fc98eba310e4056bf5bd775a366032a",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 5596,
+        "prompt_tokens": 59308,
+        "requests": 30,
+        "total_tokens": 64904
+      },
+      "seed": 1515,
+      "ticket_ledger": {
+        "chat_completion_tokens": 5597,
+        "chat_prompt_tokens": 59382,
+        "chat_total_tokens": 64979,
+        "completed_count": 174,
+        "embedding_prompt_tokens": 2635,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "f7a171912d7b165e9f395e7aa8a3389f67cc04b1ab4d4530a9e6072e3a3d3a47",
+      "dataset_sha256": "f6fd996f5424b02df4883541e93206089519598d1b60036691ea81ebc8aa0bb6",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "6f37172c5669eb20c9cca356c00c3c70d35b89c09a395996cb8bdda4214fe6dc",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 3472,
+        "prompt_tokens": 59822,
+        "requests": 31,
+        "total_tokens": 63294
+      },
+      "seed": 1616,
+      "ticket_ledger": {
+        "chat_completion_tokens": 3473,
+        "chat_prompt_tokens": 59896,
+        "chat_total_tokens": 63369,
+        "completed_count": 178,
+        "embedding_prompt_tokens": 2743,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "ce2718e8b3b41d4072856cc6d2c26af4efedc9ddbb88e22027ed24f7909e236a",
+      "dataset_sha256": "f34590ec7fc0a5b7e15d232f15192cee3baef721d41642abce6647b3ba0efdad",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "78d5c6d832573ef773940c3d4926d46122b4bc303924ee11d101312c8beea55c",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 2695,
+        "prompt_tokens": 51937,
+        "requests": 27,
+        "total_tokens": 54632
+      },
+      "seed": 1717,
+      "ticket_ledger": {
+        "chat_completion_tokens": 2696,
+        "chat_prompt_tokens": 52011,
+        "chat_total_tokens": 54707,
+        "completed_count": 175,
+        "embedding_prompt_tokens": 2750,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "76defdd53dc0c1358138636b7955d231dd8794d6008779222df96960f0e5d3b0",
+      "dataset_sha256": "2490a2489555aaa2fd24ecf272494d6ca3cefe2c9139bfcee2656d006c3899d6",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "c90978e47fb7cd58014fc940a8df2b8a21b4671e7ca331629751e96d39dbb767",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 5309,
+        "prompt_tokens": 62755,
+        "requests": 32,
+        "total_tokens": 68064
+      },
+      "seed": 1818,
+      "ticket_ledger": {
+        "chat_completion_tokens": 5310,
+        "chat_prompt_tokens": 62829,
+        "chat_total_tokens": 68139,
+        "completed_count": 195,
+        "embedding_prompt_tokens": 2994,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "99603197c6c3c2d1bea6ca76282c90c0954be23a2c8fd2517f3544f8064486fd",
+      "dataset_sha256": "ca2c88d7238067a9c04685329167c37045f99905aaef787dddf59b2772d019eb",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "34b5111a796cdfd7e95cf1963a998205368cce777af96ed1cf9d7ce0569770bc",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 3781,
+        "prompt_tokens": 59163,
+        "requests": 30,
+        "total_tokens": 62944
+      },
+      "seed": 1919,
+      "ticket_ledger": {
+        "chat_completion_tokens": 3782,
+        "chat_prompt_tokens": 59237,
+        "chat_total_tokens": 63019,
+        "completed_count": 193,
+        "embedding_prompt_tokens": 3070,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "cca58800080bb018e64eb6186450502582c577507ddebdbca13ce7691193b1bc",
+      "dataset_sha256": "11484eebb0b5cad7fe7c674c1e09611f2f392aa0a4206376b2185e1b4f779b8d",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "1ebcc1ec869fd7facf6562a39d700a580d2dfffc64f506b02e7e1bb1eded3a4f",
+      "run_size": "small",
+      "scorer_chat": {
+        "completion_tokens": 4233,
+        "prompt_tokens": 54442,
+        "requests": 28,
+        "total_tokens": 58675
+      },
+      "seed": 2020,
+      "ticket_ledger": {
+        "chat_completion_tokens": 4234,
+        "chat_prompt_tokens": 54516,
+        "chat_total_tokens": 58750,
+        "completed_count": 196,
+        "embedding_prompt_tokens": 3039,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "b824e1d78d3e6ce6e39d89edfbeb777d05cd246d6cbaa26e3c7cdabf5609985b",
+      "dataset_sha256": "4ea3c1f87ee92cbad1c74f296e91cd7bf94896d68e9d60531057266ac49643ee",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "91c64a0e57583e2e3b9624b01ab92d9baf2909cb48e5e5a5837688bd6ced09b8",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 31395,
+        "prompt_tokens": 394323,
+        "requests": 181,
+        "total_tokens": 425718
+      },
+      "seed": 101,
+      "ticket_ledger": {
+        "chat_completion_tokens": 31396,
+        "chat_prompt_tokens": 394397,
+        "chat_total_tokens": 425793,
+        "completed_count": 655,
+        "embedding_prompt_tokens": 8630,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "fc1c7ae7b6425027a0de0e923d6680571cc7820acca013a7eadaf1fddbda7532",
+      "dataset_sha256": "02c8180bbfb98805f55d256c35314256d3df3745b62b909b14df727d9f2d3cc5",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "0f024bc687730c923d35a720239b2ec61f8f3ebc65b8a2f5c0fb2f7eefa6f8b7",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 31481,
+        "prompt_tokens": 373563,
+        "requests": 171,
+        "total_tokens": 405044
+      },
+      "seed": 202,
+      "ticket_ledger": {
+        "chat_completion_tokens": 31482,
+        "chat_prompt_tokens": 373637,
+        "chat_total_tokens": 405119,
+        "completed_count": 646,
+        "embedding_prompt_tokens": 8681,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "3eccce6e8ee78f9aade8720bc609fde32e962ddd97ef16fb789efa82b89e3b15",
+      "dataset_sha256": "6e7170b542ba97921a7aa4af45051f637e2b7bf9fd4a174aa2ff19114edda4a5",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "920e3d4d96c4d98e4c3181712b01f95e19b9b1703e756f09318842ee2b0c991a",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 29610,
+        "prompt_tokens": 397619,
+        "requests": 177,
+        "total_tokens": 427229
+      },
+      "seed": 303,
+      "ticket_ledger": {
+        "chat_completion_tokens": 29611,
+        "chat_prompt_tokens": 397693,
+        "chat_total_tokens": 427304,
+        "completed_count": 657,
+        "embedding_prompt_tokens": 8723,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "03c5f06e5bab048a177b64310c537493d31f5c0c19338e70343af1d15922ccf5",
+      "dataset_sha256": "6b4c8e8ec018714f9051acd98377edbef48ed5d7cb73fdaa4d72710b73f38fe3",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "d27a5b8021322f59b6b90bb1ede653a688f6e6d2571efac1768f3618345a7642",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 27041,
+        "prompt_tokens": 366023,
+        "requests": 171,
+        "total_tokens": 393064
+      },
+      "seed": 404,
+      "ticket_ledger": {
+        "chat_completion_tokens": 27042,
+        "chat_prompt_tokens": 366093,
+        "chat_total_tokens": 393135,
+        "completed_count": 632,
+        "embedding_prompt_tokens": 8387,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "f04285d8a2580117202624fbeb13a913e270da8c7117a779cbb05ef3f22e5fc9",
+      "dataset_sha256": "1c0dc29060d2be2e9dae4ed727361b2f0a6e800f83fa7b07e82799491d4e1d50",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "8a32735b60ff79f7e635bd2a1df86680b025d3abe3579f155a71643cc6129479",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 46289,
+        "prompt_tokens": 353629,
+        "requests": 164,
+        "total_tokens": 399918
+      },
+      "seed": 505,
+      "ticket_ledger": {
+        "chat_completion_tokens": 46290,
+        "chat_prompt_tokens": 353703,
+        "chat_total_tokens": 399993,
+        "completed_count": 635,
+        "embedding_prompt_tokens": 8745,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "7924df5f1fcd66905351a5a1af08cbdd1cfd36bbd6c5d89fbeef474dc149483d",
+      "dataset_sha256": "d8b04de266932ae60fb0f866ae96c4e2738a92036c7d6b9d45d4d237de03171b",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "959d819d3ed2bbdd274d84cd7abe05529ac14257318cfd8168fd3e5b1c96e029",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 32811,
+        "prompt_tokens": 385137,
+        "requests": 177,
+        "total_tokens": 417948
+      },
+      "seed": 606,
+      "ticket_ledger": {
+        "chat_completion_tokens": 32812,
+        "chat_prompt_tokens": 385211,
+        "chat_total_tokens": 418023,
+        "completed_count": 659,
+        "embedding_prompt_tokens": 8766,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "0efbb62d6771830b789ab3bbdbc79646394ffddd5c0ffce80983d42ff1774d9d",
+      "dataset_sha256": "4e1c79d07b6a5ea78b88102d41a2fe3786aca56f3608243fb84e08901bc8eb46",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "05d1bf8ce23fe793ac95df117f6a6c7315f592b7d8c108e06b24acf9dbd13f96",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 46339,
+        "prompt_tokens": 370697,
+        "requests": 172,
+        "total_tokens": 417036
+      },
+      "seed": 707,
+      "ticket_ledger": {
+        "chat_completion_tokens": 46340,
+        "chat_prompt_tokens": 370771,
+        "chat_total_tokens": 417111,
+        "completed_count": 666,
+        "embedding_prompt_tokens": 9110,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "68145d1a5ed6000386642b2f2fd59ce9581ff7a2e30e7737b1694d357af611bf",
+      "dataset_sha256": "da2e8c7205861db24e16c1f1bc16ced6de514260facde9c1576ad6afffdbb670",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "c412fda4096419af3a168f5bbb669bb8d57244bf0fb15c24bafb8350f3a0e00f",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 28315,
+        "prompt_tokens": 404886,
+        "requests": 183,
+        "total_tokens": 433201
+      },
+      "seed": 808,
+      "ticket_ledger": {
+        "chat_completion_tokens": 28316,
+        "chat_prompt_tokens": 404960,
+        "chat_total_tokens": 433276,
+        "completed_count": 682,
+        "embedding_prompt_tokens": 9188,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "496aa142270a74bd2ea54740d6155f8fb0d0b4eb19853cb1b8db1228990ec46e",
+      "dataset_sha256": "5948e01d544dc1580c6910ff44721e574b45f7b9dbab3f1449c436526b722bef",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "110ea2190cfaac5070d4f4e96faadea0cf371f677097c873a9129431959bae48",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 25533,
+        "prompt_tokens": 364451,
+        "requests": 175,
+        "total_tokens": 389984
+      },
+      "seed": 909,
+      "ticket_ledger": {
+        "chat_completion_tokens": 25534,
+        "chat_prompt_tokens": 364525,
+        "chat_total_tokens": 390059,
+        "completed_count": 650,
+        "embedding_prompt_tokens": 8614,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "6ab0bbef557cd8bffbe5323c464c1c4c222b9753749d0878f453d2a85190442d",
+      "dataset_sha256": "df27f85869e0417312500f6a5be2479fafe04a0a64a6c582edf810dd9f88fb96",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "d2bfe63120015fc1c565079abad6cea22f2a02566fec60d41f4d6de2fdafcb47",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 31820,
+        "prompt_tokens": 423473,
+        "requests": 187,
+        "total_tokens": 455293
+      },
+      "seed": 1010,
+      "ticket_ledger": {
+        "chat_completion_tokens": 31821,
+        "chat_prompt_tokens": 423547,
+        "chat_total_tokens": 455368,
+        "completed_count": 660,
+        "embedding_prompt_tokens": 8657,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "24225bab648fae6a730c97c702fb38c78c1d8df389a175234395c3bfe01c5619",
+      "dataset_sha256": "8955ca285b0e40949a5114455e75f693b5abe121cdef76e70af89d2f899fcb72",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "10ae1e5694c3005d614702133d9fb3e2afe3bd9c74a89f7c5591a9e0cca089af",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 31218,
+        "prompt_tokens": 371794,
+        "requests": 177,
+        "total_tokens": 403012
+      },
+      "seed": 1111,
+      "ticket_ledger": {
+        "chat_completion_tokens": 31219,
+        "chat_prompt_tokens": 371868,
+        "chat_total_tokens": 403087,
+        "completed_count": 636,
+        "embedding_prompt_tokens": 8334,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "a3c6c18f19f2bd5961e5df1d1e946c420a5bea77933e6fb6bf137bc2bcf55242",
+      "dataset_sha256": "4c5cab89300cfa36dce57c37b16a674dc4c0048fc768ddb27631702454477b6b",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "b0eda8cc3ca975f5448523a776bb8928d4d0b18660587496d904c43654cdde74",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 24216,
+        "prompt_tokens": 346468,
+        "requests": 166,
+        "total_tokens": 370684
+      },
+      "seed": 1212,
+      "ticket_ledger": {
+        "chat_completion_tokens": 24217,
+        "chat_prompt_tokens": 346538,
+        "chat_total_tokens": 370755,
+        "completed_count": 654,
+        "embedding_prompt_tokens": 8969,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "2f4c34069ed6fcc3c92417dcc4a7873c445226b83af0bed67e918c1f6925e52a",
+      "dataset_sha256": "4353a46bb71a24ff904872f77d9a1c249d442a20d5bb6557ee5b1847470b23e0",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "88425a804bd202016e5f98088d3b07d0582fc72d70f70515148cb699184845e6",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 29235,
+        "prompt_tokens": 343687,
+        "requests": 166,
+        "total_tokens": 372922
+      },
+      "seed": 1313,
+      "ticket_ledger": {
+        "chat_completion_tokens": 29236,
+        "chat_prompt_tokens": 343761,
+        "chat_total_tokens": 372997,
+        "completed_count": 643,
+        "embedding_prompt_tokens": 9036,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "244ec10a0f6ef104e051db4b963b7d1b59c4ff267b68f720928f08c6318da212",
+      "dataset_sha256": "6c78aedde207617a89abb23474d40bd6cd911a33652efa508cb1e050d6507f23",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "94f9d78fdf9cbe723dfaa7c60d850828f9032901c745d67ed0c1eaa2b254b1f4",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 24353,
+        "prompt_tokens": 383497,
+        "requests": 177,
+        "total_tokens": 407850
+      },
+      "seed": 1414,
+      "ticket_ledger": {
+        "chat_completion_tokens": 24354,
+        "chat_prompt_tokens": 383567,
+        "chat_total_tokens": 407921,
+        "completed_count": 632,
+        "embedding_prompt_tokens": 8234,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "fcf1e3c0f98177e3cfdf48e1310f4055e4d5470eed6d3e41a477dc03777af17a",
+      "dataset_sha256": "494c174a7858946b5491dd561d115d51072f515949056f29990a31119ccc9ff5",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "3928b9c324fd77bbe6ef19440485eb8fe05c1a4f6b6fca106e8f80bdf9b021f4",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 36310,
+        "prompt_tokens": 372677,
+        "requests": 172,
+        "total_tokens": 408987
+      },
+      "seed": 1515,
+      "ticket_ledger": {
+        "chat_completion_tokens": 36311,
+        "chat_prompt_tokens": 372747,
+        "chat_total_tokens": 409058,
+        "completed_count": 644,
+        "embedding_prompt_tokens": 8606,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "4243b7fa25e7892308dff917534b6cbc4e6e712307651b6208c47d862442f9eb",
+      "dataset_sha256": "370d5952b8cfd8827c2e724ce766837959508cb09662ba69d0681e4a1a0ab4d8",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "2a9bed5252a73fb58fc28f3594e27c95138ee4d9c1de8f2c06b52884a4b727d6",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 34628,
+        "prompt_tokens": 422247,
+        "requests": 191,
+        "total_tokens": 456875
+      },
+      "seed": 1616,
+      "ticket_ledger": {
+        "chat_completion_tokens": 34629,
+        "chat_prompt_tokens": 422317,
+        "chat_total_tokens": 456946,
+        "completed_count": 652,
+        "embedding_prompt_tokens": 8208,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "9fb915f213e239dd88c29700733c85ee41c4517359ddbee290244c7897f860ad",
+      "dataset_sha256": "aaeb58fff09a5c5f05c3d6fcf7d700c750d865a9eae28de2512f6a112d7c098b",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "243fe84559a6940e0c119c4c94c0115048de3b4a414479ceb0d30d8f4970d628",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 35378,
+        "prompt_tokens": 387696,
+        "requests": 179,
+        "total_tokens": 423074
+      },
+      "seed": 1717,
+      "ticket_ledger": {
+        "chat_completion_tokens": 35379,
+        "chat_prompt_tokens": 387766,
+        "chat_total_tokens": 423145,
+        "completed_count": 638,
+        "embedding_prompt_tokens": 8216,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "705958ee36a87ce5ee5770b11a22b308a3ad9357df1da714f784a47b17134d26",
+      "dataset_sha256": "42201bea6e35182af2aafbc2654d46f781d35a62e0f1e81f9e41d3ca71465c8a",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "5c737c06fad5e65f73d2152ae50bce171adfb2277b245f9eb0abc8e7e0b7120a",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 26129,
+        "prompt_tokens": 343891,
+        "requests": 164,
+        "total_tokens": 370020
+      },
+      "seed": 1818,
+      "ticket_ledger": {
+        "chat_completion_tokens": 26130,
+        "chat_prompt_tokens": 343961,
+        "chat_total_tokens": 370091,
+        "completed_count": 625,
+        "embedding_prompt_tokens": 8538,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "22d203afaf8ca6156afc8fa228ccbffb80bb15f8186808a466f436ce7bf8c044",
+      "dataset_sha256": "068c6d88dbe029d43ff7d4534332fcd7b41c37952853053f4b961e598bca9776",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Fireworks",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "f4a37ef83de6320dd9db707d50e580f96708f468d31aeae69a68fcce70c22561",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 32015,
+        "prompt_tokens": 418059,
+        "requests": 191,
+        "total_tokens": 450074
+      },
+      "seed": 1919,
+      "ticket_ledger": {
+        "chat_completion_tokens": 32016,
+        "chat_prompt_tokens": 418133,
+        "chat_total_tokens": 450149,
+        "completed_count": 667,
+        "embedding_prompt_tokens": 8449,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "f5aeb37359ebb02f88fb58e5fed681cbc8bff9c3068591fc5b9e32dc39c60d6b",
+      "dataset_sha256": "d35dfa78f719d761135980903e4fa382b312671e709c52326054abafda796a20",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Fireworks",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "7e8b065dc0f2725bdb87929e10b981516635cc225a65dd73609e59aabb6b1df5",
+      "run_size": "medium",
+      "scorer_chat": {
+        "completion_tokens": 25490,
+        "prompt_tokens": 358162,
+        "requests": 178,
+        "total_tokens": 383652
+      },
+      "seed": 2020,
+      "ticket_ledger": {
+        "chat_completion_tokens": 25491,
+        "chat_prompt_tokens": 358236,
+        "chat_total_tokens": 383727,
+        "completed_count": 654,
+        "embedding_prompt_tokens": 8601,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "89d7f45d622187e7b304f82e17cd9bb253cc725e314a1eb4310ab98dad4032bc",
+      "dataset_sha256": "f505a0a39d70f8410b766e9355d26736472eaf60b7c63c19add50000768a9657",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Fireworks",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "da3dc871e6006a85236bb0e9bdd6cf95aa090194c4b5aaa70d169957fea8da8e",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 59766,
+        "prompt_tokens": 806802,
+        "requests": 377,
+        "total_tokens": 866568
+      },
+      "seed": 101,
+      "ticket_ledger": {
+        "chat_completion_tokens": 59767,
+        "chat_prompt_tokens": 806876,
+        "chat_total_tokens": 866643,
+        "completed_count": 1029,
+        "embedding_prompt_tokens": 11480,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "941f3b43d2ef4b967fc151484a5f55219489ad3d03be0916db602b4804423d3e",
+      "dataset_sha256": "62b59a0d9b0d04c0f47bb746e26942f54efed708460e7c22773b7b16070ee02f",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Fireworks",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "d3be1a17ba2adb83983d1bac1d23ae19f5f5ae0fea62ea117a64f1d1ef3f865b",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 74737,
+        "prompt_tokens": 839411,
+        "requests": 394,
+        "total_tokens": 914148
+      },
+      "seed": 202,
+      "ticket_ledger": {
+        "chat_completion_tokens": 74738,
+        "chat_prompt_tokens": 839485,
+        "chat_total_tokens": 914223,
+        "completed_count": 1072,
+        "embedding_prompt_tokens": 11701,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "eeb7b4b15c935cfd567e45b392084a63d814139a95d7a5c598468edc4624d368",
+      "dataset_sha256": "4036d4ba8bba499875c2459db693010afd36b6f7e4f4917a1db6ba89d1678979",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Fireworks",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "8d4eea257fda48a4ab5ab1a890910699d18df91758716a6904e5221ba466ca4e",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 62225,
+        "prompt_tokens": 814807,
+        "requests": 390,
+        "total_tokens": 877032
+      },
+      "seed": 303,
+      "ticket_ledger": {
+        "chat_completion_tokens": 62226,
+        "chat_prompt_tokens": 814877,
+        "chat_total_tokens": 877103,
+        "completed_count": 1072,
+        "embedding_prompt_tokens": 11895,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "32f46df5bda949248f2742b0e05c35ccd37ed42f9c4d3eca258f9f8b5696d6f6",
+      "dataset_sha256": "7392453f39ffc4cfe0da9cbcdb46bc8a16672c5f47a3e08f837653d8bd97c176",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "8717952c027c4e9351cf71ed45dcb9569261168e495bacd8974c6fb97227e50c",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 79811,
+        "prompt_tokens": 922124,
+        "requests": 407,
+        "total_tokens": 1001935
+      },
+      "seed": 404,
+      "ticket_ledger": {
+        "chat_completion_tokens": 79812,
+        "chat_prompt_tokens": 922198,
+        "chat_total_tokens": 1002010,
+        "completed_count": 1074,
+        "embedding_prompt_tokens": 11297,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "b80ef150d97f49cba321ba650fdba7350a1a75ed1aafc56e0bbddbb51f5d9f86",
+      "dataset_sha256": "ca33f4aabcad25770521a87d0e295f0b7b51bada5ba85571a667b1d10a5c46e9",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "4861ccc938e88af2d15667a0155c6ac7bf552552e58557ce2995f25eba6802c6",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 65961,
+        "prompt_tokens": 869225,
+        "requests": 391,
+        "total_tokens": 935186
+      },
+      "seed": 505,
+      "ticket_ledger": {
+        "chat_completion_tokens": 65962,
+        "chat_prompt_tokens": 869295,
+        "chat_total_tokens": 935257,
+        "completed_count": 1070,
+        "embedding_prompt_tokens": 11673,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "b850d524db4aec74b4e9d1e6def43097945b0687ff85a565460e63d61e8b9dbb",
+      "dataset_sha256": "549a57e72c430b50529a53910c615f02891c03697ec08a1b6a1abd1a97709f25",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Fireworks",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "fa045d37ea7a79fea70c85d1643987fb7a758f24dc3a68dd62d0583a9fae9409",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 71045,
+        "prompt_tokens": 883911,
+        "requests": 400,
+        "total_tokens": 954956
+      },
+      "seed": 606,
+      "ticket_ledger": {
+        "chat_completion_tokens": 71046,
+        "chat_prompt_tokens": 883985,
+        "chat_total_tokens": 955031,
+        "completed_count": 1102,
+        "embedding_prompt_tokens": 12184,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "fe39a96553b6d277cc11f4570b16b6f27d2115af752c60dbd9d5c1b32a39927d",
+      "dataset_sha256": "b056e3a4a5ea4f6ee9cc4c8610be37cd2b114f7008062722fd1833c76d6509e3",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "caaf702ff99c18fd30ce1f71b11eddbee48265d74f035450da899a2eadf784d4",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 86375,
+        "prompt_tokens": 887249,
+        "requests": 401,
+        "total_tokens": 973624
+      },
+      "seed": 707,
+      "ticket_ledger": {
+        "chat_completion_tokens": 86376,
+        "chat_prompt_tokens": 887319,
+        "chat_total_tokens": 973695,
+        "completed_count": 1097,
+        "embedding_prompt_tokens": 11926,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "a3dc38675d4b995c52e0ce80821c7beaf687804ad5425773f8a0fc8192e1fe73",
+      "dataset_sha256": "07078ef6f7f92b3b5b93db9074db1891147a0a905ff98060d5365bcb3f547e57",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "7109cba50d61c1edad528ebc10faf7ae775cdeffdb7540d6042c73aecc01d3c5",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 72313,
+        "prompt_tokens": 825464,
+        "requests": 385,
+        "total_tokens": 897777
+      },
+      "seed": 808,
+      "ticket_ledger": {
+        "chat_completion_tokens": 72314,
+        "chat_prompt_tokens": 825534,
+        "chat_total_tokens": 897848,
+        "completed_count": 1044,
+        "embedding_prompt_tokens": 11631,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "b5de564e5ffc0c536be6cfc35ee9bc4183829a738f4963ca854451a55f3665a3",
+      "dataset_sha256": "787db05f83e60f03a23cdc50612cfd9599aa6c67ff4bdffec2dd7f975cfaf99c",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "a8bb262115316c43339a1f883b062611779bbad91e537b66c17830f9dc9ccaba",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 72127,
+        "prompt_tokens": 862891,
+        "requests": 381,
+        "total_tokens": 935018
+      },
+      "seed": 909,
+      "ticket_ledger": {
+        "chat_completion_tokens": 72128,
+        "chat_prompt_tokens": 862965,
+        "chat_total_tokens": 935093,
+        "completed_count": 1049,
+        "embedding_prompt_tokens": 11457,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "397aac56a2ce9583541d2533b618d3c1e01d7fd84ee96f96855fa65580e935c8",
+      "dataset_sha256": "3491c069f931ca0e6f6c24345e73d15dead7bc1d1220fa907619f898eb6f09a2",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "80fa1d5aa16d29452c7bd44c022fa635d6f2a6aa11cb9b50feda8a17fe9bce65",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 59512,
+        "prompt_tokens": 847443,
+        "requests": 396,
+        "total_tokens": 906955
+      },
+      "seed": 1010,
+      "ticket_ledger": {
+        "chat_completion_tokens": 59513,
+        "chat_prompt_tokens": 847517,
+        "chat_total_tokens": 907030,
+        "completed_count": 1057,
+        "embedding_prompt_tokens": 11554,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "7281f48381c083d6c7ad35b58aca6360c260dddf9ba608ef261ab21e5ef75c39",
+      "dataset_sha256": "d03c0f9414e0dc61e729f0dbe093fd180b94bac581ebf2f0fbb84eb45ed4178e",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "c7d64593f8bd3a4ae84876f2246684df5a0b5d62e24041bab81a9fc545a724b0",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 77535,
+        "prompt_tokens": 886661,
+        "requests": 401,
+        "total_tokens": 964196
+      },
+      "seed": 1111,
+      "ticket_ledger": {
+        "chat_completion_tokens": 77536,
+        "chat_prompt_tokens": 886731,
+        "chat_total_tokens": 964267,
+        "completed_count": 1085,
+        "embedding_prompt_tokens": 11736,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "88e8d37258e614b8e528e7b1cad3324ccfd0deb87bf07cb8f5ea0749dadb9db2",
+      "dataset_sha256": "47d4d5aef488a75f003e3af4c4484407891bb134f12c39d75e04e2c35a76519c",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "9cb4312d98f97179592d7384350c5c22a09cfcfc106f6c1c6d0560081b69528f",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 69079,
+        "prompt_tokens": 926119,
+        "requests": 410,
+        "total_tokens": 995198
+      },
+      "seed": 1212,
+      "ticket_ledger": {
+        "chat_completion_tokens": 69080,
+        "chat_prompt_tokens": 926189,
+        "chat_total_tokens": 995269,
+        "completed_count": 1091,
+        "embedding_prompt_tokens": 11435,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "aac6e18b2f67a337b8d668fa557ca3b8e08cae7c1e165b752f8630b891fad127",
+      "dataset_sha256": "afb66d7301399f54270e64dd0802216c79514b7f1d281dbdcba0db7eb3dd89a2",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "c8df5e10d136124f5b540b4d776194e844abe3f10e52b1ddabf02a6fbd30ec97",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 74456,
+        "prompt_tokens": 901120,
+        "requests": 412,
+        "total_tokens": 975576
+      },
+      "seed": 1313,
+      "ticket_ledger": {
+        "chat_completion_tokens": 74457,
+        "chat_prompt_tokens": 901190,
+        "chat_total_tokens": 975647,
+        "completed_count": 1094,
+        "embedding_prompt_tokens": 11640,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "c8bd731c6432780b8d114964b8d3c076463dc34ef388687e620e605732f63c7d",
+      "dataset_sha256": "2105085f846dc24e3989c22e5323f38b8ecce2ac0e94ea51f826590dc00a1a0c",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "4b25629642431a3a3ec5d472fbed77ba2da28010322aa8038758be00ab6abb3a",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 69998,
+        "prompt_tokens": 956076,
+        "requests": 422,
+        "total_tokens": 1026074
+      },
+      "seed": 1414,
+      "ticket_ledger": {
+        "chat_completion_tokens": 69999,
+        "chat_prompt_tokens": 956146,
+        "chat_total_tokens": 1026145,
+        "completed_count": 1105,
+        "embedding_prompt_tokens": 11165,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "90da8881c1fe975e3f6ef024f61607f37d72d8269c73904470927141c208b8be",
+      "dataset_sha256": "c0ccbcf081a2750d11b60c9a002a7a1924c19d80da4c5e7143593f5e6e72e472",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "872878a62fbf11911bb227573e7423550aa0f2e42c6e653ac93c1191a51a64c2",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 77280,
+        "prompt_tokens": 882026,
+        "requests": 398,
+        "total_tokens": 959306
+      },
+      "seed": 1515,
+      "ticket_ledger": {
+        "chat_completion_tokens": 77281,
+        "chat_prompt_tokens": 882096,
+        "chat_total_tokens": 959377,
+        "completed_count": 1075,
+        "embedding_prompt_tokens": 11473,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "8de57e47e8ee34e03d9ad3930b0d35436968e206f14198ab6d701628afbd8c09",
+      "dataset_sha256": "ae062aab44467900bcb9364e36ceadfc3d999be303753924188cb8b31e8a7ee1",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "d7dbddfa1e3c8f1adf31f490608fe425f306f740b1ad631a56c67e867b49348c",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 66444,
+        "prompt_tokens": 825352,
+        "requests": 381,
+        "total_tokens": 891796
+      },
+      "seed": 1616,
+      "ticket_ledger": {
+        "chat_completion_tokens": 66445,
+        "chat_prompt_tokens": 825426,
+        "chat_total_tokens": 891871,
+        "completed_count": 1020,
+        "embedding_prompt_tokens": 10905,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "5b4aaec3e10d03516b8bd0d4bce2af6c0c1138a7728646c7e3d759a8156e468a",
+      "dataset_sha256": "c9b3323614818b805359f11c4993063bdb27b1bd077baf46b916cda6750b523f",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "03267f5248ce82fd35e55c00c6276826cc57ef8ce9ec4f8f5b199d951854c5df",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 71997,
+        "prompt_tokens": 821143,
+        "requests": 380,
+        "total_tokens": 893140
+      },
+      "seed": 1717,
+      "ticket_ledger": {
+        "chat_completion_tokens": 71998,
+        "chat_prompt_tokens": 821217,
+        "chat_total_tokens": 893215,
+        "completed_count": 1046,
+        "embedding_prompt_tokens": 11474,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "4b43aabf7a5d0082ae9556510e652af8079f710687f285907de37b4b74e22b92",
+      "dataset_sha256": "9705c4d4c0417fde005c9f5fe0cb4e584170a7d9367e2bbcadce9d97db080e34",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "d54bd38fd61c5449c9b6d1301e8a26f82adc59e9d5d7848e8d7282380a78d076",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 72113,
+        "prompt_tokens": 834098,
+        "requests": 385,
+        "total_tokens": 906211
+      },
+      "seed": 1818,
+      "ticket_ledger": {
+        "chat_completion_tokens": 72114,
+        "chat_prompt_tokens": 834172,
+        "chat_total_tokens": 906286,
+        "completed_count": 1036,
+        "embedding_prompt_tokens": 11450,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "56e71b134b832b36668f4c1319d709887a6f98d25f61225b525bbdb6a6bbf817",
+      "dataset_sha256": "2c617b8837c50bf19301a71d944d67278c97d82019c5531da66f0eea046f2121",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "Amazon Bedrock",
+        "CoreWeave",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "7ac3fc8d3de2accebce29b204439c6d3a208df6a1bbdec544bf17ef7c5654e7d",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 68896,
+        "prompt_tokens": 911270,
+        "requests": 405,
+        "total_tokens": 980166
+      },
+      "seed": 2121,
+      "ticket_ledger": {
+        "chat_completion_tokens": 68897,
+        "chat_prompt_tokens": 911340,
+        "chat_total_tokens": 980237,
+        "completed_count": 1081,
+        "embedding_prompt_tokens": 11618,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    },
+    {
+      "accounting_sha256": "a7c019dcdb2e67a51ac713b393dfae8317163a5b9a6748c00f3623420ad4eabd",
+      "dataset_sha256": "2a440ac25886be499d36c3d3e6ead9a595d5d2ffe3c27f188d0c1f61a807442c",
+      "fixture_residue_total": 0,
+      "observed_upstream_providers": [
+        "CoreWeave",
+        "DeepInfra",
+        "Groq",
+        "Perplexity"
+      ],
+      "report_sha256": "09eeb2594f27e4abbf39e275855eb0f671dd8dbe5f5d8171fbafc09c435b73c6",
+      "run_size": "full",
+      "scorer_chat": {
+        "completion_tokens": 63391,
+        "prompt_tokens": 832442,
+        "requests": 383,
+        "total_tokens": 895833
+      },
+      "seed": 2020,
+      "ticket_ledger": {
+        "chat_completion_tokens": 63392,
+        "chat_prompt_tokens": 832516,
+        "chat_total_tokens": 895908,
+        "completed_count": 1049,
+        "embedding_prompt_tokens": 11519,
+        "failed_count": 0,
+        "usage_complete": true
+      }
+    }
+  ],
+  "all_fixture_residue_zero": true,
+  "baselines": [
+    {
+      "aggregation": "nearest_rank_p90",
+      "allowance_completion_tokens": 51809,
+      "allowance_multiplier_bps": 7500,
+      "allowance_policy": "starter_raw_p90_floor_75_percent_v1",
+      "allowance_prompt_tokens": 694589,
+      "allowance_total_tokens": 746398,
+      "bench_version": 7,
+      "id": "v7-starter-p90-fd3ee1702a8581e9",
+      "model": "openai/gpt-oss-20b",
+      "profile_revision": "openrouter-route-a471cd87ae7df5b9-v1",
+      "provider": "openrouter",
+      "raw_reference_completion_tokens": 69079,
+      "raw_reference_prompt_tokens": 926119,
+      "raw_reference_total_tokens": 995198,
+      "run_size": "full",
+      "samples": 20,
+      "starter_kit_revision": "62223b028acceb38ad0db98790402f1e2361dd18"
+    },
+    {
+      "aggregation": "nearest_rank_p90",
+      "allowance_completion_tokens": 24011,
+      "allowance_multiplier_bps": 7500,
+      "allowance_policy": "starter_raw_p90_floor_75_percent_v1",
+      "allowance_prompt_tokens": 313544,
+      "allowance_total_tokens": 337555,
+      "bench_version": 7,
+      "id": "v7-starter-p90-435c10de95cdf2f2",
+      "model": "openai/gpt-oss-20b",
+      "profile_revision": "openrouter-route-a471cd87ae7df5b9-v1",
+      "provider": "openrouter",
+      "raw_reference_completion_tokens": 32015,
+      "raw_reference_prompt_tokens": 418059,
+      "raw_reference_total_tokens": 450074,
+      "run_size": "medium",
+      "samples": 20,
+      "starter_kit_revision": "62223b028acceb38ad0db98790402f1e2361dd18"
+    },
+    {
+      "aggregation": "nearest_rank_p90",
+      "allowance_completion_tokens": 4899,
+      "allowance_multiplier_bps": 7500,
+      "allowance_policy": "starter_raw_p90_floor_75_percent_v1",
+      "allowance_prompt_tokens": 48582,
+      "allowance_total_tokens": 53481,
+      "bench_version": 7,
+      "id": "v7-starter-p90-e541591f0cecdaea",
+      "model": "openai/gpt-oss-20b",
+      "profile_revision": "openrouter-route-a471cd87ae7df5b9-v1",
+      "provider": "openrouter",
+      "raw_reference_completion_tokens": 6532,
+      "raw_reference_prompt_tokens": 64777,
+      "raw_reference_total_tokens": 71309,
+      "run_size": "small",
+      "samples": 20,
+      "starter_kit_revision": "62223b028acceb38ad0db98790402f1e2361dd18"
+    }
+  ],
+  "bench_version": 7,
+  "campaign_status": "complete",
+  "candidate_manifest_sha256": "b8c11eff829c4c85b4b1af4f95135e4b5c26da01c8b88f72f726dca26d03d9a7",
+  "embedding": {
+    "catalog_sha256": "a6fff568e4f8c9d17e54739e6da2cdd76006d2a486124c5c43b12e94099d3348",
+    "dimensions": 768,
+    "model": "perplexity/pplx-embed-v1-0.6b",
+    "profile": "dittobench-v7-openrouter-pplx-embed-v1-0.6b-768-v1",
+    "provider": "Perplexity"
+  },
+  "platform_preview_composite_revision": "4fb5b21204eb814a8611665a829c37e546cfb987",
+  "raw_transcripts_excluded": true,
+  "rejected_attempts_excluded": true,
+  "route": {
+    "model": "openai/gpt-oss-20b",
+    "profile_revision": "openrouter-route-a471cd87ae7df5b9-v1",
+    "provider": "openrouter",
+    "routing_mode": "aggregate_throughput"
+  },
+  "sample_count": 60,
+  "samples_per_run_size": {
+    "full": 20,
+    "medium": 20,
+    "small": 20
+  },
+  "schema_version": 1,
+  "scorer_revision": "1c1e8bdca58fe41f0a9a9b5a0397eb015f4ec569",
+  "scoring_enabled": false,
+  "starter_kit_revision": "62223b028acceb38ad0db98790402f1e2361dd18"
+}

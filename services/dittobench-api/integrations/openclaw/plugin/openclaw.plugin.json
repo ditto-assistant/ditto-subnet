@@ -1,0 +1,25 @@
+{
+  "id": "dittobench-wire",
+  "name": "DittoBench wire adapter",
+  "description": "Maps the public DittoBench tool contract onto native OpenClaw runtime tools.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "contracts": {
+    "tools": [
+      "create_image", "edit_image", "read_links", "search_web",
+      "search_memories", "search_subjects", "fetch_memories", "search_memories_in_subjects",
+      "artifacts", "execute_agent_job", "run_code", "search_tools",
+      "execute_agent_workflow", "get_agent_job_status", "list_agent_jobs",
+      "file_feedback_for_team", "set_theme", "set_main_model", "set_reasoning_effort",
+      "set_chat_tool_preferences", "create_automation", "list_automations",
+      "create_recipe", "apply_recipe", "discover_capabilities",
+      "save_memory", "update_memory", "delete_memory",
+      "calendar_create_event", "calendar_search_events", "gmail_send",
+      "set_accent_color", "set_chat_font"
+    ]
+  }
+}

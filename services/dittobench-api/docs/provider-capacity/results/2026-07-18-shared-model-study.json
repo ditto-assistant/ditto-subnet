@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "study_window_utc": "2026-07-17T21:47:08Z/2026-07-18T17:16:48Z",
+  "inventory": {
+    "chutes_models_captured_at": "2026-07-17T21:47:08Z",
+    "openrouter_models_captured_at": "2026-07-17T21:47:09Z",
+    "openrouter_glm_endpoints_refreshed_at": "2026-07-17T23:08:17Z",
+    "chutes_utilization_snapshots": [
+      "2026-07-17T21:48:21.989720Z",
+      "2026-07-17T21:58:17.850666Z",
+      "2026-07-17T22:04:17.136180Z",
+      "2026-07-17T22:36:19.272029Z",
+      "2026-07-17T22:50:15.144149Z"
+    ]
+  },
+  "model_overlap": [
+    {
+      "family": "Qwen3.6-27B",
+      "chutes_id": "Qwen/Qwen3.6-27B-TEE",
+      "chutes_root": "Qwen/Qwen3.6-27B-FP8",
+      "openrouter_slug": "qwen/qwen3.6-27b",
+      "openrouter_canonical_slug": "qwen/qwen3.6-27b-20260422",
+      "relationship": "same family/version; Chutes is the FP8 serving derivative",
+      "openrouter_provider_tags": ["morph", "chutes/fp8", "siliconflow/fp8", "io-net/fp8", "phala", "deepinfra/fp8", "venice/fp8", "alibaba", "wandb/fp8"]
+    },
+    {
+      "family": "Gemma-4-31B-IT",
+      "chutes_id": "google/gemma-4-31B-turbo-TEE",
+      "chutes_root": "nvidia/Gemma-4-31B-IT-NVFP4",
+      "openrouter_slug": "google/gemma-4-31b-it",
+      "openrouter_canonical_slug": "google/gemma-4-31b-it-20260402",
+      "relationship": "same family/size/version; Chutes is NVIDIA's NVFP4 derivative, not the same weight artifact",
+      "openrouter_provider_tags": ["open-inference/bf16", "wandb/bf16", "venice/bf16", "chutes/fp4", "deepinfra/turbo", "deepinfra/fp8", "siliconflow/fp8", "novita/bf16", "friendli", "parasail/fp8", "phala", "modelrun/fp4", "together", "sambanova", "cerebras/fp16"]
+    },
+    {
+      "family": "GLM-5.1",
+      "chutes_id": "zai-org/GLM-5.1-TEE",
+      "chutes_root": "zai-org/GLM-5.1-FP8",
+      "openrouter_slug": "z-ai/glm-5.1",
+      "openrouter_canonical_slug": "z-ai/glm-5.1-20260406",
+      "relationship": "same family/version; Chutes is the FP8 serving derivative",
+      "openrouter_provider_count_at_refresh": 18
+    }
+  ],
+  "capacity": [
+    {"rank": 1, "model": "Qwen/Qwen3.6-27B-TEE", "score": 79.61, "median_active_instances": 27, "scale_allowance": 0, "scalable": false, "conservative_headroom": 0.7746512557, "completed_requests_1h": 13059, "completion_ratio_1h": 0.9987762906},
+    {"rank": 2, "model": "zai-org/GLM-5.1-TEE", "score": 76.99, "median_active_instances": 21, "scale_allowance": 5, "scalable": true, "conservative_headroom": 0.6121739193, "completed_requests_1h": 7347, "completion_ratio_1h": 0.9995918367},
+    {"rank": 3, "model": "google/gemma-4-31B-turbo-TEE", "score": 59.17, "median_active_instances": 25, "scale_allowance": 5, "scalable": true, "conservative_headroom": 0.0275676471, "completed_requests_1h": 20850.001, "completion_ratio_1h": 0.6936127834},
+    {"rank": 4, "model": "Qwen/Qwen3-32B-TEE", "score": 53.32, "median_active_instances": 13, "scale_allowance": 1, "scalable": true, "conservative_headroom": 0.2387847864, "completed_requests_1h": 203726, "completion_ratio_1h": 0.9958367468}
+  ],
+  "like_for_like_direct_chutes_tool_stream_c8": [
+    {"model": "Qwen/Qwen3.6-27B-TEE", "completed": 8, "requests": 8, "requests_per_second": 3.868375, "completion_tokens_per_second": 154.735003, "p95_latency_ms": 1775, "p95_ttft_ms": 1236, "ramp_errors": 0, "ramp_cost_usd": 0.0057088},
+    {"model": "zai-org/GLM-5.1-TEE", "completed": 8, "requests": 8, "requests_per_second": 0.462816, "completion_tokens_per_second": 12.033224, "p95_latency_ms": 8142, "p95_ttft_ms": 5082, "ramp_errors": 0, "ramp_cost_usd_estimated": 0.008568},
+    {"model": "google/gemma-4-31B-turbo-TEE", "completed": 3, "requests": 8, "requests_per_second": 0.237709, "completion_tokens_per_second": 6.576611, "p95_latency_ms": 4162, "p95_ttft_ms": 2183, "ramp_rate_limits": 17, "ramp_timeouts": 4, "ramp_cost_usd": 0.00024791}
+  ],
+  "best_clean_openrouter_c8": [
+    {"model": "qwen/qwen3.6-27b", "provider": "wandb", "completed": 8, "requests": 8, "requests_per_second": 3.934177, "p95_latency_ms": 983, "p95_ttft_ms": 599, "ramp_cost_usd": 0.0080532},
+    {"model": "z-ai/glm-5.1", "provider": "baseten", "completed": 8, "requests": 8, "requests_per_second": 7.032291, "p95_latency_ms": 1131, "p95_ttft_ms": 854, "ramp_cost_usd": 0.00636438},
+    {"model": "google/gemma-4-31b-it", "provider": "cerebras", "completed": 8, "requests": 8, "requests_per_second": 1.786193, "p95_latency_ms": 4478, "p95_ttft_ms": 3918, "ramp_cost_usd": 0.00434368}
+  ],
+  "qwen36_full_score_repetitions": {
+    "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+    "agent_name": "uNiCorN-v2",
+    "agent_version": 1,
+    "agent_artifact_sha256": "89a8663b7fe9bb31d005412a7f1c682b12ab0740cbdd6b21f963740c25cdd67a",
+    "seed": 2474496736613908576,
+    "dataset_sha256": "72fef4aad1eee98a176bb31cc0c19ce84453e78a844c6ba906f702b1ffc9b0bf",
+    "bench_version": 2,
+    "scores": [0.880185, 0.892593, 0.860741],
+    "mean": 0.8778396667,
+    "sample_standard_deviation": 0.0160549966,
+    "coefficient_of_variation": 0.0182892130,
+    "range": 0.031852,
+    "wall_seconds": [628.182282, 1437.218704, 882.065265],
+    "wall_seconds_coefficient_of_variation": 0.4211361953,
+    "relay_upstream_errors": [0, 3, 1],
+    "estimated_cost_usd": [0.1751517, 0.2135057, 0.2251467]
+  },
+  "excluded_score_cells": [
+    {"reason": "host relay unavailable across overnight sleep", "upstream_errors": 199, "observed_composite_not_valid": 0.120417},
+    {"reason": "Docker-resume Ollama forwarder address unavailable", "stage": "secondary memory seeding", "score": null}
+  ],
+  "study_spend_usd": {"observed_and_catalog_estimated": 0.884081, "note": "Includes this study's compatibility, load, and valid score calls; excludes parent Qwen3-32B study."},
+  "recommendation": {
+    "primary_model": "Qwen/Qwen3.6-27B-TEE",
+    "three_model_mix": ["Qwen/Qwen3.6-27B-TEE", "zai-org/GLM-5.1-TEE", "Qwen/Qwen3-32B-TEE"],
+    "excluded_from_mix": "google/gemma-4-31B-turbo-TEE",
+    "reason": "Qwen3.6 is the only candidate with high live headroom, clean direct scaling, shared-provider coverage, and repeated full-score evidence. GLM adds fleet and architecture diversity but is a throughput bottleneck; Qwen3-32B is the continuity anchor. Gemma's repeated Chutes saturation and rate shedding override its nominal fleet size."
+  }
+}

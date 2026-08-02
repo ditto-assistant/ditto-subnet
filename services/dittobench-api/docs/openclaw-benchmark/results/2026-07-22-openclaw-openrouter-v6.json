@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-07-22T19:01:18.947107Z",
+  "scope": "practice",
+  "profile": {
+    "name": "native",
+    "purpose": "native OpenClaw memory-core measurement without an external retrieval system",
+    "memory_provider": "none",
+    "search_limit": 10,
+    "generic_recall_guidance": true,
+    "benchmark_specific_skill": false,
+    "expected_answer_access": false,
+    "reasoning_enabled": false
+  },
+  "subject": {
+    "name": "OpenClaw",
+    "version": "2026.7.1",
+    "upstream_revision": "2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4",
+    "npm_integrity": "sha512-ge/Xss99CHAjPL/ikmH/UFoiOrjcxDB4sW3y9mhyCD+dYW3wzV7TKbAVdkrXFgAG2d2BjpJofP97zUZ+umxo8g==",
+    "adapter_source_tree_sha256": "d7078fbc13fbd8172b847d0b6f78a3d8e70ab5dcc03bd24bc4237fc9d943e8bc",
+    "memory_engine": "native memory-core SQLite FTS5 over workspace Markdown"
+  },
+  "sources": {
+    "dittobench_api_revision": "8df6ba37a3c4e46ede9db1cb6014551d49ac6ba8",
+    "dittobench_datagen_revision": "55343ff961e36ebaa1c7db378dd7e5e0663ff5f3",
+    "provider_relay_revision": "373ba5f7c8a44934fbf5748b174ccbbb159c41e4",
+    "container_image_id": "sha256:07a81912e66c1082edc3d305f8e0c37420f47b6b93a27ddf31dff181a6326add"
+  },
+  "benchmark": {
+    "version": 6,
+    "run_size": "full",
+    "run_id": "849ced7c-80fa-4eb3-a461-33cab373615f",
+    "seed": 3058240546919425205,
+    "case_count": 206,
+    "tool_case_count": 110,
+    "memory_case_count": 96,
+    "seeding_waves": 4,
+    "raw_pairs_cases": 7,
+    "dataset_sha256": "f9b8e6eea10f20316a6fc82c2f6b0af0f0cf0bc3f263cf96a760e68cdaa3ea2d",
+    "transcript_sha256": "a89495c29bcf04cddf75017ab00c0d9079abfa0ff520f80887e2c190af344aa5",
+    "started_at": "2026-07-22T18:54:36.664949Z",
+    "finished_at": "2026-07-22T19:01:18.947107Z"
+  },
+  "model": {
+    "id": "qwen/qwen3-32b",
+    "gateway": "OpenRouter",
+    "routing": "automatic",
+    "thinking": false,
+    "streaming": false,
+    "response_providers": {
+      "DeepInfra": 402
+    }
+  },
+  "result": {
+    "composite": 0.280702,
+    "raw_composite": 0.280702,
+    "composite_stderr": 0.012289,
+    "tool_mean": 0.8793939454545453,
+    "memory_mean": 0.3854166666666667,
+    "memory_correct_cases": 37,
+    "median_ms": 7341,
+    "conversational_sanity": 0,
+    "metamorphic_consistency": 0.909091,
+    "transform_robustness": 1,
+    "tool_efficiency": 1,
+    "zero_score_cases": 63,
+    "timeout_or_no_response_cases": 0,
+    "observed_tool_cases": 83,
+    "capped_tool_cases": 9,
+    "canary_score": 1,
+    "canary_leak_detected": false,
+    "token_efficiency_penalty_applied": false,
+    "token_efficiency_reason": "token_telemetry_unavailable_in_practice_scope"
+  },
+  "memory_categories": [
+    {"category": "abstention", "count": 7, "mean": 0},
+    {"category": "aggregation-count", "count": 1, "mean": 0},
+    {"category": "assistant-recall", "count": 2, "mean": 0.5},
+    {"category": "canary", "count": 1, "mean": 1},
+    {"category": "contradiction", "count": 2, "mean": 1},
+    {"category": "conversational-abstention", "count": 1, "mean": 0},
+    {"category": "conversational-chitchat", "count": 2, "mean": 1},
+    {"category": "conversational-declarative", "count": 2, "mean": 1},
+    {"category": "declarative-behavior", "count": 4, "mean": 0},
+    {"category": "declarative-write", "count": 4, "mean": 1},
+    {"category": "declarative-write-read", "count": 4, "mean": 0.25},
+    {"category": "injection-resistance", "count": 5, "mean": 0},
+    {"category": "injection-stored-instruction", "count": 4, "mean": 0},
+    {"category": "isolation", "count": 6, "mean": 0.5},
+    {"category": "knowledge-update", "count": 1, "mean": 1},
+    {"category": "memory-write", "count": 6, "mean": 0.3333333333333333},
+    {"category": "memory-write-read", "count": 5, "mean": 0.8},
+    {"category": "multi-hop-relational", "count": 4, "mean": 0.5},
+    {"category": "multi-query-recall", "count": 2, "mean": 0},
+    {"category": "multi-session", "count": 3, "mean": 0},
+    {"category": "nonverbatim-computed", "count": 3, "mean": 0.3333333333333333},
+    {"category": "passive-consolidation", "count": 2, "mean": 1},
+    {"category": "point-in-time", "count": 2, "mean": 0},
+    {"category": "preference-application", "count": 2, "mean": 0},
+    {"category": "single-session-recall", "count": 15, "mean": 0.4666666666666667},
+    {"category": "stored-instruction-benign", "count": 2, "mean": 1},
+    {"category": "temporal-depth", "count": 4, "mean": 0}
+  ],
+  "relay_telemetry": {
+    "requests": 402,
+    "http_error_responses": 0,
+    "api_error_responses": 0,
+    "upstream_errors": 0,
+    "prompt_tokens": 1786080,
+    "completion_tokens": 15551,
+    "total_tokens": 1801631,
+    "cost_usd": 0.14724067999999987,
+    "p50_latency_ms": 764,
+    "p95_latency_ms": 1689,
+    "finish_reasons": {"stop": 206, "tool_calls": 196}
+  },
+  "excluded_runs": [
+    {
+      "run_id": "e0546989-1e72-47f3-9a02-908efc8c018e",
+      "status": "cancelled",
+      "completed_cases": 106,
+      "included_in_result": false,
+      "reason": "shared host relay exited mid-run; subsequent cases were infrastructure no-responses"
+    }
+  ],
+  "local_evidence_sha256": {
+    "run_response": "ac81a4cfc5945bf0d1463d1beb786bf74c65260a7cdffa42d07f98ab36815129",
+    "transcript": "a89495c29bcf04cddf75017ab00c0d9079abfa0ff520f80887e2c190af344aa5",
+    "relay_stats": "63d5848c49d64414ec85036a208dfe924f67e0f19d25bd45f0e1431c1ab6f00"
+  }
+}

@@ -312,8 +312,8 @@ def test_source_compose_cannot_claim_managed_release_identity() -> None:
     assert "VALIDATOR_STACK_RELEASE_DESCRIPTOR_DIGEST" not in validator_environment
     assert "VALIDATOR_STACK_VERSION" not in validator_environment
     assert "VALIDATOR_STACK_REVISION" not in validator_environment
-    assert validator_environment["VALIDATOR_STACK_COMPONENT_DITTOBENCH_API"].startswith(
-        "source:"
+    assert validator_environment["VALIDATOR_STACK_COMPONENT_DITTOBENCH_API"] == (
+        "${DITTOBENCH_SOURCE_IDENTITY:-source:source-build}"
     )
     assert "VALIDATOR_STACK_COMPONENT_MODEL_RELAY" not in validator_environment
 
@@ -762,9 +762,7 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
         for key, source in {
             "VALIDATOR_IMAGE": "https://github.com/ditto-assistant/ditto-subnet",
             "SANDBOX_DOCKER_IMAGE": ("https://github.com/ditto-assistant/ditto-subnet"),
-            "DITTOBENCH_API_IMAGE": (
-                "https://github.com/ditto-assistant/dittobench-api"
-            ),
+            "DITTOBENCH_API_IMAGE": ("https://github.com/ditto-assistant/ditto-subnet"),
         }.items():
             labels[images[key]] = {
                 "org.opencontainers.image.source": source,

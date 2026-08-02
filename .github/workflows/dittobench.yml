@@ -1,0 +1,153 @@
+name: DittoBench
+
+on:
+  pull_request:
+    paths:
+      - services/dittobench-api/Dockerfile
+      - services/dittobench-api/cmd/**
+      - services/dittobench-api/go.mod
+      - services/dittobench-api/go.sum
+      - services/dittobench-api/internal/**
+      - .github/workflows/dittobench.yml
+  push:
+    branches: [main]
+    paths:
+      - services/dittobench-api/Dockerfile
+      - services/dittobench-api/cmd/**
+      - services/dittobench-api/go.mod
+      - services/dittobench-api/go.sum
+      - services/dittobench-api/internal/**
+      - .github/workflows/dittobench.yml
+
+concurrency:
+  group: dittobench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: us-central1-docker.pkg.dev/ditto-app-dev/cloud-run-source-deploy/dittobench-api
+  SERVICE_DIR: services/dittobench-api
+
+jobs:
+  test:
+    name: build · vet · test
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.23"
+          cache: true
+          cache-dependency-path: services/dittobench-api/go.sum
+      - run: go build ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+      - run: go vet ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+      - run: go test ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+
+  docker-build:
+    name: docker image builds (${{ matrix.target }})
+    if: github.event_name == 'pull_request'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      matrix:
+        target: [runtime, sandbox]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build image without publishing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: services/dittobench-api
+          file: services/dittobench-api/Dockerfile
+          target: ${{ matrix.target }}
+          push: false
+          load: false
+
+  provenance:
+    name: image reports its monorepo revision
+    if: github.event_name == 'pull_request'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build scorer with stamped identity
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: services/dittobench-api
+          file: services/dittobench-api/Dockerfile
+          target: sandbox
+          push: false
+          load: true
+          tags: dittobench-api:provenance-ci
+          build-args: |
+            DITTOBENCH_SOURCE_SHA=${{ github.event.pull_request.head.sha }}
+            DITTOBENCH_SOFTWARE_VERSION=ci-${{ github.run_id }}
+      - name: Verify compiled provenance wins over environment claims
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          report="$(docker run --rm \
+            -e DITTOBENCH_SOURCE_SHA=0000000000000000000000000000000000000001 \
+            dittobench-api:provenance-ci version -json)"
+          test "$(jq -r .source_revision <<<"$report")" = "$EXPECTED_SHA"
+          test "$(jq -r .source_revision_origin <<<"$report")" = binary
+          test "$(jq -r .source_revision_mismatch <<<"$report")" = true
+          test "$(jq -r .software_version <<<"$report")" = "ci-${{ github.run_id }}"
+          clean="$(docker run --rm dittobench-api:provenance-ci version -json)"
+          test "$(jq -r .source_revision_mismatch <<<"$clean")" = false
+
+  deploy:
+    name: deploy hosted DittoBench API
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: projects/22790208601/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: github-actions-deploy@ditto-app-dev.iam.gserviceaccount.com
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+      - name: Authenticate Docker to Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build and push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: services/dittobench-api
+          file: services/dittobench-api/Dockerfile
+          push: true
+          build-args: |
+            DITTOBENCH_SOURCE_SHA=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy dittobench-api \
+            --image "$IMAGE:${{ github.sha }}" \
+            --project ditto-app-dev --region us-central1 \
+            --allow-unauthenticated \
+            --memory 1Gi --cpu 1 --timeout 3600 \
+            --set-env-vars GENERATOR_MODEL=google/gemini-3.1-flash-lite,SCORER_MODEL=google/gemini-3.1-flash-lite \
+            --quiet

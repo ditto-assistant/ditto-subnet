@@ -1,0 +1,53 @@
+{
+  "architecture": {
+    "input_modalities": [
+      "text"
+    ],
+    "instruct_type": null,
+    "modality": "text->embeddings",
+    "output_modalities": [
+      "embeddings"
+    ],
+    "tokenizer": "Other"
+  },
+  "canonical_slug": "perplexity/pplx-embed-v1-0.6B",
+  "context_length": 32000,
+  "created": 1773624868,
+  "default_parameters": {
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null,
+    "temperature": null,
+    "top_k": null,
+    "top_p": null
+  },
+  "description": "pplx-embed-v1-0.6B is one of Perplexity's state-of-the-art text embedding models built for real-world, web-scale retrieval. pplx-embed-v1 is optimized for standard dense text retrieval with the 0.6B parameter model targeting lightweight, low-latency...",
+  "expiration_date": null,
+  "hugging_face_id": "",
+  "id": "perplexity/pplx-embed-v1-0.6b",
+  "knowledge_cutoff": null,
+  "links": {
+    "details": "/api/v1/models/perplexity/pplx-embed-v1-0.6B/endpoints"
+  },
+  "name": "Perplexity: Embed V1 0.6B",
+  "per_request_limits": null,
+  "pricing": {
+    "completion": "0",
+    "prompt": "0.000000004"
+  },
+  "supported_parameters": [
+    "frequency_penalty",
+    "max_tokens",
+    "presence_penalty",
+    "temperature",
+    "top_k",
+    "top_p",
+    "web_search_options"
+  ],
+  "supported_voices": null,
+  "top_provider": {
+    "context_length": 32000,
+    "is_moderated": false,
+    "max_completion_tokens": null
+  }
+}

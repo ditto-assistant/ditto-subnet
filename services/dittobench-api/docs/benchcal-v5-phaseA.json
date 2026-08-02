@@ -1,0 +1,56 @@
+{
+  "bench_version": 5,
+  "note": "SYNTHETIC archetype profiles (no model); on-model frozen-Qwen precheck still pending the relay",
+  "results": [
+    {
+      "archetype": "honest",
+      "description": "a grounded reasoning harness: grounds conversational turns and captures plain declaratives",
+      "seeds": 24,
+      "composite_mean": 0.6971,
+      "composite_std_err": 0.0253,
+      "composite_min": 0.51,
+      "composite_max": 0.84,
+      "memory_mean": 0.7654,
+      "conversational_sanity_mean": 0.8125,
+      "frac_below_0_85": 1
+    },
+    {
+      "archetype": "honest-strong",
+      "description": "the SAME strong retrieval stack as the router, but it grounds conversational turns (the counter-guard: only the conversational half differs)",
+      "seeds": 24,
+      "composite_mean": 0.7582,
+      "composite_std_err": 0.023,
+      "composite_min": 0.42,
+      "composite_max": 0.92,
+      "memory_mean": 0.8095,
+      "conversational_sanity_mean": 0.875,
+      "frac_below_0_85": 0.8333
+    },
+    {
+      "archetype": "unicorn-router",
+      "description": "strong retrieval + a hardcoded write-cue router that leaks on greetings and never captures declaratives (the v4 exploiter)",
+      "seeds": 24,
+      "composite_mean": 0.2921,
+      "composite_std_err": 0.0057,
+      "composite_min": 0.24,
+      "composite_max": 0.36,
+      "memory_mean": 0.5841,
+      "conversational_sanity_mean": 0,
+      "frac_below_0_85": 1
+    },
+    {
+      "archetype": "cleartext-parser",
+      "description": "a no-model harness that greps the seeded pairs (aces seeded-substring recall, cannot grep a coined value or a greeting)",
+      "seeds": 24,
+      "composite_mean": 0.2887,
+      "composite_std_err": 0.0038,
+      "composite_min": 0.26,
+      "composite_max": 0.33,
+      "memory_mean": 0.5773,
+      "conversational_sanity_mean": 0,
+      "frac_below_0_85": 1
+    }
+  ],
+  "run_size": "full",
+  "seeds": 24
+}

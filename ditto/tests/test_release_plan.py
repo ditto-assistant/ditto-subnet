@@ -55,6 +55,17 @@ def test_sandbox_change_propagates_to_stack(components, ignored_paths) -> None:
     }
 
 
+def test_dittobench_change_propagates_to_stack(components, ignored_paths) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "services/dittobench-api/cmd/dittobench-api/main.go",
+    ) == {
+        "dittobench_api",
+        "validator_stack",
+    }
+
+
 def test_shared_contract_change_releases_both_surfaces(
     components, ignored_paths
 ) -> None:
@@ -69,6 +80,7 @@ def test_shared_contract_change_releases_both_surfaces(
     "path",
     [
         "docs/MINER.md",
+        "services/dittobench-api/docs/BASELINES.md",
         "ditto/tests/miner_cli/test_api_client.py",
         ".github/workflows/ci.yml",
     ],

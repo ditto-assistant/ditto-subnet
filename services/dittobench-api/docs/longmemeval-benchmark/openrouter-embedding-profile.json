@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "profile_revision": "longmemeval-openrouter-pplx-embed-v1-0.6b-768-v1",
+  "catalog_snapshot_at": "2026-07-23T20:37:16Z",
+  "catalog_snapshot_sha256": "a6fff568e4f8c9d17e54739e6da2cdd76006d2a486124c5c43b12e94099d3348",
+  "harness_contract": {
+    "path": "/api/embed",
+    "model": "embeddinggemma",
+    "response_dimensions": 768
+  },
+  "openrouter_request": {
+    "url": "https://openrouter.ai/api/v1/embeddings",
+    "model": "perplexity/pplx-embed-v1-0.6b",
+    "dimensions": 768,
+    "encoding_format": "float",
+    "provider": {
+      "order": [
+        "Perplexity"
+      ],
+      "allow_fallbacks": false,
+      "data_collection": "deny"
+    }
+  },
+  "cache_key": [
+    "profile_revision",
+    "model",
+    "dimensions",
+    "encoding_format",
+    "provider",
+    "ordered_input"
+  ],
+  "pricing_at_snapshot_usd_per_input_token": 0.000000004
+}

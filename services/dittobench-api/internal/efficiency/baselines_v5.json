@@ -1,0 +1,396 @@
+{
+  "baselines": [
+    {
+      "aggregation": "nearest_rank_p90",
+      "bench_version": 5,
+      "completion_tokens": 15370,
+      "id": "v5-starter-p90-adbf7e00bfc19c09",
+      "model": "Qwen/Qwen3-32B-TEE",
+      "profile_revision": "chutes-qwen3-32b-tee-no-think-v1",
+      "prompt_tokens": 1476423,
+      "provider": "chutes",
+      "run_size": "full",
+      "samples": 20,
+      "starter_kit_revision": "106076a40e4214cda821dfd0bee5c9c6785d425c",
+      "total_tokens": 1491793
+    },
+    {
+      "aggregation": "nearest_rank_p90",
+      "bench_version": 5,
+      "completion_tokens": 6483,
+      "id": "v5-starter-p90-747c3cadb9c837e1",
+      "model": "Qwen/Qwen3-32B-TEE",
+      "profile_revision": "chutes-qwen3-32b-tee-no-think-v1",
+      "prompt_tokens": 613406,
+      "provider": "chutes",
+      "run_size": "medium",
+      "samples": 20,
+      "starter_kit_revision": "106076a40e4214cda821dfd0bee5c9c6785d425c",
+      "total_tokens": 619889
+    },
+    {
+      "aggregation": "nearest_rank_p90",
+      "bench_version": 5,
+      "completion_tokens": 1004,
+      "id": "v5-starter-p90-7eccca211e91b6b2",
+      "model": "Qwen/Qwen3-32B-TEE",
+      "profile_revision": "chutes-qwen3-32b-tee-no-think-v1",
+      "prompt_tokens": 102641,
+      "provider": "chutes",
+      "run_size": "small",
+      "samples": 20,
+      "starter_kit_revision": "106076a40e4214cda821dfd0bee5c9c6785d425c",
+      "total_tokens": 103645
+    },
+    {
+      "aggregation": "nearest_rank_p90",
+      "bench_version": 5,
+      "completion_tokens": 16059,
+      "id": "v5-starter-p90-4e3fcc4d339eab68",
+      "model": "qwen/qwen3-32b",
+      "profile_revision": "openrouter-nebius-qwen3-32b-no-think-v1",
+      "prompt_tokens": 1254314,
+      "provider": "openrouter",
+      "run_size": "full",
+      "samples": 20,
+      "starter_kit_revision": "106076a40e4214cda821dfd0bee5c9c6785d425c",
+      "total_tokens": 1270373
+    },
+    {
+      "aggregation": "nearest_rank_p90",
+      "bench_version": 5,
+      "completion_tokens": 6447,
+      "id": "v5-starter-p90-eea127534101c1a9",
+      "model": "qwen/qwen3-32b",
+      "profile_revision": "openrouter-nebius-qwen3-32b-no-think-v1",
+      "prompt_tokens": 508706,
+      "provider": "openrouter",
+      "run_size": "medium",
+      "samples": 20,
+      "starter_kit_revision": "106076a40e4214cda821dfd0bee5c9c6785d425c",
+      "total_tokens": 515153
+    },
+    {
+      "aggregation": "nearest_rank_p90",
+      "bench_version": 5,
+      "completion_tokens": 1309,
+      "id": "v5-starter-p90-6738c78f0ef0a9fe",
+      "model": "qwen/qwen3-32b",
+      "profile_revision": "openrouter-nebius-qwen3-32b-no-think-v1",
+      "prompt_tokens": 89133,
+      "provider": "openrouter",
+      "run_size": "small",
+      "samples": 20,
+      "starter_kit_revision": "106076a40e4214cda821dfd0bee5c9c6785d425c",
+      "total_tokens": 90442
+    }
+  ],
+  "bench_version": 5,
+  "calibration_datasets": [
+    {
+      "dataset_sha256": "e00ae322831f23e4b4cdeaaf895c1d5c2eed0f8f6f2871dcefd9cd6a30edf5fd",
+      "run_size": "small",
+      "seed": 101
+    },
+    {
+      "dataset_sha256": "ddbd4032684c5cc620661b1473b064e80c565b0551bdc271db8e1db188a0be91",
+      "run_size": "small",
+      "seed": 202
+    },
+    {
+      "dataset_sha256": "a29a923c6a15fa30955a4e33a9ba493b382aa01fde7ef743a7a988c503b0db71",
+      "run_size": "small",
+      "seed": 303
+    },
+    {
+      "dataset_sha256": "766dbdab200571719f0de169ae7f8917f78b74599823f47746c86c7ba69b1cfc",
+      "run_size": "small",
+      "seed": 404
+    },
+    {
+      "dataset_sha256": "468a4eed77d73120f17cf177671ab104bdc3712d84e64bcf63264132e9ec021e",
+      "run_size": "small",
+      "seed": 505
+    },
+    {
+      "dataset_sha256": "8d4981db7a815cac92cf9d6302e456bf5443dd3f7dc092abb63386392b7652c3",
+      "run_size": "small",
+      "seed": 606
+    },
+    {
+      "dataset_sha256": "5c53f7c45fa331fee9f872718b5ef1a6b53bae60cb165afaadb6220665da54db",
+      "run_size": "small",
+      "seed": 707
+    },
+    {
+      "dataset_sha256": "add4c5ed5a54deaf935969e2040df647cd287d8c78d57f0ec8a77de791f2f3c2",
+      "run_size": "small",
+      "seed": 808
+    },
+    {
+      "dataset_sha256": "b981f869439487f51d4d77320def80e835ed266adb171e0fc91e0a3c9bb7ab87",
+      "run_size": "small",
+      "seed": 909
+    },
+    {
+      "dataset_sha256": "bc77bb4d268edbb5b23ed824e8d00f42e935c884273224ec5a93257f01a980b1",
+      "run_size": "small",
+      "seed": 1010
+    },
+    {
+      "dataset_sha256": "0694ab20f2106aa7abbb0ed1a23fabc3bc43fd582603e241869224ee181fc97e",
+      "run_size": "small",
+      "seed": 1111
+    },
+    {
+      "dataset_sha256": "311fabb9daf88c146e822dee08987da52ac4faff5c41fa356d99cb34e6b680b5",
+      "run_size": "small",
+      "seed": 1212
+    },
+    {
+      "dataset_sha256": "2affeb7779197bee02dcc940df6ce78a1d156753ad8a5ec930633025f914489a",
+      "run_size": "small",
+      "seed": 1313
+    },
+    {
+      "dataset_sha256": "5e49a6894be70172a74a1d28ea62ef5b489df245bc7307d66a468a0c2d22a164",
+      "run_size": "small",
+      "seed": 1414
+    },
+    {
+      "dataset_sha256": "ddf7f3ef768ac7a22e33ec1555988446133cc51364e30c548398912082111dd5",
+      "run_size": "small",
+      "seed": 1515
+    },
+    {
+      "dataset_sha256": "af2b7f959045bdeb6eeb6b517d3bd37df1681bd5d5c8e4ef96a55eb6da2f9938",
+      "run_size": "small",
+      "seed": 1616
+    },
+    {
+      "dataset_sha256": "b8fa639b6206ec34d0126e603eb648043aeb677c7eafbe50c14c6a3822e998ea",
+      "run_size": "small",
+      "seed": 1717
+    },
+    {
+      "dataset_sha256": "5a9aeaaa5f4601b316b583cc2fcb3603b5a2bc3336810dcbac924c976da2974a",
+      "run_size": "small",
+      "seed": 1818
+    },
+    {
+      "dataset_sha256": "fc2148d9e8121307c5ffe12cb7dc1d508ea0b79d3fdf433cbdbf08dff76d9d80",
+      "run_size": "small",
+      "seed": 1919
+    },
+    {
+      "dataset_sha256": "2e33010ff52ad0b7fe49de7ce9e4a9ee164787206d82a5cd98ddda65d343ad9b",
+      "run_size": "small",
+      "seed": 2020
+    },
+    {
+      "dataset_sha256": "171ff93442f3eb671a32cf1d3f5c5c23122efa3b7f5c65ffb5c85434870a91a6",
+      "run_size": "medium",
+      "seed": 101
+    },
+    {
+      "dataset_sha256": "8edaa39b353605f829f05d15751c32596673997332c5dc6e9443172366813e14",
+      "run_size": "medium",
+      "seed": 202
+    },
+    {
+      "dataset_sha256": "950c0aa802abed261032c7ffa500a01268cc35b410b5b9fd8e0757fb292b1e64",
+      "run_size": "medium",
+      "seed": 303
+    },
+    {
+      "dataset_sha256": "5b5d318b2f4f2cb9195f78711fefb413ad580b8162684db76a87d04d37e8fb70",
+      "run_size": "medium",
+      "seed": 404
+    },
+    {
+      "dataset_sha256": "e95107d65a806d98640f5bfb9fd5487312baa6a061389edfcd41e9c6e69a8ab9",
+      "run_size": "medium",
+      "seed": 505
+    },
+    {
+      "dataset_sha256": "89a098abdc3ef2e6f581949c20738bdc540333edb051926325adcfdae35700be",
+      "run_size": "medium",
+      "seed": 606
+    },
+    {
+      "dataset_sha256": "80b41e762744e7f345820217b4bfbed1f641ee2183b8f41b4a1abf82c5844260",
+      "run_size": "medium",
+      "seed": 707
+    },
+    {
+      "dataset_sha256": "bf60f057b055c96445af5255c6612370e2eff0df6f858e7e16c88c10d6495087",
+      "run_size": "medium",
+      "seed": 808
+    },
+    {
+      "dataset_sha256": "638f583f5d3a6dc1b670ae57838ed059ab1f4fbe41bc981a714ea2d059c341a0",
+      "run_size": "medium",
+      "seed": 909
+    },
+    {
+      "dataset_sha256": "724136a99a0fd5e30c3add44d6631d9c0595c6cceb05d394b7a8b6f92dc634f0",
+      "run_size": "medium",
+      "seed": 1010
+    },
+    {
+      "dataset_sha256": "a23b0d61240caea8d372f25448d5f9a32b3aab54b6c841cda3cdd68866bc55b4",
+      "run_size": "medium",
+      "seed": 1111
+    },
+    {
+      "dataset_sha256": "701be2a97398fdd0ca8761ab826c09ddf1ef0f565a420d674a4fc133d487ea98",
+      "run_size": "medium",
+      "seed": 1212
+    },
+    {
+      "dataset_sha256": "33f7c1182ff1ef272e763e5c88edecf2b0ddd4487b0eeeddbf1f377c8f220cc7",
+      "run_size": "medium",
+      "seed": 1313
+    },
+    {
+      "dataset_sha256": "f539b4423cbf63c7532be962044706173f0b3ecaff7ba852e5a5c5a36235d2ca",
+      "run_size": "medium",
+      "seed": 1414
+    },
+    {
+      "dataset_sha256": "11f43c1987173b50b483f7f7ee30b5324a6b991a1b53b204fedba312e721afb5",
+      "run_size": "medium",
+      "seed": 1515
+    },
+    {
+      "dataset_sha256": "318f53153c6df2c21864d8ec02838cda2457f49ac2a1ea6a81be6559cac5c9b2",
+      "run_size": "medium",
+      "seed": 1616
+    },
+    {
+      "dataset_sha256": "d2172f20b4490d161de99d2af98b276c7cdd4ce094948c365cac43c9f5b5737a",
+      "run_size": "medium",
+      "seed": 1717
+    },
+    {
+      "dataset_sha256": "120229611820e2409a24d46be727e37aa5236dbb3bc1dba36136740f8a16344c",
+      "run_size": "medium",
+      "seed": 1818
+    },
+    {
+      "dataset_sha256": "94ebb203723e3a024536aaddb4e3d546ecff2da2238f6aede4087359d5a74431",
+      "run_size": "medium",
+      "seed": 1919
+    },
+    {
+      "dataset_sha256": "38d856254e74f8a5c8a1fff984f20854b910895287675f129fb1032cd4385e9c",
+      "run_size": "medium",
+      "seed": 2020
+    },
+    {
+      "dataset_sha256": "157a7a39bb2641bcd39d28457fc2142198d6b53b02b151d52ff6f2912720529d",
+      "run_size": "full",
+      "seed": 101
+    },
+    {
+      "dataset_sha256": "11dda6abab7b23697b8cd111f5fd35e879e298a328c240a02747cd27490396a6",
+      "run_size": "full",
+      "seed": 202
+    },
+    {
+      "dataset_sha256": "386bcb30189853b5192ca7eeec65eb322e62dbc10e4a9e1ac1229af9a36d981e",
+      "run_size": "full",
+      "seed": 303
+    },
+    {
+      "dataset_sha256": "e1d07b2fcdd8030bb77fd67b049733e5ef5539ba2e278a2580424cab075c9fbb",
+      "run_size": "full",
+      "seed": 404
+    },
+    {
+      "dataset_sha256": "45fbe1b49b57051314b24b1f0439b3d9006a9567fa49e99106029acf50d6458a",
+      "run_size": "full",
+      "seed": 505
+    },
+    {
+      "dataset_sha256": "356835e6b48dd81481e0014572daa5a8b6db05cca6c20be89d3b81b7dedd7087",
+      "run_size": "full",
+      "seed": 606
+    },
+    {
+      "dataset_sha256": "920422a1126e74112e848e691072deafd00e18ec23213e965919953a73c3c45e",
+      "run_size": "full",
+      "seed": 707
+    },
+    {
+      "dataset_sha256": "73552699e4bccebe9b2ddcb0d62aa5c326a8e6fe39d11f55e26646d3ab4a0002",
+      "run_size": "full",
+      "seed": 808
+    },
+    {
+      "dataset_sha256": "02e2aa6213de89d5629119299a498cd2c1a158d9a2cff190bb5c04a20291d385",
+      "run_size": "full",
+      "seed": 909
+    },
+    {
+      "dataset_sha256": "d1d9fbe15d7ab186ccce9a960aa842cb0dbdcd1159571ccd0f97705a0a597424",
+      "run_size": "full",
+      "seed": 1010
+    },
+    {
+      "dataset_sha256": "5af0cb82f507ef448b23ad160242deed258fc237d585da28f02a70b247bec878",
+      "run_size": "full",
+      "seed": 1111
+    },
+    {
+      "dataset_sha256": "b65c50b41f23a84f9c8b45e6fc89be674e04e8839a155a98a436f3deb162bfff",
+      "run_size": "full",
+      "seed": 1212
+    },
+    {
+      "dataset_sha256": "f159875ed459a9876b46e97ed6624d6a510057c6ee354ade7152514f0fd79307",
+      "run_size": "full",
+      "seed": 1313
+    },
+    {
+      "dataset_sha256": "33412b74a952e0c25db947f0c811c2d71523b3e28bbf9155b15c1e0b7b4bdb20",
+      "run_size": "full",
+      "seed": 1414
+    },
+    {
+      "dataset_sha256": "0da93b9b41c3446127fe5dec16dd8c7f768fc62d91c868869bf1037ca5d3bc48",
+      "run_size": "full",
+      "seed": 1515
+    },
+    {
+      "dataset_sha256": "c4a555afba5728fa86083004ab7ee75b9870bf7d5aebce81c0db21273ab96808",
+      "run_size": "full",
+      "seed": 1616
+    },
+    {
+      "dataset_sha256": "7d2d288b0ce5ebeed640c4e47e5c59e2887384e7fabaac44f2fb0c98e1eb1a8e",
+      "run_size": "full",
+      "seed": 1717
+    },
+    {
+      "dataset_sha256": "8ae544826282483bb2bd423f152ff7b7ac191fadedf01e3e40a70ce3ef05d9fe",
+      "run_size": "full",
+      "seed": 1818
+    },
+    {
+      "dataset_sha256": "fd901edbb86910ccac1c67a5543f2c1aae3cc3e935adc7c6feb448ed8eaa952c",
+      "run_size": "full",
+      "seed": 2121
+    },
+    {
+      "dataset_sha256": "88b2e9349df73a6e69f46e96d441e71a71a4c952a8f5ce6ca821f60e292b7fbe",
+      "run_size": "full",
+      "seed": 2020
+    }
+  ],
+  "dataset_known_vector": "ee70387b2470bb72a7ce457cd76187b9d89819016f3d58276f895a55b30a9f1c",
+  "formula_version": "v5-relay-token-waste-p90-v1",
+  "schema_version": 2,
+  "scoring_enabled": true,
+  "starter_kit_revision": "106076a40e4214cda821dfd0bee5c9c6785d425c"
+}

@@ -1,0 +1,16 @@
+[project]
+name = "hermes-dittobench-adapter"
+version = "0.1.0"
+description = "A thin DittoBench harness adapter for Nous Research Hermes Agent"
+requires-python = ">=3.11,<3.14"
+license = "MIT"
+
+[project.scripts]
+hermes-dittobench = "hermes_dittobench.server:main"
+
+[build-system]
+requires = ["setuptools>=77,<83"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hermes_dittobench*"]

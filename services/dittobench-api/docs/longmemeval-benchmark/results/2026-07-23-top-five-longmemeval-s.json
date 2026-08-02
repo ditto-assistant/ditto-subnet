@@ -1,0 +1,251 @@
+{
+  "agents": [
+    {
+      "abstention": {
+        "accuracy": 0.9,
+        "n": 30
+      },
+      "accuracy": 0.202,
+      "artifact_sha256": "17dc79bd6608f4bd4783e905db9f4fe12dd04e4753a092b749055b963e8efa3d",
+      "correct": 101,
+      "dittobench_v6_composite": 0.931983,
+      "empty_answers": 2,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "ebaa4068136add65f1c211d5c0d852f5106b712bf276a5ee1520ed15d2a45192",
+      "hypotheses_sha256": "e9067a249fd075d0f856be1169536a2c38adea3e1b249d5f5b0f3b333ab13db6",
+      "image_id": "sha256:3227b1dfcf3b20b0328c86ae36b89d9535232cf14c8b954175294bc0eaa713a4",
+      "n": 500,
+      "name": "whitycatboss",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.24359,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.120301,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.107143,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.266667,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.428571,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.165414,
+          "n": 133
+        }
+      },
+      "rank": 1,
+      "version": 1
+    },
+    {
+      "abstention": {
+        "accuracy": 0.9,
+        "n": 30
+      },
+      "accuracy": 0.53,
+      "artifact_sha256": "92f68b01c2d82b2333b50654bec6b9e7eac2fb02a9eb83dabc605088908ee504",
+      "correct": 265,
+      "dittobench_v6_composite": 0.931597,
+      "empty_answers": 0,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "9a6aaeae9d45837bb30bebe5d36f99130d95ecc42c28150f11244b1dccdc825c",
+      "hypotheses_sha256": "e9808a3a12c8eaa5ecfb025c982ac1398ce5a30d5b154469414d271841369afd",
+      "image_id": "sha256:95bf026723697ecbc9dbb8a90ab097f72a9b72d7a924798c49346d2b2ef86976",
+      "n": 500,
+      "name": "killer-4",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.74359,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.353383,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.821429,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.233333,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.857143,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.353383,
+          "n": 133
+        }
+      },
+      "rank": 2,
+      "version": 2
+    },
+    {
+      "abstention": {
+        "accuracy": 0.866667,
+        "n": 30
+      },
+      "accuracy": 0.576,
+      "artifact_sha256": "07bb32981c782fc51c0f910d26e071814be53044183d96f4f1bc512c69a6207e",
+      "correct": 288,
+      "dittobench_v6_composite": 0.916441,
+      "empty_answers": 0,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "4909cd3daca1669e5dac6eef980f8f0be4dabdd31c72eede69329de244fb801d",
+      "hypotheses_sha256": "d5a54e2ad4a72a96c37a85a16f12dcc61a53c297e6e48cff895fdc8767259a3c",
+      "image_id": "sha256:dcc07d39255641ff352ba45198757b919eb68c691d6b28ef515fe5be6057b6da",
+      "n": 500,
+      "name": "ditto-max-v1",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.769231,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.406015,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.982143,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.066667,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.971429,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.368421,
+          "n": 133
+        }
+      },
+      "rank": 3,
+      "version": 1
+    },
+    {
+      "abstention": {
+        "accuracy": 0.933333,
+        "n": 30
+      },
+      "accuracy": 0.062,
+      "artifact_sha256": "6d8b7c434808b9c4bab4fbe57d91c3fcf977c6fba643c52f8375afd9b30c200a",
+      "correct": 31,
+      "dittobench_v6_composite": 0.911062,
+      "empty_answers": 476,
+      "empty_answers_judged_correct": 29,
+      "evaluations_sha256": "9e1d3fa6e87c617483d27873adebed0fb3f6ef4f1424a4e4ca69d6d8e59d37bf",
+      "hypotheses_sha256": "35f8200dacf12f1b307b9fbd23d5d8b3cd794a6e28d9a4ee7b89dee3cf96f24f",
+      "image_id": "sha256:e7a4fe3bb1f47c017aa36a1c40d5bc1ad2676be20f09c7601884a84dbab5d4c5",
+      "n": 500,
+      "name": "avadakedavra",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.064103,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.082707,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.0,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.066667,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.085714,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.052632,
+          "n": 133
+        }
+      },
+      "rank": 4,
+      "version": 1
+    },
+    {
+      "abstention": {
+        "accuracy": 0.433333,
+        "n": 30
+      },
+      "accuracy": 0.356,
+      "artifact_sha256": "6dc13e83976fa679efc1e2968856b55a28eecb26fc98dc9ca030815e9d5d7205",
+      "correct": 178,
+      "dittobench_v6_composite": 0.902444,
+      "empty_answers": 0,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "9eaecf6682216e3e0248ff22c64f22df21c7aa938ffa8fabb0a68bba8c5b757c",
+      "hypotheses_sha256": "5e337a2edf60b92d789427ea8bd78e9989204d1ac26203a25a510a45088a36ea",
+      "image_id": "sha256:ac4e0eb2f4bf83165d64a83a4774dd93febd9ed8f14fc4f3b95dc8dc8178b31b",
+      "n": 500,
+      "name": "zeus_v12",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.371795,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.233083,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.625,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.133333,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.685714,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.233083,
+          "n": 133
+        }
+      },
+      "rank": 5,
+      "version": 1
+    }
+  ],
+  "answer_model": {
+    "id": "qwen/qwen3-32b",
+    "profile_revision": "openrouter-nebius-qwen3-32b-no-think-v1",
+    "provider": "openrouter"
+  },
+  "condition": "longmemeval-s-cleaned-native-dittobench-memory-v1",
+  "dataset": {
+    "huggingface_revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "longmemeval_revision": "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+    "name": "longmemeval_s_cleaned.json",
+    "questions": 500,
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+  },
+  "judge": {
+    "official_model": "gpt-4o-2024-08-06",
+    "openrouter_model": "openai/gpt-4o-2024-08-06",
+    "profile_revision": "longmemeval-official-gpt4o-openrouter-v1"
+  },
+  "leaderboard_bench_version": 6,
+  "leaderboard_snapshot_at": "2026-07-23T05:37:19.615917Z",
+  "public_harness_revision": "c3caa8e2c19f8a41a0610b9f7db774f97643dd9c",
+  "schema_version": 1
+}

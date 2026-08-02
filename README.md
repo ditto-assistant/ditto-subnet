@@ -7,12 +7,13 @@ on DittoBench (tool-calling and memory recall).
 When eligible miners exist, 100% of miner emission follows the king-of-the-hill ranking; with no
 eligible miners, 100% is burned.
 
-This repo holds the miner CLI and the validator worker. The public Ditto stack is split across:
+This monorepo holds the miner CLI, validator worker, and DittoBench scoring
+engine. Other public Ditto stack components currently live in:
 
 - [`ditto-platform`](https://github.com/ditto-assistant/ditto-platform): the public API server, live dashboard, submission coordinator, and score ledger.
 - [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness): the Rust reference library used by the starter kit.
 - [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit): the miner starting point plus the offline practice loop.
-- [`dittobench-api`](https://github.com/ditto-assistant/dittobench-api): the scoring engine each validator runs.
+- [`services/dittobench-api`](services/dittobench-api): the scoring engine each validator runs.
 - [`dittobench-datagen`](https://github.com/ditto-assistant/dittobench-datagen): the dataset generator and judge-free grader.
 - [`ditto-screener`](https://github.com/ditto-assistant/ditto-screener): the platform-operated build and health gate plus the shared screening protocol.
 
@@ -23,6 +24,7 @@ This repo holds the miner CLI and the validator worker. The public Ditto stack i
   identity-based weight-setting service).
 - `ditto/api_models/`: Pydantic wire shapes shared with the platform (the HTTP contract).
 - `ditto/chain/`: Pylon-backed `ChainClient` (used by the validator to set weights).
+- `services/dittobench-api/`: the Go scorer used by validators and hosted practice.
 
 Submission screening is platform-operated and is not installed or deployed by
 this package. Miner and validator clients import the lifecycle contract from

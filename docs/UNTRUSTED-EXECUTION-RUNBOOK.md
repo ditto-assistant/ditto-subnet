@@ -64,8 +64,8 @@ wallet, so the platform must not treat a heartbeat as proof of host integrity.
    outbound connections denied except the ticket broker.
 7. Confirm `ditto-sandbox-deny` events reach the operator log/alert sink without
    including request bodies, credentials, or private source.
-8. Confirm the required `dittobench-api` change is merged and the deployed
-   scorer checksum identifies its actual post-merge commit in `main` history.
+8. Confirm the required `services/dittobench-api` change is merged and the
+   deployed scorer identifies the same `ditto-subnet` release commit.
 9. Confirm `DITTOBENCH_ALLOW_SCREENED_IMAGES=1` is enabled while the broader
    `DITTOBENCH_ALLOW_PRIVATE_HARNESS` bypass remains disabled.
 
