@@ -1,0 +1,79 @@
+name: Platform migration order
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  merge_group:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Main sweeps publish statuses across every open PR, so serialize them under
+  # one stable key. PR and merge-queue checks remain isolated by ref.
+  group: platform-migration-order-${{ github.event_name == 'push' && 'main-sweep' || github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration-order:
+    name: Platform migration order
+    if: github.event_name != 'push'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check Alembic migration order
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set +e
+          output="$(python3 apps/platform/scripts/check_migration_order.py origin/main 2>&1)"
+          exit_code=$?
+          set -e
+
+          printf '%s\n' "$output"
+          state=success
+          description="Platform migrations are ordered after main"
+          if (( exit_code != 0 )); then
+            state=failure
+            description="Platform migration order conflicts with main"
+          fi
+
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state="$state" \
+            -f context="migration-order/merge-result" \
+            -f description="$description" \
+            -f target_url="$RUN_URL"
+          exit "$exit_code"
+
+  recheck-open-prs:
+    name: Re-check open Platform migrations against new main
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Re-check open pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: apps/platform/scripts/recheck_open_pr_migrations.sh
