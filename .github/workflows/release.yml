@@ -34,8 +34,43 @@ env:
   COMPOSE_SCHEMA: "1"
 
 jobs:
-  release:
+  plan:
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+    outputs:
+      miner_cli: ${{ steps.components.outputs.miner_cli }}
+      validator_stack: ${{ steps.components.outputs.validator_stack }}
+    steps:
+      - name: Check out the merged commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the last published release
+        id: release-base
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${{ github.sha }}")
+          echo "sha=$(git rev-list -n 1 "$tag")" >> "$GITHUB_OUTPUT"
+
+      # Plan from the last published semantic release rather than only the
+      # immediately preceding push. This carries changes forward after a
+      # queued, cancelled, or failed release attempt.
+      - name: Resolve affected release components
+        id: components
+        run: |
+          python scripts/release-plan.py \
+            --base "${{ steps.release-base.outputs.sha }}" \
+            --head "${{ github.sha }}" \
+            --github-output "$GITHUB_OUTPUT"
+
+  release:
+    needs: plan
+    if: ${{ needs.plan.outputs.miner_cli == 'true' || needs.plan.outputs.validator_stack == 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
@@ -89,7 +124,7 @@ jobs:
   # ---------------------------------------------------------------------------
 
   verify-source:
-    needs: release
+    needs: [plan, release]
     if: needs.release.outputs.released == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
@@ -121,8 +156,8 @@ jobs:
             ditto/tests/test_validator_stack_auto_update.py
 
   build-validator:
-    needs: release
-    if: needs.release.outputs.released == 'true'
+    needs: [plan, release]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -167,8 +202,8 @@ jobs:
             ${{ env.VALIDATOR_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 
   build-sandbox-docker:
-    needs: release
-    if: needs.release.outputs.released == 'true'
+    needs: [plan, release]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -213,8 +248,8 @@ jobs:
             ${{ env.SANDBOX_DOCKER_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 
   build-pylon:
-    needs: release
-    if: needs.release.outputs.released == 'true'
+    needs: [plan, release]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -261,8 +296,8 @@ jobs:
             ${{ env.PYLON_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 
   build-dittobench:
-    needs: release
-    if: needs.release.outputs.released == 'true'
+    needs: [plan, release]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -397,12 +432,13 @@ jobs:
   assemble-stack:
     needs:
       - release
+      - plan
       - verify-source
       - build-validator
       - build-sandbox-docker
       - build-dittobench
       - build-pylon
-    if: needs.release.outputs.released == 'true'
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -637,8 +673,8 @@ jobs:
             "$exact" >/dev/null
 
   smoke-validator-arm64:
-    needs: [release, build-validator]
-    if: needs.release.outputs.released == 'true'
+    needs: [plan, release, build-validator]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     permissions:
       contents: read
@@ -689,8 +725,8 @@ jobs:
           trap - EXIT
 
   promote-stack-release:
-    needs: [release, assemble-stack, smoke-validator-arm64]
-    if: needs.release.outputs.released == 'true'
+    needs: [plan, release, assemble-stack, smoke-validator-arm64]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
