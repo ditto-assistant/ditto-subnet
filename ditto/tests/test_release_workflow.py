@@ -20,14 +20,25 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     plan = jobs["plan"]
     resolver = _step(plan["steps"], "Resolve affected release components")
 
-    assert plan["outputs"] == {
-        "miner_cli": "${{ steps.components.outputs.miner_cli }}",
-        "validator_stack": "${{ steps.components.outputs.validator_stack }}",
-    }
+    assert (
+        plan["outputs"]
+        | {
+            "miner_cli": "${{ steps.components.outputs.miner_cli }}",
+            "validator_stack": "${{ steps.components.outputs.validator_stack }}",
+        }
+        == plan["outputs"]
+    )
+    assert {
+        "dittobench_api",
+        "platform",
+        "backroom",
+        "screener",
+        "screener_orchestrator",
+    } <= plan["outputs"].keys()
     assert "scripts/release-plan.py" in resolver["run"]
     release_base = _step(plan["steps"], "Resolve the last published release")
     assert "0000000000000000000000000000000000000000" in release_base["run"]
-    assert jobs["release"]["needs"] == "plan"
+    assert jobs["release"]["needs"] == ["plan", "verify-source"]
 
     image_jobs = (
         "build-validator",
@@ -49,12 +60,31 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert 'uv lock --upgrade-package "$PACKAGE_NAME"' in build_command
     assert "git add uv.lock" in build_command
 
-    # The full source re-verification (which locks the env) moved out of the old
-    # monolithic publish-stack-release job into the parallel verify-source job.
+    # Verification runs before semantic release, so hosted deploys and image
+    # publication cannot race ahead of the exact merged source gate.
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     verify_steps = workflow["jobs"]["verify-source"]["steps"]
-    verification = _step(verify_steps, "Verify the exact release source")
+    verification = _step(verify_steps, "Gate the release on exact merge source")
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
+    assert workflow["jobs"]["release"]["needs"] == ["plan", "verify-source"]
+
+
+def test_screener_runner_fallback_requires_platform_authorization() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    steps = workflow["jobs"]["build-screener"]["steps"]
+    request = _step(steps, "Ask Platform for a Targon Kaniko build")
+    fallback = _step(steps, "Build on the existing runner when Targon is unavailable")
+    record = _step(steps, "Record immutable screener image identity")
+
+    assert fallback["if"] == "steps.targon.outputs.mode == 'fallback'"
+    assert "fallback_required)" in request["run"]
+    assert "fallback_required|failed|canceled" not in request["run"]
+    assert "no provider authorized a fallback" in request["run"]
+    assert "timed out without a Platform-issued fallback" in request["run"]
+    assert "reusing immutable fallback image" in fallback["run"]
+    assert "gcloud artifacts docker images describe" in record["run"]
+    assert '"$digest" != "$TARGON_DIGEST"' in record["run"]
+    assert "--retry-all-errors" in record["run"]
 
 
 def test_public_screener_dependency_needs_no_private_authentication() -> None:

@@ -1,0 +1,58 @@
+name: Publish Maintained Kaniko Executor
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/kaniko-executor.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-maintained-kaniko
+  cancel-in-progress: false
+
+env:
+  KANIKO_SOURCE_REVISION: df8f307ec6bc64beb853250f3267b4c604e6a38a
+  KANIKO_SOURCE_VERSION: v1.25.16
+  KANIKO_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/kaniko-executor
+
+jobs:
+  publish:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    environment: prod
+    steps:
+      - name: Authenticate to the public builder registry
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SUBNET_BUILD_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Fetch the reviewed Chainguard Kaniko source
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/kaniko-source"
+          git clone --no-checkout https://github.com/chainguard-dev/kaniko.git "$source_dir"
+          git -C "$source_dir" checkout --detach "$KANIKO_SOURCE_REVISION"
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$KANIKO_SOURCE_REVISION"
+
+      - name: Build and publish the executor-debug target
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/kaniko-source"
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker build \
+            --file "$source_dir/deploy/Dockerfile" \
+            --target kaniko-debug \
+            --tag "$KANIKO_REPOSITORY:$KANIKO_SOURCE_VERSION" \
+            --tag "$KANIKO_REPOSITORY:source-$KANIKO_SOURCE_REVISION" \
+            "$source_dir"
+          docker push "$KANIKO_REPOSITORY:$KANIKO_SOURCE_VERSION"
+          docker push "$KANIKO_REPOSITORY:source-$KANIKO_SOURCE_REVISION"

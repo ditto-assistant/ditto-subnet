@@ -1,15 +1,18 @@
 name: Deploy production screeners
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - workers/screener/**
-      - packages/ditto-screening-protocol/**
-      - .github/workflows/screener-deploy.yml
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact released monorepo commit (empty uses the latest GitHub release)
+        type: string
+        required: false
+      force:
+        description: Permit an explicit non-release operator revision
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +32,34 @@ jobs:
     environment: prod
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
+      revision: ${{ steps.release.outputs.revision }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the immutable released revision
+        id: release
+        env:
+          REQUESTED_REVISION: ${{ inputs.revision }}
+          FORCE_DEPLOY: ${{ inputs.force && 'true' || 'false' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          revision="$REQUESTED_REVISION"
+          if [ -z "$revision" ]; then
+            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+            git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+            revision="$(git rev-list -n 1 "$tag^{commit}")"
+          fi
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$revision^{commit}"
+          if [ "$FORCE_DEPLOY" != true ]; then
+            git tag --points-at "$revision" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          fi
+          echo "revision=$revision" >>"$GITHUB_OUTPUT"
+
       - name: Verify deploy configuration
         env:
           WIF: ${{ secrets.GCP_WIF_PROVIDER }}
@@ -75,6 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ needs.discover.outputs.revision }}
           persist-credentials: false
 
       - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
@@ -95,5 +126,4 @@ jobs:
           name='${{ matrix.name }}'
           zone='${{ matrix.zone }}'
           workers/screener/scripts/deploy-screener-via-ssh.sh \
-            "$name" "$zone" '${{ github.sha }}'
-
+            "$name" "$zone" '${{ needs.discover.outputs.revision }}'

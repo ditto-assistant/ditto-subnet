@@ -4,11 +4,16 @@ import {
   CheckCircle2,
   Cloud,
   Container,
+  Hammer,
   RefreshCw,
   ServerCog,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import type { ScreenerCapacityNode, ScreenerCapacityView } from '../lib/admin.schemas'
+import type {
+  ScreenerCapacityNode,
+  ScreenerCapacityView,
+  TrustedImageBuild,
+} from '../lib/admin.schemas'
 import { getScreenerCapacity } from '../server/admin.functions'
 
 function formatWhen(value: string | null) {
@@ -29,6 +34,13 @@ function nodeTone(status: ScreenerCapacityNode['status']) {
   if (status === 'active') return 'bg-[var(--acid-dim)] text-[var(--acid)]'
   if (status === 'draining') return 'bg-[var(--amber-dim)] text-[var(--amber)]'
   return 'bg-[var(--red-dim)] text-[var(--red)]'
+}
+
+function buildTone(status: TrustedImageBuild['status']) {
+  if (status === 'succeeded') return 'bg-[var(--acid-dim)] text-[var(--acid)]'
+  if (status === 'failed' || status === 'canceled') return 'bg-[var(--red-dim)] text-[var(--red)]'
+  if (status === 'fallback_required') return 'bg-[var(--amber-dim)] text-[var(--amber)]'
+  return 'bg-[var(--cyan-dim)] text-[var(--cyan)]'
 }
 
 export function ScreenerCapacityPanel({ initialState }: { initialState: ScreenerCapacityView }) {
@@ -151,6 +163,70 @@ export function ScreenerCapacityPanel({ initialState }: { initialState: Screener
             ))}
           </dl>
         </div>
+      </section>
+
+      <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+        <div className="flex items-start gap-3 border-b border-[var(--line)] px-4 py-4 sm:px-5">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--cyan-dim)] text-[var(--cyan)]">
+            <Hammer className="h-4 w-4" />
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold">Trusted image builds</h2>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+              Release builds use a dedicated Kaniko rental on Targon first. GCP runs the
+              allowlisted fallback; hostile miner builds never enter this trusted lane.
+            </p>
+          </div>
+        </div>
+        {state.builds.length === 0 ? (
+          <p className="p-5 text-sm text-[var(--muted)]">No trusted screener image build has been queued.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[840px] text-left text-xs">
+              <thead className="bg-[var(--panel-soft)] text-[var(--muted)]">
+                <tr>
+                  <th className="px-4 py-3 font-medium sm:px-5">Revision</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Provider</th>
+                  <th className="px-4 py-3 font-medium">Attempts</th>
+                  <th className="px-4 py-3 font-medium">Image</th>
+                  <th className="px-4 py-3 font-medium">Updated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--line)]">
+                {state.builds.map((build) => (
+                  <tr key={build.build_id}>
+                    <td className="px-4 py-3.5 font-mono sm:px-5" title={build.source_sha}>
+                      {build.source_sha.slice(0, 12)}
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <span className={`rounded-full px-2 py-1 font-medium ${buildTone(build.status)}`}>
+                        {build.status.replaceAll('_', ' ')}
+                      </span>
+                      {build.error_code ? (
+                        <p className="mt-1 max-w-60 break-all text-[10px] text-[var(--muted)]">
+                          {build.error_code}
+                        </p>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3.5 capitalize text-[var(--muted-strong)]">
+                      {build.provider ?? 'Waiting'}
+                    </td>
+                    <td className="px-4 py-3.5 tabular-nums text-[var(--muted-strong)]">
+                      {build.attempt_count}
+                    </td>
+                    <td className="px-4 py-3.5 font-mono text-[var(--muted-strong)]" title={build.image_digest ?? build.destination}>
+                      {build.image_digest ? shortIdentity(build.image_digest) : shortIdentity(build.destination)}
+                    </td>
+                    <td className="px-4 py-3.5 text-[var(--muted-strong)]">
+                      {formatWhen(build.updated_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">

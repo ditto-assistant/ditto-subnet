@@ -27,6 +27,10 @@ resource "google_artifact_registry_repository" "public_runtime" {
   format        = "DOCKER"
   description   = "Public, immutable Ditto subnet worker runtime images."
 
+  docker_config {
+    immutable_tags = true
+  }
+
   lifecycle {
     prevent_destroy = true
   }

@@ -86,6 +86,7 @@ from ditto.db.models import (
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
+    TrustedImageBuild,
     ValidatorTicket,
 )
 from ditto.db.queries.attestation import record_attestation
@@ -683,6 +684,189 @@ def _capacity_payload(epoch: str) -> dict[str, object]:
 
 
 class TestFederatedScreenerNodes:
+    async def test_trusted_build_enqueue_is_concurrently_idempotent(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        payload = {
+            "component": "screener",
+            "source_sha": "c" * 40,
+            "reason": "prove concurrent release enqueue is idempotent",
+        }
+        responses = await asyncio.gather(
+            client.post(
+                "/api/v1/screener/controller/trusted-image-builds",
+                headers=headers,
+                json=payload,
+            ),
+            client.post(
+                "/api/v1/screener/controller/trusted-image-builds",
+                headers=headers,
+                json=payload,
+            ),
+        )
+        assert [response.status_code for response in responses] == [200, 200]
+        assert responses[0].json()["build_id"] == responses[1].json()["build_id"]
+        async with session_maker() as session:
+            count = await session.scalar(
+                select(func.count())
+                .select_from(TrustedImageBuild)
+                .where(TrustedImageBuild.source_sha == "c" * 40)
+            )
+        assert count == 1
+
+    async def test_third_expired_build_lease_requests_explicit_fallback(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        build_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                TrustedImageBuild(
+                    build_id=build_id,
+                    environment="prod",
+                    component="screener",
+                    source_repository=(
+                        "https://github.com/ditto-assistant/ditto-subnet.git"
+                    ),
+                    source_sha="d" * 40,
+                    context_path=".",
+                    dockerfile_path="workers/screener/Dockerfile",
+                    destination="registry.invalid/screener:sha-test",
+                    status="leased",
+                    provider="targon",
+                    attempt_count=3,
+                    controller_epoch="builder:stale",
+                    lease_expires_at=now - timedelta(seconds=1),
+                    created_by="release-test",
+                    reason="exhaust the bounded provider lease budget",
+                )
+            )
+        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        claim = await client.post(
+            "/api/v1/screener/controller/trusted-image-builds/claim",
+            headers=headers,
+            json={"environment": "prod", "controller_epoch": "builder:next"},
+        )
+        assert claim.status_code == 200, claim.text
+        assert claim.json()["build"] is None
+        detail = await client.get(
+            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
+            headers=headers,
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["status"] == "fallback_required"
+        assert detail.json()["error_code"] == "TARGON_BUILD_LEASE_EXHAUSTED"
+
+    async def test_trusted_build_claim_is_leased_and_digest_bound(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        build_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                TrustedImageBuild(
+                    build_id=build_id,
+                    environment="prod",
+                    component="screener",
+                    source_repository=(
+                        "https://github.com/ditto-assistant/ditto-subnet.git"
+                    ),
+                    source_sha="a" * 40,
+                    context_path=".",
+                    dockerfile_path="workers/screener/Dockerfile",
+                    destination=(
+                        "us-central1-docker.pkg.dev/ditto-app-dev/"
+                        "ditto-public-runtime/screener:sha-test"
+                    ),
+                    status="queued",
+                    created_by="release-test",
+                    reason="verify the dedicated trusted builder contract",
+                )
+            )
+        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        claim = await client.post(
+            "/api/v1/screener/controller/trusted-image-builds/claim",
+            headers=headers,
+            json={"environment": "prod", "controller_epoch": "builder:test"},
+        )
+        assert claim.status_code == 200, claim.text
+        assert claim.json()["build"]["status"] == "leased"
+
+        invalid = await client.put(
+            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
+            headers=headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "status": "succeeded",
+                "provider": "targon",
+                "provider_resource_id": "rental-test",
+            },
+        )
+        assert invalid.status_code == 422
+
+        completed = await client.put(
+            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
+            headers=headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "status": "succeeded",
+                "provider": "targon",
+                "provider_resource_id": "rental-test",
+                "image_digest": "sha256:" + "b" * 64,
+            },
+        )
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["image_digest"] == "sha256:" + "b" * 64
+
+        overwritten = await client.put(
+            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
+            headers=headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "status": "failed",
+                "provider": "targon",
+                "provider_resource_id": "rental-test",
+                "error_code": "LATE_PROVIDER_ERROR",
+            },
+        )
+        assert overwritten.status_code == 409
+
     async def test_controller_lease_fences_other_epochs_and_bootstraps_node(
         self,
         app: FastAPI,

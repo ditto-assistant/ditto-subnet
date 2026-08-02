@@ -10,6 +10,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
 ScreenerNodeStatus = Literal["active", "draining", "quarantined", "revoked"]
+TrustedImageBuildStatus = Literal[
+    "queued",
+    "leased",
+    "running",
+    "succeeded",
+    "failed",
+    "fallback_required",
+    "canceled",
+]
 
 _NODE_ID = r"^[a-zA-Z0-9._-]{1,63}$"
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
@@ -181,9 +190,72 @@ class ScreenerCapacityEventView(BaseModel):
     created_at: datetime
 
 
+class TrustedImageBuildCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    component: Literal["screener"]
+    source_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+    reason: Annotated[str, Field(min_length=8)]
+
+
+class TrustedImageBuildView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    build_id: UUID
+    environment: str
+    component: Literal["screener"]
+    source_repository: str
+    source_sha: str
+    context_path: str
+    dockerfile_path: str
+    destination: str
+    status: TrustedImageBuildStatus
+    provider: Literal["targon", "gcp"] | None = None
+    provider_resource_id: str | None = None
+    image_digest: str | None = None
+    error_code: str | None = None
+    attempt_count: int
+    controller_epoch: str | None = None
+    lease_expires_at: datetime | None = None
+    created_by: str
+    reason: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    updated_at: datetime
+
+
+class TrustedImageBuildClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+
+
+class TrustedImageBuildClaimResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    build: TrustedImageBuildView | None
+
+
+class TrustedImageBuildUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    status: Literal["running", "succeeded", "failed", "fallback_required"]
+    provider: Literal["targon", "gcp"]
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)] | None = (
+        None
+    )
+    image_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")] | None = None
+    error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+
+
 class ScreenerCapacityView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     snapshot: ScreenerCapacitySnapshotResponse | None
     nodes: list[ScreenerNodeView]
     events: list[ScreenerCapacityEventView]
+    builds: list[TrustedImageBuildView] = Field(default_factory=list)

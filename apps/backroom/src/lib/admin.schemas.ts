@@ -346,14 +346,49 @@ export const screenerCapacityNodeSchema = z.object({
   current_phase: z.string().nullable(),
 })
 
+export const trustedImageBuildSchema = z.object({
+  build_id: z.string().uuid(),
+  environment: z.string().min(1),
+  component: z.literal('screener'),
+  source_repository: z.string().url(),
+  source_sha: z.string().regex(/^[0-9a-f]{40}$/),
+  context_path: z.literal('.'),
+  dockerfile_path: z.literal('workers/screener/Dockerfile'),
+  destination: z.string().min(1),
+  status: z.enum([
+    'queued',
+    'leased',
+    'running',
+    'succeeded',
+    'failed',
+    'fallback_required',
+    'canceled',
+  ]),
+  provider: z.enum(['targon', 'gcp']).nullable(),
+  provider_resource_id: z.string().nullable(),
+  image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
+  error_code: z.string().nullable(),
+  attempt_count: z.number().int().nonnegative(),
+  controller_epoch: z.string().nullable(),
+  lease_expires_at: z.string().nullable(),
+  created_by: z.string().min(1),
+  reason: z.string().min(1),
+  created_at: z.string(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  updated_at: z.string(),
+})
+
 export const screenerCapacityViewSchema = z.object({
   snapshot: screenerCapacitySnapshotSchema.nullable(),
   nodes: z.array(screenerCapacityNodeSchema),
   events: z.array(screenerCapacityEventSchema),
+  builds: z.array(trustedImageBuildSchema).default([]),
 })
 
 export type ScreenerCapacityView = z.infer<typeof screenerCapacityViewSchema>
 export type ScreenerCapacityNode = z.infer<typeof screenerCapacityNodeSchema>
+export type TrustedImageBuild = z.infer<typeof trustedImageBuildSchema>
 
 export const ARTIFACT_RELEASE_MIN_HOURS = 6
 // Mirrors the platform's range bound. 48 hours is still the community-agreed

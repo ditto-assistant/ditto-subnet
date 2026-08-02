@@ -1236,6 +1236,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/trusted-image-builds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Trusted Image Build
+         * @description Queue one allowlisted monorepo image build; never accept arbitrary paths.
+         */
+        post: operations["create_trusted_image_build_api_v1_admin_trusted_image_builds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/validation-retries": {
         parameters: {
             query?: never;
@@ -2615,6 +2635,67 @@ export interface paths {
          * @description Drain, quarantine, reactivate, or revoke one enrolled node.
          */
         put: operations["update_screener_node_status_api_v1_screener_controller_nodes__node_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/trusted-image-builds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Release Image Build
+         * @description Idempotently queue the fixed release image contract for an exact SHA.
+         */
+        post: operations["queue_release_image_build_api_v1_screener_controller_trusted_image_builds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/trusted-image-builds/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim Trusted Image Build
+         * @description Lease one allowlisted trusted build under the current controller epoch.
+         */
+        post: operations["claim_trusted_image_build_api_v1_screener_controller_trusted_image_builds_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/trusted-image-builds/{build_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Release Image Build */
+        get: operations["get_release_image_build_api_v1_screener_controller_trusted_image_builds__build_id__get"];
+        /**
+         * Update Trusted Image Build
+         * @description Record redacted provider progress and the immutable output digest.
+         */
+        put: operations["update_trusted_image_build_api_v1_screener_controller_trusted_image_builds__build_id__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -12440,6 +12521,8 @@ export interface components {
         };
         /** ScreenerCapacityView */
         ScreenerCapacityView: {
+            /** Builds */
+            builds?: components["schemas"]["TrustedImageBuildView"][];
             /** Events */
             events: components["schemas"]["ScreenerCapacityEventView"][];
             /** Nodes */
@@ -13237,6 +13320,114 @@ export interface components {
              * @description Claiming validator hotkey.
              */
             validator_hotkey: string;
+        };
+        /** TrustedImageBuildClaimRequest */
+        TrustedImageBuildClaimRequest: {
+            /** Controller Epoch */
+            controller_epoch: string;
+            /** Environment */
+            environment: string;
+        };
+        /** TrustedImageBuildClaimResponse */
+        TrustedImageBuildClaimResponse: {
+            build: components["schemas"]["TrustedImageBuildView"] | null;
+        };
+        /** TrustedImageBuildCreateRequest */
+        TrustedImageBuildCreateRequest: {
+            /**
+             * Component
+             * @constant
+             */
+            component: "screener";
+            /** Reason */
+            reason: string;
+            /** Source Sha */
+            source_sha: string;
+        };
+        /** TrustedImageBuildUpdateRequest */
+        TrustedImageBuildUpdateRequest: {
+            /** Controller Epoch */
+            controller_epoch: string;
+            /** Environment */
+            environment: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Image Digest */
+            image_digest?: string | null;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "targon" | "gcp";
+            /** Provider Resource Id */
+            provider_resource_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "succeeded" | "failed" | "fallback_required";
+        };
+        /** TrustedImageBuildView */
+        TrustedImageBuildView: {
+            /** Attempt Count */
+            attempt_count: number;
+            /**
+             * Build Id
+             * Format: uuid
+             */
+            build_id: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Component
+             * @constant
+             */
+            component: "screener";
+            /** Context Path */
+            context_path: string;
+            /** Controller Epoch */
+            controller_epoch?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Destination */
+            destination: string;
+            /** Dockerfile Path */
+            dockerfile_path: string;
+            /** Environment */
+            environment: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Image Digest */
+            image_digest?: string | null;
+            /** Lease Expires At */
+            lease_expires_at?: string | null;
+            /** Provider */
+            provider?: ("targon" | "gcp") | null;
+            /** Provider Resource Id */
+            provider_resource_id?: string | null;
+            /** Reason */
+            reason: string;
+            /** Source Repository */
+            source_repository: string;
+            /** Source Sha */
+            source_sha: string;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "running" | "succeeded" | "failed" | "fallback_required" | "canceled";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /**
          * UploadAgentResponse
@@ -16043,6 +16234,42 @@ export interface operations {
             };
         };
     };
+    create_trusted_image_build_api_v1_admin_trusted_image_builds_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustedImageBuildCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_validation_retries_api_v1_admin_validation_retries_get: {
         parameters: {
             query?: {
@@ -18016,6 +18243,146 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_release_image_build_api_v1_screener_controller_trusted_image_builds_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustedImageBuildCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_trusted_image_build_api_v1_screener_controller_trusted_image_builds_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedImageBuildClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_release_image_build_api_v1_screener_controller_trusted_image_builds__build_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_trusted_image_build_api_v1_screener_controller_trusted_image_builds__build_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustedImageBuildUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
             };
             /** @description Validation Error */
             422: {

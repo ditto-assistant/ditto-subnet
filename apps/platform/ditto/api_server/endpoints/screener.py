@@ -35,11 +35,12 @@ import logging
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
@@ -75,6 +76,14 @@ from ditto.api_models.screener import (
     SCREENING_POLICY_VERSION,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
+)
+from ditto.api_models.screener_nodes import (
+    TrustedImageBuildClaimRequest,
+    TrustedImageBuildClaimResponse,
+    TrustedImageBuildCreateRequest,
+    TrustedImageBuildStatus,
+    TrustedImageBuildUpdateRequest,
+    TrustedImageBuildView,
 )
 from ditto.api_models.screener_review_settings import (
     EffectiveScreenerReviewSettings,
@@ -126,6 +135,7 @@ from ditto.db.models import (
     ScreenerShadowReview,
     ScreeningAttempt,
     ScreeningQuarantine,
+    TrustedImageBuild,
 )
 from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.artifact_fetch_audit import (
@@ -326,6 +336,43 @@ async def require_screener_controller(
 ControllerDep = Annotated[None, Depends(require_screener_controller)]
 _CONTROLLER_HEARTBEAT_READY_SECONDS = 180
 _NODE_TOKEN_ROTATION_GRACE_SECONDS = 120
+_TRUSTED_BUILD_LEASE_TTL = timedelta(minutes=45)
+_TRUSTED_SOURCE_REPOSITORY = "https://github.com/ditto-assistant/ditto-subnet.git"
+_TRUSTED_RUNTIME_REGISTRY = (
+    "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime"
+)
+
+
+def _trusted_build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
+    def aware(value: datetime | None) -> datetime | None:
+        if value is None or value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=UTC)
+
+    return TrustedImageBuildView(
+        build_id=row.build_id,
+        environment=row.environment,
+        component=cast(Literal["screener"], row.component),
+        source_repository=row.source_repository,
+        source_sha=row.source_sha,
+        context_path=row.context_path,
+        dockerfile_path=row.dockerfile_path,
+        destination=row.destination,
+        status=cast(TrustedImageBuildStatus, row.status),
+        provider=cast(Literal["targon", "gcp"] | None, row.provider),
+        provider_resource_id=row.provider_resource_id,
+        image_digest=row.image_digest,
+        error_code=row.error_code,
+        attempt_count=row.attempt_count,
+        controller_epoch=row.controller_epoch,
+        lease_expires_at=aware(row.lease_expires_at),
+        created_by=row.created_by,
+        reason=row.reason,
+        created_at=cast(datetime, aware(row.created_at)),
+        started_at=aware(row.started_at),
+        completed_at=aware(row.completed_at),
+        updated_at=cast(datetime, aware(row.updated_at)),
+    )
 
 
 def _node_registration_message(payload: ScreenerNodeRegistrationRequest) -> bytes:
@@ -693,6 +740,187 @@ async def fence_screener_controller(
             epoch=payload.controller_epoch,
             now=datetime.now(UTC),
         )
+
+
+@router.post(
+    "/controller/trusted-image-builds",
+    response_model=TrustedImageBuildView,
+)
+async def queue_release_image_build(
+    payload: TrustedImageBuildCreateRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> TrustedImageBuildView:
+    """Idempotently queue the fixed release image contract for an exact SHA."""
+    async with session.begin():
+        values = {
+            "build_id": uuid4(),
+            "environment": "prod",
+            "component": "screener",
+            "source_repository": _TRUSTED_SOURCE_REPOSITORY,
+            "source_sha": payload.source_sha,
+            "context_path": ".",
+            "dockerfile_path": "workers/screener/Dockerfile",
+            "destination": (
+                f"{_TRUSTED_RUNTIME_REGISTRY}/screener:sha-{payload.source_sha}"
+            ),
+            "status": "queued",
+            "created_by": f"github-release:{payload.source_sha}",
+            "reason": payload.reason,
+        }
+        await session.execute(
+            pg_insert(TrustedImageBuild)
+            .values(**values)
+            .on_conflict_do_nothing(constraint="trusted_image_builds_source_key")
+        )
+        row = await session.scalar(
+            select(TrustedImageBuild).where(
+                TrustedImageBuild.environment == "prod",
+                TrustedImageBuild.component == payload.component,
+                TrustedImageBuild.source_sha == payload.source_sha,
+            )
+        )
+        if row is None:  # pragma: no cover - INSERT/SELECT share one transaction
+            raise HTTPException(
+                status_code=503, detail="trusted build queue unavailable"
+            )
+    return _trusted_build_view(row)
+
+
+@router.get(
+    "/controller/trusted-image-builds/{build_id}",
+    response_model=TrustedImageBuildView,
+)
+async def get_release_image_build(
+    build_id: UUID,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> TrustedImageBuildView:
+    row = await session.get(TrustedImageBuild, build_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="trusted image build not found")
+    return _trusted_build_view(row)
+
+
+@router.post(
+    "/controller/trusted-image-builds/claim",
+    response_model=TrustedImageBuildClaimResponse,
+)
+async def claim_trusted_image_build(
+    payload: TrustedImageBuildClaimRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> TrustedImageBuildClaimResponse:
+    """Lease one allowlisted trusted build under the current controller epoch."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        # A repeatedly abandoned lease must become an explicit Platform-issued
+        # fallback decision instead of remaining leased forever.
+        await session.execute(
+            update(TrustedImageBuild)
+            .where(
+                TrustedImageBuild.environment == payload.environment,
+                TrustedImageBuild.status.in_(("leased", "running")),
+                TrustedImageBuild.lease_expires_at < now,
+                TrustedImageBuild.attempt_count >= 3,
+            )
+            .values(
+                status="fallback_required",
+                provider="targon",
+                error_code="TARGON_BUILD_LEASE_EXHAUSTED",
+                completed_at=now,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+        )
+        row = await session.scalar(
+            select(TrustedImageBuild)
+            .where(
+                TrustedImageBuild.environment == payload.environment,
+                or_(
+                    TrustedImageBuild.status == "queued",
+                    (
+                        TrustedImageBuild.status.in_(("leased", "running"))
+                        & (TrustedImageBuild.lease_expires_at < now)
+                        & (TrustedImageBuild.attempt_count < 3)
+                    ),
+                ),
+            )
+            .order_by(TrustedImageBuild.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if row is None:
+            return TrustedImageBuildClaimResponse(build=None)
+        row.status = "leased"
+        row.controller_epoch = payload.controller_epoch
+        row.lease_expires_at = now + _TRUSTED_BUILD_LEASE_TTL
+        row.attempt_count += 1
+        row.updated_at = now
+    return TrustedImageBuildClaimResponse(build=_trusted_build_view(row))
+
+
+@router.put(
+    "/controller/trusted-image-builds/{build_id}",
+    response_model=TrustedImageBuildView,
+)
+async def update_trusted_image_build(
+    build_id: UUID,
+    payload: TrustedImageBuildUpdateRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> TrustedImageBuildView:
+    """Record redacted provider progress and the immutable output digest."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await session.scalar(
+            select(TrustedImageBuild)
+            .where(TrustedImageBuild.build_id == build_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="trusted image build not found")
+        if row.controller_epoch != payload.controller_epoch:
+            raise HTTPException(status_code=409, detail="build lease epoch is stale")
+        if row.status in {"succeeded", "failed", "canceled"}:
+            raise HTTPException(status_code=409, detail="trusted build is terminal")
+        if row.status == "fallback_required":
+            if payload.status != "succeeded" or payload.provider != "gcp":
+                raise HTTPException(
+                    status_code=409,
+                    detail="fallback build accepts only a successful GCP result",
+                )
+        elif payload.provider != "targon":
+            raise HTTPException(
+                status_code=422,
+                detail="GCP may report only an explicitly requested fallback",
+            )
+        if payload.status == "succeeded" and payload.image_digest is None:
+            raise HTTPException(
+                status_code=422, detail="successful build requires digest"
+            )
+        if payload.status != "succeeded" and payload.image_digest is not None:
+            raise HTTPException(
+                status_code=422, detail="only a successful build carries digest"
+            )
+        if (
+            payload.status in {"failed", "fallback_required"}
+            and payload.error_code is None
+        ):
+            raise HTTPException(
+                status_code=422, detail="failed build requires error code"
+            )
+        row.status = payload.status
+        row.provider = payload.provider
+        row.provider_resource_id = payload.provider_resource_id
+        row.image_digest = payload.image_digest
+        row.error_code = payload.error_code
+        row.started_at = row.started_at or now
+        row.updated_at = now
+        if payload.status in {"succeeded", "failed", "fallback_required"}:
+            row.completed_at = now
+            row.lease_expires_at = None
+    return _trusted_build_view(row)
 
 
 @router.put("/controller/nodes/{node_id}", response_model=None, status_code=204)

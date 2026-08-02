@@ -40,3 +40,11 @@ scripts/targon-smoke.sh list
 Production runs `python -m screener_capacity.controller` as a separate systemd
 unit from Platform so provider retries, spend controls, and capacity locks do
 not share the API process lifecycle.
+
+Trusted monorepo image builds run in the separate
+`python -m screener_capacity.builder` process. Platform supplies an allowlisted
+component, exact SHA, Dockerfile, and destination. The builder mints a 30-minute
+Artifact Registry writer token, starts one Kaniko rental, stores only the digest
+and redacted status, and deletes the rental. Provider failure becomes
+`fallback_required` for the existing build runner and never changes the hostile
+screener-runtime capability gate.

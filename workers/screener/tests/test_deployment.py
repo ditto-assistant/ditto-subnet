@@ -71,8 +71,9 @@ def test_deploy_workflow_fans_out_over_the_fleet_in_parallel() -> None:
     assert "matrix: ${{ fromJson(needs.discover.outputs.matrix) }}" in workflow
     assert "fail-fast: false" in workflow
     assert "max-parallel:" in workflow
-    # Each host still receives the exact workflow commit.
-    assert '"$name" "$zone" \'${{ github.sha }}\'' in workflow
+    # Each host receives the exact GitHub release commit resolved once by the
+    # discovery job, never whatever happens to be current on main.
+    assert '"$name" "$zone" \'${{ needs.discover.outputs.revision }}\'' in workflow
 
 
 def test_deploy_workflow_enables_numpy_before_iap_transport() -> None:
@@ -174,7 +175,7 @@ def test_core_e2e_is_daily_and_manually_dispatchable() -> None:
     assert "if: always()" in workflow
 
 
-def test_screener_is_a_monorepo_component_with_path_scoped_deploy() -> None:
+def test_screener_is_a_monorepo_component_with_release_scoped_deploy() -> None:
     components = tomllib.loads(
         (MONOREPO_ROOT / "release" / "components.toml").read_text()
     )["components"]
@@ -182,9 +183,10 @@ def test_screener_is_a_monorepo_component_with_path_scoped_deploy() -> None:
 
     assert components["screener"]["paths"] == ["workers/screener/**"]
     assert components["screener"]["depends_on"] == ["screening_protocol"]
-    assert "push:\n    branches: [main]" in deploy_workflow
-    assert "- workers/screener/**" in deploy_workflow
-    assert "- packages/ditto-screening-protocol/**" in deploy_workflow
+    assert "push:\n    branches: [main]" not in deploy_workflow
+    assert "gh release view" in deploy_workflow
+    assert "schedule:" in deploy_workflow
+    assert "workflow_dispatch:" in deploy_workflow
 
 
 def test_updater_enables_the_unit_so_it_survives_a_reboot() -> None:

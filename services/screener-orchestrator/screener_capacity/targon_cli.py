@@ -605,7 +605,11 @@ def build_parser() -> argparse.ArgumentParser:
     kaniko = subparsers.add_parser("kaniko-probe")
     kaniko.add_argument("--resource", default="cpu-small")
     kaniko.add_argument(
-        "--image", default="gcr.io/kaniko-project/executor:v1.23.2-debug"
+        "--image",
+        default=(
+            "us-central1-docker.pkg.dev/ditto-app-dev/"
+            "ditto-public-builders/kaniko-executor:v1.25.16"
+        ),
     )
     kaniko.add_argument("--provision-timeout-seconds", type=float, default=600)
     kaniko.add_argument("--roundtrip", action="store_true")
