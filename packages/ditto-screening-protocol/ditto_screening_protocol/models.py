@@ -1,0 +1,670 @@
+"""Wire models for the Ditto screening boundary."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime
+from enum import StrEnum
+from typing import Annotated, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+SCREENING_POLICY_VERSION = 9
+
+_SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+_SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
+
+
+class AgentStatus(StrEnum):
+    """Lifecycle state of an agent submission."""
+
+    UPLOADED = "uploaded"
+    SCREENING = "screening"
+    SCREENING_PASSED = "screening_passed"
+    SCREENING_FAILED = "screening_failed"
+    QUARANTINED = "quarantined"
+    REJECTED = "rejected"
+    EVALUATING = "evaluating"
+    SCORED = "scored"
+    LIVE = "live"
+    ATH_PENDING_REVIEW = "ath_pending_review"
+    BANNED = "banned"
+
+
+class ScreenResultOutcome(StrEnum):
+    """Typed screener result; non-verdict outcomes never become rejection."""
+
+    PASS = "pass"
+    PASS_INCONCLUSIVE = "pass_inconclusive"
+    DETERMINISTIC_REJECT = "deterministic_reject"
+    RETRYABLE_INFRA = "retryable_infra"
+    QUARANTINE = "quarantine"
+    INCONCLUSIVE = "inconclusive"
+
+
+class ArtifactResponse(BaseModel):
+    """Short-lived artifact metadata returned to a screening worker."""
+
+    agent_id: Annotated[UUID, Field(description="Echoes the path-param id.")]
+    sha256: Annotated[
+        str, Field(description="Expected SHA-256 of the tarball, lowercase hex.")
+    ]
+    download_url: Annotated[
+        str, Field(description="Pre-signed URL used to download the tarball.")
+    ]
+    expires_at: Annotated[
+        datetime, Field(description="When the download URL expires (UTC).")
+    ]
+
+
+class ScreenedImageUploadRequest(BaseModel):
+    """Lease-bound metadata used to mint a pre-signed image upload URL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: UUID
+    sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    size_bytes: Annotated[int, Field(gt=0, le=8 * 1024**3)]
+    image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    image_ref: Annotated[str, Field(pattern=r"^ditto-screen/[0-9a-f-]{36}:latest$")]
+
+
+class ScreenedImageUploadResponse(BaseModel):
+    """Lease-bound multipart upload initiated by the platform."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    image_upload_id: UUID
+    storage_upload_id: Annotated[str, Field(min_length=1, max_length=1024)]
+    part_size_bytes: Annotated[int, Field(ge=5 * 1024**2, le=5 * 1024**3)]
+    expires_at: datetime
+
+
+class ScreenedImagePartUploadRequest(BaseModel):
+    """Request a presigned URL for one part of an active image upload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: UUID
+    storage_upload_id: Annotated[str, Field(min_length=1, max_length=1024)]
+    part_number: Annotated[int, Field(ge=1, le=10_000)]
+    size_bytes: Annotated[int, Field(gt=0, le=5 * 1024**3)]
+
+
+class ScreenedImagePartUploadResponse(BaseModel):
+    """Short-lived direct-to-object-storage URL for one multipart part."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    upload_url: str
+    expires_at: datetime
+    required_headers: dict[str, str]
+
+
+class ScreenedImageCompletedPart(BaseModel):
+    """One uploaded multipart part and the storage ETag returned for it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    part_number: Annotated[int, Field(ge=1, le=10_000)]
+    etag: Annotated[str, Field(min_length=1, max_length=256)]
+
+
+class ScreenedImageUploadCompleteRequest(BaseModel):
+    """Finalize a multipart image upload and request full-byte verification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: UUID
+    storage_upload_id: Annotated[str, Field(min_length=1, max_length=1024)]
+    sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    size_bytes: Annotated[int, Field(gt=0, le=8 * 1024**3)]
+    image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    image_ref: Annotated[str, Field(pattern=r"^ditto-screen/[0-9a-f-]{36}:latest$")]
+    parts: Annotated[
+        list[ScreenedImageCompletedPart], Field(min_length=1, max_length=10_000)
+    ]
+
+    @model_validator(mode="after")
+    def validate_part_sequence(self) -> ScreenedImageUploadCompleteRequest:
+        if [part.part_number for part in self.parts] != list(
+            range(1, len(self.parts) + 1)
+        ):
+            raise ValueError("completed image parts must be contiguous and ordered")
+        return self
+
+
+class ScreenedImageUploadCompleteResponse(BaseModel):
+    """Acknowledgement that platform verification matched the signed archive."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verified: Literal[True]
+
+
+class ScreenedImageUploadAbortRequest(BaseModel):
+    """Abort an unfinished multipart upload owned by a screening attempt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: UUID
+    storage_upload_id: Annotated[str, Field(min_length=1, max_length=1024)]
+
+
+class ScreenedImageUploadAbortResponse(BaseModel):
+    """Acknowledgement that an unfinished multipart upload was aborted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    aborted: bool
+
+
+class ScreenerQueueItem(BaseModel):
+    """One agent awaiting screening."""
+
+    agent_id: Annotated[UUID, Field(description="Server-generated agent identifier.")]
+    miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
+    name: Annotated[str, Field(description="Miner-chosen agent name.")]
+    sha256: Annotated[
+        str, Field(description="SHA-256 of the uploaded tarball, lowercase hex.")
+    ]
+    status: Annotated[
+        AgentStatus, Field(description="Lifecycle state at queue read time.")
+    ]
+    created_at: Annotated[
+        datetime, Field(description="When the upload row was inserted (UTC).")
+    ]
+    attempt_id: Annotated[
+        UUID | None,
+        Field(
+            description=(
+                "Opaque lease id returned by the claim endpoint. Null only for "
+                "legacy read-only queue responses."
+            ),
+        ),
+    ] = None
+    lease_deadline: Annotated[
+        datetime | None,
+        Field(
+            description=(
+                "UTC deadline for this screening attempt. A verdict arriving "
+                "after it expires must not be accepted."
+            ),
+        ),
+    ] = None
+    precheck_reason_code: Annotated[
+        str | None,
+        Field(
+            pattern=r"^[a-z0-9][a-z0-9-]{0,63}$",
+            description=(
+                "Platform-owned deterministic rejection discovered atomically "
+                "while leasing. The worker must not download the artifact when set."
+            ),
+        ),
+    ] = None
+    duplicate_of: Annotated[
+        UUID | None,
+        Field(description="Earlier usable cross-miner submission for an exact copy."),
+    ] = None
+    build_only: Annotated[
+        bool,
+        Field(
+            description=(
+                "Selects the mechanical build/runtime lane. The platform uses it "
+                "both for already-reviewed prerequisite rebuilds and for "
+                "score-first admission. The screener skips deep source review but "
+                "still performs every cheap fail-closed gate."
+            ),
+        ),
+    ] = False
+    deferred_source_review: Annotated[
+        bool,
+        Field(
+            description=(
+                "True only for a fresh score-first admission whose deep source "
+                "review is deferred. Unlike an already-reviewed rebuild, concrete "
+                "mechanical or behavioral-oracle findings remain authoritative."
+            )
+        ),
+    ] = False
+
+    @model_validator(mode="after")
+    def validate_precheck(self) -> ScreenerQueueItem:
+        if (self.precheck_reason_code is None) != (self.duplicate_of is None):
+            raise ValueError("precheck reason and duplicate reference must be paired")
+        if self.deferred_source_review and not self.build_only:
+            raise ValueError("deferred source review requires the mechanical lane")
+        return self
+
+
+class ScreenerQueueResponse(BaseModel):
+    """Response returned by ``GET /screener/queue``."""
+
+    items: Annotated[
+        list[ScreenerQueueItem],
+        Field(description="Agents awaiting screening, oldest first."),
+    ]
+    count: Annotated[int, Field(ge=0, description="Number of items returned.")]
+    required_policy_version: Annotated[
+        int,
+        Field(
+            ge=1,
+            description="Minimum screening policy a passing verdict must attest.",
+        ),
+    ]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "items": [
+                    {
+                        "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "miner_hotkey": (
+                            "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+                        ),
+                        "name": "alpha-agent",
+                        "sha256": "deadbeef" * 8,
+                        "status": "uploaded",
+                        "created_at": "2026-06-08T12:00:00Z",
+                    }
+                ],
+                "count": 1,
+            }
+        }
+    )
+
+
+class ScreenEvidenceItem(BaseModel):
+    """One bounded, public-safe policy evidence summary carried on a verdict.
+
+    Mirrors the screener's internal ``PolicyEvidence`` bounds. Raw challenge
+    prompts, responses, private rules, credentials, and artifact source never
+    belong here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    module_id: Annotated[
+        str,
+        Field(min_length=1, max_length=64, description="Reporting policy module."),
+    ]
+    code: Annotated[
+        str,
+        Field(min_length=1, max_length=64, description="Stable machine code."),
+    ]
+    summary: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=240,
+            description="One bounded, public-safe sentence for the operator.",
+        ),
+    ]
+    digest: Annotated[
+        str | None,
+        Field(
+            pattern=r"^[0-9a-f]{64}$",
+            description="Optional SHA-256 anchoring private evidence.",
+        ),
+    ] = None
+
+
+class SourceReviewEvidenceItem(BaseModel):
+    """One flagged source location from the read-only source review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: Annotated[str, Field(min_length=1, max_length=240)]
+    line: Annotated[int, Field(ge=1)]
+    category: Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class SourceReviewFinding(BaseModel):
+    """Bounded source-review finding whose canonical JSON is digest-bound.
+
+    ``canonical_digest()`` over this payload must equal the ``finding_digest``
+    bound into the signed verdict, letting the platform verify the finding it
+    stores is exactly the one the screener attested.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    prompt_revision: Annotated[str, Field(min_length=1, max_length=64)]
+    risk_level: Literal["low", "medium", "high"]
+    confidence: Annotated[float, Field(ge=0, le=1)]
+    categories: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=64)]],
+        Field(min_length=1, max_length=8),
+    ]
+    evidence: Annotated[
+        list[SourceReviewEvidenceItem], Field(default_factory=list, max_length=16)
+    ]
+    summary: Annotated[str, Field(min_length=1, max_length=240)]
+
+    def canonical_digest(self) -> str:
+        """SHA-256 over the canonical JSON encoding of this finding."""
+        canonical = json.dumps(
+            {
+                "artifact_sha256": self.artifact_sha256,
+                "prompt_revision": self.prompt_revision,
+                "risk_level": self.risk_level,
+                "confidence": self.confidence,
+                "categories": sorted(set(self.categories)),
+                "evidence": [
+                    {
+                        "path": item.path,
+                        "line": item.line,
+                        "category": item.category,
+                    }
+                    for item in self.evidence
+                ],
+                "summary": self.summary,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+class ScreenReviewAudit(BaseModel):
+    """Public-safe accounting for a bounded review that could not conclude."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage: Literal["l1", "l2"]
+    reason_code: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
+    prompt_revision: Annotated[str, Field(min_length=1, max_length=64)]
+    harness_revision: Annotated[str | None, Field(min_length=1, max_length=64)] = None
+    max_steps: Annotated[int, Field(ge=1, le=100)]
+    steps_used: Annotated[int, Field(ge=0, le=100)]
+    max_read_bytes: Annotated[int | None, Field(ge=1, le=256 * 1024**2)] = None
+    read_bytes_used: Annotated[int | None, Field(ge=0, le=256 * 1024**2)] = None
+    max_input_tokens: Annotated[int | None, Field(ge=1, le=2_000_000)] = None
+    input_tokens_used: Annotated[int | None, Field(ge=0, le=2_000_000)] = None
+    max_output_tokens: Annotated[int | None, Field(ge=1, le=256_000)] = None
+    output_tokens_used: Annotated[int | None, Field(ge=0, le=256_000)] = None
+    max_cost_usd: Annotated[float | None, Field(gt=0, le=100)] = None
+    cost_usd_used: Annotated[float | None, Field(ge=0, le=100)] = None
+
+    @model_validator(mode="after")
+    def validate_pairs_and_usage(self) -> ScreenReviewAudit:
+        for maximum, used, label in (
+            (self.max_read_bytes, self.read_bytes_used, "read bytes"),
+            (self.max_input_tokens, self.input_tokens_used, "input tokens"),
+            (self.max_output_tokens, self.output_tokens_used, "output tokens"),
+            (self.max_cost_usd, self.cost_usd_used, "cost"),
+        ):
+            if (maximum is None) != (used is None):
+                raise ValueError(f"{label} maximum and usage must be paired")
+        if self.steps_used > self.max_steps:
+            raise ValueError("review steps used exceed configured maximum")
+        return self
+
+    def canonical_digest(self) -> str:
+        canonical = json.dumps(
+            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+class ScreenResultRequest(BaseModel):
+    """Signed result posted to ``/screener/agent/{agent_id}/result``."""
+
+    screener_hotkey: Annotated[
+        str,
+        Field(pattern=_SS58_PATTERN, description="Reporting screener's SS58 hotkey."),
+    ]
+    attempt_id: Annotated[
+        UUID | None,
+        Field(
+            description=(
+                "Claimed screening-attempt lease. Required by lease-aware "
+                "platforms and bound into the v2 verdict signature."
+            ),
+        ),
+    ] = None
+    signature: Annotated[
+        str,
+        Field(
+            pattern=_SIGNATURE_HEX_PATTERN,
+            description="Hex sr25519 signature over the versioned verdict.",
+        ),
+    ]
+    passed: Annotated[
+        bool,
+        Field(description="True promotes to evaluating; False -> screening_failed."),
+    ]
+    outcome: ScreenResultOutcome | None = None
+    manifest_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+    finding_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+    review_audit_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+    review_settings_revision: Annotated[int | None, Field(ge=1)] = None
+    review_settings_instance_id: Annotated[
+        str | None, Field(pattern=r"^[a-zA-Z0-9._-]{1,63}$")
+    ] = None
+    review_settings_scope: Annotated[
+        str | None, Field(pattern=r"^(?:\*|[a-zA-Z0-9._-]{1,63})$")
+    ] = None
+    review_settings_checksum: Annotated[
+        str | None, Field(pattern=r"^[0-9a-f]{64}$")
+    ] = None
+    reason_code: Annotated[str | None, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")] = (
+        None
+    )
+    image_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+    image_size_bytes: Annotated[int | None, Field(gt=0, le=8 * 1024**3)] = None
+    image_id: Annotated[str | None, Field(pattern=r"^sha256:[0-9a-f]{64}$")] = None
+    image_ref: Annotated[
+        str | None, Field(pattern=r"^ditto-screen/[0-9a-f-]{36}:latest$")
+    ] = None
+    image_upload_id: UUID | None = None
+    evidence: Annotated[
+        list[ScreenEvidenceItem] | None,
+        Field(
+            max_length=16,
+            description=(
+                "Bounded public-safe policy evidence trail for operator review. "
+                "Carried over the authenticated screener channel; the platform "
+                "must treat it as display data, not proof."
+            ),
+        ),
+    ] = None
+    finding: Annotated[
+        SourceReviewFinding | None,
+        Field(
+            description=(
+                "Bounded source-review finding. Its canonical digest must equal "
+                "finding_digest, which is bound into the verdict signature."
+            ),
+        ),
+    ] = None
+    review_audit: Annotated[
+        ScreenReviewAudit | None,
+        Field(
+            description=(
+                "Public-safe, digest-bound budget accounting for a terminal "
+                "pass-inconclusive review."
+            )
+        ),
+    ] = None
+    policy_version: Annotated[
+        int,
+        Field(
+            default=1,
+            ge=1,
+            description="Screening policy version bound into the signature.",
+        ),
+    ]
+    detail: Annotated[
+        str,
+        Field(
+            default="",
+            max_length=4000,
+            description=(
+                "Optional reason / build-log tail; the platform must treat it as "
+                "untrusted."
+            ),
+        ),
+    ]
+    build_only: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Echoes the claimed item's build-only mode: this verdict came "
+                "from a mechanical build-only pass that skipped anti-cheat "
+                "review. A build-only verdict can never carry a quarantine "
+                "outcome. Unsigned display/context only; the platform must not "
+                "treat it as proof."
+            ),
+        ),
+    ]
+    deferred_source_review: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Signed echo of a platform-issued score-first mechanical claim. "
+                "The platform must verify it against the immutable attempt marker."
+            ),
+        ),
+    ] = False
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "screener_hotkey": ("5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"),
+                "signature": "ab" * 64,
+                "passed": True,
+                "policy_version": SCREENING_POLICY_VERSION,
+                "detail": "",
+            }
+        }
+    )
+
+    @model_validator(mode="after")
+    def validate_typed_outcome(self) -> ScreenResultRequest:
+        if self.outcome is None:
+            if self.policy_version >= SCREENING_POLICY_VERSION:
+                raise ValueError("policy-v9 result requires typed outcome")
+            if any(
+                value is not None
+                for value in (
+                    self.image_sha256,
+                    self.image_size_bytes,
+                    self.image_id,
+                    self.image_ref,
+                    self.image_upload_id,
+                )
+            ):
+                raise ValueError("legacy result cannot carry screened image metadata")
+            return self
+        if self.passed != (
+            self.outcome
+            in {ScreenResultOutcome.PASS, ScreenResultOutcome.PASS_INCONCLUSIVE}
+        ):
+            raise ValueError("passed must agree with outcome")
+        if (
+            self.outcome
+            in {
+                ScreenResultOutcome.QUARANTINE,
+                ScreenResultOutcome.INCONCLUSIVE,
+                ScreenResultOutcome.PASS_INCONCLUSIVE,
+            }
+            and self.attempt_id is None
+        ):
+            raise ValueError("review outcome requires attempt_id")
+        if self.outcome in {
+            ScreenResultOutcome.QUARANTINE,
+            ScreenResultOutcome.PASS_INCONCLUSIVE,
+        } and (self.manifest_digest is None or self.reason_code is None):
+            raise ValueError("review result requires manifest_digest and reason_code")
+        image_fields = (
+            self.image_sha256,
+            self.image_size_bytes,
+            self.image_id,
+            self.image_ref,
+            self.image_upload_id,
+        )
+        if self.outcome in {
+            ScreenResultOutcome.PASS,
+            ScreenResultOutcome.PASS_INCONCLUSIVE,
+        }:
+            if any(value is None for value in image_fields):
+                raise ValueError("passing policy-v9 result requires screened image")
+        elif any(value is not None for value in image_fields):
+            raise ValueError("screened image metadata requires passing outcome")
+        return self
+
+    @model_validator(mode="after")
+    def validate_review_payloads(self) -> ScreenResultRequest:
+        settings_binding = (
+            self.review_settings_revision,
+            self.review_settings_instance_id,
+            self.review_settings_scope,
+            self.review_settings_checksum,
+        )
+        if any(value is not None for value in settings_binding) and any(
+            value is None for value in settings_binding
+        ):
+            raise ValueError("review settings binding must be complete")
+        if (self.evidence is not None or self.finding is not None) and (
+            self.outcome
+            not in {
+                ScreenResultOutcome.QUARANTINE,
+                ScreenResultOutcome.INCONCLUSIVE,
+                ScreenResultOutcome.PASS_INCONCLUSIVE,
+            }
+        ):
+            raise ValueError("evidence and finding require a review outcome")
+        if self.finding is not None:
+            if self.finding_digest is None:
+                raise ValueError("finding requires finding_digest")
+            if self.finding.canonical_digest() != self.finding_digest:
+                raise ValueError("finding does not match finding_digest")
+        if self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
+            if self.review_audit is None or self.review_audit_digest is None:
+                raise ValueError("pass-inconclusive requires review audit")
+            if self.review_audit.canonical_digest() != self.review_audit_digest:
+                raise ValueError("review audit does not match review_audit_digest")
+        elif self.review_audit is not None or self.review_audit_digest is not None:
+            raise ValueError("review audit requires pass-inconclusive outcome")
+        return self
+
+    @model_validator(mode="after")
+    def validate_build_only(self) -> ScreenResultRequest:
+        if self.deferred_source_review and not self.build_only:
+            raise ValueError("deferred source review requires the mechanical lane")
+        # A historical prerequisite rebuild has already been adjudicated and
+        # cannot create a new quarantine. A fresh deferred admission, however,
+        # must keep concrete cheap behavioral/oracle findings fail-closed.
+        if (
+            self.build_only
+            and not self.deferred_source_review
+            and self.outcome == ScreenResultOutcome.QUARANTINE
+        ):
+            raise ValueError("build-only result cannot carry a quarantine outcome")
+        return self
+
+
+class ScreenResultResponse(BaseModel):
+    """Response returned after a screener verdict is applied."""
+
+    agent_id: Annotated[UUID, Field(description="Echoes the path-param id.")]
+    status: Annotated[
+        AgentStatus, Field(description="Lifecycle state after the verdict.")
+    ]
+    accepted: Annotated[bool, Field(description="True when the verdict was applied.")]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+                "status": "evaluating",
+                "accepted": True,
+            }
+        }
+    )

@@ -90,6 +90,31 @@ def test_platform_change_does_not_release_validator_stack(
     ) == {"platform"}
 
 
+def test_screener_change_does_not_release_validator_stack(
+    components, ignored_paths
+) -> None:
+    assert selected(
+        components, ignored_paths, "workers/screener/ditto_screener/worker.py"
+    ) == {"screener"}
+
+
+def test_screening_contract_change_propagates_to_every_consumer(
+    components, ignored_paths
+) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "packages/ditto-screening-protocol/ditto_screening_protocol/models.py",
+    ) == {
+        "screening_protocol",
+        "miner_cli",
+        "validator",
+        "validator_stack",
+        "platform",
+        "screener",
+    }
+
+
 def test_shared_contract_change_releases_both_surfaces(
     components, ignored_paths
 ) -> None:

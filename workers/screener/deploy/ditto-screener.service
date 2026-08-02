@@ -1,0 +1,26 @@
+[Unit]
+Description=Ditto SN118 screener worker (queue -> build gate -> verdict)
+Documentation=https://github.com/ditto-assistant/ditto-subnet
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=deploy
+Group=ditto
+WorkingDirectory=/opt/ditto/screener/src/workers/screener
+EnvironmentFile=/opt/ditto/screener/screener.env
+Environment=HOME=/opt/ditto/screener
+ExecStart=/opt/ditto/screener/src/workers/screener/.venv/bin/ditto-screener
+Restart=always
+RestartSec=15
+KillMode=mixed
+TimeoutStopSec=35min
+StandardOutput=append:/opt/ditto/logs/ditto-screener.log
+StandardError=append:/opt/ditto/logs/ditto-screener.log
+LimitNOFILE=65536
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

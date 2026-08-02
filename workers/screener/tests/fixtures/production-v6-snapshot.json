@@ -1,0 +1,25 @@
+{
+  "captured_at": "2026-07-14T11:15:55Z",
+  "release_sha": "05aaf05819a0600d94524b74227b2a8deca327d7",
+  "release": "v0.4.2",
+  "protocol_version": 2,
+  "screening_policy_version": 6,
+  "queue": {
+    "waiting_screening": 24,
+    "screening": 1,
+    "waiting_validator": 9,
+    "evaluating": 1,
+    "rejected": 6
+  },
+  "active_agent_id": "2cc8ee8c-c7ff-4e4a-8c7c-6001aec5f53c",
+  "rust_contract_rejections": [
+    {"agent_id": "4f2a1309-f763-4d40-9326-9eb7d13339e8", "score_count": 1},
+    {"agent_id": "09898a18-20f2-4d4e-aa88-a0f4e1568d48", "score_count": 1},
+    {"agent_id": "977dd6c7-09d2-44b9-86ea-c246bfc8adaa", "score_count": 1},
+    {"agent_id": "13082ef8-fe3e-4c24-84f3-b2a47dbdfa5c", "score_count": 1},
+    {"agent_id": "efc45418-12a6-444d-aa65-4d4ad4ff2fb3", "score_count": 0},
+    {"agent_id": "57c9a709-07a4-43aa-93b7-269e787deea6", "score_count": 0}
+  ],
+  "public_reason": "Submission does not satisfy the Rust harness contract",
+  "interpretation": "These artifacts failed the objective v6 Rust contract. This is not evidence of regex-semantic or causal model-use detection."
+}

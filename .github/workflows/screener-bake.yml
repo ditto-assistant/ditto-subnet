@@ -1,0 +1,61 @@
+name: Bake screener fleet image
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 1"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: bake-screener-fleet-image
+  cancel-in-progress: false
+
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: prod
+    env:
+      GCP_PROJECT: ditto-app-dev
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify bake configuration
+        env:
+          WIF: ${{ secrets.GCP_WIF_PROVIDER }}
+          SA: ${{ secrets.GCP_SCREENER_BAKE_SA }}
+        run: |
+          : "${WIF:?GCP_WIF_PROVIDER repo secret is not set}"
+          : "${SA:?GCP_SCREENER_BAKE_SA repo secret is not set}"
+
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SCREENER_BAKE_SA }}
+
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+
+      - uses: hashicorp/setup-packer@c53928b6ab74a1fe01b014715f51f43e5d1e9545 # main
+        with:
+          version: latest
+
+      - name: Package the sparse screener checkout for baking
+        run: >-
+          tar czf /tmp/src.tgz
+          --exclude=.venv --exclude=__pycache__ --exclude='*.pyc'
+          --exclude=.pytest_cache --exclude=.ruff_cache
+          .git workers/screener packages/ditto-screening-protocol
+
+      - name: Build the golden image
+        run: |
+          packer init workers/screener/packer/
+          packer build \
+            -var "project_id=${GCP_PROJECT}" \
+            -var "src_tarball=/tmp/src.tgz" \
+            workers/screener/packer/screener-fleet.pkr.hcl

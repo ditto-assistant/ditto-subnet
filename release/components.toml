@@ -22,8 +22,15 @@ ignored_paths = [
   "tests/**",
 ]
 
+[components.screening_protocol]
+description = "Shared screener wire and signing protocol"
+paths = [
+  "packages/ditto-screening-protocol/**",
+]
+
 [components.miner_cli]
 description = "Miner CLI distribution"
+depends_on = ["screening_protocol"]
 paths = [
   "ditto/miner_cli/**",
   "ditto/api_models/__init__.py",
@@ -36,6 +43,7 @@ paths = [
 
 [components.validator]
 description = "Validator worker image"
+depends_on = ["screening_protocol"]
 paths = [
   "Dockerfile",
   "ditto/chain/**",
@@ -82,8 +90,16 @@ paths = [
 
 [components.platform]
 description = "Subnet API and control plane"
+depends_on = ["screening_protocol"]
 paths = [
   "apps/platform/**",
+]
+
+[components.screener]
+description = "Screening worker"
+depends_on = ["screening_protocol"]
+paths = [
+  "workers/screener/**",
 ]
 
 [components.validator_stack]

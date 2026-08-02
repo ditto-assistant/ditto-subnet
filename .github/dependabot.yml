@@ -47,3 +47,18 @@ updates:
     directory: /apps/platform/docker/embedder
     schedule:
       interval: weekly
+
+  - package-ecosystem: pip
+    directory: /workers/screener
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /workers/screener
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /packages/ditto-screening-protocol
+    schedule:
+      interval: weekly
