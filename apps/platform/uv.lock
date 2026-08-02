@@ -788,7 +788,7 @@ requires-dist = [
     { name = "bittensor", specifier = ">=10.2.1" },
     { name = "bittensor-pylon-client", git = "https://github.com/bittensor-church/bittensor-pylon?subdirectory=pylon_client" },
     { name = "cryptography", specifier = ">=42" },
-    { name = "ditto-screening-protocol", git = "https://github.com/ditto-assistant/ditto-screener.git?subdirectory=packages%2Fditto-screening-protocol&rev=082c5304c9dd591cc0934149f4a4ceb176d434c5" },
+    { name = "ditto-screening-protocol", directory = "../../packages/ditto-screening-protocol" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "prometheus-client", specifier = ">=0.20" },
@@ -813,10 +813,13 @@ dev = [
 [[package]]
 name = "ditto-screening-protocol"
 version = "0.13.0"
-source = { git = "https://github.com/ditto-assistant/ditto-screener.git?subdirectory=packages%2Fditto-screening-protocol&rev=082c5304c9dd591cc0934149f4a4ceb176d434c5#082c5304c9dd591cc0934149f4a4ceb176d434c5" }
+source = { directory = "../../packages/ditto-screening-protocol" }
 dependencies = [
     { name = "pydantic" },
 ]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2" }]
 
 [[package]]
 name = "docker"
