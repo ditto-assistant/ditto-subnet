@@ -44,6 +44,18 @@ class ScreenerConfig:
     screener_mnemonic: str | None
     """Alternative signing source: a hotkey mnemonic (secret). Prefer a wallet."""
 
+    node_id: str | None
+    """Provider-neutral enrolled node identity, or null for legacy workers."""
+
+    node_provider: str | None
+    """Capacity provider recorded during enrollment."""
+
+    node_provider_resource_id: str | None
+    """Opaque provider workload/instance identity recorded during enrollment."""
+
+    node_credential_file: str | None
+    """Mode-0600 rotating credential store for an enrolled worker."""
+
     netuid: int
     """Subnet netuid (118 for Ditto)."""
 
@@ -236,6 +248,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         wallet_name=os.environ.get("SCREENER_WALLET_NAME") or None,
         wallet_hotkey=os.environ.get("SCREENER_WALLET_HOTKEY") or None,
         screener_mnemonic=os.environ.get("SCREENER_MNEMONIC") or None,
+        node_id=os.environ.get("SCREENER_NODE_ID") or None,
+        node_provider=os.environ.get("SCREENER_NODE_PROVIDER") or None,
+        node_provider_resource_id=(
+            os.environ.get("SCREENER_NODE_PROVIDER_RESOURCE_ID") or None
+        ),
+        node_credential_file=os.environ.get("SCREENER_NODE_CREDENTIAL_FILE") or None,
         netuid=_parse_int("NETUID", os.environ.get("NETUID", "118")),
         docker_bin=os.environ.get("SCREENER_DOCKER_BIN", "docker"),
         docker_host=(

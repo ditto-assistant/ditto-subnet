@@ -96,7 +96,17 @@ def test_screener_change_does_not_release_validator_stack(
 ) -> None:
     assert selected(
         components, ignored_paths, "workers/screener/ditto_screener/worker.py"
-    ) == {"screener"}
+    ) == {"screener", "screener_orchestrator"}
+
+
+def test_orchestrator_change_is_isolated_from_validator_release(
+    components, ignored_paths
+) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "services/screener-orchestrator/screener_capacity/controller.py",
+    ) == {"screener_orchestrator"}
 
 
 def test_screening_contract_change_propagates_to_every_consumer(
@@ -113,6 +123,7 @@ def test_screening_contract_change_propagates_to_every_consumer(
         "validator_stack",
         "platform",
         "screener",
+        "screener_orchestrator",
     }
 
 

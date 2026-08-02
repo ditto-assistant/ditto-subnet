@@ -47,6 +47,18 @@ class ScreenerAuthConfig:
     api_token: str | None
     """Bearer token required on every screener request."""
 
+    controller_api_token: str | None = None
+    """Least-privilege token allowed to reconcile nodes and capacity only."""
+
+    bootstrap_ttl_seconds: int = 600
+    """Lifetime of a single-use node registration capability."""
+
+    node_token_ttl_seconds: int = 6 * 60 * 60
+    """Lifetime of a rotating per-node bearer token."""
+
+    controller_lease_seconds: int = 180
+    """Fencing lease renewed by the single normal capacity writer."""
+
     @property
     def enabled(self) -> bool:
         return self.hotkey is not None and self.api_token is not None
@@ -373,6 +385,23 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     )
     screener_hotkey = os.environ.get("SCREENER_HOTKEY") or None
     screener_api_token = os.environ.get("SCREENER_API_TOKEN") or None
+    screener_controller_api_token = (
+        os.environ.get("SCREENER_CONTROLLER_API_TOKEN") or None
+    )
+    try:
+        screener_bootstrap_ttl_seconds = int(
+            os.environ.get("SCREENER_BOOTSTRAP_TTL_SECONDS", "600")
+        )
+        screener_node_token_ttl_seconds = int(
+            os.environ.get("SCREENER_NODE_TOKEN_TTL_SECONDS", str(6 * 60 * 60))
+        )
+        screener_controller_lease_seconds = int(
+            os.environ.get("SCREENER_CONTROLLER_LEASE_SECONDS", "180")
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "screener bootstrap, node token, and controller lease TTLs must be integers"
+        ) from error
     minimum_validator_version = (
         os.environ.get("DITTO_MIN_VALIDATOR_SOFTWARE_VERSION", "0.7.0").strip() or None
     )
@@ -619,6 +648,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         screener_auth=ScreenerAuthConfig(
             hotkey=screener_hotkey,
             api_token=screener_api_token,
+            controller_api_token=screener_controller_api_token,
+            bootstrap_ttl_seconds=screener_bootstrap_ttl_seconds,
+            node_token_ttl_seconds=screener_node_token_ttl_seconds,
+            controller_lease_seconds=screener_controller_lease_seconds,
         ),
         validator_names=parse_validator_names_config_from_env(),
         validator_compatibility=ValidatorCompatibilityConfig(
@@ -660,6 +693,22 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError("SCREENER_HOTKEY is not a valid SS58 address")
     if auth.api_token is not None and len(auth.api_token) < 32:
         raise ApiServerConfigError("SCREENER_API_TOKEN must be at least 32 characters")
+    if auth.controller_api_token is not None and len(auth.controller_api_token) < 32:
+        raise ApiServerConfigError(
+            "SCREENER_CONTROLLER_API_TOKEN must be at least 32 characters"
+        )
+    if not 60 <= auth.bootstrap_ttl_seconds <= 3600:
+        raise ApiServerConfigError(
+            "SCREENER_BOOTSTRAP_TTL_SECONDS must be between 60 and 3600"
+        )
+    if not 900 <= auth.node_token_ttl_seconds <= 86_400:
+        raise ApiServerConfigError(
+            "SCREENER_NODE_TOKEN_TTL_SECONDS must be between 900 and 86400"
+        )
+    if not 60 <= auth.controller_lease_seconds <= 900:
+        raise ApiServerConfigError(
+            "SCREENER_CONTROLLER_LEASE_SECONDS must be between 60 and 900"
+        )
     if config.admin_api_token is not None and len(config.admin_api_token) < 32:
         raise ApiServerConfigError(
             "DITTO_ADMIN_API_TOKEN must be at least 32 characters"

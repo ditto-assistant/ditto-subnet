@@ -99,7 +99,7 @@ class ScreenerWorker:
         self._gate = gate
         self._keypair = keypair
         self._system_metrics = system_metrics
-        self._instance_id = _resolve_instance_id()
+        self._instance_id = config.node_id or _resolve_instance_id()
         self._active_agent_id: UUID | None = None
         self._active_progress_stage: ScreenerProgressStage | None = None
         self._job_started_at: int | None = None

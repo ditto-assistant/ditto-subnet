@@ -12,12 +12,19 @@ import asyncio
 import contextlib
 import logging
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
+from ditto_screener.enrollment import (
+    NodeCredential,
+    load_node_credential,
+    refresh_signing_message,
+    store_node_credential,
+)
 from ditto_screener.errors import PlatformError
 from ditto_screener.heartbeat import (
     ScreenerHeartbeatRequest,
@@ -70,7 +77,13 @@ _TRANSIENT_VERDICT_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 class PlatformClient:
     """HTTP client for one platform base URL, screener-flavoured."""
 
-    def __init__(self, config: ScreenerConfig, client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        config: ScreenerConfig,
+        client: httpx.AsyncClient,
+        *,
+        keypair: Any | None = None,
+    ) -> None:
         self._config = config
         self._client = client
         self._base = config.platform_api_url.rstrip("/")
@@ -78,6 +91,8 @@ class PlatformClient:
             "Authorization": f"Bearer {config.api_token}",
             "X-Screener-Hotkey": config.screener_hotkey,
         }
+        self._keypair = keypair
+        self._credential_lock = asyncio.Lock()
         self._review_settings_cache = ReviewSettingsCache(
             config.review_settings_cache_file
         )
@@ -86,6 +101,100 @@ class PlatformClient:
         self._review_settings_source: Literal["platform", "cache", "bootstrap"] = (
             "bootstrap"
         )
+
+    async def _auth_headers(self) -> dict[str, str]:
+        """Return current auth, rotating enrolled-node authority before expiry."""
+        path = self._config.node_credential_file
+        if path is None:
+            return dict(self._headers)
+        async with self._credential_lock:
+            credential = load_node_credential(path)
+            expires_at = credential.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if expires_at > datetime.now(UTC) + timedelta(minutes=15):
+                self._headers["Authorization"] = f"Bearer {credential.api_token}"
+                return dict(self._headers)
+            if self._keypair is None:
+                raise PlatformError(
+                    "enrolled node cannot rotate without its signing key"
+                )
+            refresh_id = credential.pending_refresh_id or uuid4()
+            if credential.pending_refresh_id is None:
+                credential = credential.model_copy(
+                    update={"pending_refresh_id": refresh_id}
+                )
+                store_node_credential(path, credential)
+            timestamp = int(time.time())
+            signature = self._keypair.sign(
+                refresh_signing_message(
+                    node_id=credential.node_id,
+                    screener_hotkey=credential.screener_hotkey,
+                    timestamp=timestamp,
+                    refresh_id=refresh_id,
+                )
+            ).hex()
+            url = f"{self._base}{_PREFIX}/nodes/refresh"
+            response: httpx.Response | None = None
+            try:
+                for attempt in range(3):
+                    try:
+                        response = await self._client.post(
+                            url,
+                            json={
+                                "node_id": credential.node_id,
+                                "screener_hotkey": credential.screener_hotkey,
+                                "timestamp": timestamp,
+                                "signature": signature,
+                                "refresh_id": str(refresh_id),
+                            },
+                            headers={
+                                "Authorization": f"Bearer {credential.api_token}",
+                                "X-Screener-Hotkey": credential.screener_hotkey,
+                            },
+                        )
+                    except httpx.HTTPError:
+                        if attempt == 2:
+                            raise
+                        continue
+                    if response.status_code not in {
+                        408,
+                        425,
+                        429,
+                        500,
+                        502,
+                        503,
+                        504,
+                    }:
+                        break
+            except httpx.HTTPError as error:
+                raise PlatformError(
+                    "screener node credential refresh failed"
+                ) from error
+            if response is None:
+                raise PlatformError("screener node credential refresh failed")
+            if response.status_code != 200:
+                raise PlatformError(
+                    "screener node credential refresh rejected "
+                    f"({response.status_code})"
+                )
+            try:
+                body = response.json()
+                rotated = NodeCredential.model_validate(
+                    {
+                        **credential.model_dump(mode="python"),
+                        "api_token": body["api_token"],
+                        "expires_at": body["expires_at"],
+                        "pending_refresh_id": None,
+                    }
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise PlatformError(
+                    "screener node credential refresh response is invalid"
+                ) from error
+            store_node_credential(path, rotated)
+            self._headers["Authorization"] = f"Bearer {rotated.api_token}"
+            return dict(self._headers)
 
     @property
     def review_settings_source(self) -> Literal["platform", "cache", "bootstrap"]:
@@ -103,7 +212,9 @@ class PlatformClient:
         url = f"{self._base}{_PREFIX}/review-settings"
         try:
             response = await self._client.get(
-                url, params={"instance_id": instance_id}, headers=self._headers
+                url,
+                params={"instance_id": instance_id},
+                headers=await self._auth_headers(),
             )
             if response.status_code != 200:
                 raise PlatformError(
@@ -153,7 +264,9 @@ class PlatformClient:
         url = f"{self._base}{_PREFIX}/heartbeat"
         try:
             resp = await self._client.post(
-                url, json=request.model_dump(mode="json"), headers=self._headers
+                url,
+                json=request.model_dump(mode="json"),
+                headers=await self._auth_headers(),
             )
         except httpx.HTTPError as error:
             raise PlatformError(f"screener heartbeat failed: {error}") from error
@@ -170,7 +283,9 @@ class PlatformClient:
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/shadow-review"
         try:
             resp = await self._client.post(
-                url, json=request.model_dump(mode="json"), headers=self._headers
+                url,
+                json=request.model_dump(mode="json"),
+                headers=await self._auth_headers(),
             )
         except httpx.HTTPError as error:
             raise PlatformError(f"shadow review submission failed: {error}") from error
@@ -185,7 +300,7 @@ class PlatformClient:
         url = f"{self._base}{_PREFIX}/queue"
         try:
             resp = await self._client.get(
-                url, params={"limit": 1}, headers=self._headers
+                url, params={"limit": 1}, headers=await self._auth_headers()
             )
         except httpx.HTTPError as e:
             raise PlatformError(f"screening policy check failed: {e}") from e
@@ -201,7 +316,9 @@ class PlatformClient:
         url = f"{self._base}{_PREFIX}/claim"
         params = {"limit": 1, "policy_version": policy_version}
         try:
-            resp = await self._client.post(url, params=params, headers=self._headers)
+            resp = await self._client.post(
+                url, params=params, headers=await self._auth_headers()
+            )
         except httpx.HTTPError as e:
             raise PlatformError(f"screening claim failed: {e}") from e
         if resp.status_code != 200:
@@ -221,7 +338,9 @@ class PlatformClient:
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/artifact"
         params = {"attempt_id": str(attempt_id)} if attempt_id is not None else None
         try:
-            resp = await self._client.get(url, headers=self._headers, params=params)
+            resp = await self._client.get(
+                url, headers=await self._auth_headers(), params=params
+            )
         except httpx.HTTPError as e:
             raise PlatformError(f"artifact fetch failed: {e}") from e
         if resp.status_code != 200:
@@ -291,7 +410,9 @@ class PlatformClient:
         body = payload.model_dump(mode="json")
         for attempt in range(len(_VERDICT_RETRY_DELAYS_SECONDS) + 1):
             try:
-                resp = await self._client.post(url, json=body, headers=self._headers)
+                resp = await self._client.post(
+                    url, json=body, headers=await self._auth_headers()
+                )
             except httpx.HTTPError as error:
                 if attempt >= len(_VERDICT_RETRY_DELAYS_SECONDS):
                     raise PlatformError(f"verdict submit failed: {error}") from error
@@ -349,7 +470,7 @@ class PlatformClient:
                 base_url,
                 operation="image upload initiate",
                 json=request.model_dump(mode="json"),
-                headers=self._headers,
+                headers=await self._auth_headers(),
             )
             upload = ScreenedImageUploadResponse.model_validate(response.json())
             completed: list[ScreenedImageCompletedPart] = []
@@ -374,7 +495,7 @@ class PlatformClient:
                         f"{base_url}/{upload.image_upload_id}/part",
                         operation=f"image part {part_number} mint",
                         json=part_request.model_dump(mode="json"),
-                        headers=self._headers,
+                        headers=await self._auth_headers(),
                     )
                     part_upload = ScreenedImagePartUploadResponse.model_validate(
                         part_response.json()
@@ -417,7 +538,7 @@ class PlatformClient:
                 f"{base_url}/{upload.image_upload_id}/complete",
                 operation="image upload complete",
                 json=complete.model_dump(mode="json"),
-                headers=self._headers,
+                headers=await self._auth_headers(),
             )
             ScreenedImageUploadCompleteResponse.model_validate(
                 completed_response.json()
@@ -490,7 +611,7 @@ class PlatformClient:
                 f"{base_url}/{upload.image_upload_id}/abort",
                 operation="image upload abort",
                 json=request.model_dump(mode="json"),
-                headers=self._headers,
+                headers=await self._auth_headers(),
             )
             ScreenedImageUploadAbortResponse.model_validate(response.json())
         except PlatformError as error:

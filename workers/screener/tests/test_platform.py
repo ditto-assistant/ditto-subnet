@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -12,6 +13,11 @@ import pytest
 
 from ditto_screener import platform as platform_module
 from ditto_screener.config import ScreenerConfig
+from ditto_screener.enrollment import (
+    NodeCredential,
+    load_node_credential,
+    store_node_credential,
+)
 from ditto_screener.errors import PlatformError
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
 from ditto_screener.platform import PlatformClient
@@ -95,6 +101,76 @@ async def test_policy_preflight_is_read_only(
     async with http:
         required = await client.get_required_policy_version()
     assert required == SCREENING_POLICY_VERSION
+
+
+async def test_enrolled_node_rotates_expiring_authority_atomically(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    credential_file = tmp_path / "node.json"
+    old_token = "old-node-token-at-least-43-characters-xxxxxxxx"
+    new_token = "new-node-token-at-least-43-characters-xxxxxxxx"
+    credential = NodeCredential(
+        environment="test",
+        node_id="ditto-screener-test",
+        provider="test",
+        provider_resource_id="resource-test",
+        screener_hotkey=make_config().screener_hotkey,
+        mnemonic=(
+            "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+        ),
+        api_token=old_token,
+        expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    store_node_credential(credential_file, credential)
+    calls: list[str] = []
+    refresh_attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal refresh_attempts
+        calls.append(request.url.path)
+        if request.url.path.endswith("/nodes/refresh"):
+            refresh_attempts += 1
+            assert request.headers["Authorization"] == f"Bearer {old_token}"
+            body = json.loads(request.content)
+            assert body["refresh_id"]
+            if refresh_attempts == 1:
+                raise httpx.ReadError("response lost", request=request)
+            return httpx.Response(
+                200,
+                json={
+                    "node_id": credential.node_id,
+                    "screener_hotkey": credential.screener_hotkey,
+                    "api_token": new_token,
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=6)).isoformat(),
+                },
+            )
+        assert request.headers["Authorization"] == f"Bearer {new_token}"
+        return httpx.Response(
+            200,
+            json={
+                "items": [],
+                "count": 0,
+                "required_policy_version": SCREENING_POLICY_VERSION,
+            },
+        )
+
+    class Keypair:
+        def sign(self, _message: bytes) -> bytes:
+            return b"a" * 64
+
+    cfg = make_config(node_credential_file=str(credential_file))
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = PlatformClient(cfg, http, keypair=Keypair())
+    async with http:
+        assert await client.get_required_policy_version() == SCREENING_POLICY_VERSION
+    assert calls == [
+        "/api/v1/screener/nodes/refresh",
+        "/api/v1/screener/nodes/refresh",
+        "/api/v1/screener/queue",
+    ]
+    stored = load_node_credential(credential_file)
+    assert stored.api_token == new_token
+    assert stored.pending_refresh_id is None
 
 
 async def test_submit_heartbeat_matches_open_platform_contract(

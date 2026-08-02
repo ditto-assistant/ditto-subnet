@@ -16,6 +16,7 @@ import signal
 import httpx
 
 from ditto_screener.config import parse_screener_config_from_env
+from ditto_screener.enrollment import ensure_node_credentials_from_env
 from ditto_screener.gate import BuildGate
 from ditto_screener.heartbeat import SystemMetricsCollector
 from ditto_screener.l2_review import L2_HARNESS_REVISION, L2_PROMPT_REVISION
@@ -45,6 +46,7 @@ def _install_signal_handlers(
 
 
 async def _amain() -> int:
+    await ensure_node_credentials_from_env()
     config = parse_screener_config_from_env()
     keypair = load_screener_keypair(config)
     # load_screener_keypair imports bittensor, which clamps our loggers to
@@ -68,7 +70,7 @@ async def _amain() -> int:
         readiness.start()
 
     async with httpx.AsyncClient(timeout=config.http_timeout_seconds) as http:
-        platform = PlatformClient(config, http)
+        platform = PlatformClient(config, http, keypair=keypair)
         policy = load_policy_engine(
             config.policy_manifest_file, l2_mode=config.l2_review_mode
         )

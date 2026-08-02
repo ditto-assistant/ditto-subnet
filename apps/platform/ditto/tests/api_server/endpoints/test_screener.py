@@ -632,6 +632,7 @@ _AUTH_HEADER = {
     "X-Screener-Hotkey": _SCREENER_HOTKEY,
 }
 _CLAIM_URL = f"/api/v1/screener/claim?policy_version={SCREENING_POLICY_VERSION}"
+_CONTROLLER_TOKEN = "test-controller-token-at-least-32-characters"
 
 
 def _bounded_review_audit(*, steps_used: int = 6) -> ScreenReviewAudit:
@@ -656,6 +657,277 @@ def _bounded_review_audit(*, steps_used: int = 6) -> ScreenReviewAudit:
 @pytest.fixture(autouse=True)
 def _authenticate_screener_client(client: httpx.AsyncClient) -> None:
     client.headers.update(_AUTH_HEADER)
+
+
+def _capacity_payload(epoch: str) -> dict[str, object]:
+    return {
+        "environment": "prod",
+        "controller_epoch": epoch,
+        "runnable_backlog": 0,
+        "active_leases": 0,
+        "desired_slots": 0,
+        "global_cap": 6,
+        "provider_ready": True,
+        "targon_capability": "nogo",
+        "targon_available": 6,
+        "targon_healthy": 0,
+        "targon_pending": 0,
+        "targon_draining": 0,
+        "gce_target": 0,
+        "gce_healthy": 0,
+        "gce_pending": 0,
+        "gce_draining": 0,
+        "fallback_reason": "ROOTLESSKIT_OPERATION_NOT_PERMITTED",
+        "events": [],
+    }
+
+
+class TestFederatedScreenerNodes:
+    async def test_controller_lease_fences_other_epochs_and_bootstraps_node(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        first = await client.put(
+            "/api/v1/screener/controller/capacity",
+            headers=controller_headers,
+            json=_capacity_payload("prod:first"),
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["controller_lease_expires_at"]
+
+        fenced = await client.put(
+            "/api/v1/screener/controller/capacity",
+            headers=controller_headers,
+            json=_capacity_payload("prod:second"),
+        )
+        assert fenced.status_code == 409
+        still_owned = await client.post(
+            "/api/v1/screener/controller/fence",
+            headers=controller_headers,
+            json={"environment": "prod", "controller_epoch": "prod:first"},
+        )
+        assert still_owned.status_code == 204
+
+        node_id = "ditto-screener-prod-test"
+        resource_id = "targon-workload-test"
+        grant = await client.post(
+            "/api/v1/screener/controller/bootstrap-grants",
+            headers=controller_headers,
+            json={
+                "environment": "prod",
+                "node_id": node_id,
+                "provider": "targon",
+                "provider_resource_id": resource_id,
+                "controller_epoch": "prod:first",
+            },
+        )
+        assert grant.status_code == 200, grant.text
+
+        node_keypair = bittensor.Keypair.create_from_uri("//Bob")
+        registration_id = uuid4()
+        timestamp = int(datetime.now(UTC).timestamp())
+        message = (
+            "ditto-screener-node-register:v1:"
+            f"prod:{node_id}:targon:{resource_id}:"
+            f"{node_keypair.ss58_address}:{timestamp}:{registration_id}"
+        )
+        registration = await client.post(
+            "/api/v1/screener/nodes/register",
+            headers={
+                "Authorization": f"Bootstrap {grant.json()['registration_token']}"
+            },
+            json={
+                "environment": "prod",
+                "node_id": node_id,
+                "provider": "targon",
+                "provider_resource_id": resource_id,
+                "screener_hotkey": node_keypair.ss58_address,
+                "timestamp": timestamp,
+                "signature": node_keypair.sign(message.encode()).hex(),
+                "registration_id": str(registration_id),
+            },
+        )
+        assert registration.status_code == 200, registration.text
+        node_token = registration.json()["api_token"]
+        registration_replay = await client.post(
+            "/api/v1/screener/nodes/register",
+            headers={
+                "Authorization": f"Bootstrap {grant.json()['registration_token']}"
+            },
+            json={
+                "environment": "prod",
+                "node_id": node_id,
+                "provider": "targon",
+                "provider_resource_id": resource_id,
+                "screener_hotkey": node_keypair.ss58_address,
+                "timestamp": timestamp,
+                "signature": node_keypair.sign(message.encode()).hex(),
+                "registration_id": str(registration_id),
+            },
+        )
+        assert registration_replay.status_code == 200
+        assert registration_replay.json()["api_token"] == node_token
+        readiness = await client.get(
+            "/api/v1/screener/controller/nodes?environment=prod",
+            headers=controller_headers,
+        )
+        assert readiness.status_code == 200
+        assert readiness.json()["nodes"][0]["ready"] is False
+        assert readiness.json()["nodes"][0]["active_lease"] is False
+
+        heartbeat_timestamp = int(datetime.now(UTC).timestamp())
+        heartbeat_message = (
+            "ditto-screener-heartbeat:v3:"
+            f"{node_keypair.ss58_address}:0.4.2:3:{SCREENING_POLICY_VERSION}:"
+            f"polling::{node_id}:-:-:{heartbeat_timestamp}"
+        ).encode()
+        node_headers = {
+            "Authorization": f"Bearer {node_token}",
+            "X-Screener-Hotkey": node_keypair.ss58_address,
+        }
+        heartbeat_response = await client.post(
+            "/api/v1/screener/heartbeat",
+            headers=node_headers,
+            json={
+                "screener_hotkey": node_keypair.ss58_address,
+                "software_version": "0.4.2",
+                "protocol_version": 3,
+                "policy_version": SCREENING_POLICY_VERSION,
+                "state": "polling",
+                "instance_id": node_id,
+                "timestamp": heartbeat_timestamp,
+                "signature": node_keypair.sign(heartbeat_message).hex(),
+            },
+        )
+        assert heartbeat_response.status_code == 200, heartbeat_response.text
+        readiness = await client.get(
+            "/api/v1/screener/controller/nodes?environment=prod",
+            headers=controller_headers,
+        )
+        assert readiness.json()["nodes"][0]["ready"] is True
+
+        node_queue = await client.get(
+            "/api/v1/screener/queue",
+            headers=node_headers,
+        )
+        assert node_queue.status_code == 200, node_queue.text
+
+        refresh_id = uuid4()
+        refresh_timestamp = int(datetime.now(UTC).timestamp())
+        refresh_message = (
+            "ditto-screener-node-refresh:v1:"
+            f"{node_id}:{node_keypair.ss58_address}:{refresh_timestamp}:{refresh_id}"
+        ).encode()
+        refresh_payload = {
+            "node_id": node_id,
+            "screener_hotkey": node_keypair.ss58_address,
+            "timestamp": refresh_timestamp,
+            "signature": node_keypair.sign(refresh_message).hex(),
+            "refresh_id": str(refresh_id),
+        }
+        refresh = await client.post(
+            "/api/v1/screener/nodes/refresh",
+            headers=node_headers,
+            json=refresh_payload,
+        )
+        assert refresh.status_code == 200, refresh.text
+        rotated_token = refresh.json()["api_token"]
+        assert rotated_token != node_token
+
+        # A lost response can be retried with the immediately prior bearer and
+        # the same signed request identity; it returns the same new authority.
+        refresh_replay = await client.post(
+            "/api/v1/screener/nodes/refresh",
+            headers=node_headers,
+            json=refresh_payload,
+        )
+        assert refresh_replay.status_code == 200, refresh_replay.text
+        assert refresh_replay.json()["api_token"] == rotated_token
+
+        different_refresh_id = uuid4()
+        different_message = (
+            "ditto-screener-node-refresh:v1:"
+            f"{node_id}:{node_keypair.ss58_address}:{refresh_timestamp}:"
+            f"{different_refresh_id}"
+        ).encode()
+        stale_authority = await client.post(
+            "/api/v1/screener/nodes/refresh",
+            headers=node_headers,
+            json={
+                **refresh_payload,
+                "refresh_id": str(different_refresh_id),
+                "signature": node_keypair.sign(different_message).hex(),
+            },
+        )
+        assert stale_authority.status_code == 401
+
+        replay = await client.post(
+            "/api/v1/screener/nodes/register",
+            headers={
+                "Authorization": f"Bootstrap {grant.json()['registration_token']}"
+            },
+            json={
+                "environment": "prod",
+                "node_id": node_id,
+                "provider": "targon",
+                "provider_resource_id": resource_id,
+                "screener_hotkey": node_keypair.ss58_address,
+                "timestamp": timestamp,
+                "signature": node_keypair.sign(message.encode()).hex(),
+                "registration_id": str(registration_id),
+            },
+        )
+        # Enrollment recovery closes once the node has successfully rotated;
+        # the consumed bootstrap token cannot recover an older authority.
+        assert replay.status_code == 401
+
+    async def test_watchdog_is_quiet_while_controller_lease_is_fresh(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        missing = await client.get(
+            "/api/v1/public/screener-capacity-watchdog?environment=prod"
+        )
+        assert missing.status_code == 200
+        assert missing.json()["activate_fallback"] is True
+
+        capacity = await client.put(
+            "/api/v1/screener/controller/capacity",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json=_capacity_payload("prod:first"),
+        )
+        assert capacity.status_code == 200, capacity.text
+        fresh = await client.get(
+            "/api/v1/public/screener-capacity-watchdog?environment=prod"
+        )
+        assert fresh.status_code == 200
+        assert fresh.json() == {
+            "generated_at": fresh.json()["generated_at"],
+            "controller_stale": False,
+            "activate_fallback": False,
+            "reason": "controller_fresh",
+        }
 
 
 # --- Queue -----------------------------------------------------------------

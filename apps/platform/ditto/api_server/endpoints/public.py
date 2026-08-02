@@ -106,6 +106,7 @@ from ditto.api_models import (
     PublicScreenerHeartbeat,
     PublicScreenerHeartbeatsResponse,
     PublicScreenerProgress,
+    PublicScreenerWatchdogResponse,
     PublicScreeningAttempt,
     PublicScreeningDispute,
     PublicScreeningReviewEvidence,
@@ -208,6 +209,8 @@ from ditto.db.models import (
     ConfirmationScore,
     InferenceGrant,
     Score,
+    ScreenerCapacitySnapshot,
+    ScreenerNode,
     ScreeningDispute,
     ScreeningQuarantine,
     ValidatorTicket,
@@ -3195,6 +3198,9 @@ async def screeners(
     response.headers["Cache-Control"] = _CACHE_CONTROL
     now = datetime.now(UTC)
     rows = await list_screener_heartbeats(session)
+    enrolled_nodes = {
+        row.screener_hotkey: row for row in await session.scalars(select(ScreenerNode))
+    }
     active_ids = [
         row.active_agent_id
         for row in rows
@@ -3209,6 +3215,7 @@ async def screeners(
     }
     entries = []
     for row in rows:
+        enrolled_node = enrolled_nodes.get(row.screener_hotkey)
         seen_at = cast(datetime, _aware(row.seen_at))
         metrics = _screener_system_metrics(row.system_metrics)
         online, availability, health = _fleet_classification(
@@ -3250,6 +3257,15 @@ async def screeners(
             PublicScreenerHeartbeat(
                 instance_id=row.instance_id,
                 screener_hotkey=row.screener_hotkey,
+                provider=cast(
+                    Literal["gcp", "targon", "hetzner", "home", "test"],
+                    enrolled_node.provider if enrolled_node is not None else "gcp",
+                ),
+                node_status=cast(
+                    Literal["active", "draining", "quarantined", "revoked"],
+                    enrolled_node.status if enrolled_node is not None else "active",
+                ),
+                capacity=(enrolled_node.capacity if enrolled_node is not None else 1),
                 software_version=row.software_version,
                 protocol_version=row.protocol_version,
                 policy_version=row.policy_version,
@@ -4072,6 +4088,38 @@ async def activity(
         ath_review_composite=ath_composite,
         retired_agent_ids=retired,
         ath_only=review == "ath",
+    )
+
+
+@router.get(
+    "/screener-capacity-watchdog",
+    response_model=PublicScreenerWatchdogResponse,
+)
+async def screener_capacity_watchdog(
+    response: Response,
+    session: SessionDep,
+    environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
+) -> PublicScreenerWatchdogResponse:
+    """Tell the GCP-only watchdog whether the normal writer lease is stale."""
+    response.headers["Cache-Control"] = "no-store"
+    now = datetime.now(UTC)
+    snapshot = await session.get(ScreenerCapacitySnapshot, environment)
+    if snapshot is None:
+        return PublicScreenerWatchdogResponse(
+            generated_at=now,
+            controller_stale=True,
+            activate_fallback=True,
+            reason="controller_missing",
+        )
+    expiry = snapshot.controller_lease_expires_at
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    stale = now >= expiry
+    return PublicScreenerWatchdogResponse(
+        generated_at=now,
+        controller_stale=stale,
+        activate_fallback=stale,
+        reason="controller_stale" if stale else "controller_fresh",
     )
 
 
