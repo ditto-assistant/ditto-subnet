@@ -86,6 +86,10 @@ class PlatformError(ValidatorError):
     """Raised when a platform ``/validator/*`` call fails."""
 
 
+class PlatformInfrastructureError(PlatformError):
+    """A retryable platform dependency failure unrelated to the submission."""
+
+
 FAILURE_DETAIL_MAX_LENGTH = 4096
 """Mirrors ``ditto.api_models.validator.FAILURE_DETAIL_MAX_LENGTH``.
 

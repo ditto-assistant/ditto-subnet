@@ -49,6 +49,7 @@ from ditto.validator.dittobench import (
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
+    PlatformInfrastructureError,
     SandboxOomError,
     ValidatorInfrastructureError,
 )
@@ -1646,6 +1647,34 @@ class TestRunOnce:
         assert handed_job is jobs[0]
         assert reason == "infrastructure"
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
+
+    async def test_platform_infrastructure_failure_keeps_miner_attempt(self) -> None:
+        jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=PlatformInfrastructureError(
+                "inference exchange rejected (503) after 3 attempts"
+            )
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(set_weights=False)
+
+        assert outcome.queue_depth == 1
+        assert platform.request_job.await_count == 1
+        platform.report_ticket_failed.assert_awaited_once()
+        failed_job, reason, detail = platform.report_ticket_failed.await_args.args
+        assert failed_job is jobs[0]
+        assert reason == "infrastructure"
+        assert "inference exchange rejected (503)" in detail
 
     async def test_scoring_failure_hands_ticket_back_and_continues(self) -> None:
         jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]

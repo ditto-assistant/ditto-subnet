@@ -21,7 +21,7 @@ from ditto.api_models.validator import (
     JobResponse,
     ValidatorHeartbeatRequest,
 )
-from ditto.validator.errors import PlatformError
+from ditto.validator.errors import PlatformError, PlatformInfrastructureError
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
     artifact_signing_message,
@@ -665,6 +665,85 @@ async def test_exchange_inference_grant_preserves_ticket_route_identity() -> Non
 
     assert response.provider == "WandB"
     assert response.model == "openai/gpt-oss-20b"
+
+
+async def test_exchange_inference_grant_retries_transient_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    grant_id = UUID("00000000-0000-0000-0000-000000000001")
+    expires_at = datetime.now(UTC)
+    attempts: list[UUID] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        attempts.append(UUID(payload["nonce"]))
+        if len(attempts) < 3:
+            return httpx.Response(503)
+        return httpx.Response(
+            200,
+            json={
+                "grant_id": str(grant_id),
+                "bearer": "b" * 32,
+                "proxy_url": "https://platform.test/api/v1/inference/chat/completions",
+                "expires_at": expires_at.isoformat(),
+                "generation": 3,
+                "provider": "WandB",
+                "profile_revision": "openrouter-route-wandb-v1",
+                "model": "openai/gpt-oss-20b",
+            },
+        )
+
+    monkeypatch.setattr(
+        "ditto.validator.platform._INFERENCE_EXCHANGE_RETRY_DELAYS", (0, 0)
+    )
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            cast(Any, config), http, keypair
+        ).exchange_inference_grant(
+            grant_id,
+            "A" * 43,
+            "https://platform.test/api/v1/inference/exchange",
+        )
+
+    assert response.generation == 3
+    assert len(attempts) == 3
+    assert len(set(attempts)) == 3
+
+
+async def test_exchange_inference_grant_exhausted_503_is_infrastructure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    attempts = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503)
+
+    monkeypatch.setattr(
+        "ditto.validator.platform._INFERENCE_EXCHANGE_RETRY_DELAYS", (0, 0)
+    )
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="after 3 attempts"):
+            await PlatformClient(
+                cast(Any, config), http, keypair
+            ).exchange_inference_grant(
+                UUID("00000000-0000-0000-0000-000000000001"),
+                "A" * 43,
+                "https://platform.test/api/v1/inference/exchange",
+            )
+
+    assert attempts == 3
 
 
 async def test_submit_transcript_puts_raw_bytes_with_hotkey_header() -> None:

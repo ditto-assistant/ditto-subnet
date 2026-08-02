@@ -8,6 +8,7 @@ signature. It never touches the platform DB directly.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -36,7 +37,11 @@ from ditto.api_models.validator import (
     ValidatorHeartbeatRequest,
     ValidatorHeartbeatResponse,
 )
-from ditto.validator.errors import PlatformError, truncate_failure_detail
+from ditto.validator.errors import (
+    PlatformError,
+    PlatformInfrastructureError,
+    truncate_failure_detail,
+)
 from ditto.validator.signing import (
     sign_artifact_request,
     sign_inference_exchange,
@@ -56,6 +61,7 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/validator"
 # The scoring ledger lives under a sibling prefix, not /validator.
 _SCORING_PREFIX = "/api/v1/scoring"
+_INFERENCE_EXCHANGE_RETRY_DELAYS = (0.25, 1.0)
 
 
 class PlatformClient:
@@ -132,7 +138,13 @@ class PlatformClient:
     async def exchange_inference_grant(
         self, grant_id: UUID, broker_public_key: str, exchange_url: str
     ) -> InferenceExchangeResponse:
-        """Authorize one trusted broker key for the exact live ticket grant."""
+        """Authorize one trusted broker key for the exact live ticket grant.
+
+        Exchange is safe to retry: every attempt is freshly signed and the
+        platform rotates the same live grant onto the same broker key. A brief
+        relay restart must not consume the miner's validation attempt before a
+        benchmark has even started.
+        """
         # The platform may serve its inference plane on a different public
         # hostname than the API host this validator posts jobs and scores to
         # (DITTO_INFERENCE_PUBLIC_BASE_URL vs the API base). Accept either, and
@@ -145,37 +157,56 @@ class PlatformClient:
         verified_url = exchange_url.rstrip("/")
         if verified_url not in permitted:
             raise PlatformError("ticket inference exchange URL is not the platform")
-        requested_at = datetime.now(UTC)
-        nonce = uuid4()
-        payload = InferenceExchangeRequest(
-            validator_hotkey=self._config.validator_hotkey,
-            grant_id=grant_id,
-            broker_public_key=broker_public_key,
-            nonce=nonce,
-            requested_at=requested_at,
-            signature=sign_inference_exchange(
-                self._keypair,
+        attempts = len(_INFERENCE_EXCHANGE_RETRY_DELAYS) + 1
+        for attempt in range(attempts):
+            requested_at = datetime.now(UTC)
+            nonce = uuid4()
+            payload = InferenceExchangeRequest(
                 validator_hotkey=self._config.validator_hotkey,
                 grant_id=grant_id,
                 broker_public_key=broker_public_key,
                 nonce=nonce,
                 requested_at=requested_at,
-            ),
-        )
-        try:
-            response = await self._client.post(
-                verified_url,
-                headers=self._headers,
-                json=payload.model_dump(mode="json"),
+                signature=sign_inference_exchange(
+                    self._keypair,
+                    validator_hotkey=self._config.validator_hotkey,
+                    grant_id=grant_id,
+                    broker_public_key=broker_public_key,
+                    nonce=nonce,
+                    requested_at=requested_at,
+                ),
             )
-        except httpx.HTTPError as error:
-            raise PlatformError(f"inference exchange failed: {error}") from error
-        if response.status_code != 200:
-            raise PlatformError(
+            try:
+                response = await self._client.post(
+                    verified_url,
+                    headers=self._headers,
+                    json=payload.model_dump(mode="json"),
+                )
+            except httpx.HTTPError as error:
+                if attempt < attempts - 1:
+                    await asyncio.sleep(_INFERENCE_EXCHANGE_RETRY_DELAYS[attempt])
+                    continue
+                raise PlatformInfrastructureError(
+                    f"inference exchange failed after {attempts} attempts: {error}"
+                ) from error
+            if response.status_code == 200:
+                return InferenceExchangeResponse.model_validate(response.json())
+            retryable = (
+                response.status_code in {408, 429} or response.status_code >= 500
+            )
+            if retryable and attempt < attempts - 1:
+                await asyncio.sleep(_INFERENCE_EXCHANGE_RETRY_DELAYS[attempt])
+                continue
+            message = (
                 f"inference exchange rejected ({response.status_code}): "
                 f"{response.text[:200]}"
             )
-        return InferenceExchangeResponse.model_validate(response.json())
+            if retryable:
+                raise PlatformInfrastructureError(
+                    f"{message} after {attempts} attempts"
+                )
+            raise PlatformError(message)
+        raise AssertionError("inference exchange retry loop did not return")
 
     async def report_ticket_failed(
         self,

@@ -53,6 +53,7 @@ from ditto.validator.errors import (
     LeaseDeadlineError,
     LeaseRevokedError,
     PlatformError,
+    PlatformInfrastructureError,
     SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
@@ -783,7 +784,10 @@ class ValidatorWorker:
                                 job, "sandbox_oom", failure_detail(error)
                             )
                             slot_failed += 1
-                        except ValidatorInfrastructureError as error:
+                        except (
+                            ValidatorInfrastructureError,
+                            PlatformInfrastructureError,
+                        ) as error:
                             logger.warning(
                                 "validator infrastructure failed for agent %s "
                                 "on %s; sibling slots continue: %s",
