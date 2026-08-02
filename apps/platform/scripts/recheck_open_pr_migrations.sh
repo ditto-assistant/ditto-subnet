@@ -15,15 +15,21 @@
 # makes a newly-stale PR say so on the PR itself.
 set -euo pipefail
 
-REPO="${GITHUB_REPOSITORY:-ditto-assistant/ditto-platform}"
+REPO="${GITHUB_REPOSITORY:-ditto-assistant/ditto-subnet}"
 BASE_REF="${1:-origin/main}"
 CONTEXT="migration-order/merge-result"
-RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
+if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+  RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+else
+  # Manual/bootstrap sweeps run before this workflow reaches the default
+  # branch. Keep their status link useful instead of pointing at run 0.
+  RUN_URL="https://github.com/${REPO}/actions"
+fi
 
 # If `main` itself is divergent then every PR below inherits that failure and
 # none of them caused it. Say so once, fail loudly, and post nothing: red
 # statuses on innocent PRs are how a guard gets muted.
-if ! head_revision=$(python3 scripts/check_migration_order.py --head 2>&1); then
+if ! head_revision=$(python3 apps/platform/scripts/check_migration_order.py --head 2>&1); then
   echo "::error title=main has multiple Alembic heads::${head_revision}"
   exit 1
 fi
@@ -34,10 +40,9 @@ echo "${BASE_REF} resolves to a single head: ${head_revision}"
 # reported green without being fetched, which keeps the status present on
 # every PR (so the context is safe to require) and stops a stale red from
 # outliving the migration that caused it.
-open_prs=$(gh pr list --repo "${REPO}" --state open --limit 100 \
-  --json number,headRefOid,files \
-  --jq '.[] | "\(.number)\t\(.headRefOid)\t\([.files[].path
-        | select(startswith("alembic/versions/"))] | length)"')
+open_prs=$(gh api --paginate --slurp \
+  "repos/${REPO}/pulls?state=open&per_page=100" |
+  jq -r 'add[] | "\(.number)\t\(.head.sha)"')
 
 if [[ -z "${open_prs}" ]]; then
   echo "no open PRs"
@@ -45,15 +50,22 @@ if [[ -z "${open_prs}" ]]; then
 fi
 
 stale=()
-while IFS=$'\t' read -r number sha migrations; do
+while IFS=$'\t' read -r number sha; do
   [[ -n "${number}" ]] || continue
+  # The pull-request files endpoint is capped at 100 entries per page. Slurp
+  # every page before counting so a migration in a large generated/import PR
+  # cannot silently escape the required status.
+  migrations=$(gh api --paginate --slurp \
+    "repos/${REPO}/pulls/${number}/files?per_page=100" |
+    jq '[add[].filename
+      | select(startswith("apps/platform/alembic/versions/"))] | length')
   if ((migrations == 0)); then
     state=success
     description="Adds no migration; cannot fork the Alembic chain."
     echo "PR #${number}: no migrations"
   elif output=$(git fetch --quiet --force --no-tags origin \
     "pull/${number}/head:refs/pr/${number}" </dev/null 2>&1 &&
-    python3 scripts/check_migration_order.py \
+    python3 apps/platform/scripts/check_migration_order.py \
       "${BASE_REF}" "refs/pr/${number}" 2>&1); then
     state=success
     description="Merging into main leaves exactly one Alembic head."

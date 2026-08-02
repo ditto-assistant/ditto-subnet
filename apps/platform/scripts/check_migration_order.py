@@ -39,7 +39,37 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-MIGRATIONS_DIR = Path("alembic/versions")
+_CWD = Path.cwd().resolve()
+if (_CWD / "alembic/versions").is_dir():
+    PLATFORM_DIR = _CWD
+elif (_CWD / "apps/platform/alembic/versions").is_dir():
+    PLATFORM_DIR = _CWD / "apps/platform"
+else:
+    PLATFORM_DIR = Path(__file__).resolve().parents[1]
+_REPO_RESULT = subprocess.run(
+    ["git", "rev-parse", "--show-toplevel"],
+    cwd=PLATFORM_DIR,
+    check=False,
+    capture_output=True,
+    text=True,
+)
+MIGRATIONS_DIR = PLATFORM_DIR / "alembic/versions"
+_REPO_CANDIDATE = Path(_REPO_RESULT.stdout.strip())
+try:
+    # Deploy-script tests intentionally put a small fake ``git`` first on
+    # PATH. It implements ``rev-parse HEAD`` but not ``--show-toplevel`` and
+    # therefore returns a commit SHA here. Treat only an existing ancestor of
+    # the migration tree as a repository root.
+    MIGRATIONS_DIR.relative_to(_REPO_CANDIDATE)
+except ValueError:
+    REPO_ROOT = PLATFORM_DIR
+else:
+    REPO_ROOT = (
+        _REPO_CANDIDATE
+        if _REPO_RESULT.returncode == 0 and _REPO_CANDIDATE.is_dir()
+        else PLATFORM_DIR
+    )
+MIGRATIONS_GIT_DIR = MIGRATIONS_DIR.relative_to(REPO_ROOT)
 MIGRATION_NAME = re.compile(r"^(?P<date>\d{4}_\d{2}_\d{2})_.+\.py$")
 
 
@@ -65,6 +95,7 @@ class MigrationError(ValueError):
 def _git(*args: str) -> str:
     return subprocess.run(
         ["git", *args],
+        cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
@@ -176,7 +207,7 @@ def validate_linear_history(migrations: list[Migration], label: str) -> str:
 
 
 def _paths_at(ref: str) -> list[str]:
-    output = _git("ls-tree", "-r", "--name-only", ref, "--", str(MIGRATIONS_DIR))
+    output = _git("ls-tree", "-r", "--name-only", ref, "--", str(MIGRATIONS_GIT_DIR))
     return sorted(path for path in output.splitlines() if path.endswith(".py"))
 
 
@@ -188,7 +219,10 @@ def _migrations_at(ref: str) -> list[Migration]:
 
 def _head_migrations() -> list[Migration]:
     paths = sorted(MIGRATIONS_DIR.glob("*.py"))
-    return [parse_migration(str(path), path.read_text()) for path in paths]
+    return [
+        parse_migration(str(path.relative_to(REPO_ROOT)), path.read_text())
+        for path in paths
+    ]
 
 
 def _merge_base(base_ref: str, head_ref: str) -> str:
@@ -198,7 +232,9 @@ def _merge_base(base_ref: str, head_ref: str) -> str:
 def _paths_for(ref: str | None) -> set[str]:
     """Migration paths at *ref*, or in the working tree when it is ``None``."""
     if ref is None:
-        return {str(path) for path in MIGRATIONS_DIR.glob("*.py")}
+        return {
+            str(path.relative_to(REPO_ROOT)) for path in MIGRATIONS_DIR.glob("*.py")
+        }
     return set(_paths_at(ref))
 
 
@@ -329,14 +365,16 @@ def check(base_ref: str, head_ref: str | None = None) -> tuple[int, str, str]:
         "--diff-filter=M",
         f"{base_ref}...{label}",
         "--",
-        str(MIGRATIONS_DIR),
+        str(MIGRATIONS_GIT_DIR),
     ).splitlines()
     if changed:
         raise MigrationError("existing migrations are immutable: " + ", ".join(changed))
 
     base_migrations = _migrations_at(base_ref)
     head_migrations = _migrations_for(head_ref)
-    base_heads = _history_heads(base_migrations, base_ref)
+    # The monorepo's first Platform import legitimately compares a complete
+    # migration chain with a trunk that has no Platform directory yet.
+    base_heads = _history_heads(base_migrations, base_ref) if base_migrations else set()
     merged_head = require_single_merged_head(
         merge_result(base_migrations, head_migrations), base_ref, base_heads
     )
@@ -347,8 +385,10 @@ def check(base_ref: str, head_ref: str | None = None) -> tuple[int, str, str]:
         raise MigrationError(
             f"{base_ref}: migration filename does not use YYYY_MM_DD_name.py"
         )
-    latest_base_date = max(
-        match.group("date") for match in base_dates if match is not None
+    latest_base_date = (
+        max(match.group("date") for match in base_dates if match is not None)
+        if base_dates
+        else None
     )
 
     for path in new_paths:
@@ -357,7 +397,7 @@ def check(base_ref: str, head_ref: str | None = None) -> tuple[int, str, str]:
             raise MigrationError(
                 f"{path}: migration filename must use YYYY_MM_DD_name.py"
             )
-        if match.group("date") < latest_base_date:
+        if latest_base_date is not None and match.group("date") < latest_base_date:
             raise MigrationError(
                 f"{path}: date precedes {base_ref}'s latest migration date "
                 f"{latest_base_date}"
