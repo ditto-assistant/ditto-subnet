@@ -14,6 +14,35 @@ def _step(steps: list[dict], name: str) -> dict:
     return next(step for step in steps if step.get("name") == name)
 
 
+def test_release_fanout_is_gated_by_the_component_plan() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+    plan = jobs["plan"]
+    resolver = _step(plan["steps"], "Resolve affected release components")
+
+    assert plan["outputs"] == {
+        "miner_cli": "${{ steps.components.outputs.miner_cli }}",
+        "validator_stack": "${{ steps.components.outputs.validator_stack }}",
+    }
+    assert "scripts/release-plan.py" in resolver["run"]
+    release_base = _step(plan["steps"], "Resolve the last published release")
+    assert "0000000000000000000000000000000000000000" in release_base["run"]
+    assert jobs["release"]["needs"] == "plan"
+
+    image_jobs = (
+        "build-validator",
+        "build-sandbox-docker",
+        "build-dittobench",
+        "assemble-stack",
+        "smoke-validator-arm64",
+        "promote-stack-release",
+    )
+    for job_name in image_jobs:
+        job = jobs[job_name]
+        assert "plan" in job["needs"]
+        assert "needs.plan.outputs.validator_stack == 'true'" in job["if"]
+
+
 def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     config = tomllib.loads(PYPROJECT_PATH.read_text())["tool"]["semantic_release"]
     build_command = config["build_command"]
@@ -116,6 +145,7 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
     # assemble-stack fans in from the re-verified source and every component
     # image, then builds and cosign-signs the immutable stack descriptor.
     assert set(jobs["assemble-stack"]["needs"]) == {
+        "plan",
         "release",
         "verify-source",
         "build-validator",
@@ -133,6 +163,7 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
     # assembled + signed (assemble-stack) AND both native validator smokes pass
     # (the amd64 smoke gates assemble-stack; the arm64 smoke gates directly).
     assert jobs["promote-stack-release"]["needs"] == [
+        "plan",
         "release",
         "assemble-stack",
         "smoke-validator-arm64",

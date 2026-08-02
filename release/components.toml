@@ -1,0 +1,89 @@
+[release]
+# These files are deliberately non-runtime. Any changed path that is neither
+# mapped below nor listed here makes release planning fail closed so new
+# production inputs cannot silently bypass semantic release.
+ignored_paths = [
+  ".env.example",
+  ".agents/**",
+  ".claude/**",
+  ".codex/**",
+  ".github/**",
+  ".gitignore",
+  ".pre-commit-config.yaml",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "LICENSE*",
+  "README*",
+  "CHANGELOG.md",
+  "Makefile",
+  "apps/platform/.agents/**",
+  "docs/**",
+  "ditto/tests/**",
+  "infra/**",
+  "scripts/check_netns_incompatible.py",
+  "scripts/gen_validator_contract.py",
+  "scripts/run-validator.sh",
+  "tests/**",
+  "skills-lock.json",
+]
+
+[components.miner_cli]
+description = "Miner CLI distribution"
+paths = [
+  "ditto/__init__.py",
+  "ditto/miner_cli/**",
+  "ditto/api_models/__init__.py",
+  "ditto/api_models/agent_status.py",
+  "ditto/api_models/attestation.py",
+  "ditto/api_models/health.py",
+  "ditto/api_models/retrieval.py",
+  "ditto/api_models/upload.py",
+]
+
+[components.validator]
+description = "Validator worker image"
+paths = [
+  "Dockerfile",
+  "ditto/__init__.py",
+  "ditto/chain/**",
+  "ditto/system_health.py",
+  "ditto/validator/**",
+  "ditto/api_models/agent_status.py",
+  "ditto/api_models/benchmark_capacity.py",
+  "ditto/api_models/benchmark_progress.py",
+  "ditto/api_models/inference.py",
+  "ditto/api_models/stack_health.py",
+  "ditto/api_models/system_health.py",
+  "ditto/api_models/upload.py",
+  "ditto/api_models/validator.py",
+  "ditto/api_models/validator_capabilities.py",
+  "scripts/install-validator-stack-auto-update.sh",
+  "scripts/test-validator-stack-auto-update-e2e.sh",
+  "scripts/test-validator-stack-release-runtime.sh",
+  "scripts/validator-compose.sh",
+  "scripts/validator-stack-auto-update.sh",
+  "scripts/validator-stack-compose.sh",
+]
+
+[components.sandbox_docker]
+description = "Validator sandbox Docker daemon image"
+paths = [
+  "Dockerfile.sandbox-docker",
+  "scripts/sandbox-docker-entrypoint.sh",
+]
+
+[components.validator_stack]
+description = "Signed, digest-bound validator stack"
+depends_on = ["validator", "sandbox_docker"]
+paths = [
+  ".dockerignore",
+  ".github/workflows/release.yml",
+  "Dockerfile.pylon",
+  "Dockerfile.stack-release",
+  "docker-compose.yml",
+  "pyproject.toml",
+  "release/components.toml",
+  "scripts/build-stack-release.py",
+  "scripts/release-plan.py",
+  "uv.lock",
+]
