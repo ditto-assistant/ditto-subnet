@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-07-22T16:19:43.178588Z",
+  "scope": "practice",
+  "profile": {
+    "name": "favorable",
+    "purpose": "generous native Hermes replay without benchmark-specific knowledge",
+    "max_iterations": 90,
+    "session_search_limit_requested": 20,
+    "session_search_limit_effective": 10,
+    "generic_recall_guidance": true,
+    "benchmark_specific_skill": false,
+    "expected_answer_access": false,
+    "reasoning_enabled": false
+  },
+  "subject": {
+    "name": "Nous Research Hermes Agent",
+    "version": "0.19.0",
+    "upstream_revision": "e57918ac800121cf9c2956fe55e27df3ea80b562",
+    "adapter_revision": "609a01e435f53dea0922d5cc99c45f1cc1eec6da",
+    "memory_engine": "native SessionDB SQLite FTS5 session_search"
+  },
+  "sources": {
+    "dittobench_api_revision": "609a01e435f53dea0922d5cc99c45f1cc1eec6da",
+    "dittobench_datagen_revision": "55343ff961e36ebaa1c7db378dd7e5e0663ff5f3",
+    "provider_relay_revision": "373ba5f7c8a44934fbf5748b174ccbbb159c41e4",
+    "container_image_id": "sha256:2f908e1a3447142bf93900c49ca521fc0f37b35d82253fded2735637ee1252dd"
+  },
+  "benchmark": {
+    "version": 6,
+    "run_size": "full",
+    "run_id": "745a769b-0183-40f4-912b-155ac79dc1c5",
+    "seed": 3058240546919425205,
+    "case_count": 206,
+    "tool_case_count": 110,
+    "memory_case_count": 96,
+    "seeding_waves": 4,
+    "raw_pairs_cases": 7,
+    "dataset_sha256": "f9b8e6eea10f20316a6fc82c2f6b0af0f0cf0bc3f263cf96a760e68cdaa3ea2d",
+    "transcript_sha256": "bc74b821ad41e72e500d5aa4d8fd8d4d2ea79743599b03cb10202dd5eed9b821",
+    "started_at": "2026-07-22T16:11:59.780418Z",
+    "finished_at": "2026-07-22T16:19:43.178588Z"
+  },
+  "model": {
+    "id": "qwen/qwen3-32b",
+    "gateway": "OpenRouter",
+    "routing": "automatic",
+    "thinking": false,
+    "streaming": false,
+    "response_providers": {
+      "SiliconFlow": 439
+    }
+  },
+  "result": {
+    "composite": 0.246898,
+    "raw_composite": 0.246898,
+    "composite_stderr": 0.011159,
+    "tool_mean": 0.8842424363636361,
+    "memory_mean": 0.2604166666666667,
+    "median_ms": 7052,
+    "conversational_sanity": 0,
+    "metamorphic_consistency": 0.727273,
+    "transform_robustness": 1,
+    "tool_efficiency": 0.9995370370370371,
+    "zero_score_cases": 77,
+    "timeout_or_no_response_cases": 1,
+    "observed_tool_cases": 89,
+    "capped_tool_cases": 3,
+    "token_efficiency_penalty_applied": false,
+    "token_efficiency_reason": "token_telemetry_unavailable_in_practice_scope"
+  },
+  "paired_baseline": {
+    "run_id": "712a8c3c-860c-4962-ac07-0d2e83a57b59",
+    "same_seed": true,
+    "same_dataset_sha256": true,
+    "composite_delta": 0.005709,
+    "tool_mean_delta": 0.021818181818181737,
+    "memory_mean_delta": 0.020833333333333343,
+    "memory_cases_improved": 5,
+    "memory_cases_regressed": 3,
+    "memory_cases_unchanged": 88,
+    "memory_net_correct_cases": 2,
+    "interpretation_limit": "one stochastic paired replay with healthier provider transport"
+  },
+  "memory_categories": [
+    {"category": "abstention", "count": 7, "mean": 0.2857142857142857},
+    {"category": "aggregation-count", "count": 1, "mean": 0},
+    {"category": "assistant-recall", "count": 2, "mean": 0},
+    {"category": "canary", "count": 1, "mean": 1},
+    {"category": "contradiction", "count": 2, "mean": 1},
+    {"category": "conversational-abstention", "count": 1, "mean": 0},
+    {"category": "conversational-chitchat", "count": 2, "mean": 1},
+    {"category": "conversational-declarative", "count": 2, "mean": 1},
+    {"category": "declarative-behavior", "count": 4, "mean": 0},
+    {"category": "declarative-write", "count": 4, "mean": 1},
+    {"category": "declarative-write-read", "count": 4, "mean": 0},
+    {"category": "injection-resistance", "count": 5, "mean": 0},
+    {"category": "injection-stored-instruction", "count": 4, "mean": 0},
+    {"category": "isolation", "count": 6, "mean": 0},
+    {"category": "knowledge-update", "count": 1, "mean": 0},
+    {"category": "memory-write", "count": 6, "mean": 0.6666666666666666},
+    {"category": "memory-write-read", "count": 5, "mean": 0.2},
+    {"category": "multi-hop-relational", "count": 4, "mean": 0},
+    {"category": "multi-query-recall", "count": 2, "mean": 0},
+    {"category": "multi-session", "count": 3, "mean": 0},
+    {"category": "nonverbatim-computed", "count": 3, "mean": 0},
+    {"category": "passive-consolidation", "count": 2, "mean": 0},
+    {"category": "point-in-time", "count": 2, "mean": 0},
+    {"category": "preference-application", "count": 2, "mean": 0},
+    {"category": "single-session-recall", "count": 15, "mean": 0.3333333333333333},
+    {"category": "stored-instruction-benign", "count": 2, "mean": 1},
+    {"category": "temporal-depth", "count": 4, "mean": 0}
+  ],
+  "relay_telemetry": {
+    "requests": 439,
+    "http_error_responses": 0,
+    "api_error_responses": 0,
+    "upstream_errors": 0,
+    "prompt_tokens": 2208013,
+    "completion_tokens": 16929,
+    "total_tokens": 2224942,
+    "cost_usd": 0.31877135,
+    "p50_latency_ms": 3260,
+    "p95_latency_ms": 7934,
+    "finish_reasons": {"stop": 206, "tool_calls": 233}
+  },
+  "local_evidence_sha256": {
+    "run_response": "d3a827d295f3995d6fa11a4a176f3b662787e8db8b58acda44f016ae129b2342",
+    "relay_stats": "66e8516285fb11c20028d700f9a9704d3dcd38584ac9cf51bbd3db45c4d43e27"
+  }
+}

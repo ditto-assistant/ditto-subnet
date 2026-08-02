@@ -1,0 +1,1065 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-17T19:53:08Z",
+  "final_revalidated_at": "2026-07-17T23:02:03.609238Z",
+  "source": "https://platform-api.heyditto.ai/api/v1/public",
+  "selection": "top three finalized, registered, eligible, emission-eligible leaderboard entries",
+  "bench_version": 2,
+  "run_size": "full",
+  "harness_model": "qwen/qwen3-32b",
+  "serving_model": "Qwen/Qwen3-32B-TEE",
+  "thinking": false,
+  "validator_software_version": "0.9.6",
+  "artifact_access": {
+    "status": "complete",
+    "flow": "Backroom get_screening_artifact with backroom:artifact:read",
+    "artifact_sha256_available": true,
+    "artifacts_downloaded": 3,
+    "hashes_verified": 3,
+    "safely_extracted": 3,
+    "miner_credentials_exposed": false
+  },
+  "agents": [
+    {
+      "rank": 1,
+      "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+      "agent_name": "uNiCorN-v2",
+      "agent_version": 1,
+      "miner_hotkey": "5ERL71NWccMUM66PrseD2jD4u7B3nSdsXKFXERfykCPcunmV",
+      "miner_uid": 147,
+      "registered": true,
+      "eligible": true,
+      "emission_eligible": true,
+      "status": "scored",
+      "score_count": 3,
+      "score_quorum": 3,
+      "chutes_composite": 0.926437,
+      "chutes_tool_mean": 0.9454666666666668,
+      "chutes_memory_mean": 0.9074074074074074,
+      "chutes_median_ms": 5378,
+      "dataset_seed": 2474496736613908576,
+      "dataset_seed_block": 8638303,
+      "dataset_seed_block_hash": "0xdeb815c15c6db2838d7fdee9e938b00eb917583b018b18191e4b34b7673011d6",
+      "dataset_sha256": "72fef4aad1eee98a176bb31cc0c19ce84453e78a844c6ba906f702b1ffc9b0bf",
+      "artifact_sha256": "89a8663b7fe9bb31d005412a7f1c682b12ab0740cbdd6b21f963740c25cdd67a",
+      "validator_scores": [
+        {
+          "validator_hotkey": "5CFtzzb4vym9eysfeF9cxxp6D7gksuUVTKYNq1mchnrMs118",
+          "composite": 0.926437,
+          "run_id": "0bcc30a3-59e0-47c8-9199-225b09a24b80"
+        },
+        {
+          "validator_hotkey": "5CqJAjSjv8fjF9uAQpDLyfN1hZEvBjwpFgcGeLbYpcbSaD1C",
+          "composite": 0.916296,
+          "run_id": "0dcc2b65-90db-455b-b836-ccff5cbe2fa7"
+        },
+        {
+          "validator_hotkey": "5FU3YKmvVry2EVRUqzcdaTRAqW1E6nqPPPqmUGLe25JBmNDd",
+          "composite": 0.928889,
+          "run_id": "bbff8b9d-053d-4037-a1f8-da3fb416bbc0"
+        }
+      ],
+      "chutes_per_category": [
+        {
+          "category": "feedback",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "web_search",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "no_tool",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "automation_not_job",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "route_web_not_memory",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "image_edit_not_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "route_memory_not_web",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "workflow_not_job",
+          "count": 2,
+          "mean": 0.6
+        },
+        {
+          "category": "agent_job",
+          "count": 2,
+          "mean": 0.5
+        },
+        {
+          "category": "image_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_image_edit",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "artifacts_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_lookup",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_subject",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "calendar_search",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_read_not_run",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "arg_hallucination",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_run_not_read",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_web_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "automation_list",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_workflow",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "recipe_create",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_fetch",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "link_read",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "set_tool_prefs",
+          "count": 1,
+          "mean": 0.6
+        },
+        {
+          "category": "web_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "set_model",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "capability_discovery",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "email_send",
+          "count": 1,
+          "mean": 0.6
+        },
+        {
+          "category": "multi_subject_scope",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_web_read",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "set_effort",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "abstention",
+          "count": 5,
+          "mean": 1.0
+        },
+        {
+          "category": "web_recovery_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_delete",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_job_status",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "settings",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_update",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "calendar_create",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "job_chain_result_usage",
+          "count": 1,
+          "mean": 0.328
+        },
+        {
+          "category": "set_font",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "set_accent",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "recipe_apply",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_save_not_search",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "parallel_web_image",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "computed-answer",
+          "count": 1,
+          "mean": 0.0
+        },
+        {
+          "category": "multi-session",
+          "count": 4,
+          "mean": 1.0
+        },
+        {
+          "category": "point-in-time",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "injection-resistance",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "preference-application",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "memory-write",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "temporal-reasoning",
+          "count": 4,
+          "mean": 0.5
+        },
+        {
+          "category": "preference",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "knowledge-update",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "isolation",
+          "count": 4,
+          "mean": 1.0
+        },
+        {
+          "category": "contradiction",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "single-session-recall",
+          "count": 10,
+          "mean": 1.0
+        },
+        {
+          "category": "assistant-recall",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "memory-write-read",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "canary",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "aggregation-count",
+          "count": 1,
+          "mean": 1.0
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "agent_id": "b0186d19-92dc-4763-b9f8-a89a1ed6b3d5",
+      "agent_name": "ditto-generalist-v2",
+      "agent_version": 1,
+      "miner_hotkey": "5FpbZbRArrPfansMaH1iKMVAGnBD3JT1g2FE5wp6wbPkm31o",
+      "miner_uid": 244,
+      "registered": true,
+      "eligible": true,
+      "emission_eligible": true,
+      "status": "scored",
+      "score_count": 3,
+      "score_quorum": 3,
+      "chutes_composite": 0.921296,
+      "chutes_tool_mean": 0.9722222333333334,
+      "chutes_memory_mean": 0.8703703703703703,
+      "chutes_median_ms": 17123,
+      "dataset_seed": 1445631621658510052,
+      "dataset_seed_block": 8636406,
+      "dataset_seed_block_hash": "0x68872466b6faaf6efa489cf9cfdf340b254702502ad1b6213bd6f10539876620",
+      "dataset_sha256": "cf51e0d6de69639d5f6388e261d5769eedea71aec4e6a2b175db3cd7945bde72",
+      "artifact_sha256": "873bc89c7819834700b687d7af6d48a5a64e2b441a29ebad7607272815b3f869",
+      "validator_scores": [
+        {
+          "validator_hotkey": "5CqJAjSjv8fjF9uAQpDLyfN1hZEvBjwpFgcGeLbYpcbSaD1C",
+          "composite": 0.921296,
+          "run_id": "77875cd2-ee98-44f8-b425-028bdeb0f001"
+        },
+        {
+          "validator_hotkey": "5FU3YKmvVry2EVRUqzcdaTRAqW1E6nqPPPqmUGLe25JBmNDd",
+          "composite": 0.786111,
+          "run_id": "17dc4261-1f61-4bc3-b8f9-901c79694530"
+        },
+        {
+          "validator_hotkey": "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz",
+          "composite": 0.931111,
+          "run_id": "da7036e9-f6e1-46f3-b9df-9194ed23742c"
+        }
+      ],
+      "chutes_per_category": [
+        {
+          "category": "no_tool",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "set_model",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "automation_list",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "feedback",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "web_search",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_run_not_read",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "set_tool_prefs",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "route_web_not_memory",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "calendar_search",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "settings",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "route_memory_not_web",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "link_read",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "web_recovery_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_update",
+          "count": 1,
+          "mean": 0.666667
+        },
+        {
+          "category": "workflow_not_job",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "set_font",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_lookup",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_subject",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_read_not_run",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "web_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_web_read",
+          "count": 1,
+          "mean": 0.666667
+        },
+        {
+          "category": "recipe_apply",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "recipe_create",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_web_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "artifacts_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_workflow",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_job",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_subject_scope",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "set_accent",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "capability_discovery",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "image_edit_not_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_delete",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "job_chain_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "image_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_fetch",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "automation_not_job",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "calendar_create",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "arg_hallucination",
+          "count": 1,
+          "mean": 0.0
+        },
+        {
+          "category": "memory_save_not_search",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "parallel_web_image",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_image_edit",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_job_status",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "email_send",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "abstention",
+          "count": 5,
+          "mean": 1.0
+        },
+        {
+          "category": "set_effort",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "knowledge-update",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "preference",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "temporal-reasoning",
+          "count": 4,
+          "mean": 0.75
+        },
+        {
+          "category": "single-session-recall",
+          "count": 10,
+          "mean": 1.0
+        },
+        {
+          "category": "computed-answer",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "point-in-time",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "memory-write",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "injection-resistance",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "preference-application",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "multi-session",
+          "count": 4,
+          "mean": 0.75
+        },
+        {
+          "category": "isolation",
+          "count": 4,
+          "mean": 1.0
+        },
+        {
+          "category": "memory-write-read",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "assistant-recall",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "canary",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "contradiction",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "aggregation-count",
+          "count": 1,
+          "mean": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "agent_id": "04592829-12c9-49bc-a69b-824ced0ce260",
+      "agent_name": "Dditto-3",
+      "agent_version": 3,
+      "miner_hotkey": "5FEsBeDsXt2FWLwtxcT9vhfkcJPCA83wyvnRrfexodsPcXsr",
+      "miner_uid": 204,
+      "registered": true,
+      "eligible": true,
+      "emission_eligible": true,
+      "status": "scored",
+      "score_count": 3,
+      "score_quorum": 3,
+      "chutes_composite": 0.886574,
+      "chutes_tool_mean": 0.9583333333333334,
+      "chutes_memory_mean": 0.8148148148148148,
+      "chutes_median_ms": 6566,
+      "dataset_seed": 5924046075728594788,
+      "dataset_seed_block": 8637752,
+      "dataset_seed_block_hash": "0x53ce541bb131423aca83e0794d855de1e0bd2620eae588e9be830554652b7633",
+      "dataset_sha256": "c7e23a75b605f5a76b3c458dbbeac1871c3f170da08e5839aee12578239d0023",
+      "artifact_sha256": "6173f705f49cedcf99a804019d499a9b5cd77f02280d8de193eba8745b89c72b",
+      "validator_scores": [
+        {
+          "validator_hotkey": "5CFtzzb4vym9eysfeF9cxxp6D7gksuUVTKYNq1mchnrMs118",
+          "composite": 0.886574,
+          "run_id": "8326602d-a44b-48b1-b4ae-2832c8d6bcfc"
+        },
+        {
+          "validator_hotkey": "5CqJAjSjv8fjF9uAQpDLyfN1hZEvBjwpFgcGeLbYpcbSaD1C",
+          "composite": 0.833449,
+          "run_id": "00cb6816-718e-4bd2-9249-c081634fce2f"
+        },
+        {
+          "validator_hotkey": "5FU3YKmvVry2EVRUqzcdaTRAqW1E6nqPPPqmUGLe25JBmNDd",
+          "composite": 0.923611,
+          "run_id": "9c04736d-ce56-4fef-92ec-4d20a0adf2a3"
+        }
+      ],
+      "chutes_per_category": [
+        {
+          "category": "settings",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "calendar_create",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "set_font",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "set_tool_prefs",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "email_send",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "web_search",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "web_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "workflow_not_job",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_workflow",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "artifacts_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "image_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "set_effort",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "route_web_not_memory",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "calendar_search",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_subject_scope",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "no_tool",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "web_recovery_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "arg_hallucination",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "set_accent",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_run_not_read",
+          "count": 2,
+          "mean": 0.5
+        },
+        {
+          "category": "abstention",
+          "count": 5,
+          "mean": 1.0
+        },
+        {
+          "category": "image_edit_not_create",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_image_edit",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_job",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_subject",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_update",
+          "count": 1,
+          "mean": 0.0
+        },
+        {
+          "category": "memory_fetch",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_lookup",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "route_memory_not_web",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "recipe_create",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "agent_read_not_run",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "parallel_web_image",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_web_read",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_job_status",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "multi_web_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "link_read",
+          "count": 2,
+          "mean": 1.0
+        },
+        {
+          "category": "feedback",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_save_not_search",
+          "count": 1,
+          "mean": 0.5
+        },
+        {
+          "category": "recipe_apply",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "automation_not_job",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory_delete",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "automation_list",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "capability_discovery",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "set_model",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "job_chain_result_usage",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "knowledge-update",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "point-in-time",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "injection-resistance",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "computed-answer",
+          "count": 1,
+          "mean": 0.0
+        },
+        {
+          "category": "multi-session",
+          "count": 4,
+          "mean": 0.75
+        },
+        {
+          "category": "preference-application",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "temporal-reasoning",
+          "count": 4,
+          "mean": 0.5
+        },
+        {
+          "category": "single-session-recall",
+          "count": 10,
+          "mean": 1.0
+        },
+        {
+          "category": "preference",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "memory-write",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "isolation",
+          "count": 4,
+          "mean": 1.0
+        },
+        {
+          "category": "memory-write-read",
+          "count": 3,
+          "mean": 0.666667
+        },
+        {
+          "category": "assistant-recall",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "contradiction",
+          "count": 3,
+          "mean": 1.0
+        },
+        {
+          "category": "canary",
+          "count": 1,
+          "mean": 1.0
+        },
+        {
+          "category": "aggregation-count",
+          "count": 1,
+          "mean": 1.0
+        }
+      ]
+    }
+  ]
+}

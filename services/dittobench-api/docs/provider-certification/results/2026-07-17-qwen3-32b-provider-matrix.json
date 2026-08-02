@@ -1,0 +1,3737 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-07-17T19:48:35.029367Z",
+  "finished_at": "2026-07-17T19:52:23.990313Z",
+  "inventory_revalidated_at": "2026-07-17T23:03:15.40497Z",
+  "model": "qwen/qwen3-32b",
+  "runs_per_scenario": 3,
+  "routing": {
+    "allow_fallbacks": false,
+    "only": "single provider slug",
+    "order": "single provider slug",
+    "reasoning_enabled": false,
+    "require_parameters": false
+  },
+  "inventory": {
+    "captured_at": "2026-07-17T19:48:35.325381Z",
+    "model": "qwen/qwen3-32b",
+    "model_name": "Qwen: Qwen3 32B",
+    "architecture": {
+      "input_modalities": [
+        "text"
+      ],
+      "instruct_type": "qwen3",
+      "modality": "text-\u003etext",
+      "output_modalities": [
+        "text"
+      ],
+      "tokenizer": "Qwen3"
+    },
+    "endpoints": [
+      {
+        "name": "DeepInfra | qwen/qwen3-32b-04-28",
+        "provider_name": "DeepInfra",
+        "provider_slug": "deepinfra",
+        "tag": "deepinfra/fp8",
+        "status": 0,
+        "uptime_last_30m": 99.9657885733835,
+        "context_length": 40960,
+        "max_completion_tokens": 16384,
+        "quantization": "fp8",
+        "pricing": {
+          "completion": "0.00000028",
+          "discount": 0,
+          "prompt": "0.00000008"
+        },
+        "supported_parameters": [
+          "reasoning",
+          "include_reasoning",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "repetition_penalty",
+          "top_k",
+          "seed",
+          "min_p",
+          "response_format",
+          "tools",
+          "tool_choice",
+          "logit_bias",
+          "structured_outputs"
+        ]
+      },
+      {
+        "name": "Nebius | qwen/qwen3-32b-04-28",
+        "provider_name": "Nebius",
+        "provider_slug": "nebius",
+        "tag": "nebius/base",
+        "status": 0,
+        "uptime_last_30m": 99.95731967562953,
+        "context_length": 40960,
+        "quantization": "fp8",
+        "pricing": {
+          "completion": "0.0000003",
+          "discount": 0,
+          "prompt": "0.0000001"
+        },
+        "supported_parameters": [
+          "reasoning",
+          "include_reasoning",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "seed",
+          "top_k",
+          "logit_bias",
+          "tools",
+          "tool_choice",
+          "response_format",
+          "structured_outputs",
+          "repetition_penalty"
+        ]
+      },
+      {
+        "name": "Alibaba | qwen/qwen3-32b-04-28",
+        "provider_name": "Alibaba",
+        "provider_slug": "alibaba",
+        "tag": "alibaba",
+        "status": 0,
+        "uptime_last_30m": 99.86518368722615,
+        "context_length": 131072,
+        "max_completion_tokens": 8192,
+        "quantization": "unknown",
+        "pricing": {
+          "completion": "0.000000416",
+          "discount": 0.35,
+          "prompt": "0.000000104"
+        },
+        "supported_parameters": [
+          "reasoning",
+          "include_reasoning",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "seed",
+          "presence_penalty",
+          "response_format",
+          "tools",
+          "tool_choice"
+        ]
+      },
+      {
+        "name": "SiliconFlow | qwen/qwen3-32b-04-28",
+        "provider_name": "SiliconFlow",
+        "provider_slug": "siliconflow",
+        "tag": "siliconflow/fp8",
+        "status": 0,
+        "uptime_last_30m": 100,
+        "context_length": 131072,
+        "max_completion_tokens": 131072,
+        "quantization": "fp8",
+        "pricing": {
+          "completion": "0.00000057",
+          "discount": 0,
+          "prompt": "0.00000014"
+        },
+        "supported_parameters": [
+          "reasoning",
+          "include_reasoning",
+          "structured_outputs",
+          "response_format",
+          "temperature",
+          "top_p",
+          "top_k",
+          "frequency_penalty",
+          "tools",
+          "tool_choice",
+          "max_tokens"
+        ]
+      },
+      {
+        "name": "Groq | qwen/qwen3-32b-04-28",
+        "provider_name": "Groq",
+        "provider_slug": "groq",
+        "tag": "groq",
+        "status": 0,
+        "uptime_last_30m": 100,
+        "context_length": 131072,
+        "max_completion_tokens": 40960,
+        "quantization": "unknown",
+        "pricing": {
+          "completion": "0.00000059",
+          "discount": 0,
+          "input_cache_read": "0.000000145",
+          "prompt": "0.00000029"
+        },
+        "supported_parameters": [
+          "reasoning",
+          "include_reasoning",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "seed",
+          "response_format",
+          "logprobs",
+          "top_logprobs"
+        ]
+      }
+    ]
+  },
+  "results": [
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "auto_tool",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 634,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_4badfe695c924a86887c65",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 23,
+        "total_tokens": 224,
+        "cost_usd": 0.000030472
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "continuation",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 1036,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 31,
+      "tool_calls": [
+        {
+          "id": "call_db70f6a37c8646ec9c2010",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 301,
+        "completion_tokens": 31,
+        "total_tokens": 332,
+        "cost_usd": 0.0000442
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "forced_tool",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 420,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_c73695888e654a9490c7b7",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 211,
+        "completion_tokens": 14,
+        "total_tokens": 225,
+        "cost_usd": 0.000027768
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "parallel_tools",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 615,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_5d5247b5283c4bf59cb88f",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 42,
+        "total_tokens": 304,
+        "cost_usd": 0.00004472
+      },
+      "errors": [
+        "got 1 tool calls, want at least 2",
+        "parallel response did not contain both expected tool names"
+      ]
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "streaming_tool",
+      "run": 1,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 693,
+      "ttft_ms": 693,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_964447c7de834f59ae04ce",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 23,
+        "total_tokens": 224,
+        "cost_usd": 0.000030472
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "text",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 422,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 3,
+        "total_tokens": 44,
+        "cost_usd": 0.000005512
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "tool_error_continuation",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 1051,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "call_64c0bc2f17634017b63612",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 309,
+        "completion_tokens": 28,
+        "total_tokens": 337,
+        "cost_usd": 0.000043784
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "auto_tool",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 605,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_4dea897e442d4a3692aa90",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 23,
+        "total_tokens": 224,
+        "cost_usd": 0.000030472
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "continuation",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 1069,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 31,
+      "tool_calls": [
+        {
+          "id": "call_21b4a2c77fd44ca4b51cef",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 301,
+        "completion_tokens": 31,
+        "total_tokens": 332,
+        "cost_usd": 0.0000442
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "forced_tool",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 681,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_c023900e9c6a414a91eaa1",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 211,
+        "completion_tokens": 14,
+        "total_tokens": 225,
+        "cost_usd": 0.000027768
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "parallel_tools",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 635,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_d805b367b66a49838deb25",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 42,
+        "total_tokens": 304,
+        "cost_usd": 0.00004472
+      },
+      "errors": [
+        "got 1 tool calls, want at least 2",
+        "parallel response did not contain both expected tool names"
+      ]
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "streaming_tool",
+      "run": 2,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 660,
+      "ttft_ms": 660,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_9e585dfd672043d3a751f4",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 23,
+        "total_tokens": 224,
+        "cost_usd": 0.000030472
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "text",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 436,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 3,
+        "total_tokens": 44,
+        "cost_usd": 0.000005512
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "tool_error_continuation",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 1160,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "call_d79b8446ad9746c2b47490",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 309,
+        "completion_tokens": 28,
+        "total_tokens": 337,
+        "cost_usd": 0.000043784
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "auto_tool",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 643,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_e3196746048d42f5b0ed97",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 23,
+        "total_tokens": 224,
+        "cost_usd": 0.000030472
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "continuation",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 1138,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 31,
+      "tool_calls": [
+        {
+          "id": "call_faa468e3cf814d1d946198",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 301,
+        "completion_tokens": 31,
+        "total_tokens": 332,
+        "cost_usd": 0.0000442
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "forced_tool",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 417,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_4f2cd7d462204bdb9d87de",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 211,
+        "completion_tokens": 14,
+        "total_tokens": 225,
+        "cost_usd": 0.000027768
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "parallel_tools",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 643,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_dfbe7b9d37b0437f91ec8b",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 42,
+        "total_tokens": 304,
+        "cost_usd": 0.00004472
+      },
+      "errors": [
+        "got 1 tool calls, want at least 2",
+        "parallel response did not contain both expected tool names"
+      ]
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "streaming_tool",
+      "run": 3,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 610,
+      "ttft_ms": 612,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "call_3e4743c45bd04d7d93a731",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 23,
+        "total_tokens": 224,
+        "cost_usd": 0.000030472
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "text",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 391,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 3,
+        "total_tokens": 44,
+        "cost_usd": 0.000005512
+      }
+    },
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "endpoint_tag": "alibaba",
+      "scenario": "tool_error_continuation",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 1567,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Alibaba",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "call_e237c51ece7d45929e67bf",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 309,
+        "completion_tokens": 28,
+        "total_tokens": 337,
+        "cost_usd": 0.000043784
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "auto_tool",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 169,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_oO9lXgpoefsca3twJ4ik6Y36",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "continuation",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 322,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 56,
+      "tool_calls": [
+        {
+          "id": "call_n9DyvVqWXMACsLplByjKWWyd",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 304,
+        "completion_tokens": 38,
+        "total_tokens": 342,
+        "cost_usd": 0.00003496
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "forced_tool",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 139,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_MZwDAnjLcCwIpAN1o20eHGfW",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "parallel_tools",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 141,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 10,
+      "tool_calls": [
+        {
+          "id": "call_AIkWJU4KG6lje35qfiO08R7R",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "call_ujsJPVQJZg5UGUL06xXzCMJH",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 43,
+        "total_tokens": 305,
+        "cost_usd": 0.000033
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "streaming_tool",
+      "run": 1,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 138,
+      "ttft_ms": 402,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_XHBYiTv2DlE1l6QRvzhBrNpS",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "text",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 168,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 38,
+        "completion_tokens": 89,
+        "total_tokens": 127,
+        "reasoning_tokens": 102,
+        "cost_usd": 0.00002796
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled"
+      ]
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "tool_error_continuation",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 271,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 32,
+      "tool_calls": [
+        {
+          "id": "call_5h3QL32ALeSYXIkDYOeS5xGc",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 312,
+        "completion_tokens": 30,
+        "total_tokens": 342,
+        "cost_usd": 0.00003336
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "auto_tool",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 154,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_JEH0v2s2sfL9AalVnkA0w0YV",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "continuation",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 387,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 56,
+      "tool_calls": [
+        {
+          "id": "call_NkL7GxUKeuXHxJLSZu5GYXtM",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 304,
+        "completion_tokens": 38,
+        "total_tokens": 342,
+        "cost_usd": 0.00003496
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "forced_tool",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 164,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_kK6nWWTK9upLdPnNgk2sROzD",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "parallel_tools",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 143,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 10,
+      "tool_calls": [
+        {
+          "id": "call_kklduLIzRPGVmqoZzg07d2XB",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "call_IZTslj4cM4aewGe62yf4OrtW",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 43,
+        "total_tokens": 305,
+        "cost_usd": 0.000033
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "streaming_tool",
+      "run": 2,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 151,
+      "ttft_ms": 376,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_02oXq3bptQprOZxEK8HLhEDG",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "text",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 229,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 38,
+        "completion_tokens": 74,
+        "total_tokens": 112,
+        "reasoning_tokens": 78,
+        "cost_usd": 0.00002376
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled"
+      ]
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "tool_error_continuation",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 272,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 32,
+      "tool_calls": [
+        {
+          "id": "call_JrfqsIEhcc5WcD4QzscNDJst",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 312,
+        "completion_tokens": 30,
+        "total_tokens": 342,
+        "cost_usd": 0.00003336
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "auto_tool",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 138,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_gulCoK7Km3yaiUstzACm1fhI",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "continuation",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 301,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 56,
+      "tool_calls": [
+        {
+          "id": "call_s6p4NfLULzPwJGPbnOOr2FHa",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 304,
+        "completion_tokens": 38,
+        "total_tokens": 342,
+        "cost_usd": 0.00003496
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "forced_tool",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 150,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_DJinq0Lf4lQPPSskNkP44pCk",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "parallel_tools",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 128,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 10,
+      "tool_calls": [
+        {
+          "id": "call_ZBLB2pnus100gCJGW9L8vfMA",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "call_8zi2ph8tsDzrSszhGF6cZYMo",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 43,
+        "total_tokens": 305,
+        "cost_usd": 0.000033
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "streaming_tool",
+      "run": 3,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 155,
+      "ttft_ms": 918,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 9,
+      "tool_calls": [
+        {
+          "id": "call_ZESBVuJlBKl7vzaWFAYTnDIn",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000228
+      }
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "text",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 148,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 38,
+        "completion_tokens": 94,
+        "total_tokens": 132,
+        "reasoning_tokens": 103,
+        "cost_usd": 0.00002936
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled"
+      ]
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "endpoint_tag": "deepinfra/fp8",
+      "scenario": "tool_error_continuation",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 348,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "DeepInfra",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 32,
+      "tool_calls": [
+        {
+          "id": "call_8qjw9LXDQRG51nXPQ9i9hQUq",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 312,
+        "completion_tokens": 30,
+        "total_tokens": 342,
+        "cost_usd": 0.00003336
+      }
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "auto_tool",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 421,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 1"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "continuation",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 525,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "initial response contained no tool call"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "forced_tool",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 376,
+      "content_length": 0,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0
+      },
+      "errors": [
+        "openrouter error 502: Upstream error from Groq: Failed to call a function. Please adjust your prompt. See 'failed_generation' for more details."
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "parallel_tools",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 354,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 258,
+        "completion_tokens": 96,
+        "total_tokens": 354,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00013146
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 2",
+        "parallel response did not contain both expected tool names"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "streaming_tool",
+      "run": 1,
+      "streaming": true,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 663,
+      "ttft_ms": 664,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 94,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 1"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "text",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 211,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 12,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 96,
+        "total_tokens": 133,
+        "reasoning_tokens": 88,
+        "cost_usd": 0.00006737
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "text response lacked content or stop finish reason"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "tool_error_continuation",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 402,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 96,
+        "total_tokens": 301,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011609
+      },
+      "errors": [
+        "initial response contained no tool call"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "auto_tool",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 373,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 1"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "continuation",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 354,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "initial response contained no tool call"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "forced_tool",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 704,
+      "content_length": 0,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0
+      },
+      "errors": [
+        "openrouter error 502: Upstream error from Groq: Failed to call a function. Please adjust your prompt. See 'failed_generation' for more details."
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "parallel_tools",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 356,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 258,
+        "completion_tokens": 96,
+        "total_tokens": 354,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00013146
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 2",
+        "parallel response did not contain both expected tool names"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "streaming_tool",
+      "run": 2,
+      "streaming": true,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 369,
+      "ttft_ms": 381,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 94,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 1"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "text",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 296,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 96,
+        "total_tokens": 133,
+        "reasoning_tokens": 93,
+        "cost_usd": 0.00006737
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "text response lacked content or stop finish reason"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "tool_error_continuation",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 390,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 96,
+        "total_tokens": 301,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011609
+      },
+      "errors": [
+        "initial response contained no tool call"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "auto_tool",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 523,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 1"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "continuation",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 509,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "initial response contained no tool call"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "forced_tool",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 373,
+      "content_length": 0,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0
+      },
+      "errors": [
+        "openrouter error 502: Upstream error from Groq: Failed to call a function. Please adjust your prompt. See 'failed_generation' for more details."
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "parallel_tools",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 445,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 258,
+        "completion_tokens": 96,
+        "total_tokens": 354,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00013146
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 2",
+        "parallel response did not contain both expected tool names"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "streaming_tool",
+      "run": 3,
+      "streaming": true,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 645,
+      "ttft_ms": 657,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 94,
+      "usage": {
+        "prompt_tokens": 197,
+        "completion_tokens": 96,
+        "total_tokens": 293,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011377
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "got 0 tool calls, want at least 1"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "text",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 195,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 12,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 96,
+        "total_tokens": 133,
+        "reasoning_tokens": 88,
+        "cost_usd": 0.00006737
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "text response lacked content or stop finish reason"
+      ]
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "endpoint_tag": "groq",
+      "scenario": "tool_error_continuation",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 387,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Groq",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 96,
+        "total_tokens": 301,
+        "reasoning_tokens": 94,
+        "cost_usd": 0.00011609
+      },
+      "errors": [
+        "initial response contained no tool call"
+      ]
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "auto_tool",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 285,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-ad06ec2570540ff7",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000273
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "continuation",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 768,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 47,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-901c83a1c0592049",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 453,
+        "completion_tokens": 38,
+        "total_tokens": 491,
+        "cost_usd": 0.000056699999999999996
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "forced_tool",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 431,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-8d8464a83f0bb421",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 11,
+        "total_tokens": 212,
+        "cost_usd": 0.0000234
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "parallel_tools",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1110,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-a5db453a201e6437",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "chatcmpl-tool-b75bb9fcf8c7e841",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 43,
+        "total_tokens": 305,
+        "cost_usd": 0.0000391
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "streaming_tool",
+      "run": 1,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 368,
+      "ttft_ms": 1643,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-a8da9eaf4aae7dfa",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000273
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "text",
+      "run": 1,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 350,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 38,
+        "completion_tokens": 96,
+        "total_tokens": 134,
+        "reasoning_tokens": 102,
+        "cost_usd": 0.0000326
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "text response lacked content or stop finish reason"
+      ]
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "tool_error_continuation",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 1022,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-b18fbec96584632d",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 461,
+        "completion_tokens": 30,
+        "total_tokens": 491,
+        "cost_usd": 0.0000551
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "auto_tool",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 265,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-8289004714aaa0b7",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000273
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "continuation",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 667,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 47,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-be3c3ec232df5241",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 453,
+        "completion_tokens": 38,
+        "total_tokens": 491,
+        "cost_usd": 0.000056699999999999996
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "forced_tool",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 327,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-aa4a4cd594e28402",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 11,
+        "total_tokens": 212,
+        "cost_usd": 0.0000234
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "parallel_tools",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 267,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-b78aa07ca9076a1a",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "chatcmpl-tool-a08f288553de2f81",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 43,
+        "total_tokens": 305,
+        "cost_usd": 0.0000391
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "streaming_tool",
+      "run": 2,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1047,
+      "ttft_ms": 1327,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-bbc2b21fbe1f9869",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000273
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "text",
+      "run": 2,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 285,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 38,
+        "completion_tokens": 96,
+        "total_tokens": 134,
+        "reasoning_tokens": 102,
+        "cost_usd": 0.0000326
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "text response lacked content or stop finish reason"
+      ]
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "tool_error_continuation",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 565,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-aa18791631ee2e82",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 461,
+        "completion_tokens": 30,
+        "total_tokens": 491,
+        "cost_usd": 0.0000551
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "auto_tool",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 412,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-96d0fdb935efe10a",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000273
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "continuation",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 733,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 47,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-bdf2752906fc9cdf",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 453,
+        "completion_tokens": 38,
+        "total_tokens": 491,
+        "cost_usd": 0.000056699999999999996
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "forced_tool",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 272,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "stop",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-af9e18ab133d734c",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 11,
+        "total_tokens": 212,
+        "cost_usd": 0.0000234
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "parallel_tools",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 706,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-9be735bc1f71c9c8",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "chatcmpl-tool-972ef9d0d4a7822d",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 262,
+        "completion_tokens": 43,
+        "total_tokens": 305,
+        "cost_usd": 0.0000391
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "streaming_tool",
+      "run": 3,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 497,
+      "ttft_ms": 838,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-838f0bb5557c3479",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 24,
+        "total_tokens": 225,
+        "cost_usd": 0.0000273
+      }
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "text",
+      "run": 3,
+      "streaming": false,
+      "success": false,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 630,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "content_length": 0,
+      "reasoning_present": true,
+      "reasoning_details": 1,
+      "usage": {
+        "prompt_tokens": 38,
+        "completion_tokens": 96,
+        "total_tokens": 134,
+        "reasoning_tokens": 102,
+        "cost_usd": 0.0000326
+      },
+      "errors": [
+        "reasoning was present despite reasoning being disabled",
+        "text response lacked content or stop finish reason"
+      ]
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "endpoint_tag": "nebius/base",
+      "scenario": "tool_error_continuation",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 628,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "Nebius",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "chatcmpl-tool-8cb14d0bd6d5cb9e",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 461,
+        "completion_tokens": 30,
+        "total_tokens": 491,
+        "cost_usd": 0.0000551
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "auto_tool",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1299,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a02b525510ee8ade2901ec6f0b",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "continuation",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 2697,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 47,
+      "tool_calls": [
+        {
+          "id": "019f71a046ef86c41a9fdf31fcadb7d7",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 305,
+        "completion_tokens": 36,
+        "total_tokens": 341,
+        "cost_usd": 0.00006322000000000001
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "forced_tool",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1498,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a0185478687e1e9ea121954a3d",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "parallel_tools",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1572,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a034b8e907dd6522d4f60ca209",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "019f71a036d2d0c0bf511cfa3043e18b",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 270,
+        "completion_tokens": 42,
+        "total_tokens": 312,
+        "cost_usd": 0.00006174
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "streaming_tool",
+      "run": 1,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1526,
+      "ttft_ms": 1616,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a03e7ae75ba24a5925b944e417",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "text",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1312,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 3,
+        "total_tokens": 44,
+        "cost_usd": 0.00000745
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "tool_error_continuation",
+      "run": 1,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 2504,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "019f71a0560a75ce38d26ed04edb446a",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 313,
+        "completion_tokens": 28,
+        "total_tokens": 341,
+        "cost_usd": 0.00005978
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "auto_tool",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1116,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a286d364d0ce2d856ea8786ee7",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "continuation",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 2519,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 47,
+      "tool_calls": [
+        {
+          "id": "019f71a2a361546f241b47395d17b0fe",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 305,
+        "completion_tokens": 36,
+        "total_tokens": 341,
+        "cost_usd": 0.00006322000000000001
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "forced_tool",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1114,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a2809fe80cb5b0a547dd9d54f8",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "parallel_tools",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1508,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a29022ecc102b5e9bd6f26160e",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "019f71a2935b632837475af634a6d461",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 270,
+        "completion_tokens": 42,
+        "total_tokens": 312,
+        "cost_usd": 0.00006174
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "streaming_tool",
+      "run": 2,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1307,
+      "ttft_ms": 1529,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a29b14c36fe98d36b47c544395",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "text",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1616,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 3,
+        "total_tokens": 44,
+        "cost_usd": 0.00000745
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "tool_error_continuation",
+      "run": 2,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 2635,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "019f71a2b0aba63d43bc54e27ef4e513",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 313,
+        "completion_tokens": 28,
+        "total_tokens": 341,
+        "cost_usd": 0.00005978
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "auto_tool",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1421,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a2ce5fe22f7121a07b3d4b8054",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "continuation",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 2767,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 47,
+      "tool_calls": [
+        {
+          "id": "019f71a2ede93356037b2b6099d93365",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 305,
+        "completion_tokens": 36,
+        "total_tokens": 341,
+        "cost_usd": 0.00006322000000000001
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "forced_tool",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1337,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a2c55d24d6aa69141b40169df5",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "parallel_tools",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1467,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a2d8594224688088c2aa3c5e63",
+          "name": "weather_paris",
+          "arguments": {
+            "city": "Paris"
+          }
+        },
+        {
+          "id": "019f71a2dccf9ac11a1c760cf96d6e53",
+          "name": "weather_tokyo",
+          "arguments": {
+            "city": "Tokyo"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 270,
+        "completion_tokens": 42,
+        "total_tokens": 312,
+        "cost_usd": 0.00006174
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "streaming_tool",
+      "run": 3,
+      "streaming": true,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1348,
+      "ttft_ms": 1661,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "content_length": 0,
+      "tool_calls": [
+        {
+          "id": "019f71a2e5e6463fa2dba25cb0d915f2",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 205,
+        "completion_tokens": 23,
+        "total_tokens": 228,
+        "cost_usd": 0.00004181
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "text",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 1,
+      "latency_ms": 1331,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 12,
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 41,
+        "completion_tokens": 3,
+        "total_tokens": 44,
+        "cost_usd": 0.00000745
+      }
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "endpoint_tag": "siliconflow/fp8",
+      "scenario": "tool_error_continuation",
+      "run": 3,
+      "streaming": false,
+      "success": true,
+      "http_status": 200,
+      "attempts": 2,
+      "latency_ms": 2389,
+      "model": "qwen/qwen3-32b",
+      "response_provider": "SiliconFlow",
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "content_length": 23,
+      "tool_calls": [
+        {
+          "id": "019f71a2faef2decf07d2d0b235e0967",
+          "name": "lookup_record",
+          "arguments": {
+            "record_id": "record-17"
+          }
+        }
+      ],
+      "reasoning_present": false,
+      "reasoning_details": 0,
+      "usage": {
+        "prompt_tokens": 313,
+        "completion_tokens": 28,
+        "total_tokens": 341,
+        "cost_usd": 0.00005978
+      }
+    }
+  ],
+  "summary": [
+    {
+      "provider": "Alibaba",
+      "provider_slug": "alibaba",
+      "runs": 21,
+      "successes": 18,
+      "success_rate": 0.8571428571428571,
+      "tool_runs": 18,
+      "tool_successes": 15,
+      "tool_success_rate": 0.8333333333333334,
+      "p50_latency_ms": 643,
+      "p95_latency_ms": 1160,
+      "output_tokens": 492,
+      "effective_output_tokens_per_second": 31.688780110781913,
+      "total_cost_usd": 0.000680784
+    },
+    {
+      "provider": "DeepInfra",
+      "provider_slug": "deepinfra",
+      "runs": 21,
+      "successes": 18,
+      "success_rate": 0.8571428571428571,
+      "tool_runs": 18,
+      "tool_successes": 18,
+      "tool_success_rate": 1,
+      "p50_latency_ms": 155,
+      "p95_latency_ms": 348,
+      "output_tokens": 806,
+      "effective_output_tokens_per_second": 191.17647058823528,
+      "total_cost_usd": 0.00059024
+    },
+    {
+      "provider": "Groq",
+      "provider_slug": "groq",
+      "runs": 21,
+      "successes": 0,
+      "success_rate": 0,
+      "tool_runs": 18,
+      "tool_successes": 0,
+      "tool_success_rate": 0,
+      "p50_latency_ms": 387,
+      "p95_latency_ms": 663,
+      "output_tokens": 1728,
+      "effective_output_tokens_per_second": 194.79201893811293,
+      "total_cost_usd": 0.00196869
+    },
+    {
+      "provider": "Nebius",
+      "provider_slug": "nebius",
+      "runs": 21,
+      "successes": 18,
+      "success_rate": 0.8571428571428571,
+      "tool_runs": 18,
+      "tool_successes": 18,
+      "tool_success_rate": 1,
+      "p50_latency_ms": 497,
+      "p95_latency_ms": 1047,
+      "output_tokens": 798,
+      "effective_output_tokens_per_second": 68.58616244091104,
+      "total_cost_usd": 0.0007845
+    },
+    {
+      "provider": "SiliconFlow",
+      "provider_slug": "siliconflow",
+      "runs": 21,
+      "successes": 21,
+      "success_rate": 1,
+      "tool_runs": 18,
+      "tool_successes": 18,
+      "tool_success_rate": 1,
+      "p50_latency_ms": 1498,
+      "p95_latency_ms": 2697,
+      "output_tokens": 534,
+      "effective_output_tokens_per_second": 14.717636358625251,
+      "total_cost_usd": 0.00095286
+    }
+  ]
+}

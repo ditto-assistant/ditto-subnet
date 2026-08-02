@@ -1,0 +1,35 @@
+# Binaries (root-level outputs of `go build ./cmd/...`)
+/benchcal
+/calibrate
+/dittobench-api
+/egress-proxy
+/model-relay
+/refharness
+/v5calibrate
+/v5onmodel
+*.exe
+*.out
+
+# Env / secrets
+.env
+.env.*
+
+# Go build/test artifacts
+/bin/
+/dist/
+*.test
+coverage.out
+
+# Python calibration tooling
+__pycache__/
+*.py[cod]
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Scratch
+.tmp/
+.tool-versions
+go.work

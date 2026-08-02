@@ -311,7 +311,7 @@ jobs:
       id-token: write
     outputs:
       revision: ${{ steps.dittobench-source.outputs.revision }}
-      relay_compat_revision: ${{ steps.dittobench-source.outputs.relay_compat_revision }}
+      relay_compat_revision: ${{ steps.relay-source.outputs.relay_compat_revision }}
       scorer_digest: ${{ steps.dittobench-api.outputs.digest }}
       relay_digest: ${{ steps.model-relay.outputs.digest }}
     steps:
@@ -321,34 +321,29 @@ jobs:
           ref: ${{ needs.release.outputs.commit_sha }}
           persist-credentials: false
 
-      - name: Materialize the reviewed dittobench-api source
+      - name: Bind DittoBench to the monorepo release
         id: dittobench-source
         run: |
-          context="$(
-            grep -Eo \
-              'https://github\.com/ditto-assistant/dittobench-api\.git\?ref=refs/heads/main&checksum=[0-9a-f]{40}' \
-              docker-compose.yml | sort -u
-          )"
-          test -n "$context"
-          test "$(wc -l <<<"$context" | tr -d ' ')" = 1
-          revision="${context##*checksum=}"
+          revision="$(git log -1 --format=%H -- services/dittobench-api)"
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-          git clone --quiet --filter=blob:none \
-            https://github.com/ditto-assistant/dittobench-api.git \
-            "$RUNNER_TEMP/dittobench-source"
-          git -C "$RUNNER_TEMP/dittobench-source" cat-file -e "$revision^{commit}"
-          git -C "$RUNNER_TEMP/dittobench-source" merge-base --is-ancestor \
-            "$revision" origin/main
-          git -C "$RUNNER_TEMP/dittobench-source" checkout --quiet --detach "$revision"
-          test -z "$(git -C "$RUNNER_TEMP/dittobench-source" status --porcelain)"
+          git merge-base --is-ancestor "$revision" HEAD
+          test -f services/dittobench-api/Dockerfile
+          test -f services/dittobench-api/go.mod
           printf 'revision=%s\n' "$revision" >>"$GITHUB_OUTPUT"
 
+      - name: Materialize the retired relay compatibility source
+        id: relay-source
+        run: |
+          git clone --quiet --filter=blob:none \
+            https://github.com/ditto-assistant/dittobench-api.git \
+            "$RUNNER_TEMP/model-relay-repository"
           relay_revision="$MODEL_RELAY_COMPAT_REVISION"
           [[ "$relay_revision" =~ ^[0-9a-f]{40}$ ]]
-          git -C "$RUNNER_TEMP/dittobench-source" cat-file -e "$relay_revision^{commit}"
-          git -C "$RUNNER_TEMP/dittobench-source" merge-base --is-ancestor \
+          git -C "$RUNNER_TEMP/model-relay-repository" cat-file -e \
+            "$relay_revision^{commit}"
+          git -C "$RUNNER_TEMP/model-relay-repository" merge-base --is-ancestor \
             "$relay_revision" origin/main
-          git -C "$RUNNER_TEMP/dittobench-source" worktree add --quiet --detach \
+          git -C "$RUNNER_TEMP/model-relay-repository" worktree add --quiet --detach \
             "$RUNNER_TEMP/model-relay-source" "$relay_revision"
           grep -q '^FROM .* AS relay$' "$RUNNER_TEMP/model-relay-source/Dockerfile"
           test -z "$(git -C "$RUNNER_TEMP/model-relay-source" status --porcelain)"
@@ -358,10 +353,10 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.23"
-          cache-dependency-path: ${{ runner.temp }}/dittobench-source/go.sum
+          cache-dependency-path: services/dittobench-api/go.sum
 
       - name: Verify the exact dittobench-api source
-        working-directory: ${{ runner.temp }}/dittobench-source
+        working-directory: services/dittobench-api
         run: go test ./...
 
       - name: Set up QEMU for both release platforms
@@ -381,8 +376,8 @@ jobs:
         id: dittobench-api
         uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
-          context: ${{ runner.temp }}/dittobench-source
-          file: ${{ runner.temp }}/dittobench-source/Dockerfile
+          context: services/dittobench-api
+          file: services/dittobench-api/Dockerfile
           target: sandbox
           platforms: linux/amd64,linux/arm64
           push: true
@@ -394,7 +389,7 @@ jobs:
             DITTOBENCH_SOURCE_SHA=${{ steps.dittobench-source.outputs.revision }}
             DITTOBENCH_SOFTWARE_VERSION=${{ needs.release.outputs.version }}
           labels: |
-            org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
+            org.opencontainers.image.source=https://github.com/ditto-assistant/ditto-subnet
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
             org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
             io.heyditto.validator.stack-version=${{ needs.release.outputs.version }}
@@ -422,7 +417,7 @@ jobs:
             org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
             org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
-            io.heyditto.validator.compat-source-revision=${{ steps.dittobench-source.outputs.relay_compat_revision }}
+            io.heyditto.validator.compat-source-revision=${{ steps.relay-source.outputs.relay_compat_revision }}
             io.heyditto.validator.stack-version=${{ needs.release.outputs.version }}
             io.heyditto.validator.stack-revision=${{ needs.release.outputs.commit_sha }}
             io.heyditto.validator.stack-service=model-relay
@@ -503,7 +498,7 @@ jobs:
           declare -A sources=(
             ["$VALIDATOR_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
             ["$SANDBOX_DOCKER_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
-            ["$DITTOBENCH_API_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
+            ["$DITTOBENCH_API_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
             ["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
           )
           declare -A revisions=(

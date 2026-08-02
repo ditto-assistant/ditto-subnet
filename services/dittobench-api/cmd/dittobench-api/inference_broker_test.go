@@ -1,0 +1,2022 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/ditto-assistant/dittobench-api/internal/llm"
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/google/uuid"
+)
+
+const testBrokerAgentID = "00000000-0000-0000-0000-000000000002"
+
+func TestLegacyBrokerSessionsRunConcurrentlyWithIsolatedAccounting(t *testing.T) {
+	var inFlight atomic.Int64
+	var peak atomic.Int64
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Error("legacy broker must not send a provider bearer to model-relay")
+		}
+		current := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			previous := peak.Load()
+			if current <= previous || peak.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		arrived <- struct{}{}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(2)
+	ids := make([]string, 2)
+	runIDs := []string{uuid.NewString(), uuid.NewString()}
+	for i, ip := range []string{"192.0.2.40", "192.0.2.41"} {
+		id, err := broker.prepareLegacy(runIDs[i], protocol.BenchVersionV6, upstream.URL, relayHealthSnapshot{
+			Provider: "openrouter", ProfileRevision: llm.OpenRouterRelayProfileRevision,
+			Model: llm.LockedHarnessModel,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[i] = id
+		if !broker.bindSource(id, runIDs[i], ip) {
+			t.Fatalf("failed to bind legacy session %d", i)
+		}
+	}
+
+	var wg sync.WaitGroup
+	recorders := make([]*httptest.ResponseRecorder, 2)
+	for i, ip := range []string{"192.0.2.40", "192.0.2.41"} {
+		wg.Add(1)
+		go func(i int, ip string) {
+			defer wg.Done()
+			// Match the frozen starter-kit adapter exactly: CHUTES_BASE_URL is
+			// the broker base and the client appends /chat/completions.
+			request := httptest.NewRequest(http.MethodPost, "/v1/inference/chat/completions", bytes.NewBufferString(`{"model":"qwen/qwen3-32b"}`))
+			request.RemoteAddr = ip + ":4321"
+			request.SetPathValue("rest", "chat/completions")
+			recorders[i] = httptest.NewRecorder()
+			broker.handle(recorders[i], request)
+		}(i, ip)
+	}
+	for range 2 {
+		select {
+		case <-arrived:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("legacy requests did not overlap")
+		}
+	}
+	close(release)
+	wg.Wait()
+
+	if peak.Load() != 2 {
+		t.Fatalf("peak legacy relay concurrency = %d, want 2", peak.Load())
+	}
+	for i, id := range ids {
+		if recorders[i].Code != http.StatusOK {
+			t.Fatalf("legacy response %d = %d: %s", i, recorders[i].Code, recorders[i].Body.String())
+		}
+		snapshot, err := broker.snapshot(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Provider != "openrouter" || snapshot.ProfileRevision != llm.OpenRouterRelayProfileRevision ||
+			snapshot.Model != llm.LockedHarnessModel || snapshot.Requests != 1 || snapshot.Successes != 1 ||
+			snapshot.UsageAvailable != 1 {
+			t.Fatalf("legacy session %d accounting = %+v", i, snapshot)
+		}
+		if snapshot.PromptTokens != 3 || snapshot.CompletionTokens != 4 {
+			t.Fatalf("legacy session %d token accounting = %+v", i, snapshot)
+		}
+	}
+}
+
+func TestLegacyBrokerRetainsBoundedRelayRetries(t *testing.T) {
+	requestCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		if requestCount < 3 {
+			http.Error(w, "transient", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	runID := uuid.NewString()
+	id, err := broker.prepareLegacy(runID, protocol.BenchVersionV6, upstream.URL, relayHealthSnapshot{
+		Provider: "openrouter", ProfileRevision: llm.OpenRouterRelayProfileRevision,
+		Model: llm.LockedHarnessModel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !broker.bindSource(id, runID, "192.0.2.42") {
+		t.Fatal("failed to bind legacy session")
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/chat/completions", bytes.NewBufferString(`{"model":"qwen/qwen3-32b"}`))
+	request.RemoteAddr = "192.0.2.42:4321"
+	request.SetPathValue("rest", "chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusOK || requestCount != 3 {
+		t.Fatalf("legacy retry status=%d attempts=%d body=%s", recorder.Code, requestCount, recorder.Body.String())
+	}
+	snapshot, err := broker.snapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.UpstreamAttempts != 3 || snapshot.InfrastructureFailures != 0 || snapshot.Successes != 1 {
+		t.Fatalf("legacy retry accounting = %+v", snapshot)
+	}
+}
+
+func TestLegacyBrokerRejectsUnreviewedRelayIdentity(t *testing.T) {
+	broker := newInferenceBroker(1)
+	if _, err := broker.prepareLegacy(uuid.NewString(), protocol.BenchVersionV6, "http://127.0.0.1:11434", relayHealthSnapshot{
+		Provider: "openrouter", ProfileRevision: "mutable-route", Model: llm.LockedHarnessModel,
+	}); err == nil {
+		t.Fatal("unreviewed legacy relay identity was accepted")
+	}
+}
+
+func embeddingBrokerSession(t *testing.T, broker *inferenceBroker, source string) (string, string) {
+	t.Helper()
+	runID := uuid.NewString()
+	id, err := broker.prepareLegacy(runID, protocol.BenchVersionV6, "http://127.0.0.1:11435", relayHealthSnapshot{
+		Provider: "openrouter", ProfileRevision: llm.OpenRouterRelayProfileRevision,
+		Model: llm.LockedHarnessModel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !broker.bindSource(id, runID, source) {
+		t.Fatal("failed to bind embedding broker source")
+	}
+	return id, runID
+}
+
+func admittedEmbeddingBrokerSession(t *testing.T, broker *inferenceBroker, source string) (string, string) {
+	t.Helper()
+	id, runID := embeddingBrokerSession(t, broker, source)
+	if !broker.beginEmbeddingPhase(id, runID) {
+		t.Fatal("failed to admit embedding phase")
+	}
+	t.Cleanup(func() { broker.endEmbeddingPhase(id, runID) })
+	return id, runID
+}
+
+func writeTestEmbedding(w http.ResponseWriter, inputs int) {
+	vector := make([]float64, embeddingDimensions)
+	vectors := make([][]float64, inputs)
+	for index := range vectors {
+		vectors[index] = vector
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"embeddings":        vectors,
+		"prompt_eval_count": inputs,
+	})
+}
+
+func callEmbedding(broker *inferenceBroker, source, input string) *httptest.ResponseRecorder {
+	return callEmbeddingAs(broker, source, embeddingModel, input)
+}
+
+// callEmbeddingAs is callEmbedding with the harness's `model` string under the
+// test's control. The literal `embeddinggemma` above is the string every
+// shipped harness sends; this variant exists to exercise the ones that do not.
+func callEmbeddingAs(broker *inferenceBroker, source, model, input string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodPost, embeddingAPIPath, bytes.NewBufferString(
+		`{"model":`+strconv.Quote(model)+`,"input":[`+strconv.Quote(input)+`]}`,
+	))
+	request.RemoteAddr = source + ":4321"
+	recorder := httptest.NewRecorder()
+	broker.handleEmbedding(recorder, request)
+	return recorder
+}
+
+func TestEmbeddingBrokerCapacityOneForwardsOnlyLockedOperation(t *testing.T) {
+	vector := make([]float64, embeddingDimensions)
+	for index := range vector {
+		vector[index] = float64(index) / embeddingDimensions
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != embeddingAPIPath {
+			t.Fatalf("unexpected embedding upstream route %s %s", r.Method, r.URL.Path)
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if len(request) != 2 || request["model"] != embeddingModel {
+			t.Fatalf("unlocked embedding request: %#v", request)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"model":             embeddingModel,
+			"embeddings":        [][]float64{vector},
+			"prompt_eval_count": 3,
+		})
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.embeddingURL = upstream.URL + embeddingAPIPath
+	broker.client.Transport = upstream.Client().Transport
+	admittedEmbeddingBrokerSession(t, broker, "192.0.2.60")
+	request := httptest.NewRequest(http.MethodPost, embeddingAPIPath, bytes.NewBufferString(
+		`{"model":"embeddinggemma","input":["bounded text"]}`,
+	))
+	request.RemoteAddr = "192.0.2.60:4321"
+	recorder := httptest.NewRecorder()
+	broker.handleEmbedding(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("embedding status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response) != 2 || response["model"] != nil {
+		t.Fatalf("embedding response leaked upstream metadata: %s", recorder.Body.String())
+	}
+}
+
+func TestV7EmbeddingBrokerUsesSignedLockedPlatformRoute(t *testing.T) {
+	vector := make([]float64, embeddingDimensions)
+	var calls atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Method != http.MethodPost || r.URL.Path != platformEmbeddingAPIPath {
+			t.Fatalf("unexpected hosted embedding route %s %s", r.Method, r.URL.Path)
+		}
+		for _, header := range []string{"Authorization", "X-Ditto-Grant", "X-Ditto-Generation", "X-Ditto-Nonce", "X-Ditto-Requested-At", "X-Ditto-Proof"} {
+			if r.Header.Get(header) == "" {
+				t.Fatalf("missing signed embedding header %s", header)
+			}
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload) != 4 || payload["model"] != hostedEmbeddingModel || payload["dimensions"] != float64(embeddingDimensions) || payload["encoding_format"] != "float" {
+			t.Fatalf("unlocked hosted embedding payload: %#v", payload)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list", "model": hostedEmbeddingModel,
+			"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": vector}},
+			"usage": map[string]int{"prompt_tokens": 4, "total_tokens": 4},
+		})
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.70", protocol.BenchVersionV7)
+	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+		t.Fatal("failed to admit v7 embedding phase")
+	}
+	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+	response := callEmbedding(broker, "192.0.2.70", "hosted text")
+	if response.Code != http.StatusOK {
+		t.Fatalf("hosted embedding status=%d body=%s", response.Code, response.Body.String())
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("hosted embedding calls=%d, want 1", calls.Load())
+	}
+}
+
+func TestV8EmbeddingBrokerUsesSignedLockedPlatformRoute(t *testing.T) {
+	vector := make([]float64, embeddingDimensions)
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != platformEmbeddingAPIPath {
+			t.Fatalf("unexpected hosted embedding route %s", r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list", "model": hostedEmbeddingModel,
+			"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": vector}},
+			"usage": map[string]int{"prompt_tokens": 4, "total_tokens": 4},
+		})
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
+		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.170", protocol.BenchVersionV8)
+	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+		t.Fatal("failed to admit v8 embedding phase")
+	}
+	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+	response := callEmbedding(broker, "192.0.2.170", "hosted v8 text")
+	if response.Code != http.StatusOK {
+		t.Fatalf("hosted v8 embedding status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestV7EmbeddingBrokerCountsPlatformFailureAsInfrastructure(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.71", protocol.BenchVersionV7)
+	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+		t.Fatal("failed to admit v7 embedding phase")
+	}
+	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := callEmbedding(broker, "192.0.2.71", "hosted text")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("hosted embedding status=%d body=%s", response.Code, response.Body.String())
+	}
+	snapshot, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.InfrastructureFailures != 1 {
+		t.Fatalf("hosted embedding failure accounting = %+v", snapshot)
+	}
+	if err := relayDegradedSince(start, snapshot); err == nil {
+		t.Fatal("hosted embedding infrastructure failure did not fail scoring closed")
+	}
+}
+
+func TestEmbeddingBrokerRejectsMalformedPayloadsAndManagementProbes(t *testing.T) {
+	var upstreamCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		upstreamCalls.Add(1)
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	broker.embeddingURL = upstream.URL + embeddingAPIPath
+	broker.client.Transport = upstream.Client().Transport
+	admittedEmbeddingBrokerSession(t, broker, "192.0.2.61")
+
+	tests := []struct {
+		method string
+		path   string
+		body   string
+		ip     string
+		status int
+	}{
+		// The model name is no longer an allowlist (see
+		// TestEmbeddingBrokerSubstitutesAnyRequestedModel), but every other
+		// field is still validated exactly as strictly as before.
+		{http.MethodPost, embeddingAPIPath, `{"model":"embeddinggemma","input":["x"],"keep_alive":"24h"}`, "192.0.2.61", http.StatusBadRequest},
+		{http.MethodPost, embeddingAPIPath, `{"model":"other","input":["x"],"keep_alive":"24h"}`, "192.0.2.61", http.StatusBadRequest},
+		{http.MethodPost, embeddingAPIPath, `{"model":"other","input":[]}`, "192.0.2.61", http.StatusBadRequest},
+		{http.MethodPost, embeddingAPIPath, `{"model":"other","input":["x"]} {"model":"other","input":["y"]}`, "192.0.2.61", http.StatusBadRequest},
+		{http.MethodPost, embeddingAPIPath, `not json`, "192.0.2.61", http.StatusBadRequest},
+		{http.MethodPost, "/api/pull", `{"model":"embeddinggemma"}`, "192.0.2.61", http.StatusNotFound},
+		{http.MethodGet, embeddingAPIPath, "", "192.0.2.61", http.StatusNotFound},
+		{http.MethodPost, embeddingAPIPath, `{"model":"embeddinggemma","input":["x"]}`, "192.0.2.62", http.StatusUnauthorized},
+	}
+	for _, test := range tests {
+		request := httptest.NewRequest(test.method, test.path, bytes.NewBufferString(test.body))
+		request.RemoteAddr = test.ip + ":4321"
+		recorder := httptest.NewRecorder()
+		broker.handleEmbedding(recorder, request)
+		if recorder.Code != test.status {
+			t.Fatalf("%s %s status=%d want=%d body=%s", test.method, test.path, recorder.Code, test.status, recorder.Body.String())
+		}
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("rejected embedding probes reached upstream %d time(s)", upstreamCalls.Load())
+	}
+}
+
+func TestEmbeddingBrokerRejectsPrePhaseAndLateUse(t *testing.T) {
+	var upstreamCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		writeTestEmbedding(w, 1)
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	broker.embeddingURL = upstream.URL + embeddingAPIPath
+	broker.client.Transport = upstream.Client().Transport
+	id, runID := embeddingBrokerSession(t, broker, "192.0.2.62")
+
+	if got := callEmbedding(broker, "192.0.2.62", "before").Code; got != http.StatusConflict {
+		t.Fatalf("pre-phase embedding status = %d", got)
+	}
+	if !broker.beginEmbeddingPhase(id, runID) {
+		t.Fatal("failed to begin embedding phase")
+	}
+	if got := callEmbedding(broker, "192.0.2.62", "during").Code; got != http.StatusOK {
+		t.Fatalf("admitted embedding status = %d", got)
+	}
+	broker.endEmbeddingPhase(id, runID)
+	if got := callEmbedding(broker, "192.0.2.62", "after").Code; got != http.StatusConflict {
+		t.Fatalf("late embedding status = %d", got)
+	}
+	if broker.beginEmbeddingPhase(id, runID) {
+		t.Fatal("ended embedding phase reopened")
+	}
+	if upstreamCalls.Load() != 1 {
+		t.Fatalf("pre/late probes reached upstream %d time(s)", upstreamCalls.Load())
+	}
+}
+
+func TestEmbeddingBrokerOneRequestPerSessionDoesNotStarveSibling(t *testing.T) {
+	firstArrived := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload embeddingRequest
+		if json.NewDecoder(r.Body).Decode(&payload) != nil || len(payload.Input) != 1 {
+			http.Error(w, "bad test request", http.StatusBadRequest)
+			return
+		}
+		if payload.Input[0] == "hold" {
+			firstArrived <- struct{}{}
+			<-releaseFirst
+		}
+		writeTestEmbedding(w, 1)
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(2, 2)
+	broker.embeddingURL = upstream.URL + embeddingAPIPath
+	broker.client.Transport = upstream.Client().Transport
+	admittedEmbeddingBrokerSession(t, broker, "192.0.2.63")
+	admittedEmbeddingBrokerSession(t, broker, "192.0.2.64")
+
+	firstDone := make(chan int, 1)
+	go func() {
+		firstDone <- callEmbedding(broker, "192.0.2.63", "hold").Code
+	}()
+	select {
+	case <-firstArrived:
+	case <-time.After(time.Second):
+		close(releaseFirst)
+		t.Fatal("first embedding request did not reach upstream")
+	}
+	if got := callEmbedding(broker, "192.0.2.63", "same-session").Code; got != http.StatusTooManyRequests {
+		close(releaseFirst)
+		t.Fatalf("same-session concurrent embedding status = %d", got)
+	}
+	if got := callEmbedding(broker, "192.0.2.64", "sibling").Code; got != http.StatusOK {
+		close(releaseFirst)
+		t.Fatalf("sibling embedding status = %d", got)
+	}
+	close(releaseFirst)
+	if got := <-firstDone; got != http.StatusOK {
+		t.Fatalf("first embedding status = %d", got)
+	}
+}
+
+func TestEmbeddingBrokerFailsClosedAtEverySessionBudget(t *testing.T) {
+	var upstreamCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		writeTestEmbedding(w, 1)
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	broker.embeddingURL = upstream.URL + embeddingAPIPath
+	broker.client.Transport = upstream.Client().Transport
+	id, _ := admittedEmbeddingBrokerSession(t, broker, "192.0.2.65")
+	broker.mu.RLock()
+	session := broker.sessions[id]
+	broker.mu.RUnlock()
+
+	tests := []struct {
+		name string
+		set  func()
+	}{
+		{"requests", func() { session.embeddingRequests = embeddingSessionRequests }},
+		{"inputs", func() { session.embeddingInputs = embeddingSessionInputs }},
+		{"input-bytes", func() { session.embeddingInputBytes = embeddingSessionInputBytes }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			session.mu.Lock()
+			session.embeddingRequests = 0
+			session.embeddingInputs = 0
+			session.embeddingInputBytes = 0
+			test.set()
+			session.mu.Unlock()
+			recorder := callEmbedding(broker, "192.0.2.65", "x")
+			if recorder.Code != http.StatusTooManyRequests ||
+				!strings.Contains(recorder.Body.String(), "budget exhausted") {
+				t.Fatalf("budget status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("budget-exhausted requests reached upstream %d time(s)", upstreamCalls.Load())
+	}
+}
+
+func TestMemoryAdmissionCapacityOneQueuesThenAdmitsSibling(t *testing.T) {
+	broker := newInferenceBroker(2, 1)
+	firstID, firstRun := embeddingBrokerSession(t, broker, "192.0.2.66")
+	secondID, secondRun := embeddingBrokerSession(t, broker, "192.0.2.67")
+	server := &server{memorySlots: make(chan struct{}, 1), broker: broker}
+	endFirst, ok := server.beginMemoryPhase(context.Background(), firstID, firstRun, true)
+	if !ok {
+		t.Fatal("capacity-one first phase was not admitted")
+	}
+
+	type admission struct {
+		end func()
+		ok  bool
+	}
+	admitted := make(chan admission, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		end, admittedOK := server.beginMemoryPhase(ctx, secondID, secondRun, true)
+		admitted <- admission{end: end, ok: admittedOK}
+	}()
+	select {
+	case <-admitted:
+		endFirst()
+		t.Fatal("sibling bypassed capacity-one memory admission")
+	case <-time.After(25 * time.Millisecond):
+	}
+	endFirst()
+	select {
+	case result := <-admitted:
+		if !result.ok {
+			t.Fatal("sibling was starved after the first phase released capacity")
+		}
+		result.end()
+	case <-time.After(time.Second):
+		t.Fatal("sibling did not acquire released memory capacity")
+	}
+}
+
+func TestHostedMemoryAdmissionDoesNotUseLocalOllamaQueue(t *testing.T) {
+	broker := newInferenceBroker(2, 1)
+	firstID, firstRun := embeddingBrokerSession(t, broker, "192.0.2.76")
+	secondID, secondRun := embeddingBrokerSession(t, broker, "192.0.2.77")
+	server := &server{memorySlots: make(chan struct{}, 1), broker: broker}
+	endFirst, ok := server.beginMemoryPhase(context.Background(), firstID, firstRun, false)
+	if !ok {
+		t.Fatal("first hosted phase was not admitted")
+	}
+	defer endFirst()
+	endSecond, ok := server.beginMemoryPhase(context.Background(), secondID, secondRun, false)
+	if !ok {
+		t.Fatal("second hosted phase queued behind the local Ollama lane")
+	}
+	endSecond()
+	if len(server.memorySlots) != 0 {
+		t.Fatal("hosted phases consumed the local Ollama admission slot")
+	}
+}
+
+func TestMemoryAdmissionDrainsHostileInFlightEmbeddingBeforeSibling(t *testing.T) {
+	firstArrived := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload embeddingRequest
+		if json.NewDecoder(r.Body).Decode(&payload) != nil || len(payload.Input) != 1 {
+			http.Error(w, "bad test request", http.StatusBadRequest)
+			return
+		}
+		if payload.Input[0] == "hostile-background" {
+			close(firstArrived)
+			select {
+			case <-r.Context().Done():
+				close(firstCanceled)
+			case <-releaseFirst:
+			}
+			return
+		}
+		writeTestEmbedding(w, 1)
+	}))
+	defer upstream.Close()
+	defer close(releaseFirst)
+
+	broker := newInferenceBroker(2, 1)
+	broker.embeddingURL = upstream.URL + embeddingAPIPath
+	broker.client.Transport = upstream.Client().Transport
+	firstID, firstRun := embeddingBrokerSession(t, broker, "192.0.2.68")
+	secondID, secondRun := embeddingBrokerSession(t, broker, "192.0.2.69")
+	server := &server{memorySlots: make(chan struct{}, 1), broker: broker}
+	endFirst, ok := server.beginMemoryPhase(context.Background(), firstID, firstRun, true)
+	if !ok {
+		t.Fatal("capacity-one first phase was not admitted")
+	}
+
+	firstDone := make(chan int, 1)
+	go func() {
+		firstDone <- callEmbedding(broker, "192.0.2.68", "hostile-background").Code
+	}()
+	select {
+	case <-firstArrived:
+	case <-time.After(time.Second):
+		t.Fatal("hostile embedding request did not reach upstream")
+	}
+
+	type admission struct {
+		end func()
+		ok  bool
+	}
+	admitted := make(chan admission, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		end, admittedOK := server.beginMemoryPhase(ctx, secondID, secondRun, true)
+		admitted <- admission{end: end, ok: admittedOK}
+	}()
+	select {
+	case <-admitted:
+		t.Fatal("sibling bypassed the first memory-phase admission")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	endFirst()
+	var sibling admission
+	select {
+	case sibling = <-admitted:
+		if !sibling.ok {
+			t.Fatal("sibling was not admitted after predecessor drain")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sibling was starved after predecessor drain")
+	}
+	defer sibling.end()
+	if got := len(broker.embeddingSlots); got != 0 {
+		t.Fatalf("memory admission released with %d predecessor embedding slot(s) held", got)
+	}
+	select {
+	case status := <-firstDone:
+		if status != http.StatusBadGateway {
+			t.Fatalf("canceled predecessor embedding status = %d", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled predecessor embedding request did not drain")
+	}
+	select {
+	case <-firstCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("predecessor embedding cancellation did not reach upstream")
+	}
+	if got := callEmbedding(broker, "192.0.2.69", "sibling").Code; got != http.StatusOK {
+		t.Fatalf("sibling embedding inherited predecessor capacity: status=%d", got)
+	}
+}
+
+func prepareBrokerSession(t *testing.T, broker *inferenceBroker) map[string]string {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	request.RemoteAddr = "127.0.0.1:4321"
+	broker.prepare(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("prepare status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var prepared map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &prepared); err != nil {
+		t.Fatal(err)
+	}
+	return prepared
+}
+
+func activateBrokerSession(t *testing.T, broker *inferenceBroker, prepared map[string]string, proxyURL string) {
+	t.Helper()
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "", "", "")
+}
+
+func activateBrokerSessionFor(t *testing.T, broker *inferenceBroker, prepared map[string]string, proxyURL, provider, profile, model string) {
+	t.Helper()
+	ticketDeadline := time.Now().Add(2 * time.Minute)
+	body, _ := json.Marshal(brokerActivation{
+		ActivationSecret: prepared["activation_secret"],
+		GrantID:          "00000000-0000-0000-0000-000000000001",
+		AgentID:          testBrokerAgentID,
+		SlotID:           "slot-0",
+		TicketDeadline:   ticketDeadline,
+		Bearer:           "platform-bearer-never-given-to-harness",
+		ProxyURL:         proxyURL,
+		Generation:       1,
+		ExpiresAt:        time.Now().Add(time.Minute),
+		Provider:         provider,
+		ProfileRevision:  profile,
+		Model:            model,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session/id/activate", bytes.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:4321"
+	request.SetPathValue("id", prepared["session_id"])
+	recorder := httptest.NewRecorder()
+	broker.activate(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("activate status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func claimAndBindBrokerSession(t *testing.T, broker *inferenceBroker, sessionID, sourceIP string, benchVersion int) string {
+	t.Helper()
+	broker.mu.RLock()
+	session := broker.sessions[sessionID]
+	broker.mu.RUnlock()
+	if session == nil {
+		t.Fatal("prepared broker session disappeared")
+	}
+	session.mu.Lock()
+	identity := brokerTicketIdentity{
+		GrantID: session.grantID, AgentID: session.ticketAgentID,
+		SlotID: session.ticketSlotID, TicketDeadline: session.ticketDeadline,
+	}
+	session.mu.Unlock()
+	runID := uuid.NewString()
+	if !broker.claimRun(sessionID, runID, identity, benchVersion) {
+		t.Fatal("failed to claim prepared broker session")
+	}
+	if !broker.bindSource(sessionID, runID, sourceIP) {
+		t.Fatal("failed to bind claimed broker session")
+	}
+	return runID
+}
+
+func configureBrokerUpstream(broker *inferenceBroker, upstream *httptest.Server) string {
+	proxyURL := upstream.URL + platformInferenceAPIPath
+	broker.platformProxyURL = proxyURL
+	broker.platformTransportURL = proxyURL
+	broker.client.Transport = upstream.Client().Transport
+	return proxyURL
+}
+
+func activationResponse(
+	broker *inferenceBroker,
+	prepared map[string]string,
+	proxyURL string,
+	expiresAt time.Time,
+) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(brokerActivation{
+		ActivationSecret: prepared["activation_secret"],
+		GrantID:          "00000000-0000-0000-0000-000000000001",
+		Bearer:           "platform-bearer-never-given-to-harness",
+		ProxyURL:         proxyURL,
+		Generation:       1,
+		ExpiresAt:        expiresAt,
+	})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/inference/session/id/activate",
+		bytes.NewReader(body),
+	)
+	request.RemoteAddr = "127.0.0.1:4321"
+	request.SetPathValue("id", prepared["session_id"])
+	recorder := httptest.NewRecorder()
+	broker.activate(recorder, request)
+	return recorder
+}
+
+func TestInferenceControlPlaneRequiresLoopbackOrBearer(t *testing.T) {
+	broker := newInferenceBroker(1)
+	broker.controlToken = "control-secret"
+
+	external := httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	external.RemoteAddr = "192.0.2.5:4321"
+	recorder := httptest.NewRecorder()
+	broker.prepare(recorder, external)
+	if recorder.Code != http.StatusUnauthorized || len(broker.sessions) != 0 {
+		t.Fatalf("unauthorized prepare status=%d sessions=%d", recorder.Code, len(broker.sessions))
+	}
+
+	external = httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	external.RemoteAddr = "192.0.2.5:4321"
+	external.Header.Set("Authorization", "Bearer control-secret")
+	recorder = httptest.NewRecorder()
+	broker.prepare(recorder, external)
+	if recorder.Code != http.StatusCreated || len(broker.sessions) != 1 {
+		t.Fatalf("authorized prepare status=%d sessions=%d", recorder.Code, len(broker.sessions))
+	}
+}
+
+func TestInferenceActivationRequiresConfiguredExactProxyAndBoundedExpiry(t *testing.T) {
+	broker := newInferenceBroker(1)
+	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath
+	broker.platformTransportURL = "https://platform-origin.example" + platformInferenceAPIPath
+	prepared := prepareBrokerSession(t, broker)
+
+	recorder := activationResponse(
+		broker,
+		prepared,
+		"https://attacker.example"+platformInferenceAPIPath,
+		time.Now().Add(time.Minute),
+	)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unconfigured proxy status = %d", recorder.Code)
+	}
+	recorder = activationResponse(
+		broker,
+		prepared,
+		broker.platformProxyURL,
+		time.Now().Add(brokerMaximumSessionTTL+time.Minute),
+	)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("overlong expiry status = %d", recorder.Code)
+	}
+	recorder = activationResponse(
+		broker,
+		prepared,
+		broker.platformProxyURL,
+		time.Now().Add(time.Minute),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("valid activation status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	broker.mu.RLock()
+	session := broker.sessions[prepared["session_id"]]
+	broker.mu.RUnlock()
+	session.mu.Lock()
+	transportURL := session.proxyURL
+	session.mu.Unlock()
+	if transportURL != broker.platformTransportURL {
+		t.Fatalf("session transport URL = %q, want %q", transportURL, broker.platformTransportURL)
+	}
+}
+
+func TestInferenceActivationRequiresTicketIdentityForV7Route(t *testing.T) {
+	broker := newInferenceBroker(1)
+	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath
+	broker.platformTransportURL = broker.platformProxyURL
+	prepared := prepareBrokerSession(t, broker)
+	body, _ := json.Marshal(brokerActivation{
+		ActivationSecret: prepared["activation_secret"],
+		GrantID:          "00000000-0000-0000-0000-000000000001",
+		Bearer:           "platform-bearer-never-given-to-harness",
+		ProxyURL:         broker.platformProxyURL,
+		Generation:       1,
+		ExpiresAt:        time.Now().Add(time.Minute),
+		Provider:         "amazon-bedrock",
+		ProfileRevision:  "openrouter-route-0123456789abcdef-v1",
+		Model:            llm.V7HarnessModel,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session/id/activate", bytes.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:4321"
+	request.SetPathValue("id", prepared["session_id"])
+	recorder := httptest.NewRecorder()
+	broker.activate(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("identity-free v7 activation status = %d", recorder.Code)
+	}
+}
+
+func TestConfiguredPlatformProxyURLFailsClosed(t *testing.T) {
+	valid := "https://platform.example" + platformInferenceAPIPath
+	if got := configuredPlatformProxyURL("  " + valid + "  "); got != valid {
+		t.Fatalf("configured proxy = %q", got)
+	}
+	for _, invalid := range []string{
+		"http://platform.example" + platformInferenceAPIPath,
+		"https://platform.example/other",
+		valid + "?next=https://attacker.example",
+		"https://user@platform.example" + platformInferenceAPIPath,
+	} {
+		if got := configuredPlatformProxyURL(invalid); got != "" {
+			t.Errorf("unsafe proxy %q accepted as %q", invalid, got)
+		}
+	}
+}
+
+func TestConfiguredPlatformTransportURLDefaultsToCanonicalAndFailsClosed(t *testing.T) {
+	canonical := "https://platform.example" + platformInferenceAPIPath
+	direct := "https://platform-origin.example" + platformInferenceAPIPath
+	if got := configuredPlatformTransportURL("", canonical); got != canonical {
+		t.Fatalf("empty transport = %q, want canonical %q", got, canonical)
+	}
+	if got := configuredPlatformTransportURL("  "+direct+"  ", canonical); got != direct {
+		t.Fatalf("direct transport = %q, want %q", got, direct)
+	}
+	if got := configuredPlatformTransportURL("http://platform-origin.example"+platformInferenceAPIPath, canonical); got != "" {
+		t.Fatalf("unsafe transport accepted as %q", got)
+	}
+}
+
+func TestInferenceBrokerDoesNotFollowPlatformRedirects(t *testing.T) {
+	redirectFollowed := false
+	destination := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirectFollowed = true
+	}))
+	defer destination.Close()
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+platformInferenceAPIPath, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, redirector)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSession(t, broker, prepared, proxyURL)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.50", protocol.BenchVersionV6)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/inference/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"qwen/qwen3-32b"}`),
+	)
+	request.RemoteAddr = "192.0.2.50:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusBadGateway || redirectFollowed {
+		t.Fatalf("redirect status=%d followed=%t", recorder.Code, redirectFollowed)
+	}
+}
+
+func TestInferenceBrokerRejectsSiblingSource(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("wrong-source request reached upstream")
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSession(t, broker, prepared, proxyURL)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "10.0.0.10", protocol.BenchVersionV6)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"qwen/qwen3-32b"}`))
+	request.RemoteAddr = "10.0.0.11:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong source status = %d", recorder.Code)
+	}
+}
+
+func TestInferenceBrokerAddsProofWithoutExposingBearerToHarness(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, header := range []string{"Authorization", "X-Ditto-Grant", "X-Ditto-Generation", "X-Ditto-Nonce", "X-Ditto-Requested-At", "X-Ditto-Proof"} {
+			if r.Header.Get(header) == "" {
+				t.Errorf("missing trusted broker header %s", header)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[]}`))
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSession(t, broker, prepared, proxyURL)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.10", protocol.BenchVersionV6)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"qwen/qwen3-32b","max_tokens":32}`))
+	request.RemoteAddr = "192.0.2.10:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("proxy status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if bytes.Contains(recorder.Body.Bytes(), []byte("platform-bearer")) {
+		t.Fatal("platform bearer leaked to harness response")
+	}
+}
+
+func TestInferenceBrokerTrustedProbeUsesControlPlaneSession(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	embeddingCalls := 0
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == platformEmbeddingAPIPath {
+			embeddingCalls++
+			vector := make([]float64, embeddingDimensions)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"object": "list", "model": hostedEmbeddingModel,
+				"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": vector}},
+				"usage": map[string]int{"prompt_tokens": 3, "total_tokens": 3},
+			})
+			return
+		}
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "amazon-bedrock", profile, llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.30", protocol.BenchVersionV7)
+
+	if err := broker.trustedProbe(context.Background(), prepared["session_id"]); err != nil {
+		t.Fatalf("trusted probe: %v", err)
+	}
+	snapshot, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Requests != 1 || snapshot.Successes != 1 || snapshot.UsageAvailable != 1 {
+		t.Fatalf("unexpected trusted probe accounting: %+v", snapshot)
+	}
+	if embeddingCalls != 1 {
+		t.Fatalf("trusted v7 probe made %d embedding calls, want 1", embeddingCalls)
+	}
+	if snapshot.Model != llm.V7HarnessModel || snapshot.ProfileRevision != profile || snapshot.Provider != "amazon-bedrock" {
+		t.Fatalf("v7 relay identity = %+v", snapshot)
+	}
+}
+
+// TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly replaces the
+// single-attempt contract #97 introduced. The platform still owns the first
+// line of provider retry, but one attempt here meant a fault it could not
+// absorb discarded the whole run, so v7 now gets a tiny bounded second line.
+// The bound is the point of the test: the fast window plus the slower recovery
+// window, each delivery independently signed, and the run still fails closed
+// once both are exhausted.
+func TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	requestCount := 0
+	var nonces []string
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		nonces = append(nonces, r.Header.Get("X-Ditto-Nonce"))
+		http.Error(w, "transient", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	var waitEvents []bool
+	broker.relayWait = func(_ string, waiting bool) { waitEvents = append(waitEvents, waiting) }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV7)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = "192.0.2.31:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("request status = %d, want 502: %s", recorder.Code, recorder.Body.String())
+	}
+	totalAttempts := ticketChatFastMaxAttempts + ticketRecoveryMaxAttempts
+	if requestCount != totalAttempts {
+		t.Fatalf("platform deliveries=%d, want %d", requestCount, totalAttempts)
+	}
+	if !reflect.DeepEqual(waitEvents, []bool{true, false}) {
+		t.Fatalf("relay wait events = %v, want [true false]", waitEvents)
+	}
+	seen := map[string]bool{}
+	for _, nonce := range nonces {
+		if nonce == "" || seen[nonce] {
+			t.Fatalf("platform deliveries were not independently signed: nonces=%v", nonces)
+		}
+		seen[nonce] = true
+	}
+
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage, err := relayUsageSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Requests != 1 || usage.Successes != 0 || usage.UsageAvailable != 0 {
+		t.Fatalf("provider failure accounting = %+v", usage)
+	}
+	execution, err := relayExecutionSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.UpstreamAttempts != uint64(totalAttempts) ||
+		execution.Retries != uint64(totalAttempts-1) || execution.InfrastructureFailures != 1 ||
+		execution.RecoveryWaits != 1 || execution.RecoveryExhaustions != 1 {
+		t.Fatalf("provider execution accounting = %+v", execution)
+	}
+	// One logical request, bounded deliveries, one authoritative outcome: the
+	// retries are visible in the ledger and never inflate the request count or
+	// the failure count.
+	if execution.Requests != 1 || execution.GrantDenials != 0 {
+		t.Fatalf("retry must not inflate requests or denials: %+v", execution)
+	}
+	if err := requireCompleteV7Usage(protocol.BenchVersionV7, usage, relayExecutionSummary{}); err == nil {
+		t.Fatal("v7 accepted a run with a provider infrastructure failure")
+	}
+}
+
+func TestV7InferenceBrokerWaitsForRelayThenResumes(t *testing.T) {
+	var attempts atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) <= ticketChatFastMaxAttempts {
+			http.Error(w, "transient", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	var waitEvents []bool
+	broker.relayWait = func(_ string, waiting bool) { waitEvents = append(waitEvents, waiting) }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.33", protocol.BenchVersionV7)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = "192.0.2.33:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if !reflect.DeepEqual(waitEvents, []bool{true, false}) {
+		t.Fatalf("relay wait events = %v, want [true false]", waitEvents)
+	}
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relayDegradedSince(start, end); err != nil {
+		t.Fatalf("recovered relay wait failed the run: %v", err)
+	}
+	execution, err := relayExecutionSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.RecoveryWaits != 1 || execution.RecoveryExhaustions != 0 || execution.Successes != 1 {
+		t.Fatalf("recovery execution = %+v", execution)
+	}
+}
+
+func TestInferenceBrokerRejectsExhaustedTransientFailures(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.32", protocol.BenchVersionV7)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = "192.0.2.32:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("request status = %d, want 502: %s", recorder.Code, recorder.Body.String())
+	}
+	snapshot, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Requests != 1 || snapshot.Successes != 0 ||
+		snapshot.UpstreamAttempts != ticketChatFastMaxAttempts+ticketRecoveryMaxAttempts ||
+		snapshot.InfrastructureFailures != 1 || snapshot.RecoveryExhaustions != 1 {
+		t.Fatalf("exhausted provider accounting = %+v", snapshot)
+	}
+}
+
+// TestInferenceBrokerServesTheTicketModelNotTheRequestedOne pins version
+// isolation under the substitution rule. The caller no longer selects a model
+// at all: whatever it sends, the upstream receives the session's own model. A
+// pre-v7 harness carrying the stale qwen/qwen3-32b default is therefore scored
+// on the v7 model rather than failing closed with an error it cannot act on,
+// and a caller still cannot reach a model its ticket does not pin.
+func TestInferenceBrokerServesTheTicketModelNotTheRequestedOne(t *testing.T) {
+	var delivered []string
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var seen struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &seen)
+		delivered = append(delivered, seen.Model)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "amazon-bedrock", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.40", protocol.BenchVersionV7)
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"qwen/qwen3-32b","temperature":0}`))
+	request.RemoteAddr = "192.0.2.40:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("substituted request status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if len(delivered) != 1 || delivered[0] != llm.V7HarnessModel {
+		t.Fatalf("upstream received %v, want only the ticket model %q", delivered, llm.V7HarnessModel)
+	}
+	for _, model := range delivered {
+		if model == "qwen/qwen3-32b" {
+			t.Fatal("the caller's model reached the platform proxy")
+		}
+	}
+}
+
+// TestInferenceBrokerRejectsUnparseableRequestBody keeps the substitution path
+// fail-closed on input it cannot safely rewrite.
+func TestInferenceBrokerRejectsUnparseableRequestBody(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("unparseable request reached upstream")
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.41", protocol.BenchVersionV7)
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions",
+		bytes.NewBufferString(`["not","an","object"]`))
+	request.RemoteAddr = "192.0.2.41:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unparseable body status = %d, want 400", recorder.Code)
+	}
+}
+
+func TestInferenceBrokerClaimsTicketIdentityOnceAndRejectsSiblingRemoval(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	broker := newInferenceBroker(1)
+	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(
+		t, broker, prepared, broker.platformProxyURL,
+		"amazon-bedrock", profile, llm.V7HarnessModel,
+	)
+
+	broker.mu.RLock()
+	session := broker.sessions[prepared["session_id"]]
+	broker.mu.RUnlock()
+	session.mu.Lock()
+	identity := brokerTicketIdentity{
+		GrantID: session.grantID, AgentID: session.ticketAgentID,
+		SlotID: session.ticketSlotID, TicketDeadline: session.ticketDeadline,
+	}
+	session.mu.Unlock()
+
+	wrongIdentity := identity
+	wrongIdentity.AgentID = "00000000-0000-0000-0000-000000000003"
+	if broker.claimRun(prepared["session_id"], uuid.NewString(), wrongIdentity, protocol.BenchVersionV7) {
+		t.Fatal("session accepted a run for a sibling ticket identity")
+	}
+	ownerRunID := uuid.NewString()
+	if !broker.claimRun(prepared["session_id"], ownerRunID, identity, protocol.BenchVersionV7) {
+		t.Fatal("session rejected its ticket identity")
+	}
+	if broker.claimRun(prepared["session_id"], uuid.NewString(), identity, protocol.BenchVersionV7) {
+		t.Fatal("session accepted a second run claim")
+	}
+	if broker.bindSource(prepared["session_id"], uuid.NewString(), "192.0.2.60") {
+		t.Fatal("sibling run bound a source")
+	}
+	if !broker.bindSource(prepared["session_id"], ownerRunID, "192.0.2.60") {
+		t.Fatal("owner run could not bind its source")
+	}
+	if broker.bindSource(prepared["session_id"], ownerRunID, "192.0.2.61") {
+		t.Fatal("owner run rebound an already-bound source")
+	}
+	if broker.removeRun(prepared["session_id"], uuid.NewString()) {
+		t.Fatal("sibling run removed the session")
+	}
+	broker.mu.RLock()
+	stillPresent := broker.sessions[prepared["session_id"]] != nil
+	broker.mu.RUnlock()
+	if !stillPresent {
+		t.Fatal("sibling removal deleted the owner session")
+	}
+	if !broker.removeRun(prepared["session_id"], ownerRunID) {
+		t.Fatal("owner run could not remove its session")
+	}
+}
+
+type readTrackingBody struct {
+	reads int
+}
+
+func (b *readTrackingBody) Read([]byte) (int, error) {
+	b.reads++
+	return 0, io.EOF
+}
+
+func TestInferenceBrokerRejectsOverCapacityBeforeReadingBody(t *testing.T) {
+	broker := newInferenceBroker(1)
+	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSession(t, broker, prepared, broker.platformProxyURL)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.70", protocol.BenchVersionV6)
+
+	broker.mu.RLock()
+	session := broker.sessions[prepared["session_id"]]
+	broker.mu.RUnlock()
+	session.mu.Lock()
+	session.inFlight = brokerPerSourceConcurrency
+	session.mu.Unlock()
+	body := &readTrackingBody{}
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/v1/chat/completions", body)
+	request.RemoteAddr = "192.0.2.70:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-capacity status = %d", recorder.Code)
+	}
+	if body.reads != 0 {
+		t.Fatalf("request body read %d time(s) before capacity rejection", body.reads)
+	}
+}
+
+func TestInferenceBrokerHTTPServerSetsUntrustedListenerTimeouts(t *testing.T) {
+	server := newInferenceBrokerHTTPServer(":11436", http.NewServeMux())
+	if server.ReadHeaderTimeout != brokerReadHeaderTimeout ||
+		server.ReadTimeout != brokerReadTimeout || server.WriteTimeout != brokerWriteTimeout ||
+		server.IdleTimeout != brokerIdleTimeout || server.MaxHeaderBytes != brokerMaximumHeaderBytes {
+		t.Fatalf("unexpected broker server limits: %+v", server)
+	}
+}
+
+func TestInferenceBrokerPrunesUnactivatedSessionsBeforeCapacityCheck(t *testing.T) {
+	broker := newInferenceBroker(1) // bounded to two prepared/active sessions
+	first := prepareBrokerSession(t, broker)
+	_ = prepareBrokerSession(t, broker)
+
+	broker.mu.RLock()
+	stale := broker.sessions[first["session_id"]]
+	broker.mu.RUnlock()
+	stale.mu.Lock()
+	stale.preparedAt = time.Now().Add(-3 * time.Minute)
+	stale.mu.Unlock()
+
+	third := prepareBrokerSession(t, broker)
+	if third["session_id"] == "" {
+		t.Fatal("stale prepared session did not release broker capacity")
+	}
+}
+
+func TestToolRouteIsSourceBoundAndRemoved(t *testing.T) {
+	broker := newInferenceBroker(1)
+	called := 0
+	id, stop, err := broker.registerTool(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called++
+		if r.URL.Path != "/tool" {
+			t.Errorf("forwarded path = %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), "192.0.2.20")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/tools/route/tool", nil)
+	request.SetPathValue("id", id)
+	request.RemoteAddr = "192.0.2.21:1234"
+	recorder := httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusUnauthorized || called != 0 {
+		t.Fatalf("sibling source status=%d called=%d", recorder.Code, called)
+	}
+
+	request.Method = http.MethodGet
+	recorder = httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusNoContent || called != 0 {
+		t.Fatalf("self-check status=%d called=%d", recorder.Code, called)
+	}
+
+	request.Method = http.MethodPost
+	request.RemoteAddr = "192.0.2.20:1234"
+	recorder = httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusNoContent || called != 1 {
+		t.Fatalf("bound source status=%d called=%d", recorder.Code, called)
+	}
+
+	stop()
+	recorder = httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("removed route status=%d", recorder.Code)
+	}
+}
+
+func TestToolRouteRejectsOverCapacityBeforeReadingBody(t *testing.T) {
+	broker := newInferenceBroker(1)
+	called := false
+	id, stop, err := broker.registerTool(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}), "192.0.2.80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	broker.mu.RLock()
+	route := broker.tools[id]
+	broker.mu.RUnlock()
+	for range brokerPerSourceConcurrency {
+		route.slots <- struct{}{}
+	}
+	body := &readTrackingBody{}
+	request := httptest.NewRequest(http.MethodPost, "/v1/tools/route/tool", body)
+	request.SetPathValue("id", id)
+	request.RemoteAddr = "192.0.2.80:1234"
+	recorder := httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusTooManyRequests || called || body.reads != 0 {
+		t.Fatalf("over-capacity tool status=%d called=%t body_reads=%d", recorder.Code, called, body.reads)
+	}
+}
+
+// TestV7BrokerServesBYOKShapedRequests exercises the exact request a harness
+// built against the pre-v7 BYOK contract emits once OPENAI_BASE_URL /
+// OPENROUTER_BASE_URL are aliased to the broker gateway: base URL
+// ".../v1/inference" plus the client's own "/chat/completions" suffix, carrying
+// whatever key the client found in its environment.
+//
+// Two invariants are pinned:
+//   - the aliased path shape is served (no miner change required), and
+//   - the caller's Authorization header is ignored and replaced by the
+//     ticket-bound platform bearer, so the placeholder key handed to the sandbox
+//     grants nothing and is worthless if exfiltrated.
+func TestV7BrokerServesBYOKShapedRequests(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	var seenAuthorization []string
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuthorization = append(seenAuthorization, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.71", protocol.BenchVersionV7)
+
+	// The BYOK suffix: an OpenAI/OpenRouter client appends /chat/completions to
+	// its configured base URL, which under the alias is ".../v1/inference".
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/chat/completions",
+		bytes.NewBufferString(`{"model":"`+llm.V7HarnessModel+`"}`))
+	request.RemoteAddr = "192.0.2.71:4321"
+	request.SetPathValue("rest", "chat/completions")
+	// A harness may send the injected placeholder, a stale real OpenRouter key,
+	// or nothing at all. None of it may reach or influence the upstream.
+	request.Header.Set("Authorization", "Bearer sk-or-v1-attacker-supplied")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("BYOK-shaped request status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if len(seenAuthorization) != 1 {
+		t.Fatalf("upstream deliveries = %d, want 1", len(seenAuthorization))
+	}
+	if seenAuthorization[0] != "Bearer platform-bearer-never-given-to-harness" {
+		t.Fatalf("upstream Authorization = %q; the broker must substitute the ticket bearer", seenAuthorization[0])
+	}
+	if strings.Contains(seenAuthorization[0], "attacker-supplied") {
+		t.Fatal("the caller's key reached the platform proxy")
+	}
+}
+
+// --- transient survival vs. integrity fail-closed -------------------------
+//
+// The two directions this change has to hold apart at once: a run must now
+// SURVIVE a transient provider fault, and must still FAIL CLOSED on an
+// integrity fault or a lost lease. Every test below pins one of those.
+
+// TestV7ChatSurvivesOneTransientProviderFault is the whole point of the change.
+// A single 503 used to end an 18-minute run at ~1,067 requests deep. It is now
+// absorbed, the run's usage is booked from the successful attempt only, and the
+// retry is visible in the ledger.
+func TestV7ChatSurvivesOneTransientProviderFault(t *testing.T) {
+	var attempts atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			http.Error(w, "transient", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+			"usage":   map[string]int{"prompt_tokens": 11, "completion_tokens": 7},
+		})
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.90", protocol.BenchVersionV7)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = "192.0.2.90:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("transient fault was not absorbed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("platform deliveries=%d, want 2", attempts.Load())
+	}
+
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fail-closed must NOT fire: nothing was degraded in the end.
+	if err := relayDegradedSince(start, end); err != nil {
+		t.Fatalf("an absorbed transient fault still failed the run closed: %v", err)
+	}
+	usage, err := relayUsageSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Status != "complete" || usage.Successes != 1 {
+		t.Fatalf("absorbed fault did not produce complete usage: %+v", usage)
+	}
+	// The failed attempt booked no tokens: usage is the successful attempt's.
+	if usage.PromptTokens != 11 || usage.CompletionTokens != 7 || usage.TotalTokens != 18 {
+		t.Fatalf("failed attempt leaked into observed usage: %+v", usage)
+	}
+	execution, err := relayExecutionSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Requests != 1 || execution.UpstreamAttempts != 2 || execution.Retries != 1 ||
+		execution.InfrastructureFailures != 0 || execution.GrantDenials != 0 {
+		t.Fatalf("retry ledger = %+v", execution)
+	}
+}
+
+// TestRetriedRunReportsIdenticalObservedUsageToACleanRun answers the accounting
+// question directly: a miner must never be charged for a provider fault. The
+// retried run and the clean run see the same provider usage, so every accounted
+// field of their scored TokenUsage must be identical; only the attempt ledger
+// may differ.
+func TestRetriedRunReportsIdenticalObservedUsageToACleanRun(t *testing.T) {
+	const retries = ticketChatFastMaxAttempts + ticketRecoveryMaxAttempts - 1
+	run := func(t *testing.T, faults int, sourceIP string) (protocol.TokenUsage, relayExecutionSummary) {
+		t.Helper()
+		var attempts atomic.Int64
+		upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if attempts.Add(1) <= int64(faults) {
+				http.Error(w, "transient", http.StatusBadGateway)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+				"usage":   map[string]int{"prompt_tokens": 23, "completion_tokens": 5},
+			})
+		}))
+		defer upstream.Close()
+
+		broker := newInferenceBroker(1)
+		broker.sleep = func(context.Context, time.Duration) error { return nil }
+		proxyURL := configureBrokerUpstream(broker, upstream)
+		prepared := prepareBrokerSession(t, broker)
+		activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+		claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+		start, err := broker.snapshot(prepared["session_id"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+		request.RemoteAddr = sourceIP + ":4321"
+		request.SetPathValue("rest", "v1/chat/completions")
+		recorder := httptest.NewRecorder()
+		broker.handle(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("run with %d fault(s) did not complete: %d", faults, recorder.Code)
+		}
+		end, err := broker.snapshot(prepared["session_id"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		usage, err := relayUsageSince(start, end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execution, err := relayExecutionSince(start, end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return usage, execution
+	}
+
+	cleanUsage, cleanExecution := run(t, 0, "192.0.2.91")
+	retriedUsage, retriedExecution := run(t, retries, "192.0.2.92")
+
+	// The figures that feed efficiency: identical. Retried attempts are not
+	// charged to the miner, so they book zero usage — token counts, the
+	// request and success counts, and usage availability all match the clean
+	// run exactly.
+	//
+	// ProviderLatencyMs is deliberately excluded from the comparison: it is
+	// measured wall clock against the httptest upstream, so it drifts by a
+	// millisecond or two between two otherwise identical runs (routinely so
+	// under -race). It is no part of the accounting invariant this test
+	// protects. Every other field stays exactly as strict as before.
+	cleanAccounted, retriedAccounted := cleanUsage, retriedUsage
+	cleanAccounted.ProviderLatencyMs = 0
+	retriedAccounted.ProviderLatencyMs = 0
+	if cleanAccounted != retriedAccounted {
+		t.Fatalf("retries changed observed usage:\n clean   = %+v\n retried = %+v", cleanAccounted, retriedAccounted)
+	}
+	// The audit ledger: different, and by exactly the number of retries.
+	if cleanExecution.Retries != 0 || cleanExecution.UpstreamAttempts != 1 {
+		t.Fatalf("clean run ledger = %+v", cleanExecution)
+	}
+	if retriedExecution.Retries != retries || retriedExecution.UpstreamAttempts != retries+1 {
+		t.Fatalf("retried run ledger = %+v, want %d retries", retriedExecution, retries)
+	}
+	if retriedExecution.Requests != cleanExecution.Requests {
+		t.Fatal("retries inflated the logical request count")
+	}
+}
+
+// TestV7EmbeddingSurvivesOneTransientPlatformFault covers the lane that carries
+// roughly two thirds of a v7 run's inference requests and previously had no
+// retry at all.
+func TestV7EmbeddingSurvivesOneTransientPlatformFault(t *testing.T) {
+	vector := make([]float64, embeddingDimensions)
+	var attempts atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			http.Error(w, "transient", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list", "model": hostedEmbeddingModel,
+			"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": vector}},
+			"usage": map[string]int{"prompt_tokens": 4, "total_tokens": 4},
+		})
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.93", protocol.BenchVersionV7)
+	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+		t.Fatal("failed to admit v7 embedding phase")
+	}
+	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := callEmbedding(broker, "192.0.2.93", "hosted text")
+	if response.Code != http.StatusOK {
+		t.Fatalf("transient embedding fault was not absorbed: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("embedding deliveries=%d, want 2", attempts.Load())
+	}
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relayDegradedSince(start, end); err != nil {
+		t.Fatalf("an absorbed transient embedding fault still failed the run closed: %v", err)
+	}
+	execution, err := relayExecutionSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.EmbeddingRetries != 1 || execution.InfrastructureFailures != 0 {
+		t.Fatalf("embedding retry ledger = %+v", execution)
+	}
+}
+
+// TestV7EmbeddingIntegrityFaultIsNeverRetriedAndFailsClosed is the other
+// direction. A provider that answers 200 with the WRONG model is an integrity
+// violation -- exactly what #97 exists to catch. Repeating it could not help,
+// so it must be delivered once and must still discard the run.
+func TestV7EmbeddingIntegrityFaultIsNeverRetriedAndFailsClosed(t *testing.T) {
+	vector := make([]float64, embeddingDimensions)
+	var attempts atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list", "model": "some-other/embedding-model",
+			"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": vector}},
+			"usage": map[string]int{"prompt_tokens": 4, "total_tokens": 4},
+		})
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.94", protocol.BenchVersionV7)
+	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+		t.Fatal("failed to admit v7 embedding phase")
+	}
+	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if response := callEmbedding(broker, "192.0.2.94", "hosted text"); response.Code != http.StatusBadGateway {
+		t.Fatalf("integrity fault status=%d, want 502", response.Code)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("integrity fault was retried: deliveries=%d, want 1", attempts.Load())
+	}
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.InfrastructureFailures != 1 || end.EmbeddingRetries != 0 {
+		t.Fatalf("integrity fault accounting = %+v", end)
+	}
+	if err := relayDegradedSince(start, end); err == nil {
+		t.Fatal("an integrity fault no longer fails the run closed")
+	}
+}
+
+// --- lost lease is not a provider fault -----------------------------------
+
+// TestPlatformGrantDenialIsNotCountedAsAnUpstreamProviderFault pins the
+// misdiagnosis that started this. The platform answers 429 only when it
+// declines to reserve capacity for the grant -- a revoked lease, a rewritten or
+// passed ticket deadline, an exhausted budget. It converts every real provider
+// rejection into 502 instead, so a 429 here is never a provider rate limit.
+// It must be counted as a grant denial, reported by name, and never retried.
+func TestPlatformGrantDenialIsNotCountedAsAnUpstreamProviderFault(t *testing.T) {
+	for _, lane := range []string{"chat", "embedding"} {
+		t.Run(lane, func(t *testing.T) {
+			var attempts atomic.Int64
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				attempts.Add(1)
+				http.Error(w, "inference grant unavailable", http.StatusTooManyRequests)
+			}))
+			defer upstream.Close()
+
+			broker := newInferenceBroker(1)
+			broker.sleep = func(context.Context, time.Duration) error { return nil }
+			proxyURL := configureBrokerUpstream(broker, upstream)
+			prepared := prepareBrokerSession(t, broker)
+			activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+			sourceIP := "192.0.2.95"
+			if lane == "embedding" {
+				sourceIP = "192.0.2.96"
+			}
+			runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+			start, err := broker.snapshot(prepared["session_id"])
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if lane == "chat" {
+				request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+				request.RemoteAddr = sourceIP + ":4321"
+				request.SetPathValue("rest", "v1/chat/completions")
+				recorder := httptest.NewRecorder()
+				broker.handle(recorder, request)
+				// The harness-visible response is unchanged from before this
+				// change: the run is discarded either way, and its remaining
+				// requests must not observe a different gateway contract.
+				if recorder.Code != http.StatusBadGateway {
+					t.Fatalf("harness-visible status=%d, want an unchanged 502", recorder.Code)
+				}
+			} else {
+				if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+					t.Fatal("failed to admit v7 embedding phase")
+				}
+				defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+				if response := callEmbedding(broker, sourceIP, "hosted text"); response.Code != http.StatusBadGateway {
+					t.Fatalf("harness-visible status=%d, want an unchanged 502", response.Code)
+				}
+			}
+
+			// Never retried: the grant is gone, so another delivery cannot
+			// succeed and would burn a fresh reservation against a dead lease.
+			if attempts.Load() != 1 {
+				t.Fatalf("a denied grant was retried: deliveries=%d, want 1", attempts.Load())
+			}
+			end, err := broker.snapshot(prepared["session_id"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if end.GrantDenials != 1 {
+				t.Fatalf("grant denial was not recorded: %+v", end)
+			}
+			if end.InfrastructureFailures != 0 {
+				t.Fatalf("a lost lease was miscounted as an upstream provider fault: %+v", end)
+			}
+			// Still fails closed -- #97's rule is intact; only the diagnosis
+			// changed.
+			degraded := relayDegradedSince(start, end)
+			if degraded == nil {
+				t.Fatal("a denied grant no longer fails the run closed")
+			}
+			if strings.Contains(degraded.Error(), "upstream failure") {
+				t.Fatalf("a lost lease is still reported as a provider fault: %v", degraded)
+			}
+			if !strings.Contains(degraded.Error(), "declined this run's inference grant") {
+				t.Fatalf("grant denial was not reported by name: %v", degraded)
+			}
+		})
+	}
+}
+
+// TestLegacyRelayStillTreatsA429AsAProviderFault guards the exception. The
+// frozen model-relay forwards a real provider 429 verbatim, so on that path a
+// 429 IS an upstream fault and its historical accounting must not move.
+func TestLegacyRelayStillTreatsA429AsAProviderFault(t *testing.T) {
+	if platformDeniesGrant("http://host.docker.internal:11434", http.StatusTooManyRequests) {
+		t.Fatal("a legacy relay 429 was reclassified as a platform grant denial")
+	}
+	if !platformDeniesGrant("", http.StatusTooManyRequests) {
+		t.Fatal("a ticket-path 429 was not classified as a platform grant denial")
+	}
+	if platformDeniesGrant("", http.StatusBadGateway) {
+		t.Fatal("a platform 502 must stay an upstream provider fault")
+	}
+}
+
+// TestPlatformDeclineCodeIsAdvisoryAndFailsSoft pins the parser's contract. It
+// may only ever ADD information: the fleet runs pinned builds against a
+// platform that may be older or newer, so a body this cannot understand must
+// leave every status-only decision exactly as it was.
+func TestPlatformDeclineCodeIsAdvisoryAndFailsSoft(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		body []byte
+		want int
+	}{
+		"revoked":        {[]byte(`{"error_code":4101,"message":"x"}`), platformDeclineGrantRevoked},
+		"exhausted":      {[]byte(`{"error_code":4102,"message":"x"}`), platformDeclineBudgetExhausted},
+		"at capacity":    {[]byte(`{"error_code":4103}`), platformDeclineAtCapacity},
+		"unspecified":    {[]byte(`{"error_code":4100}`), platformDeclineUnspecified},
+		"older platform": {[]byte(`{"detail":"inference grant unavailable"}`), 0},
+		"unknown code":   {[]byte(`{"error_code":9999}`), 0},
+		"not json":       {[]byte(`inference grant unavailable`), 0},
+		"empty":          {nil, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := platformDeclineCode(testCase.body); got != testCase.want {
+				t.Fatalf("platformDeclineCode=%d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestChatCapacityDeclineIsWaitedOutRatherThanKillingTheRun is the regression
+// test for `banblackycat`, which died to 17 capacity declines against a lease
+// that was still live.
+//
+// The platform now answers a full-but-healthy chat lane with 503 + Retry-After
+// instead of the 429 it reserves for a dead lease. This asserts the broker
+// treats that as backpressure end to end: it comes back, it succeeds, it does
+// NOT record a grant denial, and it does NOT charge the run's transient
+// transient budget for waiting out a queue.
+func TestChatCapacityDeclineIsWaitedOutRatherThanKillingTheRun(t *testing.T) {
+	var attempts atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) <= 3 {
+			w.Header().Set("Retry-After", "1")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error_code":4103,"message":"inference lane is at capacity"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c","object":"chat.completion","created":1,"model":"openai/gpt-oss-20b","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	sourceIP := "192.0.2.97"
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = sourceIP + ":4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("a healthy-but-full lane failed the request: status=%d", recorder.Code)
+	}
+	// Three declines waited out, then the real answer. Under the old
+	// status-only classifier the first one ended the run.
+	if attempts.Load() != 4 {
+		t.Fatalf("deliveries=%d, want 4 (three capacity waits then success)", attempts.Load())
+	}
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.GrantDenials != 0 {
+		t.Fatalf("backpressure was miscounted as a lost lease: %+v", end)
+	}
+	if end.InfrastructureFailures != 0 {
+		t.Fatalf("backpressure was miscounted as a provider fault: %+v", end)
+	}
+}
+
+// TestChatCapacityWaitingIsBounded stops the previous test's tolerance from
+// becoming a way to hold a check open forever. A platform pinned at zero
+// headroom must surface as a bounded failure, not an unbounded stall.
+func TestChatCapacityWaitingIsBounded(t *testing.T) {
+	var attempts atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error_code":4103}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	sourceIP := "192.0.2.98"
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = sourceIP + ":4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("an endlessly-full lane did not fail closed: status=%d", recorder.Code)
+	}
+	if got := attempts.Load(); got > platformChatCapacityMaxWaits+1 {
+		t.Fatalf("capacity waiting was unbounded: deliveries=%d", got)
+	}
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.GrantDenials != 0 {
+		t.Fatalf("backpressure was miscounted as a lost lease: %+v", end)
+	}
+}

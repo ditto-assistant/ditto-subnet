@@ -85,7 +85,7 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
     assert all(character in "0123456789abcdef" for character in relay_revision)
 
     build = workflow["jobs"]["build-dittobench"]
-    source = _step(build["steps"], "Materialize the reviewed dittobench-api source")
+    source = _step(build["steps"], "Materialize the retired relay compatibility source")
     relay = _step(
         build["steps"], "Build and publish the retired relay compatibility index"
     )
@@ -100,7 +100,7 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
     )
     assert (
         "io.heyditto.validator.compat-source-revision="
-        "${{ steps.dittobench-source.outputs.relay_compat_revision }}"
+        "${{ steps.relay-source.outputs.relay_compat_revision }}"
         in relay["with"]["labels"]
     )
 

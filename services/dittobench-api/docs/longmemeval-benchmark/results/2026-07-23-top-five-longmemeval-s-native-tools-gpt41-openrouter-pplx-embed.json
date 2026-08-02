@@ -1,0 +1,303 @@
+{
+  "agents": [
+    {
+      "abstention": {
+        "accuracy": 0.8,
+        "n": 30
+      },
+      "accuracy": 0.344,
+      "artifact_sha256": "17dc79bd6608f4bd4783e905db9f4fe12dd04e4753a092b749055b963e8efa3d",
+      "correct": 172,
+      "dittobench_v6_composite": 0.931983,
+      "empty_answers": 0,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "219250835b3b77cbf9b7b3e2d744323a1a90a744012f095d96a113a2c24b8c76",
+      "hypotheses_sha256": "3058ae79c54f2a1e2251e3029572a94ce18dcd35fe0aa525eb5f80893e3230b2",
+      "image_id": "sha256:3227b1dfcf3b20b0328c86ae36b89d9535232cf14c8b954175294bc0eaa713a4",
+      "n": 500,
+      "name": "whitycatboss",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.333333,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.180451,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.25,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.633333,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.514286,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.398496,
+          "n": 133
+        }
+      },
+      "rank": 1,
+      "version": 1
+    },
+    {
+      "abstention": {
+        "accuracy": 0.933333,
+        "n": 30
+      },
+      "accuracy": 0.674,
+      "artifact_sha256": "92f68b01c2d82b2333b50654bec6b9e7eac2fb02a9eb83dabc605088908ee504",
+      "correct": 337,
+      "dittobench_v6_composite": 0.931597,
+      "empty_answers": 0,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "78b381a2de1fa43509d8f3ccf00c056a7af6dfd634162b811122d6b96b49bcc9",
+      "hypotheses_sha256": "1d9fbd2c335946ab8c90aab1a5865427125a0565b9a790b0dd82d9da0d51647a",
+      "image_id": "sha256:95bf026723697ecbc9dbb8a90ab097f72a9b72d7a924798c49346d2b2ef86976",
+      "n": 500,
+      "name": "killer-4",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.769231,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.609023,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.839286,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.3,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.957143,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.548872,
+          "n": 133
+        }
+      },
+      "rank": 2,
+      "version": 2
+    },
+    {
+      "abstention": {
+        "accuracy": 0.866667,
+        "n": 30
+      },
+      "accuracy": 0.694,
+      "artifact_sha256": "07bb32981c782fc51c0f910d26e071814be53044183d96f4f1bc512c69a6207e",
+      "correct": 347,
+      "dittobench_v6_composite": 0.916441,
+      "empty_answers": 0,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "376c147cc8775b02b88e3756c88a133cf241ff7be03e1a03846381fcde740521",
+      "hypotheses_sha256": "5932c8496a9722ab80f994e7794b5a0cdb74f3f17f3ee0280f68d57ab466ba7d",
+      "image_id": "sha256:dcc07d39255641ff352ba45198757b919eb68c691d6b28ef515fe5be6057b6da",
+      "n": 500,
+      "name": "ditto-max-v1",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.846154,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.578947,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.928571,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.166667,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.957143,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.601504,
+          "n": 133
+        }
+      },
+      "rank": 3,
+      "version": 1
+    },
+    {
+      "abstention": {
+        "accuracy": 0.8,
+        "n": 30
+      },
+      "accuracy": 0.718,
+      "artifact_sha256": "6d8b7c434808b9c4bab4fbe57d91c3fcf977c6fba643c52f8375afd9b30c200a",
+      "correct": 359,
+      "dittobench_v6_composite": 0.911062,
+      "empty_answers": 1,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "37c7a6d22d298e99f4f57b41b6883a3f29379e0f62336668cf0f5469737787e6",
+      "hypotheses_sha256": "90fdb967f6ba80b057f939f0f28c570049cf544817801062b1f4adcd55968abe",
+      "image_id": "sha256:e7a4fe3bb1f47c017aa36a1c40d5bc1ad2676be20f09c7601884a84dbab5d4c5",
+      "n": 500,
+      "name": "avadakedavra",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.769231,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.736842,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.517857,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.7,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.942857,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.639098,
+          "n": 133
+        }
+      },
+      "rank": 4,
+      "version": 1
+    },
+    {
+      "abstention": {
+        "accuracy": 0.4,
+        "n": 30
+      },
+      "accuracy": 0.384,
+      "artifact_sha256": "6dc13e83976fa679efc1e2968856b55a28eecb26fc98dc9ca030815e9d5d7205",
+      "correct": 192,
+      "dittobench_v6_composite": 0.902444,
+      "empty_answers": 0,
+      "empty_answers_judged_correct": 0,
+      "evaluations_sha256": "186d308552f0318d1cbdc933b7018e9958a113929bebc734acaeb780c20ac804",
+      "hypotheses_sha256": "59913839d35a965386d007132bb82d45caabd23f4ddca257c0915465d9748766",
+      "image_id": "sha256:ac4e0eb2f4bf83165d64a83a4774dd93febd9ed8f14fc4f3b95dc8dc8178b31b",
+      "n": 500,
+      "name": "zeus_v12",
+      "per_category": {
+        "knowledge-update": {
+          "accuracy": 0.397436,
+          "n": 78
+        },
+        "multi-session": {
+          "accuracy": 0.24812,
+          "n": 133
+        },
+        "single-session-assistant": {
+          "accuracy": 0.589286,
+          "n": 56
+        },
+        "single-session-preference": {
+          "accuracy": 0.133333,
+          "n": 30
+        },
+        "single-session-user": {
+          "accuracy": 0.728571,
+          "n": 70
+        },
+        "temporal-reasoning": {
+          "accuracy": 0.300752,
+          "n": 133
+        }
+      },
+      "rank": 5,
+      "version": 1
+    }
+  ],
+  "answer_model": {
+    "id": "openai/gpt-4.1",
+    "profile_revision": "longmemeval-openrouter-gpt41-reader-v1",
+    "provider": "openrouter"
+  },
+  "condition": "longmemeval-s-cleaned-native-memory-tools-v2-openrouter-pplx-embed-v1",
+  "dataset": {
+    "huggingface_revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "longmemeval_revision": "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+    "name": "longmemeval_s_cleaned.json",
+    "questions": 500,
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+  },
+  "embedding_model": {
+    "dimensions": 768,
+    "id": "perplexity/pplx-embed-v1-0.6b",
+    "profile_revision": "longmemeval-openrouter-pplx-embed-v1-0.6b-768-v1",
+    "provider": "openrouter"
+  },
+  "judge": {
+    "official_model": "gpt-4o-2024-08-06",
+    "openrouter_model": "openai/gpt-4o-2024-08-06",
+    "profile_revision": "longmemeval-official-gpt4o-openrouter-v1"
+  },
+  "leaderboard_bench_version": 6,
+  "leaderboard_snapshot_at": "2026-07-23T05:37:19.615917Z",
+  "public_harness_revision": "c3caa8e2c19f8a41a0610b9f7db774f97643dd9c",
+  "run_telemetry": {
+    "embedding_proxy": {
+      "cache_hits": 283035,
+      "cache_misses": 100592,
+      "cache_write_failures": 0,
+      "coalesced_waits": 16,
+      "dimensions": 768,
+      "estimated_cost_usd": 0.367306688,
+      "failures": 8,
+      "profile_revision": "longmemeval-openrouter-pplx-embed-v1-0.6b-768-v1",
+      "prompt_tokens": 91826672,
+      "provider": "Perplexity",
+      "provider_latency_ms": 8634611,
+      "requests": 383627,
+      "total_tokens": 91826672,
+      "upstream_model": "perplexity/pplx-embed-v1-0.6b",
+      "upstream_requests": 100592
+    },
+    "judge_proxy": {
+      "completion_tokens": 3913,
+      "failures": 0,
+      "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
+      "prompt_tokens": 473582,
+      "provider_latency_ms": 1341130,
+      "requests": 2500,
+      "successes": 2500,
+      "upstream_model": "openai/gpt-4o-2024-08-06"
+    },
+    "notes": [
+      "Hypothesis files contain exactly 500 unique benchmark question IDs per agent.",
+      "Process-lifetime transport counters include interrupted and resumed work for agents 1, 4, and 5, so they are not a minimal per-case cost estimate.",
+      "The eight embedding failures and 48 reader failures were transient transport attempts absorbed by the harness retry and resume paths; no incomplete hypothesis was scored.",
+      "Raw memories, questions, hypotheses, reference answers, and evaluator transcripts are excluded from this aggregate telemetry."
+    ],
+    "reader_proxy": {
+      "completion_tokens": 207462,
+      "failures": 48,
+      "profile_revision": "longmemeval-openrouter-gpt41-reader-v1",
+      "prompt_tokens": 50445527,
+      "provider_latency_ms": 1991571,
+      "requests": 4060,
+      "successes": 4012,
+      "upstream_model": "openai/gpt-4.1"
+    },
+    "scope": "process_lifetime_including_interruption_and_resume"
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,3440 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-17T23:01:07.472034Z",
+  "bench_version": 2,
+  "run_size": "full",
+  "expected_runs_per_provider_agent": 3,
+  "valid_runs": 45,
+  "providers": [
+    {
+      "closeness_rank": 1,
+      "provider": "nebius",
+      "complete": true,
+      "valid_runs": 9,
+      "expected_runs": 9,
+      "run_success_rate": 1,
+      "mean_absolute_composite_delta": 0.035765111111111136,
+      "mean_signed_composite_delta": 0.024807111111111186,
+      "mean_cross_run_composite_stddev": 0.011662676002992318,
+      "total_cost_usd": 0.8027605000000001,
+      "mean_cost_per_run_usd": 0.08919561111111113,
+      "total_requests": 2200,
+      "relay_error_rate": 0.003181818181818182,
+      "total_prompt_tokens": 7701022,
+      "total_completion_tokens": 108861,
+      "total_benchmark_wall_seconds": 6897.66796533,
+      "effective_completion_tokens_per_benchmark_second": 15.782290557790258,
+      "median_run_p50_relay_latency_ms": 1664,
+      "median_run_p95_relay_latency_ms": 7119,
+      "response_provider_attribution": {
+        "Nebius": 2193
+      },
+      "agents": [
+        {
+          "rank": 1,
+          "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+          "agent_name": "uNiCorN-v2",
+          "agent_version": 1,
+          "artifact_sha256": "89a8663b7fe9bb31d005412a7f1c682b12ab0740cbdd6b21f963740c25cdd67a",
+          "dataset_seed": 2474496736613908576,
+          "dataset_sha256": "72fef4aad1eee98a176bb31cc0c19ce84453e78a844c6ba906f702b1ffc9b0bf",
+          "runs": 3,
+          "chutes_composite": 0.926437,
+          "openrouter_composite_mean": 0.91,
+          "composite_delta": -0.016436999999999924,
+          "absolute_composite_delta": 0.016436999999999924,
+          "openrouter_composite_stddev": 0.015212180612916754,
+          "openrouter_composite_min": 0.897778,
+          "openrouter_composite_max": 0.927037,
+          "chutes_tool_mean": 0.9454666666666668,
+          "openrouter_tool_mean": 0.9311111111111111,
+          "tool_mean_delta": -0.014355555555555677,
+          "chutes_memory_mean": 0.9074074074074074,
+          "openrouter_memory_mean": 0.8888888888888888,
+          "memory_mean_delta": -0.0185185185185186,
+          "chutes_median_ms": 5378,
+          "openrouter_median_ms_mean": 6774.333333333333,
+          "openrouter_vs_chutes_latency_ratio": 1.2596380314863023,
+          "total_cost_usd": 0.1603213000000002,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.905185,
+              "tool_mean": 0.9400000000000001,
+              "memory_mean": 0.8703703703703703,
+              "median_ms": 6009,
+              "cost_usd": 0.052639200000000066,
+              "requests": 285,
+              "relay_errors": 4,
+              "p50_relay_latency_ms": 1664,
+              "p95_relay_latency_ms": 16755,
+              "benchmark_wall_seconds": 1275.556529924,
+              "response_provider_attribution": {
+                "Nebius": 281
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.897778,
+              "tool_mean": 0.9066666666666667,
+              "memory_mean": 0.8888888888888888,
+              "median_ms": 8140,
+              "cost_usd": 0.053983500000000066,
+              "requests": 290,
+              "relay_errors": 1,
+              "p50_relay_latency_ms": 2063,
+              "p95_relay_latency_ms": 15048,
+              "benchmark_wall_seconds": 1242.157102241,
+              "response_provider_attribution": {
+                "Nebius": 289
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.927037,
+              "tool_mean": 0.9466666666666668,
+              "memory_mean": 0.9074074074074074,
+              "median_ms": 6174,
+              "cost_usd": 0.05369860000000006,
+              "requests": 288,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1366,
+              "p95_relay_latency_ms": 12857,
+              "benchmark_wall_seconds": 1060.848194422,
+              "response_provider_attribution": {
+                "Nebius": 288
+              }
+            }
+          ]
+        },
+        {
+          "rank": 2,
+          "agent_id": "b0186d19-92dc-4763-b9f8-a89a1ed6b3d5",
+          "agent_name": "ditto-generalist-v2",
+          "agent_version": 1,
+          "artifact_sha256": "873bc89c7819834700b687d7af6d48a5a64e2b441a29ebad7607272815b3f869",
+          "dataset_seed": 1445631621658510052,
+          "dataset_sha256": "cf51e0d6de69639d5f6388e261d5769eedea71aec4e6a2b175db3cd7945bde72",
+          "runs": 3,
+          "chutes_composite": 0.921296,
+          "openrouter_composite_mean": 0.9703703333333333,
+          "composite_delta": 0.04907433333333333,
+          "absolute_composite_delta": 0.04907433333333333,
+          "openrouter_composite_stddev": 0.004811059793157171,
+          "openrouter_composite_min": 0.964815,
+          "openrouter_composite_max": 0.973148,
+          "chutes_tool_mean": 0.9722222333333334,
+          "openrouter_tool_mean": 0.9777777777777777,
+          "tool_mean_delta": 0.0055555444444443935,
+          "chutes_memory_mean": 0.8703703703703703,
+          "openrouter_memory_mean": 0.9629629629629629,
+          "memory_mean_delta": 0.09259259259259256,
+          "chutes_median_ms": 17123,
+          "openrouter_median_ms_mean": 4267,
+          "openrouter_vs_chutes_latency_ratio": 0.24919698650937336,
+          "total_cost_usd": 0.22084550000000003,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.973148,
+              "tool_mean": 0.9833333333333333,
+              "memory_mean": 0.9629629629629629,
+              "median_ms": 4264,
+              "cost_usd": 0.07353399999999996,
+              "requests": 262,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1305,
+              "p95_relay_latency_ms": 6025,
+              "benchmark_wall_seconds": 571.6764085,
+              "response_provider_attribution": {
+                "Nebius": 262
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.964815,
+              "tool_mean": 0.9666666666666667,
+              "memory_mean": 0.9629629629629629,
+              "median_ms": 3968,
+              "cost_usd": 0.0753256,
+              "requests": 265,
+              "relay_errors": 2,
+              "p50_relay_latency_ms": 1294,
+              "p95_relay_latency_ms": 4838,
+              "benchmark_wall_seconds": 534.007604455,
+              "response_provider_attribution": {
+                "Nebius": 263
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.973148,
+              "tool_mean": 0.9833333333333333,
+              "memory_mean": 0.9629629629629629,
+              "median_ms": 4569,
+              "cost_usd": 0.07198590000000003,
+              "requests": 259,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1593,
+              "p95_relay_latency_ms": 6427,
+              "benchmark_wall_seconds": 615.178352868,
+              "response_provider_attribution": {
+                "Nebius": 259
+              }
+            }
+          ]
+        },
+        {
+          "rank": 3,
+          "agent_id": "04592829-12c9-49bc-a69b-824ced0ce260",
+          "agent_name": "Dditto-3",
+          "agent_version": 3,
+          "artifact_sha256": "6173f705f49cedcf99a804019d499a9b5cd77f02280d8de193eba8745b89c72b",
+          "dataset_seed": 5924046075728594788,
+          "dataset_sha256": "c7e23a75b605f5a76b3c458dbbeac1871c3f170da08e5839aee12578239d0023",
+          "runs": 3,
+          "chutes_composite": 0.886574,
+          "openrouter_composite_mean": 0.9283580000000001,
+          "composite_delta": 0.041784000000000154,
+          "absolute_composite_delta": 0.041784000000000154,
+          "openrouter_composite_stddev": 0.014964787602903032,
+          "openrouter_composite_min": 0.911926,
+          "openrouter_composite_max": 0.941204,
+          "chutes_tool_mean": 0.9583333333333334,
+          "openrouter_tool_mean": 0.9740000000000001,
+          "tool_mean_delta": 0.015666666666666718,
+          "chutes_memory_mean": 0.8148148148148148,
+          "openrouter_memory_mean": 0.882716049382716,
+          "memory_mean_delta": 0.0679012345679012,
+          "chutes_median_ms": 6566,
+          "openrouter_median_ms_mean": 3562.6666666666665,
+          "openrouter_vs_chutes_latency_ratio": 0.5425931566656513,
+          "total_cost_usd": 0.42159369999999996,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.911926,
+              "tool_mean": 0.972,
+              "memory_mean": 0.8518518518518519,
+              "median_ms": 3632,
+              "cost_usd": 0.1406531,
+              "requests": 184,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1887,
+              "p95_relay_latency_ms": 7119,
+              "benchmark_wall_seconds": 520.600178505,
+              "response_provider_attribution": {
+                "Nebius": 184
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.941204,
+              "tool_mean": 0.975,
+              "memory_mean": 0.9074074074074074,
+              "median_ms": 3230,
+              "cost_usd": 0.13995819999999995,
+              "requests": 183,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1735,
+              "p95_relay_latency_ms": 5113,
+              "benchmark_wall_seconds": 481.668261917,
+              "response_provider_attribution": {
+                "Nebius": 183
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.931944,
+              "tool_mean": 0.975,
+              "memory_mean": 0.8888888888888888,
+              "median_ms": 3826,
+              "cost_usd": 0.14098240000000004,
+              "requests": 184,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 2041,
+              "p95_relay_latency_ms": 7585,
+              "benchmark_wall_seconds": 595.975332498,
+              "response_provider_attribution": {
+                "Nebius": 184
+              }
+            }
+          ]
+        }
+      ],
+      "per_category_changes": [
+        {
+          "category": "abstention",
+          "count": 45,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": -0.1333333333333333
+        },
+        {
+          "category": "agent_job",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 1,
+          "delta": 0.16666666666666663
+        },
+        {
+          "category": "agent_read_not_run",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "agent_run_not_read",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.8333333333333334,
+          "delta": 0
+        },
+        {
+          "category": "agent_workflow",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "aggregation-count",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": 0
+        },
+        {
+          "category": "arg_hallucination",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": 0
+        },
+        {
+          "category": "artifacts_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "assistant-recall",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "automation_list",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "automation_not_job",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "calendar_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "calendar_search",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "canary",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "capability_discovery",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "computed-answer",
+          "count": 9,
+          "chutes_mean": 0.3333333333333333,
+          "openrouter_mean": 0.3333333333333333,
+          "delta": 0
+        },
+        {
+          "category": "contradiction",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "email_send",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        },
+        {
+          "category": "feedback",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "image_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "image_edit_not_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "injection-resistance",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.851852,
+          "delta": 0.07407399999999997
+        },
+        {
+          "category": "isolation",
+          "count": 36,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "job_chain_result_usage",
+          "count": 9,
+          "chutes_mean": 0.776,
+          "openrouter_mean": 0.8,
+          "delta": 0.02400000000000002
+        },
+        {
+          "category": "knowledge-update",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.8518518888888887,
+          "delta": 0.18518488888888884
+        },
+        {
+          "category": "link_read",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory-write",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.851851888888889,
+          "delta": 0.07407388888888888
+        },
+        {
+          "category": "memory-write-read",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.8888889999999999,
+          "delta": 0
+        },
+        {
+          "category": "memory_delete",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_fetch",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_lookup",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_save_not_search",
+          "count": 9,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.8333333333333334,
+          "delta": 0
+        },
+        {
+          "category": "memory_subject",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_update",
+          "count": 9,
+          "chutes_mean": 0.5555556666666667,
+          "openrouter_mean": 1,
+          "delta": 0.44444433333333333
+        },
+        {
+          "category": "multi-session",
+          "count": 36,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.9722222222222222,
+          "delta": 0.13888888888888884
+        },
+        {
+          "category": "multi_image_edit",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_job_status",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_subject_scope",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_web_read",
+          "count": 9,
+          "chutes_mean": 0.8888890000000002,
+          "openrouter_mean": 1,
+          "delta": 0.11111099999999985
+        },
+        {
+          "category": "multi_web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "no_tool",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "parallel_web_image",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.98,
+          "delta": -0.020000000000000018
+        },
+        {
+          "category": "point-in-time",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.8888889999999999,
+          "delta": 0
+        },
+        {
+          "category": "preference",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "preference-application",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.814815,
+          "delta": 0.14814800000000006
+        },
+        {
+          "category": "recipe_apply",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "recipe_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8888888888888888,
+          "delta": -0.11111111111111116
+        },
+        {
+          "category": "route_memory_not_web",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "route_web_not_memory",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_accent",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_effort",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.911111111111111,
+          "delta": -0.08888888888888902
+        },
+        {
+          "category": "set_font",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_model",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_tool_prefs",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        },
+        {
+          "category": "settings",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "single-session-recall",
+          "count": 90,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "temporal-reasoning",
+          "count": 36,
+          "chutes_mean": 0.5833333333333334,
+          "openrouter_mean": 0.8055555555555556,
+          "delta": 0.2222222222222222
+        },
+        {
+          "category": "web_recovery_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "web_search",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "workflow_not_job",
+          "count": 18,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        }
+      ]
+    },
+    {
+      "closeness_rank": 2,
+      "provider": "alibaba",
+      "complete": true,
+      "valid_runs": 9,
+      "expected_runs": 9,
+      "run_success_rate": 1,
+      "mean_absolute_composite_delta": 0.03625988888888887,
+      "mean_signed_composite_delta": -0.016567666666666647,
+      "mean_cross_run_composite_stddev": 0.010974266169327986,
+      "total_cost_usd": 0.8144352320000001,
+      "mean_cost_per_run_usd": 0.09049280355555557,
+      "total_requests": 2188,
+      "relay_error_rate": 0.0031992687385740404,
+      "total_prompt_tokens": 7522936,
+      "total_completion_tokens": 77043,
+      "total_benchmark_wall_seconds": 3989.403597901,
+      "effective_completion_tokens_per_benchmark_second": 19.311909188765885,
+      "median_run_p50_relay_latency_ms": 1038,
+      "median_run_p95_relay_latency_ms": 2839,
+      "response_provider_attribution": {
+        "Alibaba": 2181
+      },
+      "agents": [
+        {
+          "rank": 1,
+          "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+          "agent_name": "uNiCorN-v2",
+          "agent_version": 1,
+          "artifact_sha256": "89a8663b7fe9bb31d005412a7f1c682b12ab0740cbdd6b21f963740c25cdd67a",
+          "dataset_seed": 2474496736613908576,
+          "dataset_sha256": "72fef4aad1eee98a176bb31cc0c19ce84453e78a844c6ba906f702b1ffc9b0bf",
+          "runs": 3,
+          "chutes_composite": 0.926437,
+          "openrouter_composite_mean": 0.8642326666666668,
+          "composite_delta": -0.062204333333333195,
+          "absolute_composite_delta": 0.062204333333333195,
+          "openrouter_composite_stddev": 0.015841720119145343,
+          "openrouter_composite_min": 0.8469,
+          "openrouter_composite_max": 0.877963,
+          "chutes_tool_mean": 0.9454666666666668,
+          "openrouter_tool_mean": 0.8651259333333335,
+          "tool_mean_delta": -0.08034073333333325,
+          "chutes_memory_mean": 0.9074074074074074,
+          "openrouter_memory_mean": 0.8641975308641975,
+          "memory_mean_delta": -0.04320987654320996,
+          "chutes_median_ms": 5378,
+          "openrouter_median_ms_mean": 3156.6666666666665,
+          "openrouter_vs_chutes_latency_ratio": 0.5869592165612991,
+          "total_cost_usd": 0.16583455200000008,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.877963,
+              "tool_mean": 0.8855555666666667,
+              "memory_mean": 0.8703703703703703,
+              "median_ms": 2667,
+              "cost_usd": 0.05483545600000003,
+              "requests": 291,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 827,
+              "p95_relay_latency_ms": 2839,
+              "benchmark_wall_seconds": 418.513215249,
+              "response_provider_attribution": {
+                "Alibaba": 291
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.867835,
+              "tool_mean": 0.8665777833333335,
+              "memory_mean": 0.8703703703703703,
+              "median_ms": 2638,
+              "cost_usd": 0.055579680000000006,
+              "requests": 293,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 862,
+              "p95_relay_latency_ms": 2306,
+              "benchmark_wall_seconds": 442.704584663,
+              "response_provider_attribution": {
+                "Alibaba": 293
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.8469,
+              "tool_mean": 0.8432444500000001,
+              "memory_mean": 0.8518518518518519,
+              "median_ms": 4165,
+              "cost_usd": 0.05541941600000003,
+              "requests": 290,
+              "relay_errors": 3,
+              "p50_relay_latency_ms": 1268,
+              "p95_relay_latency_ms": 10306,
+              "benchmark_wall_seconds": 969.364159838,
+              "response_provider_attribution": {
+                "Alibaba": 287
+              }
+            }
+          ]
+        },
+        {
+          "rank": 2,
+          "agent_id": "b0186d19-92dc-4763-b9f8-a89a1ed6b3d5",
+          "agent_name": "ditto-generalist-v2",
+          "agent_version": 1,
+          "artifact_sha256": "873bc89c7819834700b687d7af6d48a5a64e2b441a29ebad7607272815b3f869",
+          "dataset_seed": 1445631621658510052,
+          "dataset_sha256": "cf51e0d6de69639d5f6388e261d5769eedea71aec4e6a2b175db3cd7945bde72",
+          "runs": 3,
+          "chutes_composite": 0.921296,
+          "openrouter_composite_mean": 0.9508343333333333,
+          "composite_delta": 0.029538333333333333,
+          "absolute_composite_delta": 0.029538333333333333,
+          "openrouter_composite_stddev": 0.006791805528232758,
+          "openrouter_composite_min": 0.945096,
+          "openrouter_composite_max": 0.958333,
+          "chutes_tool_mean": 0.9722222333333334,
+          "openrouter_tool_mean": 0.970000011111111,
+          "tool_mean_delta": -0.0022222222222223476,
+          "chutes_memory_mean": 0.8703703703703703,
+          "openrouter_memory_mean": 0.9320987654320988,
+          "memory_mean_delta": 0.06172839506172845,
+          "chutes_median_ms": 17123,
+          "openrouter_median_ms_mean": 3421.6666666666665,
+          "openrouter_vs_chutes_latency_ratio": 0.19982869045533297,
+          "total_cost_usd": 0.23401872000000007,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.945096,
+              "tool_mean": 0.9655555666666665,
+              "memory_mean": 0.9259259259259259,
+              "median_ms": 3555,
+              "cost_usd": 0.08124906400000002,
+              "requests": 263,
+              "relay_errors": 3,
+              "p50_relay_latency_ms": 1255,
+              "p95_relay_latency_ms": 6373,
+              "benchmark_wall_seconds": 583.125277408,
+              "response_provider_attribution": {
+                "Alibaba": 260
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.949074,
+              "tool_mean": 0.9722222333333334,
+              "memory_mean": 0.9259259259259259,
+              "median_ms": 4153,
+              "cost_usd": 0.07569109600000001,
+              "requests": 259,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1453,
+              "p95_relay_latency_ms": 3656,
+              "benchmark_wall_seconds": 470.634425385,
+              "response_provider_attribution": {
+                "Alibaba": 259
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.958333,
+              "tool_mean": 0.9722222333333334,
+              "memory_mean": 0.9444444444444444,
+              "median_ms": 2557,
+              "cost_usd": 0.07707856000000003,
+              "requests": 259,
+              "relay_errors": 1,
+              "p50_relay_latency_ms": 882,
+              "p95_relay_latency_ms": 2284,
+              "benchmark_wall_seconds": 310.644088032,
+              "response_provider_attribution": {
+                "Alibaba": 258
+              }
+            }
+          ]
+        },
+        {
+          "rank": 3,
+          "agent_id": "04592829-12c9-49bc-a69b-824ced0ce260",
+          "agent_name": "Dditto-3",
+          "agent_version": 3,
+          "artifact_sha256": "6173f705f49cedcf99a804019d499a9b5cd77f02280d8de193eba8745b89c72b",
+          "dataset_seed": 5924046075728594788,
+          "dataset_sha256": "c7e23a75b605f5a76b3c458dbbeac1871c3f170da08e5839aee12578239d0023",
+          "runs": 3,
+          "chutes_composite": 0.886574,
+          "openrouter_composite_mean": 0.8695369999999999,
+          "composite_delta": -0.01703700000000008,
+          "absolute_composite_delta": 0.01703700000000008,
+          "openrouter_composite_stddev": 0.010289272860605854,
+          "openrouter_composite_min": 0.859537,
+          "openrouter_composite_max": 0.880093,
+          "chutes_tool_mean": 0.9583333333333334,
+          "openrouter_tool_mean": 0.9242592611111111,
+          "tool_mean_delta": -0.03407407222222225,
+          "chutes_memory_mean": 0.8148148148148148,
+          "openrouter_memory_mean": 0.8148148148148149,
+          "memory_mean_delta": 1.1102230246251565e-16,
+          "chutes_median_ms": 6566,
+          "openrouter_median_ms_mean": 2024.3333333333333,
+          "openrouter_vs_chutes_latency_ratio": 0.30830541171692555,
+          "total_cost_usd": 0.41458196,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.859537,
+              "tool_mean": 0.9227777833333334,
+              "memory_mean": 0.7962962962962963,
+              "median_ms": 2078,
+              "cost_usd": 0.137521592,
+              "requests": 177,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1114,
+              "p95_relay_latency_ms": 2911,
+              "benchmark_wall_seconds": 279.717988838,
+              "response_provider_attribution": {
+                "Alibaba": 177
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.868981,
+              "tool_mean": 0.9416666666666667,
+              "memory_mean": 0.7962962962962963,
+              "median_ms": 1992,
+              "cost_usd": 0.138228688,
+              "requests": 178,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1010,
+              "p95_relay_latency_ms": 2461,
+              "benchmark_wall_seconds": 264.383786331,
+              "response_provider_attribution": {
+                "Alibaba": 178
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.880093,
+              "tool_mean": 0.9083333333333333,
+              "memory_mean": 0.8518518518518519,
+              "median_ms": 2003,
+              "cost_usd": 0.13883167999999999,
+              "requests": 178,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1038,
+              "p95_relay_latency_ms": 1968,
+              "benchmark_wall_seconds": 250.316072157,
+              "response_provider_attribution": {
+                "Alibaba": 178
+              }
+            }
+          ]
+        }
+      ],
+      "per_category_changes": [
+        {
+          "category": "abstention",
+          "count": 45,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8444444444444444,
+          "delta": -0.15555555555555556
+        },
+        {
+          "category": "agent_job",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.9333333333333331,
+          "delta": 0.09999999999999976
+        },
+        {
+          "category": "agent_read_not_run",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "agent_run_not_read",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.16666666666666674
+        },
+        {
+          "category": "agent_workflow",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "aggregation-count",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.4444444444444444,
+          "delta": -0.2222222222222222
+        },
+        {
+          "category": "arg_hallucination",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": 0
+        },
+        {
+          "category": "artifacts_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "assistant-recall",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "automation_list",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "automation_not_job",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "calendar_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "calendar_search",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8888888888888888,
+          "delta": -0.11111111111111116
+        },
+        {
+          "category": "canary",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "capability_discovery",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7777777777777778,
+          "delta": -0.2222222222222222
+        },
+        {
+          "category": "computed-answer",
+          "count": 9,
+          "chutes_mean": 0.3333333333333333,
+          "openrouter_mean": 0.3333333333333333,
+          "delta": 0
+        },
+        {
+          "category": "contradiction",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "email_send",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        },
+        {
+          "category": "feedback",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "image_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "image_edit_not_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "injection-resistance",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.8148150000000001,
+          "delta": 0.03703699999999999
+        },
+        {
+          "category": "isolation",
+          "count": 36,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9722222222222222,
+          "delta": -0.02777777777777779
+        },
+        {
+          "category": "job_chain_result_usage",
+          "count": 9,
+          "chutes_mean": 0.776,
+          "openrouter_mean": 0.784,
+          "delta": 0.008000000000000007
+        },
+        {
+          "category": "knowledge-update",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.5925926666666667,
+          "delta": -0.07407433333333324
+        },
+        {
+          "category": "link_read",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory-write",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.8888889999999999,
+          "delta": 0.11111099999999985
+        },
+        {
+          "category": "memory-write-read",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.8888889999999999,
+          "delta": 0
+        },
+        {
+          "category": "memory_delete",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8888890000000002,
+          "delta": -0.11111099999999985
+        },
+        {
+          "category": "memory_fetch",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_lookup",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "memory_save_not_search",
+          "count": 9,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.8333333333333334,
+          "delta": 0
+        },
+        {
+          "category": "memory_subject",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "memory_update",
+          "count": 9,
+          "chutes_mean": 0.5555556666666667,
+          "openrouter_mean": 0.5481482222222223,
+          "delta": -0.007407444444444411
+        },
+        {
+          "category": "multi-session",
+          "count": 36,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.8055555555555556,
+          "delta": -0.02777777777777779
+        },
+        {
+          "category": "multi_image_edit",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_job_status",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_subject_scope",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_web_read",
+          "count": 9,
+          "chutes_mean": 0.8888890000000002,
+          "openrouter_mean": 0.962963,
+          "delta": 0.07407399999999986
+        },
+        {
+          "category": "multi_web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "no_tool",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "parallel_web_image",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "point-in-time",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.8888889999999999,
+          "delta": 0
+        },
+        {
+          "category": "preference",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "preference-application",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.8888889999999999,
+          "delta": 0.22222200000000003
+        },
+        {
+          "category": "recipe_apply",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "recipe_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.3333333333333333,
+          "delta": -0.6666666666666667
+        },
+        {
+          "category": "route_memory_not_web",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "route_web_not_memory",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444446666666665,
+          "delta": -0.05555533333333351
+        },
+        {
+          "category": "set_accent",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_effort",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9555555555555555,
+          "delta": -0.04444444444444451
+        },
+        {
+          "category": "set_font",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_model",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_tool_prefs",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        },
+        {
+          "category": "settings",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.937037111111111,
+          "delta": -0.06296288888888901
+        },
+        {
+          "category": "single-session-recall",
+          "count": 90,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "temporal-reasoning",
+          "count": 36,
+          "chutes_mean": 0.5833333333333334,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": 0.08333333333333326
+        },
+        {
+          "category": "web_recovery_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8,
+          "delta": -0.19999999999999996
+        },
+        {
+          "category": "web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9851852222222222,
+          "delta": -0.014814777777777843
+        },
+        {
+          "category": "web_search",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "workflow_not_job",
+          "count": 18,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        }
+      ]
+    },
+    {
+      "closeness_rank": 3,
+      "provider": "deepinfra",
+      "complete": true,
+      "valid_runs": 9,
+      "expected_runs": 9,
+      "run_success_rate": 1,
+      "mean_absolute_composite_delta": 0.04604822222222223,
+      "mean_signed_composite_delta": 0.0010306666666666613,
+      "mean_cross_run_composite_stddev": 0.011980698897990938,
+      "total_cost_usd": 0.6319853999999999,
+      "mean_cost_per_run_usd": 0.0702206,
+      "total_requests": 2193,
+      "relay_error_rate": 0.005015959872321021,
+      "total_prompt_tokens": 7528954,
+      "total_completion_tokens": 105961,
+      "total_benchmark_wall_seconds": 3465.205502439,
+      "effective_completion_tokens_per_benchmark_second": 30.578561625109646,
+      "median_run_p50_relay_latency_ms": 741,
+      "median_run_p95_relay_latency_ms": 3497,
+      "response_provider_attribution": {
+        "DeepInfra": 2182
+      },
+      "agents": [
+        {
+          "rank": 1,
+          "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+          "agent_name": "uNiCorN-v2",
+          "agent_version": 1,
+          "artifact_sha256": "89a8663b7fe9bb31d005412a7f1c682b12ab0740cbdd6b21f963740c25cdd67a",
+          "dataset_seed": 2474496736613908576,
+          "dataset_sha256": "72fef4aad1eee98a176bb31cc0c19ce84453e78a844c6ba906f702b1ffc9b0bf",
+          "runs": 3,
+          "chutes_composite": 0.926437,
+          "openrouter_composite_mean": 0.8589106666666666,
+          "composite_delta": -0.06752633333333335,
+          "absolute_composite_delta": 0.06752633333333335,
+          "openrouter_composite_stddev": 0.01639625799788882,
+          "openrouter_composite_min": 0.843213,
+          "openrouter_composite_max": 0.875926,
+          "chutes_tool_mean": 0.9454666666666668,
+          "openrouter_tool_mean": 0.8955555555555557,
+          "tool_mean_delta": -0.04991111111111113,
+          "chutes_memory_mean": 0.9074074074074074,
+          "openrouter_memory_mean": 0.8518518518518517,
+          "memory_mean_delta": -0.05555555555555569,
+          "chutes_median_ms": 5378,
+          "openrouter_median_ms_mean": 2379,
+          "openrouter_vs_chutes_latency_ratio": 0.44235775381182596,
+          "total_cost_usd": 0.12787543999999995,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.875926,
+              "tool_mean": 0.9000000000000001,
+              "memory_mean": 0.8518518518518519,
+              "median_ms": 1910,
+              "cost_usd": 0.042859279999999986,
+              "requests": 289,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 520,
+              "p95_relay_latency_ms": 3497,
+              "benchmark_wall_seconds": 308.11687817,
+              "response_provider_attribution": {
+                "DeepInfra": 289
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.843213,
+              "tool_mean": 0.9233333333333335,
+              "memory_mean": 0.8518518518518519,
+              "median_ms": 2277,
+              "cost_usd": 0.042055599999999985,
+              "requests": 287,
+              "relay_errors": 1,
+              "p50_relay_latency_ms": 659,
+              "p95_relay_latency_ms": 3891,
+              "benchmark_wall_seconds": 428.339234254,
+              "response_provider_attribution": {
+                "DeepInfra": 286
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.857593,
+              "tool_mean": 0.8633333333333334,
+              "memory_mean": 0.8518518518518519,
+              "median_ms": 2950,
+              "cost_usd": 0.042960559999999995,
+              "requests": 288,
+              "relay_errors": 3,
+              "p50_relay_latency_ms": 766,
+              "p95_relay_latency_ms": 6088,
+              "benchmark_wall_seconds": 662.406085585,
+              "response_provider_attribution": {
+                "DeepInfra": 285
+              }
+            }
+          ]
+        },
+        {
+          "rank": 2,
+          "agent_id": "b0186d19-92dc-4763-b9f8-a89a1ed6b3d5",
+          "agent_name": "ditto-generalist-v2",
+          "agent_version": 1,
+          "artifact_sha256": "873bc89c7819834700b687d7af6d48a5a64e2b441a29ebad7607272815b3f869",
+          "dataset_seed": 1445631621658510052,
+          "dataset_sha256": "cf51e0d6de69639d5f6388e261d5769eedea71aec4e6a2b175db3cd7945bde72",
+          "runs": 3,
+          "chutes_composite": 0.921296,
+          "openrouter_composite_mean": 0.955556,
+          "composite_delta": 0.03425999999999996,
+          "absolute_composite_delta": 0.03425999999999996,
+          "openrouter_composite_stddev": 0,
+          "openrouter_composite_min": 0.955556,
+          "openrouter_composite_max": 0.955556,
+          "chutes_tool_mean": 0.9722222333333334,
+          "openrouter_tool_mean": 0.9666666666666667,
+          "tool_mean_delta": -0.005555566666666678,
+          "chutes_memory_mean": 0.8703703703703703,
+          "openrouter_memory_mean": 0.9444444444444443,
+          "memory_mean_delta": 0.07407407407407396,
+          "chutes_median_ms": 17123,
+          "openrouter_median_ms_mean": 2742.3333333333335,
+          "openrouter_vs_chutes_latency_ratio": 0.1601549572699488,
+          "total_cost_usd": 0.17114695999999996,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.955556,
+              "tool_mean": 0.9666666666666667,
+              "memory_mean": 0.9444444444444444,
+              "median_ms": 3270,
+              "cost_usd": 0.05753379999999998,
+              "requests": 264,
+              "relay_errors": 7,
+              "p50_relay_latency_ms": 1499,
+              "p95_relay_latency_ms": 7770,
+              "benchmark_wall_seconds": 716.211105749,
+              "response_provider_attribution": {
+                "DeepInfra": 257
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.955556,
+              "tool_mean": 0.9666666666666667,
+              "memory_mean": 0.9444444444444444,
+              "median_ms": 2731,
+              "cost_usd": 0.05574971999999999,
+              "requests": 257,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 1151,
+              "p95_relay_latency_ms": 3796,
+              "benchmark_wall_seconds": 433.274028506,
+              "response_provider_attribution": {
+                "DeepInfra": 257
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.955556,
+              "tool_mean": 0.9666666666666667,
+              "memory_mean": 0.9444444444444444,
+              "median_ms": 2226,
+              "cost_usd": 0.05786343999999999,
+              "requests": 260,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 885,
+              "p95_relay_latency_ms": 3226,
+              "benchmark_wall_seconds": 333.98072353,
+              "response_provider_attribution": {
+                "DeepInfra": 260
+              }
+            }
+          ]
+        },
+        {
+          "rank": 3,
+          "agent_id": "04592829-12c9-49bc-a69b-824ced0ce260",
+          "agent_name": "Dditto-3",
+          "agent_version": 3,
+          "artifact_sha256": "6173f705f49cedcf99a804019d499a9b5cd77f02280d8de193eba8745b89c72b",
+          "dataset_seed": 5924046075728594788,
+          "dataset_sha256": "c7e23a75b605f5a76b3c458dbbeac1871c3f170da08e5839aee12578239d0023",
+          "runs": 3,
+          "chutes_composite": 0.886574,
+          "openrouter_composite_mean": 0.9229323333333334,
+          "composite_delta": 0.03635833333333338,
+          "absolute_composite_delta": 0.03635833333333338,
+          "openrouter_composite_stddev": 0.019545838696083992,
+          "openrouter_composite_min": 0.903056,
+          "openrouter_composite_max": 0.94213,
+          "chutes_tool_mean": 0.9583333333333334,
+          "openrouter_tool_mean": 0.96314815,
+          "tool_mean_delta": 0.00481481666666661,
+          "chutes_memory_mean": 0.8148148148148148,
+          "openrouter_memory_mean": 0.8827160493827161,
+          "memory_mean_delta": 0.06790123456790131,
+          "chutes_median_ms": 6566,
+          "openrouter_median_ms_mean": 1440,
+          "openrouter_vs_chutes_latency_ratio": 0.21931160523911056,
+          "total_cost_usd": 0.332963,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.923611,
+              "tool_mean": 0.9583333333333334,
+              "memory_mean": 0.8888888888888888,
+              "median_ms": 1455,
+              "cost_usd": 0.11190135999999998,
+              "requests": 184,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 741,
+              "p95_relay_latency_ms": 1886,
+              "benchmark_wall_seconds": 202.889203552,
+              "response_provider_attribution": {
+                "DeepInfra": 184
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.903056,
+              "tool_mean": 0.9727777833333333,
+              "memory_mean": 0.8333333333333334,
+              "median_ms": 1398,
+              "cost_usd": 0.10876696000000001,
+              "requests": 180,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 717,
+              "p95_relay_latency_ms": 1806,
+              "benchmark_wall_seconds": 184.241772627,
+              "response_provider_attribution": {
+                "DeepInfra": 180
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.94213,
+              "tool_mean": 0.9583333333333334,
+              "memory_mean": 0.9259259259259259,
+              "median_ms": 1467,
+              "cost_usd": 0.11229468000000002,
+              "requests": 184,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 691,
+              "p95_relay_latency_ms": 1610,
+              "benchmark_wall_seconds": 195.746470466,
+              "response_provider_attribution": {
+                "DeepInfra": 184
+              }
+            }
+          ]
+        }
+      ],
+      "per_category_changes": [
+        {
+          "category": "abstention",
+          "count": 45,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8222222222222222,
+          "delta": -0.1777777777777778
+        },
+        {
+          "category": "agent_job",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.8888888888888888,
+          "delta": 0.05555555555555547
+        },
+        {
+          "category": "agent_read_not_run",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "agent_run_not_read",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.16666666666666674
+        },
+        {
+          "category": "agent_workflow",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": -0.1333333333333333
+        },
+        {
+          "category": "aggregation-count",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 1,
+          "delta": 0.33333333333333337
+        },
+        {
+          "category": "arg_hallucination",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": 0
+        },
+        {
+          "category": "artifacts_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "assistant-recall",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.962963,
+          "delta": -0.03703699999999999
+        },
+        {
+          "category": "automation_list",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "automation_not_job",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "calendar_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "calendar_search",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "canary",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "capability_discovery",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "computed-answer",
+          "count": 9,
+          "chutes_mean": 0.3333333333333333,
+          "openrouter_mean": 0.3333333333333333,
+          "delta": 0
+        },
+        {
+          "category": "contradiction",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "email_send",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        },
+        {
+          "category": "feedback",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "image_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "image_edit_not_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "injection-resistance",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.8888889999999999,
+          "delta": 0.11111099999999985
+        },
+        {
+          "category": "isolation",
+          "count": 36,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "job_chain_result_usage",
+          "count": 9,
+          "chutes_mean": 0.776,
+          "openrouter_mean": 0.8,
+          "delta": 0.02400000000000002
+        },
+        {
+          "category": "knowledge-update",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.6666668888888888,
+          "delta": -1.1111111108963456e-7
+        },
+        {
+          "category": "link_read",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory-write",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.962963,
+          "delta": 0.18518499999999993
+        },
+        {
+          "category": "memory-write-read",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.851852,
+          "delta": -0.037036999999999876
+        },
+        {
+          "category": "memory_delete",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_fetch",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_lookup",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_save_not_search",
+          "count": 9,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.8333333333333334,
+          "delta": 0
+        },
+        {
+          "category": "memory_subject",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_update",
+          "count": 9,
+          "chutes_mean": 0.5555556666666667,
+          "openrouter_mean": 0.8888888888888888,
+          "delta": 0.33333322222222217
+        },
+        {
+          "category": "multi-session",
+          "count": 36,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.8055555555555556,
+          "delta": -0.02777777777777779
+        },
+        {
+          "category": "multi_image_edit",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_job_status",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_subject_scope",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_web_read",
+          "count": 9,
+          "chutes_mean": 0.8888890000000002,
+          "openrouter_mean": 1,
+          "delta": 0.11111099999999985
+        },
+        {
+          "category": "multi_web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "no_tool",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "parallel_web_image",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "point-in-time",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.8518518888888887,
+          "delta": -0.03703711111111119
+        },
+        {
+          "category": "preference",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "preference-application",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.8518519999999999,
+          "delta": 0.18518500000000004
+        },
+        {
+          "category": "recipe_apply",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "recipe_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "route_memory_not_web",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "route_web_not_memory",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "set_accent",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_effort",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.911111111111111,
+          "delta": -0.08888888888888902
+        },
+        {
+          "category": "set_font",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_model",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_tool_prefs",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        },
+        {
+          "category": "settings",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "single-session-recall",
+          "count": 90,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9888888888888889,
+          "delta": -0.011111111111111072
+        },
+        {
+          "category": "temporal-reasoning",
+          "count": 36,
+          "chutes_mean": 0.5833333333333334,
+          "openrouter_mean": 0.7777777777777778,
+          "delta": 0.19444444444444442
+        },
+        {
+          "category": "web_recovery_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": -0.1333333333333333
+        },
+        {
+          "category": "web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9851852222222222,
+          "delta": -0.014814777777777843
+        },
+        {
+          "category": "web_search",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "workflow_not_job",
+          "count": 18,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        }
+      ]
+    },
+    {
+      "closeness_rank": 4,
+      "provider": "siliconflow",
+      "complete": true,
+      "valid_runs": 9,
+      "expected_runs": 9,
+      "run_success_rate": 1,
+      "mean_absolute_composite_delta": 0.06810655555555552,
+      "mean_signed_composite_delta": -0.04785877777777773,
+      "mean_cross_run_composite_stddev": 0.057358293394697696,
+      "total_cost_usd": 1.09547525,
+      "mean_cost_per_run_usd": 0.12171947222222222,
+      "total_requests": 2183,
+      "relay_error_rate": 0.01832340815391663,
+      "total_prompt_tokens": 7526644,
+      "total_completion_tokens": 73237,
+      "total_benchmark_wall_seconds": 8769.968185838,
+      "effective_completion_tokens_per_benchmark_second": 8.350885481918308,
+      "median_run_p50_relay_latency_ms": 2526,
+      "median_run_p95_relay_latency_ms": 9029,
+      "response_provider_attribution": {
+        "SiliconFlow": 2143
+      },
+      "agents": [
+        {
+          "rank": 1,
+          "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+          "agent_name": "uNiCorN-v2",
+          "agent_version": 1,
+          "artifact_sha256": "89a8663b7fe9bb31d005412a7f1c682b12ab0740cbdd6b21f963740c25cdd67a",
+          "dataset_seed": 2474496736613908576,
+          "dataset_sha256": "72fef4aad1eee98a176bb31cc0c19ce84453e78a844c6ba906f702b1ffc9b0bf",
+          "runs": 3,
+          "chutes_composite": 0.926437,
+          "openrouter_composite_mean": 0.7637853333333333,
+          "composite_delta": -0.16265166666666664,
+          "absolute_composite_delta": 0.16265166666666664,
+          "openrouter_composite_stddev": 0.14965868930781578,
+          "openrouter_composite_min": 0.595596,
+          "openrouter_composite_max": 0.88226,
+          "chutes_tool_mean": 0.9454666666666668,
+          "openrouter_tool_mean": 0.8715037166666669,
+          "tool_mean_delta": -0.07396294999999986,
+          "chutes_memory_mean": 0.9074074074074074,
+          "openrouter_memory_mean": 0.8065843641975308,
+          "memory_mean_delta": -0.10082304320987667,
+          "chutes_median_ms": 5378,
+          "openrouter_median_ms_mean": 6649.666666666667,
+          "openrouter_vs_chutes_latency_ratio": 1.236457171191273,
+          "total_cost_usd": 0.21307355,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.8135,
+              "tool_mean": 0.8813555666666668,
+              "memory_mean": 0.8312757222222222,
+              "median_ms": 6488,
+              "cost_usd": 0.07121235000000001,
+              "requests": 286,
+              "relay_errors": 4,
+              "p50_relay_latency_ms": 2095,
+              "p95_relay_latency_ms": 9029,
+              "benchmark_wall_seconds": 1221.029731287,
+              "response_provider_attribution": {
+                "SiliconFlow": 282
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.595596,
+              "tool_mean": 0.8554666833333334,
+              "memory_mean": 0.7016460925925926,
+              "median_ms": 7562,
+              "cost_usd": 0.06500015999999997,
+              "requests": 281,
+              "relay_errors": 10,
+              "p50_relay_latency_ms": 2526,
+              "p95_relay_latency_ms": 27205,
+              "benchmark_wall_seconds": 1770.632735084,
+              "response_provider_attribution": {
+                "SiliconFlow": 271
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.88226,
+              "tool_mean": 0.8776889000000002,
+              "memory_mean": 0.8868312777777777,
+              "median_ms": 5899,
+              "cost_usd": 0.07686104,
+              "requests": 293,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 2044,
+              "p95_relay_latency_ms": 5456,
+              "benchmark_wall_seconds": 855.333701966,
+              "response_provider_attribution": {
+                "SiliconFlow": 293
+              }
+            }
+          ]
+        },
+        {
+          "rank": 2,
+          "agent_id": "b0186d19-92dc-4763-b9f8-a89a1ed6b3d5",
+          "agent_name": "ditto-generalist-v2",
+          "agent_version": 1,
+          "artifact_sha256": "873bc89c7819834700b687d7af6d48a5a64e2b441a29ebad7607272815b3f869",
+          "dataset_seed": 1445631621658510052,
+          "dataset_sha256": "cf51e0d6de69639d5f6388e261d5769eedea71aec4e6a2b175db3cd7945bde72",
+          "runs": 3,
+          "chutes_composite": 0.921296,
+          "openrouter_composite_mean": 0.9516676666666667,
+          "composite_delta": 0.030371666666666686,
+          "absolute_composite_delta": 0.030371666666666686,
+          "openrouter_composite_stddev": 0.008981579890717104,
+          "openrouter_composite_min": 0.943233,
+          "openrouter_composite_max": 0.961111,
+          "chutes_tool_mean": 0.9722222333333334,
+          "openrouter_tool_mean": 0.9659259277777777,
+          "tool_mean_delta": -0.0062963055555556036,
+          "chutes_memory_mean": 0.8703703703703703,
+          "openrouter_memory_mean": 0.9382716049382717,
+          "memory_mean_delta": 0.06790123456790131,
+          "chutes_median_ms": 17123,
+          "openrouter_median_ms_mean": 6682.333333333333,
+          "openrouter_vs_chutes_latency_ratio": 0.39025482294769215,
+          "total_cost_usd": 0.30851439,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.961111,
+              "tool_mean": 0.9777777833333334,
+              "memory_mean": 0.9444444444444444,
+              "median_ms": 6876,
+              "cost_usd": 0.10325308999999998,
+              "requests": 261,
+              "relay_errors": 10,
+              "p50_relay_latency_ms": 2526,
+              "p95_relay_latency_ms": 10002,
+              "benchmark_wall_seconds": 965.129609794,
+              "response_provider_attribution": {
+                "SiliconFlow": 251
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.950659,
+              "tool_mean": 0.9766666666666667,
+              "memory_mean": 0.9259259259259259,
+              "median_ms": 6661,
+              "cost_usd": 0.10144306000000002,
+              "requests": 256,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 2336,
+              "p95_relay_latency_ms": 5936,
+              "benchmark_wall_seconds": 737.019825119,
+              "response_provider_attribution": {
+                "SiliconFlow": 256
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.943233,
+              "tool_mean": 0.9433333333333334,
+              "memory_mean": 0.9444444444444444,
+              "median_ms": 6510,
+              "cost_usd": 0.10381824000000002,
+              "requests": 268,
+              "relay_errors": 16,
+              "p50_relay_latency_ms": 2364,
+              "p95_relay_latency_ms": 9998,
+              "benchmark_wall_seconds": 917.712382092,
+              "response_provider_attribution": {
+                "SiliconFlow": 252
+              }
+            }
+          ]
+        },
+        {
+          "rank": 3,
+          "agent_id": "04592829-12c9-49bc-a69b-824ced0ce260",
+          "agent_name": "Dditto-3",
+          "agent_version": 3,
+          "artifact_sha256": "6173f705f49cedcf99a804019d499a9b5cd77f02280d8de193eba8745b89c72b",
+          "dataset_seed": 5924046075728594788,
+          "dataset_sha256": "c7e23a75b605f5a76b3c458dbbeac1871c3f170da08e5839aee12578239d0023",
+          "runs": 3,
+          "chutes_composite": 0.886574,
+          "openrouter_composite_mean": 0.8752776666666667,
+          "composite_delta": -0.011296333333333242,
+          "absolute_composite_delta": 0.011296333333333242,
+          "openrouter_composite_stddev": 0.013434610985560194,
+          "openrouter_composite_min": 0.861574,
+          "openrouter_composite_max": 0.888426,
+          "chutes_tool_mean": 0.9583333333333334,
+          "openrouter_tool_mean": 0.9172222222222223,
+          "tool_mean_delta": -0.0411111111111111,
+          "chutes_memory_mean": 0.8148148148148148,
+          "openrouter_memory_mean": 0.8333333333333334,
+          "memory_mean_delta": 0.0185185185185186,
+          "chutes_median_ms": 6566,
+          "openrouter_median_ms_mean": 5897.333333333333,
+          "openrouter_vs_chutes_latency_ratio": 0.8981622499746167,
+          "total_cost_usd": 0.5738873099999999,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.888426,
+              "tool_mean": 0.925,
+              "memory_mean": 0.8518518518518519,
+              "median_ms": 6087,
+              "cost_usd": 0.19497404000000002,
+              "requests": 182,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 3285,
+              "p95_relay_latency_ms": 10032,
+              "benchmark_wall_seconds": 899.935080875,
+              "response_provider_attribution": {
+                "SiliconFlow": 182
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.861574,
+              "tool_mean": 0.9083333333333333,
+              "memory_mean": 0.8148148148148148,
+              "median_ms": 5927,
+              "cost_usd": 0.18845483999999996,
+              "requests": 177,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 3205,
+              "p95_relay_latency_ms": 6767,
+              "benchmark_wall_seconds": 685.292364914,
+              "response_provider_attribution": {
+                "SiliconFlow": 177
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.875833,
+              "tool_mean": 0.9183333333333333,
+              "memory_mean": 0.8333333333333334,
+              "median_ms": 5678,
+              "cost_usd": 0.19045842999999998,
+              "requests": 179,
+              "relay_errors": 0,
+              "p50_relay_latency_ms": 3272,
+              "p95_relay_latency_ms": 6550,
+              "benchmark_wall_seconds": 717.882754707,
+              "response_provider_attribution": {
+                "SiliconFlow": 179
+              }
+            }
+          ]
+        }
+      ],
+      "per_category_changes": [
+        {
+          "category": "abstention",
+          "count": 45,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7111111111111111,
+          "delta": -0.28888888888888886
+        },
+        {
+          "category": "agent_job",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 1,
+          "delta": 0.16666666666666663
+        },
+        {
+          "category": "agent_read_not_run",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8333333333333334,
+          "delta": -0.16666666666666663
+        },
+        {
+          "category": "agent_run_not_read",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.16666666666666674
+        },
+        {
+          "category": "agent_workflow",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "aggregation-count",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": 0
+        },
+        {
+          "category": "arg_hallucination",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.3333333333333333,
+          "delta": -0.3333333333333333
+        },
+        {
+          "category": "artifacts_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "assistant-recall",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9629629999999999,
+          "delta": -0.0370370000000001
+        },
+        {
+          "category": "automation_list",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8888888888888888,
+          "delta": -0.11111111111111116
+        },
+        {
+          "category": "automation_not_job",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "calendar_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "calendar_search",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "canary",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8888888888888888,
+          "delta": -0.11111111111111116
+        },
+        {
+          "category": "capability_discovery",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "computed-answer",
+          "count": 9,
+          "chutes_mean": 0.3333333333333333,
+          "openrouter_mean": 0.4444444444444444,
+          "delta": 0.1111111111111111
+        },
+        {
+          "category": "contradiction",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9629629999999999,
+          "delta": -0.0370370000000001
+        },
+        {
+          "category": "email_send",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        },
+        {
+          "category": "feedback",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "image_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "image_edit_not_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444446666666665,
+          "delta": -0.05555533333333351
+        },
+        {
+          "category": "injection-resistance",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.814814888888889,
+          "delta": 0.0370368888888889
+        },
+        {
+          "category": "isolation",
+          "count": 36,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "job_chain_result_usage",
+          "count": 9,
+          "chutes_mean": 0.776,
+          "openrouter_mean": 0.776,
+          "delta": 0
+        },
+        {
+          "category": "knowledge-update",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -3.333333332689037e-7
+        },
+        {
+          "category": "link_read",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9444444444444444,
+          "delta": -0.05555555555555558
+        },
+        {
+          "category": "memory-write",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.925926,
+          "delta": 0.14814799999999995
+        },
+        {
+          "category": "memory-write-read",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.8518519999999999,
+          "delta": -0.03703699999999999
+        },
+        {
+          "category": "memory_delete",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9555555555555555,
+          "delta": -0.04444444444444451
+        },
+        {
+          "category": "memory_fetch",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_lookup",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_save_not_search",
+          "count": 9,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.8333333333333334,
+          "delta": 0
+        },
+        {
+          "category": "memory_subject",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "memory_update",
+          "count": 9,
+          "chutes_mean": 0.5555556666666667,
+          "openrouter_mean": 0.5407407777777777,
+          "delta": -0.014814888888888933
+        },
+        {
+          "category": "multi-session",
+          "count": 36,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.7962962222222223,
+          "delta": -0.037037111111111076
+        },
+        {
+          "category": "multi_image_edit",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_job_status",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8911111111111111,
+          "delta": -0.10888888888888892
+        },
+        {
+          "category": "multi_subject_scope",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "multi_web_read",
+          "count": 9,
+          "chutes_mean": 0.8888890000000002,
+          "openrouter_mean": 1,
+          "delta": 0.11111099999999985
+        },
+        {
+          "category": "multi_web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "no_tool",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "parallel_web_image",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "point-in-time",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.8518519999999999,
+          "delta": -0.03703699999999999
+        },
+        {
+          "category": "preference",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "preference-application",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.8888889999999999,
+          "delta": 0.22222200000000003
+        },
+        {
+          "category": "recipe_apply",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "recipe_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.5555555555555556,
+          "delta": -0.4444444444444444
+        },
+        {
+          "category": "route_memory_not_web",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "route_web_not_memory",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9629631111111111,
+          "delta": -0.0370368888888889
+        },
+        {
+          "category": "set_accent",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_effort",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.911111111111111,
+          "delta": -0.08888888888888902
+        },
+        {
+          "category": "set_font",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "set_model",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8888888888888888,
+          "delta": -0.11111111111111116
+        },
+        {
+          "category": "set_tool_prefs",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.8666666666666667,
+          "delta": 0
+        },
+        {
+          "category": "settings",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9629631111111111,
+          "delta": -0.0370368888888889
+        },
+        {
+          "category": "single-session-recall",
+          "count": 90,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.9222222222222223,
+          "delta": -0.07777777777777772
+        },
+        {
+          "category": "temporal-reasoning",
+          "count": 36,
+          "chutes_mean": 0.5833333333333334,
+          "openrouter_mean": 0.8333333333333334,
+          "delta": 0.25
+        },
+        {
+          "category": "web_recovery_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "web_search",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 1,
+          "delta": 0
+        },
+        {
+          "category": "workflow_not_job",
+          "count": 18,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.911111111111111,
+          "delta": 0.04444444444444429
+        }
+      ]
+    },
+    {
+      "closeness_rank": 5,
+      "provider": "groq",
+      "complete": true,
+      "valid_runs": 9,
+      "expected_runs": 9,
+      "run_success_rate": 1,
+      "mean_absolute_composite_delta": 0.33991711111111106,
+      "mean_signed_composite_delta": -0.33991711111111106,
+      "mean_cross_run_composite_stddev": 0.04429676629545424,
+      "total_cost_usd": 1.1321369399999994,
+      "mean_cost_per_run_usd": 0.12579299333333327,
+      "total_requests": 2297,
+      "relay_error_rate": 0.2886373530692207,
+      "total_prompt_tokens": 4128733,
+      "total_completion_tokens": 161167,
+      "total_benchmark_wall_seconds": 3088.2521736649996,
+      "effective_completion_tokens_per_benchmark_second": 52.18712428160755,
+      "median_run_p50_relay_latency_ms": 603,
+      "median_run_p95_relay_latency_ms": 2732,
+      "response_provider_attribution": {
+        "Groq": 1634
+      },
+      "agents": [
+        {
+          "rank": 1,
+          "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+          "agent_name": "uNiCorN-v2",
+          "agent_version": 1,
+          "artifact_sha256": "89a8663b7fe9bb31d005412a7f1c682b12ab0740cbdd6b21f963740c25cdd67a",
+          "dataset_seed": 2474496736613908576,
+          "dataset_sha256": "72fef4aad1eee98a176bb31cc0c19ce84453e78a844c6ba906f702b1ffc9b0bf",
+          "runs": 3,
+          "chutes_composite": 0.926437,
+          "openrouter_composite_mean": 0.5899893333333334,
+          "composite_delta": -0.3364476666666666,
+          "absolute_composite_delta": 0.3364476666666666,
+          "openrouter_composite_stddev": 0.030003302490448205,
+          "openrouter_composite_min": 0.556325,
+          "openrouter_composite_max": 0.613909,
+          "chutes_tool_mean": 0.9454666666666668,
+          "openrouter_tool_mean": 0.8988888944444445,
+          "tool_mean_delta": -0.04657777222222226,
+          "chutes_memory_mean": 0.9074074074074074,
+          "openrouter_memory_mean": 0.5123456790123457,
+          "memory_mean_delta": -0.3950617283950617,
+          "chutes_median_ms": 5378,
+          "openrouter_median_ms_mean": 1920.6666666666667,
+          "openrouter_vs_chutes_latency_ratio": 0.35713400272716006,
+          "total_cost_usd": 0.35524182999999976,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.556325,
+              "tool_mean": 0.8988889,
+              "memory_mean": 0.5555555555555556,
+              "median_ms": 1853,
+              "cost_usd": 0.12530595999999994,
+              "requests": 292,
+              "relay_errors": 21,
+              "p50_relay_latency_ms": 605,
+              "p95_relay_latency_ms": 1797,
+              "benchmark_wall_seconds": 261.286736829,
+              "response_provider_attribution": {
+                "Groq": 271
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.613909,
+              "tool_mean": 0.8900000000000001,
+              "memory_mean": 0.5555555555555556,
+              "median_ms": 1729,
+              "cost_usd": 0.12366300999999993,
+              "requests": 290,
+              "relay_errors": 25,
+              "p50_relay_latency_ms": 603,
+              "p95_relay_latency_ms": 2732,
+              "benchmark_wall_seconds": 299.245433791,
+              "response_provider_attribution": {
+                "Groq": 265
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.599734,
+              "tool_mean": 0.9077777833333334,
+              "memory_mean": 0.42592592592592593,
+              "median_ms": 2180,
+              "cost_usd": 0.10627285999999991,
+              "requests": 287,
+              "relay_errors": 33,
+              "p50_relay_latency_ms": 752,
+              "p95_relay_latency_ms": 2875,
+              "benchmark_wall_seconds": 546.41567817,
+              "response_provider_attribution": {
+                "Groq": 254
+              }
+            }
+          ]
+        },
+        {
+          "rank": 2,
+          "agent_id": "b0186d19-92dc-4763-b9f8-a89a1ed6b3d5",
+          "agent_name": "ditto-generalist-v2",
+          "agent_version": 1,
+          "artifact_sha256": "873bc89c7819834700b687d7af6d48a5a64e2b441a29ebad7607272815b3f869",
+          "dataset_seed": 1445631621658510052,
+          "dataset_sha256": "cf51e0d6de69639d5f6388e261d5769eedea71aec4e6a2b175db3cd7945bde72",
+          "runs": 3,
+          "chutes_composite": 0.921296,
+          "openrouter_composite_mean": 0.8662346666666667,
+          "composite_delta": -0.055061333333333295,
+          "absolute_composite_delta": 0.055061333333333295,
+          "openrouter_composite_stddev": 0.022700470487047934,
+          "openrouter_composite_min": 0.845926,
+          "openrouter_composite_max": 0.890741,
+          "chutes_tool_mean": 0.9722222333333334,
+          "openrouter_tool_mean": 0.8985185222222224,
+          "tool_mean_delta": -0.07370371111111096,
+          "chutes_memory_mean": 0.8703703703703703,
+          "openrouter_memory_mean": 0.8641975308641975,
+          "memory_mean_delta": -0.006172839506172867,
+          "chutes_median_ms": 17123,
+          "openrouter_median_ms_mean": 2761.3333333333335,
+          "openrouter_vs_chutes_latency_ratio": 0.161264575911542,
+          "total_cost_usd": 0.4969255999999997,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.890741,
+              "tool_mean": 0.9111111166666668,
+              "memory_mean": 0.8703703703703703,
+              "median_ms": 1897,
+              "cost_usd": 0.15674365,
+              "requests": 339,
+              "relay_errors": 115,
+              "p50_relay_latency_ms": 591,
+              "p95_relay_latency_ms": 5382,
+              "benchmark_wall_seconds": 555.723988409,
+              "response_provider_attribution": {
+                "Groq": 224
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.845926,
+              "tool_mean": 0.84,
+              "memory_mean": 0.8518518518518519,
+              "median_ms": 2916,
+              "cost_usd": 0.15978497999999983,
+              "requests": 359,
+              "relay_errors": 144,
+              "p50_relay_latency_ms": 747,
+              "p95_relay_latency_ms": 4671,
+              "benchmark_wall_seconds": 593.294989053,
+              "response_provider_attribution": {
+                "Groq": 215
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.862037,
+              "tool_mean": 0.9444444500000001,
+              "memory_mean": 0.8703703703703703,
+              "median_ms": 3471,
+              "cost_usd": 0.18039696999999982,
+              "requests": 342,
+              "relay_errors": 101,
+              "p50_relay_latency_ms": 952,
+              "p95_relay_latency_ms": 4108,
+              "benchmark_wall_seconds": 539.60252675,
+              "response_provider_attribution": {
+                "Groq": 241
+              }
+            }
+          ]
+        },
+        {
+          "rank": 3,
+          "agent_id": "04592829-12c9-49bc-a69b-824ced0ce260",
+          "agent_name": "Dditto-3",
+          "agent_version": 3,
+          "artifact_sha256": "6173f705f49cedcf99a804019d499a9b5cd77f02280d8de193eba8745b89c72b",
+          "dataset_seed": 5924046075728594788,
+          "dataset_sha256": "c7e23a75b605f5a76b3c458dbbeac1871c3f170da08e5839aee12578239d0023",
+          "runs": 3,
+          "chutes_composite": 0.886574,
+          "openrouter_composite_mean": 0.2583316666666667,
+          "composite_delta": -0.6282423333333333,
+          "absolute_composite_delta": 0.6282423333333333,
+          "openrouter_composite_stddev": 0.08018652590886659,
+          "openrouter_composite_min": 0.180625,
+          "openrouter_composite_max": 0.340787,
+          "chutes_tool_mean": 0.9583333333333334,
+          "openrouter_tool_mean": 0.18888888888888888,
+          "tool_mean_delta": -0.7694444444444445,
+          "chutes_memory_mean": 0.8148148148148148,
+          "openrouter_memory_mean": 0.4567901234567901,
+          "memory_mean_delta": -0.35802469135802467,
+          "chutes_median_ms": 6566,
+          "openrouter_median_ms_mean": 0,
+          "openrouter_vs_chutes_latency_ratio": 0,
+          "total_cost_usd": 0.27996951000000003,
+          "run_results": [
+            {
+              "run": 1,
+              "composite": 0.340787,
+              "tool_mean": 0.2833333333333333,
+              "memory_mean": 0.5185185185185185,
+              "median_ms": 0,
+              "cost_usd": 0.11230469000000004,
+              "requests": 136,
+              "relay_errors": 67,
+              "p50_relay_latency_ms": 527,
+              "p95_relay_latency_ms": 1055,
+              "benchmark_wall_seconds": 105.41610484,
+              "response_provider_attribution": {
+                "Groq": 69
+              }
+            },
+            {
+              "run": 2,
+              "composite": 0.253583,
+              "tool_mean": 0.2,
+              "memory_mean": 0.46296296296296297,
+              "median_ms": 0,
+              "cost_usd": 0.09968128999999999,
+              "requests": 130,
+              "relay_errors": 72,
+              "p50_relay_latency_ms": 391,
+              "p95_relay_latency_ms": 1100,
+              "benchmark_wall_seconds": 103.225315617,
+              "response_provider_attribution": {
+                "Groq": 58
+              }
+            },
+            {
+              "run": 3,
+              "composite": 0.180625,
+              "tool_mean": 0.08333333333333333,
+              "memory_mean": 0.3888888888888889,
+              "median_ms": 0,
+              "cost_usd": 0.06798353,
+              "requests": 122,
+              "relay_errors": 85,
+              "p50_relay_latency_ms": 294,
+              "p95_relay_latency_ms": 957,
+              "benchmark_wall_seconds": 84.041400206,
+              "response_provider_attribution": {
+                "Groq": 37
+              }
+            }
+          ]
+        }
+      ],
+      "per_category_changes": [
+        {
+          "category": "abstention",
+          "count": 45,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6,
+          "delta": -0.4
+        },
+        {
+          "category": "agent_job",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.6444444444444444,
+          "delta": -0.188888888888889
+        },
+        {
+          "category": "agent_read_not_run",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6481482222222222,
+          "delta": -0.35185177777777776
+        },
+        {
+          "category": "agent_run_not_read",
+          "count": 18,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.7222222222222222,
+          "delta": -0.11111111111111116
+        },
+        {
+          "category": "agent_workflow",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "aggregation-count",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.5555555555555556,
+          "delta": -0.11111111111111105
+        },
+        {
+          "category": "arg_hallucination",
+          "count": 9,
+          "chutes_mean": 0.6666666666666666,
+          "openrouter_mean": 0.4444444444444444,
+          "delta": -0.2222222222222222
+        },
+        {
+          "category": "artifacts_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "assistant-recall",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7037037777777777,
+          "delta": -0.2962962222222223
+        },
+        {
+          "category": "automation_list",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.5555555555555556,
+          "delta": -0.4444444444444444
+        },
+        {
+          "category": "automation_not_job",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "calendar_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "calendar_search",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "canary",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "capability_discovery",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.5555555555555556,
+          "delta": -0.4444444444444444
+        },
+        {
+          "category": "computed-answer",
+          "count": 9,
+          "chutes_mean": 0.3333333333333333,
+          "openrouter_mean": 0.3333333333333333,
+          "delta": 0
+        },
+        {
+          "category": "contradiction",
+          "count": 27,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.5925925555555556,
+          "delta": -0.40740744444444443
+        },
+        {
+          "category": "email_send",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.7555555555555556,
+          "delta": -0.11111111111111105
+        },
+        {
+          "category": "feedback",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.5555555555555556,
+          "delta": -0.4444444444444444
+        },
+        {
+          "category": "image_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7222222222222222,
+          "delta": -0.2777777777777778
+        },
+        {
+          "category": "image_edit_not_create",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6296297777777777,
+          "delta": -0.37037022222222227
+        },
+        {
+          "category": "injection-resistance",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.5925925555555556,
+          "delta": -0.1851854444444445
+        },
+        {
+          "category": "isolation",
+          "count": 36,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6111111111111112,
+          "delta": -0.38888888888888884
+        },
+        {
+          "category": "job_chain_result_usage",
+          "count": 9,
+          "chutes_mean": 0.776,
+          "openrouter_mean": 0.4666666666666667,
+          "delta": -0.30933333333333335
+        },
+        {
+          "category": "knowledge-update",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.3703701111111111,
+          "delta": -0.2962968888888888
+        },
+        {
+          "category": "link_read",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "memory-write",
+          "count": 27,
+          "chutes_mean": 0.7777780000000001,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.11111133333333345
+        },
+        {
+          "category": "memory-write-read",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.48148144444444446,
+          "delta": -0.40740755555555547
+        },
+        {
+          "category": "memory_delete",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.4444444444444444,
+          "delta": -0.5555555555555556
+        },
+        {
+          "category": "memory_fetch",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "memory_lookup",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7222222222222222,
+          "delta": -0.2777777777777778
+        },
+        {
+          "category": "memory_save_not_search",
+          "count": 9,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.16666666666666674
+        },
+        {
+          "category": "memory_subject",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7222222222222222,
+          "delta": -0.2777777777777778
+        },
+        {
+          "category": "memory_update",
+          "count": 9,
+          "chutes_mean": 0.5555556666666667,
+          "openrouter_mean": 0.48148155555555555,
+          "delta": -0.07407411111111112
+        },
+        {
+          "category": "multi-session",
+          "count": 36,
+          "chutes_mean": 0.8333333333333334,
+          "openrouter_mean": 0.6111111111111112,
+          "delta": -0.2222222222222222
+        },
+        {
+          "category": "multi_image_edit",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7777777777777778,
+          "delta": -0.2222222222222222
+        },
+        {
+          "category": "multi_job_status",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "multi_subject_scope",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "multi_web_read",
+          "count": 9,
+          "chutes_mean": 0.8888890000000002,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.22222233333333352
+        },
+        {
+          "category": "multi_web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "no_tool",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "parallel_web_image",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "point-in-time",
+          "count": 27,
+          "chutes_mean": 0.8888889999999999,
+          "openrouter_mean": 0.6296296666666665,
+          "delta": -0.2592593333333334
+        },
+        {
+          "category": "preference",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "preference-application",
+          "count": 27,
+          "chutes_mean": 0.6666669999999999,
+          "openrouter_mean": 0.7037037777777777,
+          "delta": 0.03703677777777781
+        },
+        {
+          "category": "recipe_apply",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "recipe_create",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "route_memory_not_web",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7777777777777778,
+          "delta": -0.2222222222222222
+        },
+        {
+          "category": "route_web_not_memory",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7222222222222222,
+          "delta": -0.2777777777777778
+        },
+        {
+          "category": "set_accent",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6666666666666666,
+          "delta": -0.33333333333333337
+        },
+        {
+          "category": "set_effort",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.4444444444444444,
+          "delta": -0.5555555555555556
+        },
+        {
+          "category": "set_font",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.8888888888888888,
+          "delta": -0.11111111111111116
+        },
+        {
+          "category": "set_model",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.5555555555555556,
+          "delta": -0.4444444444444444
+        },
+        {
+          "category": "set_tool_prefs",
+          "count": 9,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.7555555555555556,
+          "delta": -0.11111111111111105
+        },
+        {
+          "category": "settings",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6777777777777777,
+          "delta": -0.3222222222222223
+        },
+        {
+          "category": "single-session-recall",
+          "count": 90,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7222222222222222,
+          "delta": -0.2777777777777778
+        },
+        {
+          "category": "temporal-reasoning",
+          "count": 36,
+          "chutes_mean": 0.5833333333333334,
+          "openrouter_mean": 0.5833333333333334,
+          "delta": 0
+        },
+        {
+          "category": "web_recovery_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.4,
+          "delta": -0.6
+        },
+        {
+          "category": "web_result_usage",
+          "count": 9,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.7777777777777778,
+          "delta": -0.2222222222222222
+        },
+        {
+          "category": "web_search",
+          "count": 18,
+          "chutes_mean": 1,
+          "openrouter_mean": 0.6111111111111112,
+          "delta": -0.38888888888888884
+        },
+        {
+          "category": "workflow_not_job",
+          "count": 18,
+          "chutes_mean": 0.8666666666666667,
+          "openrouter_mean": 0.7222222222222222,
+          "delta": -0.1444444444444445
+        }
+      ]
+    }
+  ]
+}

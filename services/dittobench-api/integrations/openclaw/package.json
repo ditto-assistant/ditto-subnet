@@ -1,0 +1,17 @@
+{
+  "name": "openclaw-dittobench-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A native-memory DittoBench adapter for OpenClaw",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "openclaw": "2026.7.1"
+  },
+  "engines": {
+    "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
+  }
+}

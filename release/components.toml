@@ -72,9 +72,19 @@ paths = [
   "scripts/sandbox-docker-entrypoint.sh",
 ]
 
+[components.dittobench_api]
+description = "DittoBench scorer and hosted API"
+paths = [
+  "services/dittobench-api/Dockerfile",
+  "services/dittobench-api/cmd/**",
+  "services/dittobench-api/go.mod",
+  "services/dittobench-api/go.sum",
+  "services/dittobench-api/internal/**",
+]
+
 [components.validator_stack]
 description = "Signed, digest-bound validator stack"
-depends_on = ["validator", "sandbox_docker"]
+depends_on = ["validator", "sandbox_docker", "dittobench_api"]
 paths = [
   ".dockerignore",
   ".github/workflows/release.yml",

@@ -1,7 +1,6 @@
 """Regression checks for production Compose invariants."""
 
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
 
 import yaml
 
@@ -277,54 +276,35 @@ def test_screened_image_capability_is_enabled_without_a_global_requirement() -> 
     assert validator["VALIDATOR_EXECUTOR_ISOLATION"] == "privileged_dind"
 
 
-def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
+def test_dittobench_context_is_the_local_monorepo_service() -> None:
     raw_compose = COMPOSE_PATH.read_text()
-    context_prefix = "${DITTOBENCH_BUILD_CONTEXT:-"
-    context_line = next(
-        line for line in raw_compose.splitlines() if context_prefix in line
-    )
-    remote_context = context_line.split(context_prefix, 1)[1].removesuffix("}")
-    parsed = urlsplit(remote_context)
-    query = parse_qs(parsed.query)
-
-    assert parsed.scheme == "https"
-    assert parsed.netloc == "github.com"
-    assert parsed.path == "/ditto-assistant/dittobench-api.git"
-    assert query.get("ref") == ["refs/heads/main"]
-    assert set(query) == {"ref", "checksum"}
-    assert len(query["checksum"]) == 1
-    checksum = query["checksum"][0]
-    assert len(checksum) == 40
-    assert checksum == checksum.lower()
-    assert all(character in "0123456789abcdef" for character in checksum)
-    # The checksum must remain the exact reviewed source commit. A moving branch
-    # paired with a stale checksum makes the documented local Compose build
-    # fail before the release materializer can replace the source context.
-    assert checksum == "f528cef3f00a1e70b557b0bbe715b19eaad84585"
-
     compose = yaml.safe_load(raw_compose)
-    expected = compose["x-dittobench-build-context"]
-    assert compose["services"]["dittobench-api"]["build"]["context"] == expected
+    assert compose["x-dittobench-build-context"] == (
+        "${DITTOBENCH_BUILD_CONTEXT:-./services/dittobench-api}"
+    )
+    assert compose["x-dittobench-revision"] == (
+        "${DITTOBENCH_SOURCE_REVISION:-source-build}"
+    )
+    assert (
+        compose["services"]["dittobench-api"]["build"]["context"]
+        == (compose["x-dittobench-build-context"])
+    )
     validator_environment = compose["services"]["ditto-subnet"]["environment"]
     assert validator_environment["VALIDATOR_STACK_COMPONENT_DITTOBENCH_API"] == (
-        f"source:{checksum}"
+        "${DITTOBENCH_SOURCE_IDENTITY:-source:source-build}"
     )
     assert "VALIDATOR_STACK_COMPONENT_MODEL_RELAY" not in validator_environment
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
-    assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == checksum
-    # One anchor definition plus the build-context default. Everything else that
-    # names the revision aliases the anchor or carries the `source:` prefix, so
-    # no copy of the revision can drift away from the build context.
-    assert raw_compose.count(checksum) == 3
-    assert f"x-dittobench-revision: &dittobench-revision {checksum}" in raw_compose
+    assert (
+        scorer_environment["DITTOBENCH_SOURCE_SHA"]
+        == (compose["x-dittobench-revision"])
+    )
     assert "DITTOBENCH_SOURCE_SHA: *dittobench-revision" in raw_compose
     wrapper = COMPOSE_WRAPPER_PATH.read_text()
-    assert 'git -C "$checkout" fetch' in wrapper
-    assert 'context_override="${DITTOBENCH_BUILD_CONTEXT:-}"' in wrapper
-    assert 'merge-base --is-ancestor "$checksum" FETCH_HEAD' in wrapper
-    assert 'verified_marker="$checkout.ref-verified"' in wrapper
-    assert "DITTOBENCH_ALLOW_UNMERGED_SMOKE:-false" in wrapper
-    assert "SUBTENSOR_NETWORK:-finney" in wrapper
+    assert 'dittobench_context="$ROOT_DIR/services/dittobench-api"' in wrapper
+    assert 'export DITTOBENCH_SOURCE_REVISION="$checksum"' in wrapper
+    assert 'export DITTOBENCH_SOURCE_IDENTITY="source:$checksum"' in wrapper
+    assert "dittobench-api source has local changes" in wrapper
     assert "materialize_context=false" in wrapper
 
 

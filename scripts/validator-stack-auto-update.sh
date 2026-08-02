@@ -251,7 +251,7 @@ validate_release_image_labels() {
   validate_image_labels "$(manifest_value "$manifest" SANDBOX_DOCKER_IMAGE)" \
     https://github.com/ditto-assistant/ditto-subnet "$stack_revision" "$version" || return 1
   validate_image_labels "$(manifest_value "$manifest" DITTOBENCH_API_IMAGE)" \
-    https://github.com/ditto-assistant/dittobench-api "$dbench_revision" "$version" || return 1
+    https://github.com/ditto-assistant/ditto-subnet "$dbench_revision" "$version" || return 1
   if release_is_legacy "$dir"; then
     validate_image_labels "$(manifest_value "$manifest" MODEL_RELAY_IMAGE)" \
       https://github.com/ditto-assistant/dittobench-api "$dbench_revision" "$version" || return 1

@@ -1,0 +1,369 @@
+{
+  "runs": 60,
+  "n_tools": 110,
+  "n_mem": 85,
+  "harness": "refharness (tools) + fixed reference-competence policy (memory)",
+  "mem_profile_source": "synthetic placeholder (refMemoryCompetence)",
+  "target_sigma": 0.01,
+  "tool_mean": {
+    "mean": 0.3581,
+    "stddev": 0.03,
+    "min": 0.3018,
+    "max": 0.4394,
+    "n": 60
+  },
+  "memory_mean": {
+    "mean": 0.6168,
+    "stddev": 0.0101,
+    "min": 0.5947,
+    "max": 0.6406,
+    "n": 60
+  },
+  "composite": {
+    "mean": 0.4875,
+    "stddev": 0.0162,
+    "min": 0.4575,
+    "max": 0.5292,
+    "n": 60
+  },
+  "per_category": {
+    "abstention": {
+      "mean": 0.6667,
+      "stddev": 0.3249,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "agent_job": {
+      "mean": 0.58,
+      "stddev": 0.06,
+      "min": 0.4,
+      "max": 0.6,
+      "n": 60
+    },
+    "agent_read_not_run": {
+      "mean": 0.0222,
+      "stddev": 0.0831,
+      "min": 0,
+      "max": 0.3333,
+      "n": 60
+    },
+    "agent_run_not_read": {
+      "mean": 0.1778,
+      "stddev": 0.1872,
+      "min": 0,
+      "max": 0.6667,
+      "n": 60
+    },
+    "agent_workflow": {
+      "mean": 0.425,
+      "stddev": 0.1841,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "arg_hallucination": {
+      "mean": 0.0083,
+      "stddev": 0.064,
+      "min": 0,
+      "max": 0.5,
+      "n": 60
+    },
+    "artifacts_create": {
+      "mean": 0.6556,
+      "stddev": 0.3041,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "automation_list": {
+      "mean": 0,
+      "stddev": 0,
+      "min": 0,
+      "max": 0,
+      "n": 60
+    },
+    "automation_not_job": {
+      "mean": 0.455,
+      "stddev": 0.2012,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "calendar_create": {
+      "mean": 0.365,
+      "stddev": 0.2128,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "calendar_search": {
+      "mean": 0.2,
+      "stddev": 0.1871,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "capability_discovery": {
+      "mean": 0.1167,
+      "stddev": 0.2303,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "code_compute": {
+      "mean": 0.5917,
+      "stddev": 0.3226,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "code_compute_not_agent_job": {
+      "mean": 0.1833,
+      "stddev": 0.2882,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "email_send": {
+      "mean": 0.295,
+      "stddev": 0.2085,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "feedback": {
+      "mean": 0.41,
+      "stddev": 0.2047,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "image_create": {
+      "mean": 0.6889,
+      "stddev": 0.278,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "image_edit_not_create": {
+      "mean": 0,
+      "stddev": 0,
+      "min": 0,
+      "max": 0,
+      "n": 60
+    },
+    "job_chain_result_usage": {
+      "mean": 0.4556,
+      "stddev": 0.2354,
+      "min": 0,
+      "max": 0.6667,
+      "n": 60
+    },
+    "link_read": {
+      "mean": 0.1767,
+      "stddev": 0.1553,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "memory_delete": {
+      "mean": 0.225,
+      "stddev": 0.2022,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "memory_fetch": {
+      "mean": 0.15,
+      "stddev": 0.263,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "memory_lookup": {
+      "mean": 0.0722,
+      "stddev": 0.1373,
+      "min": 0,
+      "max": 0.3333,
+      "n": 60
+    },
+    "memory_save_not_search": {
+      "mean": 0.1917,
+      "stddev": 0.2753,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "memory_subject": {
+      "mean": 0.6833,
+      "stddev": 0.254,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "memory_update": {
+      "mean": 0.425,
+      "stddev": 0.192,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "multi_image_edit": {
+      "mean": 0.6667,
+      "stddev": 0,
+      "min": 0.6667,
+      "max": 0.6667,
+      "n": 60
+    },
+    "multi_job_status": {
+      "mean": 0.6333,
+      "stddev": 0.1,
+      "min": 0.3333,
+      "max": 0.6667,
+      "n": 60
+    },
+    "multi_subject_scope": {
+      "mean": 0.6667,
+      "stddev": 0.3496,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "multi_web_read": {
+      "mean": 0.4278,
+      "stddev": 0.2202,
+      "min": 0,
+      "max": 0.6667,
+      "n": 60
+    },
+    "multi_web_result_usage": {
+      "mean": 0.4944,
+      "stddev": 0.2063,
+      "min": 0,
+      "max": 0.6667,
+      "n": 60
+    },
+    "no_tool": {
+      "mean": 0.7083,
+      "stddev": 0.2929,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "parallel_web_image": {
+      "mean": 0.5633,
+      "stddev": 0.266,
+      "min": 0,
+      "max": 0.8667,
+      "n": 60
+    },
+    "recipe_apply": {
+      "mean": 0.405,
+      "stddev": 0.1883,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "recipe_create": {
+      "mean": 0.6,
+      "stddev": 0,
+      "min": 0.6,
+      "max": 0.6,
+      "n": 60
+    },
+    "route_memory_not_web": {
+      "mean": 0.05,
+      "stddev": 0.1337,
+      "min": 0,
+      "max": 0.6667,
+      "n": 60
+    },
+    "route_web_not_memory": {
+      "mean": 0,
+      "stddev": 0,
+      "min": 0,
+      "max": 0,
+      "n": 60
+    },
+    "set_accent": {
+      "mean": 0.6,
+      "stddev": 0,
+      "min": 0.6,
+      "max": 0.6,
+      "n": 60
+    },
+    "set_effort": {
+      "mean": 0.245,
+      "stddev": 0.2085,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "set_font": {
+      "mean": 0.345,
+      "stddev": 0.2312,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "set_model": {
+      "mean": 0.38,
+      "stddev": 0.2112,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "set_tool_prefs": {
+      "mean": 0.24,
+      "stddev": 0.1881,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "settings": {
+      "mean": 0.29,
+      "stddev": 0.165,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    },
+    "tool_discovery": {
+      "mean": 0.8417,
+      "stddev": 0.2499,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "web_recovery_result_usage": {
+      "mean": 0.325,
+      "stddev": 0.3515,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "web_result_usage": {
+      "mean": 0.3,
+      "stddev": 0.2915,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "web_search": {
+      "mean": 0.2667,
+      "stddev": 0.2341,
+      "min": 0,
+      "max": 1,
+      "n": 60
+    },
+    "workflow_not_job": {
+      "mean": 0.3967,
+      "stddev": 0.1915,
+      "min": 0,
+      "max": 0.6,
+      "n": 60
+    }
+  },
+  "noise_floor_stddev": 0,
+  "note": "Hermetic structural variance ONLY: tool σ = deterministic routing difficulty; memory σ ≈ 0 shows v2 stratification removed question-type-mix variance. The memory policy is a synthetic placeholder (refMemoryCompetence) — a zero-variance parser, so this pass CANNOT see real champion-region composite σ (judge + harness noise). The KOTH margin/score_tol retune assumes target_sigma and MUST be reconfirmed against a real locked-model harness's measured variance (record it via --mem-profile / the hosted multi-seed run), never against this refharness lookup. See docs/calibration-trust.md."
+}

@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-07-23",
+  "scope": "practice",
+  "interpretation": "One shared seed per immutable contract; observational reference, not a confidence interval or payout input.",
+  "subject": {
+    "name": "Nous Research Hermes Agent",
+    "version": "0.19.0",
+    "upstream_revision": "e57918ac800121cf9c2956fe55e27df3ea80b562",
+    "adapter_base_revision": "58b3eda842d949d2bb9874cb6c768846d201b849",
+    "container_image_id": "sha256:c54e8f14479b32a8712d1ab6080adf8edf1b4fdccaea82835b868d1712d5048c"
+  },
+  "profile": {
+    "name": "native-session",
+    "memory_engine": "Hermes Agent SessionDB SQLite FTS5",
+    "native_tool_names": [
+      "session_search"
+    ],
+    "ditto_memory_aliases_exposed": false,
+    "external_memory_provider": false,
+    "benchmark_specific_skill": false,
+    "expected_answer_access": false,
+    "max_iterations": 90,
+    "max_output_tokens": 8192
+  },
+  "sources": {
+    "dittobench_api_base_revision": "444422cb970f949912eabeacfea3133790023759",
+    "dittobench_datagen_revision": "55343ff961e36ebaa1c7db378dd7e5e0663ff5f3",
+    "provider_relay_revision": "d15b62a00f41fb9e71b71019698b65c13becb2e4"
+  },
+  "contract": {
+    "versions": [
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "run_size": "full",
+    "seed": "3058240546919425205",
+    "model": "qwen/qwen3-32b",
+    "gateway": "OpenRouter",
+    "provider_route": "Nebius only; fallbacks disabled",
+    "profile_revision": "openrouter-nebius-qwen3-32b-no-think-v1",
+    "reasoning": false,
+    "streaming": false,
+    "case_concurrency": 8
+  },
+  "runs": [
+    {
+      "bench_version": 2,
+      "release_date": "2026-07-07",
+      "run_id": "7c20350e-7b64-4a19-8913-dc4b9cdeb164",
+      "started_at": "2026-07-23T00:40:53.013566-04:00",
+      "finished_at": "2026-07-23T00:42:21.660878-04:00",
+      "dataset_sha256": "965d0668351dc8c9f141e8600d376941e5ea38c14de7697302e26aabf86bfc7b",
+      "transcript_sha256": "c0286952920c80ba80e4e6e9bcd8ebb0c1698e8a2a9de34eb0a22c13de569b13",
+      "case_count": 114,
+      "tool_case_count": 60,
+      "memory_case_count": 54,
+      "result": {
+        "composite": 0.404667,
+        "tool_mean": 0.69822225,
+        "memory_mean": 0.1111111111111111,
+        "memory_fully_correct": 6,
+        "median_ms": 4260,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 26
+      },
+      "transport": {
+        "requests": 212,
+        "successes": 212,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 1171655,
+        "completion_tokens": 8382,
+        "usage_available": 212,
+        "usage_unavailable": 0
+      }
+    },
+    {
+      "bench_version": 3,
+      "release_date": "2026-07-18",
+      "run_id": "b5ca5d5d-56cc-465e-ae38-56d72ffe397b",
+      "started_at": "2026-07-23T00:30:33.267567-04:00",
+      "finished_at": "2026-07-23T00:32:07.19774-04:00",
+      "dataset_sha256": "39f323eb273f4dc49e8916f9bc2a0d12d8fac3a7ad06e5189bac145d36b5cbb9",
+      "transcript_sha256": "098176b7d10cea47d0c4df77c23904b28336ae6cde60b13799ef8b49a361fae3",
+      "case_count": 119,
+      "tool_case_count": 60,
+      "memory_case_count": 59,
+      "result": {
+        "composite": 0.366585,
+        "tool_mean": 0.6866666833333335,
+        "memory_mean": 0.12796610169491526,
+        "memory_fully_correct": 6,
+        "median_ms": 5194,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 18
+      },
+      "transport": {
+        "requests": 201,
+        "successes": 201,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 1113026,
+        "completion_tokens": 7810,
+        "usage_available": 201,
+        "usage_unavailable": 0
+      }
+    },
+    {
+      "bench_version": 4,
+      "release_date": "2026-07-19",
+      "run_id": "97570165-5e96-4d98-b053-7d5b36a28c90",
+      "started_at": "2026-07-23T00:32:13.476697-04:00",
+      "finished_at": "2026-07-23T00:33:40.919199-04:00",
+      "dataset_sha256": "ffc90c35a0a779a65ac1afb61ed5aa8fa001b6343f279176ccda82ee04646921",
+      "transcript_sha256": "e81dd4dd487f579507ec56d53410306f4d2e725d6b63e407391d384be872017f",
+      "case_count": 119,
+      "tool_case_count": 60,
+      "memory_case_count": 59,
+      "result": {
+        "composite": 0.384983,
+        "tool_mean": 0.7225777833333334,
+        "memory_mean": 0.17796610169491525,
+        "memory_fully_correct": 10,
+        "median_ms": 3741,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 26
+      },
+      "transport": {
+        "requests": 217,
+        "successes": 217,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 1203671,
+        "completion_tokens": 9130,
+        "usage_available": 217,
+        "usage_unavailable": 0
+      }
+    },
+    {
+      "bench_version": 5,
+      "release_date": "2026-07-21",
+      "run_id": "31c7b01b-be22-4b28-b27d-9a82f299d0a3",
+      "started_at": "2026-07-23T00:33:53.736324-04:00",
+      "finished_at": "2026-07-23T00:36:32.671903-04:00",
+      "dataset_sha256": "6e8732f7bbcf153a7a257d938afe3c4d93d410a253f2352eb966272d66f30ec0",
+      "transcript_sha256": "72319cb842c0bf3ebe24064cddb5754493cf58de8ae05225d84cee057cd76ae5",
+      "case_count": 206,
+      "tool_case_count": 110,
+      "memory_case_count": 96,
+      "result": {
+        "composite": 0.196259,
+        "tool_mean": 0.7210909272727273,
+        "memory_mean": 0.16907051041666668,
+        "memory_fully_correct": 16,
+        "median_ms": 4158,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 35
+      },
+      "transport": {
+        "requests": 373,
+        "successes": 373,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 2054227,
+        "completion_tokens": 16208,
+        "usage_available": 373,
+        "usage_unavailable": 0
+      }
+    },
+    {
+      "bench_version": 6,
+      "release_date": "2026-07-21",
+      "run_id": "c9230dd4-b5bd-4543-94a7-6cc5f2521161",
+      "started_at": "2026-07-23T00:36:34.027392-04:00",
+      "finished_at": "2026-07-23T00:39:41.190166-04:00",
+      "dataset_sha256": "f9b8e6eea10f20316a6fc82c2f6b0af0f0cf0bc3f263cf96a760e68cdaa3ea2d",
+      "transcript_sha256": "2762810dbbc7ecfce219cf9bb5ef02d7b340845a35fd1abfa79237a735a3c07c",
+      "case_count": 206,
+      "tool_case_count": 110,
+      "memory_case_count": 96,
+      "result": {
+        "composite": 0.207493,
+        "tool_mean": 0.7370248,
+        "memory_mean": 0.19791666666666666,
+        "memory_fully_correct": 19,
+        "median_ms": 5250,
+        "timeout_or_no_response_cases": 0,
+        "memory_cases_using_native_retrieval": 40
+      },
+      "transport": {
+        "requests": 384,
+        "successes": 384,
+        "infrastructure_failures": 0,
+        "caller_cancellations": 0,
+        "prompt_tokens": 2115845,
+        "completion_tokens": 16547,
+        "usage_available": 384,
+        "usage_unavailable": 0
+      }
+    }
+  ],
+  "excluded_attempts": [
+    {
+      "run_ids": [
+        "ffc9c591-616f-4a95-a075-89f5d41ddfbd",
+        "1ca99075-550e-422a-9cf8-654ea619c535",
+        "5784caf3-3813-472f-a505-e7817f0026b6"
+      ],
+      "reason": "Hermes defaulted max_tokens to 65536, exceeding the pinned Nebius 40960-token context before prompt and tool-schema tokens. The adapter cap was corrected before retained measurement."
+    },
+    {
+      "run_ids": [
+        "c49b5c65-3277-44bd-8eae-06539cd84f25"
+      ],
+      "reason": "First capped v2 replay recorded two relay infrastructure failures and eight timeout/no-response cases. It was retained locally but replaced by the clean same-seed v2 replay."
+    }
+  ],
+  "artifact_policy": "Raw generated datasets and answer-bearing transcripts remain local; dataset and transcript SHA-256 digests bind the retained evidence."
+}

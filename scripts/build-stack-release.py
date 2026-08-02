@@ -163,6 +163,7 @@ def main() -> None:
     # pin that nothing in the rendered model consults.
     compose.pop("x-dittobench-build-context", None)
     compose.pop("x-dittobench-revision", None)
+    compose.pop("x-dittobench-source-identity", None)
     compose.pop("x-dittobench-software-version", None)
     args.output.mkdir(parents=True, exist_ok=True)
     rendered_compose = yaml.safe_dump(compose, sort_keys=False, width=1000)

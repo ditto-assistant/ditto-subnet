@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "excluded_runs": [
+    {
+      "provider": "deepinfra",
+      "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+      "observed_composite": 0.719352,
+      "classification": "harness_defect",
+      "reason": "The local validator advertised the observed-tool callback on container loopback, which the separately isolated miner container could not reach. The run preceded DITTOBENCH_LOCAL_TOOL_HOST and is not evidence about provider behavior.",
+      "raw_result_local_name": "a2-deepinfra-run1-unreachable-tool-callback.json"
+    },
+    {
+      "provider": "deepinfra",
+      "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+      "observed_composite": 0.028333,
+      "relay_requests": 235,
+      "relay_error_responses": 235,
+      "classification": "infrastructure_failure",
+      "reason": "The worker inherited unrelated clipboard text instead of an OpenRouter credential, so every request returned HTTP 401. The matrix was restarted from a verified task-specific Keychain credential.",
+      "raw_result_local_name": "deepinfra-a2-run1-invalid-credential.json"
+    },
+    {
+      "provider": "deepinfra",
+      "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+      "observed_composite": 0.028333,
+      "relay_requests": 235,
+      "relay_error_responses": 235,
+      "classification": "infrastructure_failure",
+      "reason": "The worker inherited unrelated clipboard text instead of an OpenRouter credential, so every request returned HTTP 401. The matrix was restarted from a verified task-specific Keychain credential.",
+      "raw_result_local_name": "deepinfra-a2-run2-invalid-credential.json"
+    },
+    {
+      "provider": "siliconflow",
+      "agent_id": "b0186d19-92dc-4763-b9f8-a89a1ed6b3d5",
+      "run": 2,
+      "observed_composite": 0.848876,
+      "relay_requests": 273,
+      "relay_upstream_errors": 39,
+      "relay_cost_usd": 0.08930729,
+      "classification": "concurrent_load_confounder",
+      "reason": "This run overlapped a separately controlled SiliconFlow load probe from 2026-07-17T22:12:10Z through the conservative 2026-07-17T22:14:36.1Z upstream-finish bound. Its 39 upstream errors and elevated p95 latency make it unsuitable for provider scoring; the exact cell is rerun once in an exclusive window.",
+      "raw_result_local_name": "top3-siliconflow-b0186d19-92dc-4763-b9f8-a89a1ed6b3d5-run2.json"
+    },
+    {
+      "provider": "siliconflow",
+      "agent_id": "04592829-12c9-49bc-a69b-824ced0ce260",
+      "run": 2,
+      "observed_composite": 0.794907,
+      "relay_requests": 177,
+      "relay_upstream_errors": 10,
+      "relay_cost_usd": 0.17666235,
+      "classification": "concurrent_load_confounder",
+      "reason": "This run overlapped a separately controlled SiliconFlow load probe from 2026-07-17T22:12:10Z through the conservative 2026-07-17T22:14:36.1Z upstream-finish bound. Its 10 upstream errors and elevated p95 latency make it unsuitable for provider scoring; the exact cell is rerun once in an exclusive window.",
+      "raw_result_local_name": "top3-siliconflow-04592829-12c9-49bc-a69b-824ced0ce260-run2.json"
+    }
+  ]
+}

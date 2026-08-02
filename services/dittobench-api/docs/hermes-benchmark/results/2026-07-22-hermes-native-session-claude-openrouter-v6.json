@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-07-22T19:59:51.739530Z",
+  "scope": "practice",
+  "profile": {
+    "name": "native-session-strong-model",
+    "purpose": "Hermes-favorable upper bound with native session memory and a stronger model",
+    "native_tool": "session_search",
+    "native_tool_schema": true,
+    "native_session_persistence": true,
+    "seed_import": "verbatim user and assistant turns in native SessionDB sessions",
+    "wire_memory_aliases_exposed": false,
+    "external_memory_provider": false,
+    "benchmark_specific_skill": false,
+    "expected_answer_access": false,
+    "max_iterations": 90,
+    "reasoning_enabled": false
+  },
+  "subject": {
+    "name": "Nous Research Hermes Agent",
+    "version": "0.19.0",
+    "upstream_revision": "e57918ac800121cf9c2956fe55e27df3ea80b562",
+    "adapter_revision": "b89b1bd2bc3e62a4dea65768774bcbeec70925a2",
+    "memory_engine": "native SessionDB SQLite FTS5 session_search"
+  },
+  "sources": {
+    "dittobench_api_engine_revision": "8df6ba37a3c4e46ede9db1cb6014551d49ac6ba8",
+    "dittobench_datagen_revision": "55343ff961e36ebaa1c7db378dd7e5e0663ff5f3",
+    "provider_relay_revision": "373ba5f7c8a44934fbf5748b174ccbbb159c41e4",
+    "container_image_id": "sha256:63b0d1980c03410d9b2732ade3117e11ec6a802c9e0f51d7e13a526a30ccfab3"
+  },
+  "benchmark": {
+    "version": 6,
+    "run_size": "full",
+    "run_id": "b171417a-9d45-415e-8573-de2f06e82dba",
+    "seed": 3058240546919425205,
+    "case_count": 206,
+    "tool_case_count": 110,
+    "memory_case_count": 96,
+    "seeding_waves": 4,
+    "raw_pairs_cases": 7,
+    "dataset_sha256": "f9b8e6eea10f20316a6fc82c2f6b0af0f0cf0bc3f263cf96a760e68cdaa3ea2d",
+    "transcript_sha256": "09dc8b3335bca96dfac5de933d012c059c9dfd9e346ccd88de030604f6968130",
+    "started_at": "2026-07-22T19:51:15.891429Z",
+    "finished_at": "2026-07-22T19:59:51.739530Z"
+  },
+  "model": {
+    "id": "anthropic/claude-sonnet-4.6",
+    "gateway": "OpenRouter",
+    "routing": "automatic",
+    "thinking": false,
+    "streaming": false,
+    "response_providers": {"Anthropic": 481},
+    "benchmark_report_lock_metadata": "qwen/qwen3-32b",
+    "metadata_note": "The practice report retains the benchmark lock label; the host relay and adapter both pinned Claude Sonnet 4.6 for this explicitly non-comparable upper bound."
+  },
+  "result": {
+    "composite": 0.194242,
+    "composite_not_comparable_reason": "model differs from the miner lock and native session_search is not a Ditto memory tool name",
+    "composite_stderr": 0.013768,
+    "tool_mean": 0.590032709090909,
+    "memory_mean": 0.3020833333333333,
+    "memory_correct": 29,
+    "median_ms": 6141,
+    "conversational_sanity": 0,
+    "metamorphic_consistency": 0.818182,
+    "transform_robustness": 1,
+    "tool_efficiency": 0.9948275862068965,
+    "capped_tool_cases": 15,
+    "timeout_or_no_response_cases": 1,
+    "timeout_or_no_response_memory_cases": 0
+  },
+  "native_trace": {
+    "memory_cases_calling_session_search": 63,
+    "correct_memory_cases_calling_session_search": 14,
+    "memory_cases_calling_no_tool": 23,
+    "memory_cases_calling_only_non_native_tools": 10
+  },
+  "transport": {
+    "requests": 481,
+    "prompt_tokens": 3017986,
+    "completion_tokens": 61890,
+    "total_tokens": 3079876,
+    "cost_usd": 9.982308,
+    "http_error_responses": 0,
+    "api_error_responses": 0,
+    "upstream_errors": 0,
+    "finish_reasons": {"stop": 206, "tool_calls": 275}
+  },
+  "paired_context": {
+    "same_model_native_memory_mean": 0.22916666666666666,
+    "prior_alias_favorable_memory_mean": 0.2604166666666667,
+    "delta_vs_same_model_native": 0.07291666666666666,
+    "delta_vs_prior_alias_favorable": 0.04166666666666663,
+    "net_correct_vs_same_model_native": 7,
+    "net_correct_vs_prior_alias_favorable": 4
+  },
+  "public_comparison_snapshot": {
+    "generated_at": "2026-07-22T20:10:12.155786Z",
+    "finalized_v6_miners": 36,
+    "top_five_memory_means": [
+      0.9479166666666666,
+      0.9375,
+      0.8854166666666666,
+      0.8842105263157894,
+      0.8842105263157894
+    ],
+    "top_over_hermes": 3.137931034482759,
+    "limit": "three-validator production medians on independent routes and seeds versus one OpenRouter practice sample"
+  },
+  "memory_categories": [
+    {"category":"abstention","count":7,"mean":1},
+    {"category":"aggregation-count","count":1,"mean":0},
+    {"category":"assistant-recall","count":2,"mean":0},
+    {"category":"canary","count":1,"mean":1},
+    {"category":"contradiction","count":2,"mean":1},
+    {"category":"conversational-abstention","count":1,"mean":0},
+    {"category":"conversational-chitchat","count":2,"mean":1},
+    {"category":"conversational-declarative","count":2,"mean":1},
+    {"category":"declarative-behavior","count":4,"mean":0},
+    {"category":"declarative-write","count":4,"mean":1},
+    {"category":"declarative-write-read","count":4,"mean":0},
+    {"category":"injection-resistance","count":5,"mean":0},
+    {"category":"injection-stored-instruction","count":4,"mean":0},
+    {"category":"isolation","count":6,"mean":0},
+    {"category":"knowledge-update","count":1,"mean":0},
+    {"category":"memory-write","count":6,"mean":0.6666666666666666},
+    {"category":"memory-write-read","count":5,"mean":0.4},
+    {"category":"multi-hop-relational","count":4,"mean":0},
+    {"category":"multi-query-recall","count":2,"mean":0},
+    {"category":"multi-session","count":3,"mean":0},
+    {"category":"nonverbatim-computed","count":3,"mean":0},
+    {"category":"passive-consolidation","count":2,"mean":0},
+    {"category":"point-in-time","count":2,"mean":0},
+    {"category":"preference-application","count":2,"mean":0},
+    {"category":"single-session-recall","count":15,"mean":0.26666666666666666},
+    {"category":"stored-instruction-benign","count":2,"mean":0.5},
+    {"category":"temporal-depth","count":4,"mean":0}
+  ]
+}

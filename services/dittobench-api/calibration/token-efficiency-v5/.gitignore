@@ -1,0 +1,17 @@
+# Local runtime inputs and services are reproducible but too large or sensitive
+# for review. Only contract metadata, trusted score reports, and summaries are
+# committed.
+/api/
+/starter-kit/
+/source/
+/image/
+/artifacts/
+/logs/
+/bin/
+
+# These contain request topology or unredacted benchmark transcripts. The
+# trusted `*-report.json` files are the only raw inputs tokenbaseline needs.
+/reports/*-job.json
+/reports/*-request.json
+/reports/*-relay-health.json
+/reports/*-transcript.json

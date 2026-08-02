@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-07-22T19:12:07.870120Z",
+  "scope": "practice",
+  "profile": {
+    "name": "favorable-native-recall",
+    "purpose": "generous native OpenClaw replay without benchmark-specific knowledge",
+    "memory_provider": "none",
+    "search_limit": 20,
+    "generic_recall_guidance": true,
+    "benchmark_specific_skill": false,
+    "expected_answer_access": false,
+    "reasoning_enabled": false
+  },
+  "subject": {
+    "name": "OpenClaw",
+    "version": "2026.7.1",
+    "upstream_revision": "2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4",
+    "npm_integrity": "sha512-ge/Xss99CHAjPL/ikmH/UFoiOrjcxDB4sW3y9mhyCD+dYW3wzV7TKbAVdkrXFgAG2d2BjpJofP97zUZ+umxo8g==",
+    "adapter_source_tree_sha256": "d7078fbc13fbd8172b847d0b6f78a3d8e70ab5dcc03bd24bc4237fc9d943e8bc",
+    "memory_engine": "native memory-core SQLite FTS5 over workspace Markdown"
+  },
+  "sources": {
+    "dittobench_api_revision": "8df6ba37a3c4e46ede9db1cb6014551d49ac6ba8",
+    "dittobench_datagen_revision": "55343ff961e36ebaa1c7db378dd7e5e0663ff5f3",
+    "provider_relay_revision": "373ba5f7c8a44934fbf5748b174ccbbb159c41e4",
+    "container_image_id": "sha256:07a81912e66c1082edc3d305f8e0c37420f47b6b93a27ddf31dff181a6326add"
+  },
+  "benchmark": {
+    "version": 6,
+    "run_size": "full",
+    "run_id": "391f157e-85a8-4132-90f7-9f1930fddb6f",
+    "seed": 3058240546919425205,
+    "case_count": 206,
+    "tool_case_count": 110,
+    "memory_case_count": 96,
+    "seeding_waves": 4,
+    "raw_pairs_cases": 7,
+    "dataset_sha256": "f9b8e6eea10f20316a6fc82c2f6b0af0f0cf0bc3f263cf96a760e68cdaa3ea2d",
+    "transcript_sha256": "2d3a4dac96178dcd397371597aca3888e4dc5f3abc2d659eeb8ef7076e8c46a8",
+    "started_at": "2026-07-22T19:02:37.639678Z",
+    "finished_at": "2026-07-22T19:12:07.870120Z"
+  },
+  "model": {
+    "id": "qwen/qwen3-32b",
+    "gateway": "OpenRouter",
+    "routing": "automatic",
+    "thinking": false,
+    "streaming": false,
+    "response_providers": {
+      "DeepInfra": 403
+    }
+  },
+  "result": {
+    "composite": 0.277023,
+    "raw_composite": 0.277023,
+    "composite_stderr": 0.012324,
+    "tool_mean": 0.8572727454545452,
+    "memory_mean": 0.4270833333333333,
+    "memory_correct_cases": 41,
+    "median_ms": 10447,
+    "conversational_sanity": 0,
+    "metamorphic_consistency": 0.727273,
+    "transform_robustness": 1,
+    "tool_efficiency": 0.9995129870129871,
+    "zero_score_cases": 61,
+    "timeout_or_no_response_cases": 0,
+    "observed_tool_cases": 84,
+    "capped_tool_cases": 9,
+    "canary_score": 0,
+    "canary_leak_detected": false,
+    "token_efficiency_penalty_applied": false,
+    "token_efficiency_reason": "token_telemetry_unavailable_in_practice_scope"
+  },
+  "paired_baseline": {
+    "run_id": "849ced7c-80fa-4eb3-a461-33cab373615f",
+    "same_seed": true,
+    "same_dataset_sha256": true,
+    "same_response_provider": true,
+    "composite_delta": -0.003679,
+    "tool_mean_delta": -0.0221212,
+    "memory_mean_delta": 0.04166666666666663,
+    "memory_cases_improved": 7,
+    "memory_cases_regressed": 3,
+    "memory_cases_unchanged": 86,
+    "memory_net_correct_cases": 4,
+    "interpretation_limit": "one stochastic paired replay; only the native result window was intentionally changed"
+  },
+  "memory_categories": [
+    {"category": "abstention", "count": 7, "mean": 0.2857142857142857},
+    {"category": "aggregation-count", "count": 1, "mean": 0},
+    {"category": "assistant-recall", "count": 2, "mean": 0.5},
+    {"category": "canary", "count": 1, "mean": 0},
+    {"category": "contradiction", "count": 2, "mean": 1},
+    {"category": "conversational-abstention", "count": 1, "mean": 0},
+    {"category": "conversational-chitchat", "count": 2, "mean": 1},
+    {"category": "conversational-declarative", "count": 2, "mean": 1},
+    {"category": "declarative-behavior", "count": 4, "mean": 0},
+    {"category": "declarative-write", "count": 4, "mean": 1},
+    {"category": "declarative-write-read", "count": 4, "mean": 0.5},
+    {"category": "injection-resistance", "count": 5, "mean": 0},
+    {"category": "injection-stored-instruction", "count": 4, "mean": 0.25},
+    {"category": "isolation", "count": 6, "mean": 0.5},
+    {"category": "knowledge-update", "count": 1, "mean": 1},
+    {"category": "memory-write", "count": 6, "mean": 0.6666666666666666},
+    {"category": "memory-write-read", "count": 5, "mean": 0.6},
+    {"category": "multi-hop-relational", "count": 4, "mean": 0.5},
+    {"category": "multi-query-recall", "count": 2, "mean": 0.5},
+    {"category": "multi-session", "count": 3, "mean": 0},
+    {"category": "nonverbatim-computed", "count": 3, "mean": 0.3333333333333333},
+    {"category": "passive-consolidation", "count": 2, "mean": 1},
+    {"category": "point-in-time", "count": 2, "mean": 0},
+    {"category": "preference-application", "count": 2, "mean": 0},
+    {"category": "single-session-recall", "count": 15, "mean": 0.4},
+    {"category": "stored-instruction-benign", "count": 2, "mean": 1},
+    {"category": "temporal-depth", "count": 4, "mean": 0}
+  ],
+  "relay_telemetry": {
+    "requests": 403,
+    "http_error_responses": 0,
+    "api_error_responses": 0,
+    "upstream_errors": 0,
+    "prompt_tokens": 1803027,
+    "completion_tokens": 15535,
+    "total_tokens": 1818562,
+    "cost_usd": 0.1485919600000001,
+    "p50_latency_ms": 1015,
+    "p95_latency_ms": 2066,
+    "finish_reasons": {"stop": 206, "tool_calls": 197}
+  },
+  "leaderboard_context": {
+    "snapshot_at": "2026-07-22T19:06:16.093476Z",
+    "bench_version": 6,
+    "finalized_miner_count": 36,
+    "top_five_memory_min": 0.8842105263157894,
+    "top_five_memory_max": 0.9479166666666666,
+    "leader": {
+      "agent_id": "b60de554-8830-44ce-bce7-1064b7cafac6",
+      "agent_name": "whitycatboss",
+      "score_count": 3,
+      "composite": 0.931983,
+      "memory_mean": 0.9479166666666666
+    },
+    "comparison_limit": "production Chutes medians on independent seeds versus one OpenRouter practice run"
+  },
+  "local_evidence_sha256": {
+    "run_response": "b388158ec30710fb53e35b8fbb3052ef0d681fd2d88b0865e06f0fc954b84045",
+    "transcript": "2d3a4dac96178dcd397371597aca3888e4dc5f3abc2d659eeb8ef7076e8c46a8",
+    "relay_stats": "e0b005422cdc0431d89bf6f3cdd404b6ff9c54be183c62bd0207432a0d7139d6"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "bench_version": 8,
+  "dataset_known_vector": "6a09587706c95b5f61d3e65e0e34b317fc8ce24d0c927c66864d2869c8728e98",
+  "scorer_token_policy": "quality-only",
+  "efficiency_authority": "ditto-platform-relative-cohort-v1",
+  "harness": {
+    "provider": "openrouter",
+    "profile_revision": "openrouter-route-a471cd87ae7df5b9-v1",
+    "model": "openai/gpt-oss-20b"
+  },
+  "embedding": {
+    "provider": "Perplexity",
+    "model": "perplexity/pplx-embed-v1-0.6b",
+    "profile": "dittobench-v7-openrouter-pplx-embed-v1-0.6b-768-v1",
+    "dimensions": 768,
+    "catalog_sha256": "a6fff568e4f8c9d17e54739e6da2cdd76006d2a486124c5c43b12e94099d3348"
+  }
+}

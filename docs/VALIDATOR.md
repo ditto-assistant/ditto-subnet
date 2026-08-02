@@ -510,11 +510,11 @@ channel is unavailable. It does not enter managed updater mode:
 Upgrade a source-built validator only during a supervised window with no live
 lease: `git pull --ff-only`, then the same three commands.
 
-The wrapper builds `dittobench-api` from the exact reviewed commit pinned in
-`docker-compose.yml` and refuses a checksum that is not in that repository's
-`main` history. When the pin has moved since the last build it rebuilds and
-replaces the scorer and relay containers first, so `up` can never start a cached
-image against a newer pin — see [Stale scorer image](#stale-scorer-image).
+The wrapper builds `services/dittobench-api` from the clean checkout and stamps
+the latest monorepo commit that changed that service. When that component
+revision has moved since the last build it rebuilds and replaces the scorer
+first, so `up` can never start a cached image while claiming a newer revision —
+see [Stale scorer image](#stale-scorer-image).
 
 For local code work outside Compose:
 

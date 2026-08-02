@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-07-17T20:34:10Z",
+  "finished_at": "2026-07-17T23:01:13Z",
+  "matrix": {
+    "providers": [
+      "deepinfra",
+      "nebius",
+      "alibaba",
+      "siliconflow",
+      "groq"
+    ],
+    "agents": 3,
+    "runs_per_provider_agent": 3,
+    "run_size": "full",
+    "cases_per_run": 114,
+    "same_seed_and_dataset_sha_as_chutes": true
+  },
+  "local_validator": {
+    "source_base_sha": "63243b62744d636e704650cfec21837878604e49",
+    "provider_certification_patch": true,
+    "image_sha256": "b7833f4d20b1cd8a34e481d584cc0e6b538d244c010ff2b3b76e40d810c956c0",
+    "bench_version": 2,
+    "platform_validator_software_version": "0.9.6"
+  },
+  "local_runtime": {
+    "host_architecture": "arm64",
+    "macos_version": "26.5.2",
+    "go_version": "go1.26.4 darwin/arm64",
+    "docker_server_version": "29.4.0",
+    "ollama_version": "0.15.2",
+    "embedding_model": "embeddinggemma:latest",
+    "embedding_model_sha256": "85462619ee721b466c5927d109d4cb765861907d5417b9109caebc4e614679f1"
+  },
+  "isolation": {
+    "production_validator": false,
+    "chain_access": false,
+    "chain_writes": false,
+    "miner_secrets": false,
+    "miner_host_mounts": false,
+    "miner_privileged": false,
+    "miner_root_filesystem_read_only": true,
+    "miner_capabilities_dropped": "ALL",
+    "miner_no_new_privileges": true,
+    "miner_memory_limit": "2g",
+    "miner_cpu_limit": 2,
+    "miner_pids_limit": 512,
+    "miner_network": "provider-specific internal Docker network",
+    "trusted_services": [
+      "provider-pinning relay",
+      "embedding forwarder",
+      "local validator"
+    ]
+  },
+  "artifacts": [
+    {
+      "agent_id": "a2b69f5c-e866-45b0-a8cf-849231d9d218",
+      "artifact_sha256": "89a8663b7fe9bb31d005412a7f1c682b12ab0740cbdd6b21f963740c25cdd67a",
+      "image_sha256": "1cd9005410148481cd686339498ae555c7182964233f92adc87ea39a682d068b"
+    },
+    {
+      "agent_id": "b0186d19-92dc-4763-b9f8-a89a1ed6b3d5",
+      "artifact_sha256": "873bc89c7819834700b687d7af6d48a5a64e2b441a29ebad7607272815b3f869",
+      "image_sha256": "5c1530a5b91f39e245a7fc57d62f3d9e79e0706e9ac2d6334199e8e3b7c48725"
+    },
+    {
+      "agent_id": "04592829-12c9-49bc-a69b-824ced0ce260",
+      "artifact_sha256": "6173f705f49cedcf99a804019d499a9b5cd77f02280d8de193eba8745b89c72b",
+      "image_sha256": "66d2c730cbf2f6574cf5aa3d89c0c3c687d4a4fa57f0ece1f7e94ecb677cbb05"
+    }
+  ],
+  "results": {
+    "valid_runs": 45,
+    "expected_valid_runs": 45,
+    "valid_run_cost_usd": 4.476793322,
+    "excluded_runs": 5,
+    "providers_complete": 5,
+    "chutes_rerun": false,
+    "qwen32_chutes_vs_nebius_load_ramp": "cancelled_by_user_after_score_and_compatibility_decision"
+  },
+  "concurrency_control": {
+    "exclusive_provider_windows": true,
+    "confounded_cells_preserved_and_replaced": 2,
+    "confounder_provider": "siliconflow",
+    "confounder_window_utc": "2026-07-17T22:12:10Z/2026-07-17T22:14:36.1Z"
+  }
+}

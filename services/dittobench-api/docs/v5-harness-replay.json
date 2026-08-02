@@ -1,0 +1,41 @@
+{
+  "note": "v5 (bench_version 5, full) scores of the top v4 leaderboard harnesses, run locally: Qwen3-32B (OpenRouter), embeddings Ollama embeddinggemma, memory+tool observed. v4-view=ungated 0.5*tool+0.5*mem. GATEWAY harnesses use cmd/model-relay (NOT port 9100 on Docker Desktop, IPv4 bind).",
+  "harnesses": {
+    "mnemo-v6 (CHAMPION, d2a307a4)": {
+      "v5_composite": 0.8544,
+      "v4_view": 0.9493,
+      "conversational_sanity": 1,
+      "verdict": "grounded \u2014 stays champion"
+    },
+    "gggggggg (81266c17)": {
+      "v5_composite": 0.4218,
+      "v4_view": 0.8605,
+      "conversational_sanity": 0,
+      "verdict": "phrase-list router \u2014 drops below 0.85"
+    },
+    "pandas (2b260c75)": {
+      "v5_composite": 0.4505,
+      "v4_view": 0.9095,
+      "conversational_sanity": 0,
+      "verdict": "phrase-list router \u2014 drops below 0.85"
+    },
+    "zeus_v8 (977782fa)": {
+      "v5_composite": 0.4254,
+      "v4_view": 0.8771,
+      "conversational_sanity": 0,
+      "verdict": "phrase-list router \u2014 drops below 0.85"
+    },
+    "ditto-scratch (1fddf196)": {
+      "v5_composite": 0.4586,
+      "v4_view": 0.9172,
+      "conversational_sanity": 0,
+      "verdict": "phrase-list router \u2014 drops below 0.85"
+    },
+    "tada (2b870216)": {
+      "v5_composite": 0.3669,
+      "v4_view": 0.7521,
+      "conversational_sanity": 0,
+      "verdict": "phrase-list router \u2014 drops below 0.85"
+    }
+  }
+}
