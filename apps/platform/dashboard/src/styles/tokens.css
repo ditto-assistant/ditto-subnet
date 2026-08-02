@@ -1,0 +1,133 @@
+/* Ported verbatim from the monolith <style> block, lines 1233-1353:
+   base (warm-paper light) tokens, time-of-day overlays, and the dark
+   re-palette. Theme switching is attribute-driven on <html> (data-theme /
+   data-system-theme / data-time-phase, stamped by the theme bootstrap).
+   Note: the monolith references var(--bad) and var(--shadow) without ever
+   defining them; they are intentionally left undefined here for parity. */
+
+/* ── Ditto paper product system ───────────────────────────
+   Shared with landing-astro and ditto-app: warm paper surfaces, sepia ink,
+   brass/plum data accents, editorial headings, and compact app controls. */
+:root {
+  --bg: #f3efe6;
+  --bg-elev: #fdfbf7;
+  --bg-elev-2: #e8e2d5;
+  --border: #d6ccb8;
+  --border-strong: #9f927e;
+  --text: #2d2822;
+  --text-dim: #625a4e;
+  --text-faint: #6b6356;
+  --accent: #5c4d3c;
+  --accent-2: #6d5873;
+  --gold: #9a692c;
+  --tool: #9a692c;
+  --memory: #6d5873;
+  --good: #356845;
+  --warn: #8a5a1f;
+  --danger: #a33d36;
+  --on-accent: #fdfbf7;
+  --focus: #5c4d3c;
+  --accent-hover: #433529;
+  --banner-text: #684215;
+  --banner-strong: #4d3010;
+  --rank-one-text: #754b18;
+  --rank-three-text: #814626;
+  /* Benchmark-generation ramp (ordinal: one hue, monotone lightness, light
+     -> dark as contracts advance). The chart interpolates between these two
+     ends in OKLCH, so any number of contracts up to six keeps a legible
+     lightness gap. Both ends and the two reference hues are validated for
+     the ordinal ramp checks, CVD separation against every ramp step, and
+     contrast on this surface. */
+  --era-from: oklch(70% 0.09 340);
+  --era-to: oklch(36% 0.105 340);
+  --ref-hermes: oklch(52% 0.17 75);
+  --ref-openclaw: oklch(52% 0.17 270);
+  --radius: 8px;
+  /* Ground-grid rule strength: how much of --text mixes into the body's
+     ruled lines (vertical, horizontal). Dark surfaces compress faint light
+     rules, so the night block raises these to stay equally noticeable. */
+  --grid-rule-v: 5%;
+  --grid-rule-h: 4%;
+  /* Exponential ease-out only: decisive, no bounce. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --display: Georgia, "Times New Roman", serif;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+}
+
+:root[data-theme="time"][data-time-phase="dawn"] {
+  --bg: oklch(96% 0.015 45);
+  --bg-elev: oklch(98% 0.01 45);
+  --bg-elev-2: oklch(93% 0.02 42);
+  --border: oklch(84% 0.035 45);
+  --border-strong: oklch(67% 0.045 45);
+  --accent: oklch(43% 0.055 45);
+  --accent-hover: oklch(34% 0.05 45);
+  --focus: oklch(43% 0.055 45);
+}
+:root[data-theme="time"][data-time-phase="morning"] {
+  --bg: oklch(98% 0.006 90);
+  --bg-elev: oklch(99% 0.004 90);
+  --bg-elev-2: oklch(95% 0.01 85);
+  --border: oklch(87% 0.018 85);
+  --border-strong: oklch(69% 0.028 80);
+}
+:root[data-theme="time"][data-time-phase="dusk"] {
+  --bg: oklch(94% 0.022 45);
+  --bg-elev: oklch(97% 0.016 42);
+  --bg-elev-2: oklch(91% 0.028 40);
+  --border: oklch(80% 0.045 42);
+  --border-strong: oklch(62% 0.055 40);
+  --accent: oklch(42% 0.07 50);
+  --accent-hover: oklch(33% 0.06 48);
+  --gold: oklch(55% 0.12 65);
+  --tool: var(--gold);
+  --focus: oklch(42% 0.07 50);
+}
+:root[data-theme="dark"],
+:root[data-theme="system"][data-system-theme="dark"],
+:root[data-theme="time"][data-time-phase="night"] {
+  --bg: oklch(19% 0.025 255);
+  --bg-elev: oklch(23% 0.028 255);
+  --bg-elev-2: oklch(27% 0.03 255);
+  --border: oklch(36% 0.02 255);
+  --border-strong: oklch(48% 0.025 255);
+  --text: oklch(92% 0.006 85);
+  --text-dim: oklch(79% 0.008 85);
+  --text-faint: oklch(72% 0.01 85);
+  --accent: oklch(74% 0.12 75);
+  --accent-hover: oklch(80% 0.115 75);
+  --accent-2: oklch(75% 0.1 340);
+  --gold: oklch(78% 0.12 75);
+  --tool: var(--accent);
+  --memory: var(--accent-2);
+  --good: oklch(75% 0.11 145);
+  --warn: oklch(76% 0.15 52);
+  --danger: oklch(72% 0.13 28);
+  --on-accent: oklch(19% 0.025 255);
+  --focus: oklch(80% 0.115 75);
+  --banner-text: oklch(86% 0.08 75);
+  --banner-strong: oklch(92% 0.08 75);
+  --rank-one-text: oklch(84% 0.1 75);
+  --rank-three-text: oklch(78% 0.08 45);
+  /* Dark is selected, not flipped: the ramp runs dim -> bright here so the
+     newest contract is still the most prominent, re-stepped for the night
+     surface and re-validated against it. */
+  --era-from: oklch(52% 0.085 340);
+  --era-to: oklch(83% 0.105 340);
+  --ref-hermes: oklch(66% 0.17 75);
+  --ref-openclaw: oklch(66% 0.17 270);
+  --grid-rule-v: 8%;
+  --grid-rule-h: 6.5%;
+}
+
+html {
+  color-scheme: light;
+  background: var(--bg);
+}
+html[data-theme="dark"],
+html[data-theme="system"][data-system-theme="dark"],
+html[data-theme="time"][data-time-phase="night"] {
+  color-scheme: dark;
+}

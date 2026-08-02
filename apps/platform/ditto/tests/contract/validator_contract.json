@@ -1,0 +1,2597 @@
+{
+  "ArtifactResponse": {
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "download_url": {
+        "type": "string"
+      },
+      "expires_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "screened_image_id": {
+        "anyOf": [
+          {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screened_image_ref": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screened_image_sha256": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screened_image_size_bytes": {
+        "anyOf": [
+          {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screened_image_url": {
+        "anyOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "screening_policy_version": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "sha256": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id",
+      "sha256",
+      "download_url",
+      "expires_at"
+    ],
+    "type": "object"
+  },
+  "CaseScore": {
+    "properties": {
+      "called": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "case_id": {
+        "type": "string"
+      },
+      "category": {
+        "type": "string"
+      },
+      "confidence": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "correct": {
+        "default": false,
+        "type": "boolean"
+      },
+      "expected": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "injection": {
+        "default": false,
+        "type": "boolean"
+      },
+      "kind": {
+        "default": "",
+        "type": "string"
+      },
+      "latency_ms": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "notes": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "observed": {
+        "default": false,
+        "type": "boolean"
+      },
+      "quality": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "result_usage": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "score": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "tool_score": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "twin_group": {
+        "default": "",
+        "type": "string"
+      }
+    },
+    "required": [
+      "case_id",
+      "category",
+      "score",
+      "tool_score",
+      "latency_ms"
+    ],
+    "type": "object"
+  },
+  "FailJobRequest": {
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "failure_detail": {
+        "anyOf": [
+          {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "reason": {
+        "enum": [
+          "infrastructure",
+          "scoring_error",
+          "sandbox_oom"
+        ],
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "pattern": "^[0-9a-fA-F]{128}$",
+        "type": "string"
+      },
+      "ticket_deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "agent_id",
+      "ticket_deadline",
+      "reason",
+      "nonce",
+      "requested_at",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "FailJobResponse": {
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "reopened": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "agent_id",
+      "reopened"
+    ],
+    "type": "object"
+  },
+  "LedgerEntry": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "quarantined",
+          "rejected",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      },
+      "ConfirmationScoreRecord": {
+        "properties": {
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed",
+          "composite",
+          "validator_hotkey",
+          "bench_version"
+        ],
+        "type": "object"
+      },
+      "LedgerScoreProof": {
+        "properties": {
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ticket_deadline": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcript_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator_hotkey",
+          "run_id",
+          "composite",
+          "seed"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "composite": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "composite_stderr": {
+        "anyOf": [
+          {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_composites": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_history": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/ConfirmationScoreRecord"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_seeds": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "continual_aggregate_method": {
+        "anyOf": [
+          {
+            "const": "mean_after_quorum",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "effective_composite": {
+        "anyOf": [
+          {
+            "maximum": 1.1,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "efficiency_bonus": {
+        "anyOf": [
+          {
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "first_seen": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "n": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "score_proofs": {
+        "items": {
+          "$ref": "#/$defs/LedgerScoreProof"
+        },
+        "type": "array"
+      },
+      "seed": {
+        "type": "integer"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "signature": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "size_bytes": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      },
+      "validator_hotkey": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "miner_hotkey",
+      "agent_id",
+      "composite",
+      "n",
+      "first_seen",
+      "sha256",
+      "run_id",
+      "seed",
+      "validator_hotkey",
+      "status"
+    ],
+    "type": "object"
+  },
+  "LedgerResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "quarantined",
+          "rejected",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      },
+      "ConfirmationScoreRecord": {
+        "properties": {
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed",
+          "composite",
+          "validator_hotkey",
+          "bench_version"
+        ],
+        "type": "object"
+      },
+      "LedgerEntry": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "composite_stderr": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_composites": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_history": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationScoreRecord"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_seeds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "continual_aggregate_method": {
+            "anyOf": [
+              {
+                "const": "mean_after_quorum",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "effective_composite": {
+            "anyOf": [
+              {
+                "maximum": 1.1,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "efficiency_bonus": {
+            "anyOf": [
+              {
+                "maximum": 0.1,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "first_seen": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "miner_hotkey": {
+            "type": "string"
+          },
+          "n": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "score_proofs": {
+            "items": {
+              "$ref": "#/$defs/LedgerScoreProof"
+            },
+            "type": "array"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "$ref": "#/$defs/AgentStatus"
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "miner_hotkey",
+          "agent_id",
+          "composite",
+          "n",
+          "first_seen",
+          "sha256",
+          "run_id",
+          "seed",
+          "validator_hotkey",
+          "status"
+        ],
+        "type": "object"
+      },
+      "LedgerScoreProof": {
+        "properties": {
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ticket_deadline": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcript_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validator_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator_hotkey",
+          "run_id",
+          "composite",
+          "seed"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "age_seconds": {
+        "default": 0,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "continual_retest_cohort_size": {
+        "default": 5,
+        "minimum": 5,
+        "type": "integer"
+      },
+      "count": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/LedgerEntry"
+        },
+        "type": "array"
+      },
+      "generated_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "stale": {
+        "default": false,
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "entries",
+      "count"
+    ],
+    "type": "object"
+  },
+  "ScoreReport": {
+    "$defs": {
+      "CaseScore": {
+        "properties": {
+          "called": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "correct": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "injection": {
+            "default": false,
+            "type": "boolean"
+          },
+          "kind": {
+            "default": "",
+            "type": "string"
+          },
+          "latency_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "quality": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "result_usage": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tool_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "twin_group": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "category",
+          "score",
+          "tool_score",
+          "latency_ms"
+        ],
+        "type": "object"
+      },
+      "CategoryStat": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mean": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "std_err": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "count",
+          "mean"
+        ],
+        "type": "object"
+      },
+      "CodeFingerprint": {
+        "properties": {
+          "card": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "k": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "m": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "v": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "v",
+          "k",
+          "card"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "composite": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "composite_stderr": {
+        "anyOf": [
+          {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_composites": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_seeds": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "details": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "generated_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "median_ms": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "memory_mean": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "n": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "per_case": {
+        "items": {
+          "$ref": "#/$defs/CaseScore"
+        },
+        "type": "array"
+      },
+      "per_category": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/CategoryStat"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "raw_composite": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "seed": {
+        "maximum": 9223372036854775807,
+        "minimum": -9223372036854775808,
+        "type": "integer"
+      },
+      "structural_fingerprint": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CodeFingerprint"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "tool_mean": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      }
+    },
+    "required": [
+      "run_id",
+      "seed",
+      "composite",
+      "tool_mean",
+      "memory_mean",
+      "median_ms",
+      "n",
+      "generated_at"
+    ],
+    "type": "object"
+  },
+  "SubmitScoreRequest": {
+    "$defs": {
+      "CaseScore": {
+        "properties": {
+          "called": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "correct": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "injection": {
+            "default": false,
+            "type": "boolean"
+          },
+          "kind": {
+            "default": "",
+            "type": "string"
+          },
+          "latency_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "quality": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "result_usage": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "tool_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "twin_group": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "category",
+          "score",
+          "tool_score",
+          "latency_ms"
+        ],
+        "type": "object"
+      },
+      "CategoryStat": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mean": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "std_err": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "count",
+          "mean"
+        ],
+        "type": "object"
+      },
+      "CodeFingerprint": {
+        "properties": {
+          "card": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "k": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "m": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "v": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "v",
+          "k",
+          "card"
+        ],
+        "type": "object"
+      },
+      "ScoreReport": {
+        "properties": {
+          "bench_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "composite": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "composite_stderr": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_composites": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmation_seeds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "median_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_mean": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "n": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "per_case": {
+            "items": {
+              "$ref": "#/$defs/CaseScore"
+            },
+            "type": "array"
+          },
+          "per_category": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/CategoryStat"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "raw_composite": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "seed": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "structural_fingerprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CodeFingerprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tool_mean": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "run_id",
+          "seed",
+          "composite",
+          "tool_mean",
+          "memory_mean",
+          "median_ms",
+          "n",
+          "generated_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "report": {
+        "$ref": "#/$defs/ScoreReport"
+      },
+      "signature": {
+        "pattern": "^[0-9a-fA-F]{128}$",
+        "type": "string"
+      },
+      "ticket_deadline": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "signature",
+      "report"
+    ],
+    "type": "object"
+  },
+  "SubmitScoreResponse": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "uploaded",
+          "screening",
+          "screening_passed",
+          "screening_failed",
+          "quarantined",
+          "rejected",
+          "evaluating",
+          "scored",
+          "live",
+          "ath_pending_review",
+          "banned"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "accepted": {
+        "type": "boolean"
+      },
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      }
+    },
+    "required": [
+      "agent_id",
+      "status",
+      "accepted"
+    ],
+    "type": "object"
+  },
+  "ValidatorHeartbeatRequest": {
+    "$defs": {
+      "ActiveBenchmarkSlot": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "healthy": {
+            "default": true,
+            "type": "boolean"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BenchmarkProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "slot_id": {
+            "pattern": "^slot-[0-7]$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot_id",
+          "agent_id",
+          "bench_version"
+        ],
+        "type": "object"
+      },
+      "BenchmarkCapacity": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "items": {
+              "$ref": "#/$defs/ActiveBenchmarkSlot"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "admission": {
+            "default": "accepting",
+            "enum": [
+              "accepting",
+              "draining",
+              "paused",
+              "resource_constrained"
+            ],
+            "type": "string"
+          },
+          "configured_slots": {
+            "default": 1,
+            "maximum": 8,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "healthy_slots": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "BenchmarkProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "completed": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "run_token": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{8,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "stage": {
+            "enum": [
+              "preparing",
+              "building_harness",
+              "generating_dataset",
+              "starting_harness",
+              "running_benchmark",
+              "waiting_for_relay",
+              "finalizing",
+              "submitting_result",
+              "failed_retrying"
+            ],
+            "type": "string"
+          },
+          "ticket_deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "stage",
+          "ticket_deadline"
+        ],
+        "type": "object"
+      },
+      "DockerHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "running_containers": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "healthy",
+              "degraded",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "unhealthy_containers": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "running_containers",
+          "unhealthy_containers"
+        ],
+        "type": "object"
+      },
+      "InferenceCalibrationRoute": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "pattern": "^[0-9A-Za-z][0-9A-Za-z._+/-]{0,127}$",
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "profile_revision",
+          "model"
+        ],
+        "type": "object"
+      },
+      "ObservedComponentIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "image_digest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "ScorerBenchmarkCapability": {
+        "additionalProperties": false,
+        "properties": {
+          "observed_at": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "probe": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScorerLivenessProbe"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "software_version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "enum": [
+              "fresh_verified",
+              "legacy_v2",
+              "unreachable",
+              "identity_mismatch"
+            ],
+            "type": "string"
+          },
+          "supported_bench_versions": {
+            "items": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "v7_calibration": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V7InferenceCalibration"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "status",
+          "supported_bench_versions"
+        ],
+        "type": "object"
+      },
+      "ScorerLivenessProbe": {
+        "additionalProperties": false,
+        "properties": {
+          "consecutive_failures": {
+            "default": 0,
+            "maximum": 2147483647,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "maximum": 599,
+                "minimum": 100,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "last_served_at": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "observed_at": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "served",
+              "served_degraded",
+              "http_error",
+              "unreadable",
+              "timeout",
+              "connect_error",
+              "not_probed"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "invalid_json",
+                  "malformed_capabilities",
+                  "unsupported_bench_version",
+                  "calibration_unreadable",
+                  "identity_mismatch"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "outcome",
+          "observed_at"
+        ],
+        "type": "object"
+      },
+      "SystemMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "collected_at": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cpu_percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "multipleOf": 5,
+            "type": "integer"
+          },
+          "disk_percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "multipleOf": 5,
+            "type": "integer"
+          },
+          "docker": {
+            "$ref": "#/$defs/DockerHealth"
+          },
+          "memory_percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "multipleOf": 5,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collected_at",
+          "cpu_percent",
+          "memory_percent",
+          "disk_percent",
+          "docker"
+        ],
+        "type": "object"
+      },
+      "V7InferenceCalibration": {
+        "additionalProperties": false,
+        "properties": {
+          "manifest_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "supported_routes": {
+            "items": {
+              "$ref": "#/$defs/InferenceCalibrationRoute"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "manifest_sha256",
+          "supported_routes"
+        ],
+        "type": "object"
+      },
+      "ValidatorCapabilities": {
+        "additionalProperties": false,
+        "properties": {
+          "executor_isolation": {
+            "enum": [
+              "unknown",
+              "privileged_dind",
+              "rootless_dind",
+              "rootless_host",
+              "ephemeral_vm"
+            ],
+            "type": "string"
+          },
+          "full_stack_managed": {
+            "type": "boolean"
+          },
+          "require_screened_image": {
+            "type": "boolean"
+          },
+          "sandbox_egress_restricted": {
+            "type": "boolean"
+          },
+          "scorer_benchmarks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScorerBenchmarkCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "screened_images": {
+            "type": "boolean"
+          },
+          "signed_score_quorum": {
+            "default": false,
+            "type": "boolean"
+          },
+          "source_build_fallback": {
+            "type": "boolean"
+          },
+          "stack_updater": {
+            "type": "boolean"
+          },
+          "ticket_inference": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "screened_images",
+          "require_screened_image",
+          "source_build_fallback",
+          "full_stack_managed",
+          "stack_updater",
+          "sandbox_egress_restricted",
+          "executor_isolation"
+        ],
+        "type": "object"
+      },
+      "ValidatorComponentHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "health": {
+            "enum": [
+              "healthy",
+              "degraded",
+              "unreachable",
+              "identity_mismatch",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "model_ready": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "observed_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ObservedComponentIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ready": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "health",
+          "required"
+        ],
+        "type": "object"
+      },
+      "ValidatorComponentIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "image_digest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "provenance": {
+            "enum": [
+              "signed_descriptor",
+              "committed_pin",
+              "local_unverified"
+            ],
+            "type": "string"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "ValidatorStackComponents": {
+        "additionalProperties": false,
+        "properties": {
+          "ditto_subnet": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          },
+          "dittobench_api": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          },
+          "model_relay": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidatorComponentIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ollama": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidatorComponentIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "pylon": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          },
+          "sandbox_docker": {
+            "$ref": "#/$defs/ValidatorComponentIdentity"
+          }
+        },
+        "required": [
+          "ditto_subnet",
+          "dittobench_api",
+          "sandbox_docker",
+          "pylon"
+        ],
+        "type": "object"
+      },
+      "ValidatorStackHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "ditto_subnet": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          },
+          "dittobench_api": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          },
+          "model_relay": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidatorComponentHealth"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ollama": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ValidatorComponentHealth"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "pylon": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          },
+          "sandbox_docker": {
+            "$ref": "#/$defs/ValidatorComponentHealth"
+          }
+        },
+        "required": [
+          "ditto_subnet",
+          "dittobench_api",
+          "sandbox_docker",
+          "pylon"
+        ],
+        "type": "object"
+      },
+      "ValidatorStackIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "components": {
+            "$ref": "#/$defs/ValidatorStackComponents"
+          },
+          "compose_schema": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "source",
+              "managed"
+            ],
+            "type": "string"
+          },
+          "release_descriptor_digest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "mode",
+          "compose_schema",
+          "components"
+        ],
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "active_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "benchmark_capacity": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BenchmarkCapacity"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "benchmark_progress": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BenchmarkProgress"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "capabilities": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ValidatorCapabilities"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "code_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "protocol_version": {
+        "maximum": 2147483647,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "signature": {
+        "pattern": "^[0-9a-fA-F]{128}$",
+        "type": "string"
+      },
+      "software_version": {
+        "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$",
+        "type": "string"
+      },
+      "stack": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ValidatorStackIdentity"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "stack_health": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ValidatorStackHealth"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "state": {
+        "enum": [
+          "polling",
+          "running_benchmark",
+          "updating_weights",
+          "idle",
+          "error",
+          "paused"
+        ],
+        "type": "string"
+      },
+      "system_metrics": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SystemMetrics"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "timestamp": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "software_version",
+      "protocol_version",
+      "code_digest",
+      "state",
+      "timestamp",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "ValidatorHeartbeatResponse": {
+    "$defs": {
+      "HeldLease": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "slot_id": {
+            "pattern": "^slot-[0-7]$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot_id",
+          "agent_id",
+          "bench_version",
+          "deadline"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "accepted": {
+        "type": "boolean"
+      },
+      "leases": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/HeldLease"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seen_at": {
+        "format": "date-time",
+        "type": "string"
+      }
+    },
+    "required": [
+      "accepted",
+      "seen_at"
+    ],
+    "type": "object"
+  }
+}

@@ -1,0 +1,39 @@
+# Build + push the baked-model code-embedding image to Artifact Registry.
+#
+# The image bakes the weights in (see Dockerfile), so it is rebuilt only when the
+# model or TEI version changes — not on every platform deploy. Artifact Registry
+# repo + Cloud Run service that consumes this image live in the infra repo's
+# Terraform (terraform/envs/gcp-platform/embedder.tf).
+#
+# Usage (from this directory, project already selected):
+#   gcloud builds submit \
+#     --config cloudbuild.yaml \
+#     --substitutions=_IMAGE=us-central1-docker.pkg.dev/PROJECT/embedder/embedder:jina-v2
+#
+# Override the model with _MODEL_ID / _MODEL_REVISION (e.g.
+# jinaai/jina-embeddings-v2-base-code + a :jina-v2 tag for the CPU fallback); keep
+# _IMAGE's tag in sync with the model so a rollback is a tag change, not a rebuild.
+
+substitutions:
+  _IMAGE: "REPLACE_WITH_ARTIFACT_REGISTRY_IMAGE"
+  _MODEL_ID: "jinaai/jina-embeddings-v2-base-code"
+  _MODEL_REVISION: "main"
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=MODEL_ID=${_MODEL_ID}
+      - --build-arg=MODEL_REVISION=${_MODEL_REVISION}
+      - --tag=${_IMAGE}
+      - --file=Dockerfile
+      - .
+
+images:
+  - "${_IMAGE}"
+
+# Baking weights pulls a few GB; give the build room and a disk.
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 30
+timeout: 1800s

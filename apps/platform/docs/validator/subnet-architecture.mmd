@@ -1,0 +1,85 @@
+%%{init: {"flowchart": {"htmlLabels": true, "nodeSpacing": 45, "rankSpacing": 55, "curve": "basis"}} }%%
+flowchart LR
+    classDef new fill:#fff3bf,stroke:#e0a800,stroke-width:2px;
+    classDef store fill:#e6f4ea,stroke:#34a853;
+    classDef chain fill:#fce8e6,stroke:#d93025;
+    classDef practice fill:#f1f3f4,stroke:#9aa0a6,color:#5f6368;
+
+    subgraph Miner["Miner — ditto-subnet (CLI)"]
+        MCLI["miner CLI<br/>sign · package .tgz · pay fee"]
+    end
+
+    subgraph Chain["Bittensor SN118<br/>dev-localnet netuid 3 · finney 118"]
+        PAY["eval-fee payment<br/>transfer_keep_alive"]:::chain
+        WEIGHTS["set_weights<br/>SDK set_weights (localnet)<br/>Pylon put_weights (finney)"]:::chain
+        YUMA["Yuma consensus<br/>→ emissions to winner"]:::chain
+        WEIGHTS --> YUMA
+    end
+
+    subgraph Platform["ditto-platform — API VM (GCP, auto-deploy from dev)"]
+        UP["/upload/*<br/>verify payment · sha256 · size cap"]
+        SAPI["/screener/*<br/>queue · artifact · result"]:::new
+        VAPI["/validator/*<br/>queue · artifact · score"]
+        SM["agents state machine<br/>uploaded → screening_failed<br/>uploaded → evaluating → scored → live"]
+        S3[("GCS<br/>agent tarballs")]:::store
+        PG[("Postgres<br/>agents · scores ledger")]:::store
+    end
+
+    subgraph ScrVM["Screener VM · platform-operated · dedicated host · Docker"]
+        SW["ditto-screener worker<br/>docker build + /health gate"]:::new
+    end
+
+    subgraph VM["Validator VM · Docker · private · IAP SSH"]
+        VW["validator worker<br/>python -m ditto.validator<br/>stateless · epoch sweep"]
+        subgraph DBench["dittobench-api :8080 — Go host binary + host Docker"]
+            FETCH["mode B: fetch tarball_url<br/>build + run in Docker sandbox"]:::new
+            RUN["fresh anti-cheat dataset<br/>stratified datagen"]
+            JUDGE["deterministic scorer · judge-free<br/>ScoreReport = 0.6·tool + 0.4·mem"]
+        end
+        HC["miner harness container<br/>built from tarball · temp 0"]
+    end
+
+    subgraph Ref["Reference · deps · off-chain practice"]
+        HARNESS["ditto-harness<br/>Rust memory library"]
+        SK["dittobench-starter-kit<br/>baseline harness"]
+        CAL["calibrate + refharness<br/>difficulty stddev ≤ 0.03"]
+        CR["dittobench-api on Cloud Run<br/>miner practice only — no Docker"]:::practice
+        GW["locked model gateway<br/>Qwen3-32B · frozen · egress-locked"]
+    end
+
+    %% 1-2 upload
+    MCLI -->|"1 pay eval fee"| PAY
+    MCLI -->|"2 upload .tgz + payment proof"| UP
+    UP -->|"verify on-chain"| PAY
+    UP --> S3
+    UP -->|"insert status=uploaded"| SM
+
+    %% 3-4 screen / promote (NEW — was manual)
+    SW -->|"3 poll uploaded + artifact"| SAPI
+    SAPI --> S3
+    SW -->|"4 verdict: pass then evaluating / fail then screening_failed"| SAPI
+    SAPI --> SM
+
+    %% 5-8 evaluate
+    VW -->|"5 poll evaluating + tarball_url"| VAPI
+    VAPI --> S3
+    VW -->|"6 submit tarball_url · run_size=full"| FETCH
+    FETCH -->|"presigned fetch"| S3
+    FETCH -->|"docker build + run"| HC
+    FETCH --> RUN --> JUDGE
+    HC -->|"locked model calls"| GW
+    JUDGE -->|"7 ScoreReport — poll /v1/runs/id"| VW
+    VW -->|"8 signed score sr25519"| VAPI
+    VAPI -->|"evaluating then scored"| SM
+
+    %% 9 weights
+    VW -->|"9 set_weights"| WEIGHTS
+    YUMA -.->|"emissions"| MCLI
+
+    SM --- PG
+
+    %% deps + calibration
+    HARNESS -.->|"pinned dep"| SK
+    SK -.->|"reference same model"| CAL
+    CAL -.->|"isolates dataset difficulty"| RUN
+    MCLI -.->|"practice (no chain, no key)"| CR

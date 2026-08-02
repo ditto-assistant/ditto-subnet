@@ -1,0 +1,3843 @@
+"""SQLAlchemy 2.0 declarative models for the Ditto data layer.
+
+Alembic migrations under :file:`alembic/versions/` own the schema;
+these models describe it in Python so :class:`AsyncSession` queries
+hydrate into typed objects. Models and migrations must stay in sync.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID, uuid4
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Enum,
+    Float,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    MetaData,
+    Numeric,
+    PrimaryKeyConstraint,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy import (
+    UUID as SaUUID,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import TIMESTAMP
+
+from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+
+# Per-case detail is a JSON blob: JSONB on Postgres (indexable, compact),
+# plain JSON on the SQLite unit-test fallback. The variant keeps one model
+# working across both dialects.
+_JSON_VARIANT = JSON().with_variant(JSONB(), "postgresql")
+_NULLABLE_JSON_VARIANT = JSON(none_as_null=True).with_variant(
+    JSONB(none_as_null=True), "postgresql"
+)
+
+# Naming convention so alembic autogenerate produces deterministic constraint
+# names instead of random SHA suffixes.
+_NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
+class Base(DeclarativeBase):
+    """Declarative base for every Ditto ORM model."""
+
+    metadata = MetaData(naming_convention=_NAMING_CONVENTION)
+
+
+class Agent(Base):
+    """One row of the ``agents`` table.
+
+    Represents a single miner submission. Lifecycle is tracked through
+    :class:`AgentStatus`; transitions are owned by the upload, evaluator,
+    and scoring modules.
+    """
+
+    __tablename__ = "agents"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    """Primary key. Client-generated UUID supplied at INSERT time."""
+
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """SS58 hotkey of the submitting miner."""
+
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    """Human-friendly agent name supplied by the miner."""
+
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Immutable revision within ``(miner_hotkey, name)``; null for legacy rows."""
+
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    """SHA-256 of the uploaded tarball, hex encoded."""
+
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    """Uploaded tarball size in bytes. Nullable for rows written before the
+    ledger migration; a cheap near-dup signal (a copy has a near-identical size)."""
+
+    # The four anti-copy sketch columns below hold multi-hundred-KB JSON blobs
+    # (k=256 minhash arrays, embedding vectors). They are deferred behind the
+    # "anticopy" group: the dominant DB cost in production was serializing them
+    # on every Agent read (leaderboard/ticket/screener paths that never look at
+    # them). Readers that DO need them — the scoring gate, the admin copy-review
+    # comparison, the fingerprint backfill — load with
+    # ``undefer_group("anticopy")`` / ``include_anticopy=True``; under the async
+    # session a forgotten undefer fails loudly (MissingGreenlet) rather than
+    # silently re-fetching.
+    content_fingerprint: Mapped[dict | None] = mapped_column(
+        _JSON_VARIANT, nullable=True, deferred=True, deferred_group="anticopy"
+    )
+
+    """Shingle MinHash sketch of the tarball source (see
+    :mod:`ditto.api_server.fingerprint`). Feeds the anti-copy gate's content-level
+    signal: a reindented/renamed/reformatted or locally-edited copy keeps a
+    near-identical fingerprint even when its byte size drifts past the
+    ``size_bytes`` tolerance. Nullable for rows written before this landed and for
+    tarballs that were unreadable/empty at upload (the gate reads null as "no
+    content match")."""
+
+    structural_fingerprint: Mapped[dict | None] = mapped_column(
+        _JSON_VARIANT, nullable=True, deferred=True, deferred_group="anticopy"
+    )
+    """AST-level shingle MinHash sketch of the crate, same ``{v,k,card,m}`` shape as
+    :attr:`content_fingerprint` (see the dittobench ``astfp`` package). Computed by
+    dittobench where the crate is unpacked and a Rust parser exists, it hashes only
+    the parse-tree *shape*, so it survives identifier renaming that the lexical
+    channel misses. Arrives (unsigned, advisory) on the score report and is written
+    at score time. Nullable: null before this landed, on the local harness_url
+    path, or when the crate has no parseable Rust."""
+
+    normalized_source_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """SHA-256 (hex) of the crate's canonicalized source — comments stripped,
+    whitespace removed, files sorted (see
+    :func:`ditto.api_server.fingerprint.compute_normalized_source_hash`). Feeds the
+    anti-copy gate's "exact-repack" signal: an *equality* match means the same
+    source repackaged (reformat / re-comment / file rename+reorder), which the
+    ``sha256`` and shingle sketches miss. Computed at upload. Nullable for rows
+    written before this landed and for tarballs unreadable/empty at upload (the
+    gate reads null as "no repack match")."""
+
+    dataset_seed: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    """The per-submission dataset seed the platform generated at job-ready
+    (``uploaded -> evaluating``). All k=3 validators score against THIS seed, so
+    their scores are comparable (the median-of-3 is over one dataset). Fresh and
+    unpredictable per submission, so a published run's answer key does not help the
+    miner's next (differently-seeded) submission. Null until the agent is promoted
+    to ``evaluating``. Bounded to the signed 64-bit range ``scores.seed`` stores."""
+
+    dataset_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """SHA-256 (hex) of the fully-rendered dataset the generate service produced
+    for ``dataset_seed`` (the DatasetArtifact digest). Issued to every validator in
+    the ticket; the validator's scoring call regenerates the dataset from the seed
+    and the scoring API fails if it does not hash to this — tamper-evidence that
+    all three validators scored the exact dataset the platform pinned. Null until
+    job-ready."""
+
+    dataset_run_size: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The generator profile the dataset was built with (``small|medium|full``),
+    issued with the ticket so the validator's scoring call uses the same profile.
+    Null until job-ready."""
+
+    dataset_seed_block: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    """Number of the on-chain block whose hash the ``dataset_seed`` was derived
+    from (see :mod:`ditto.api_server.onchain_seed`). Pinned at job-ready so anyone
+    can fetch that block, recompute ``derive_seed(block_hash, agent_id)``, and
+    verify the seed the platform published — the seed is not platform-chosen. Null
+    until job-ready, or when chain-derivation is unavailable (fallback path)."""
+
+    dataset_seed_block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Hex hash of :attr:`dataset_seed_block`, stored alongside the number so a
+    verifier need not trust the platform's block lookup: it recomputes the seed
+    directly from this hash + the agent id. Null until job-ready / on fallback."""
+
+    code_embedding: Mapped[list | None] = mapped_column(
+        _JSON_VARIANT, nullable=True, deferred=True, deferred_group="anticopy"
+    )
+    """Unit-norm code-embedding vector (JSON float array) of the crate's canonical
+    source, from the self-hosted the code-embedding signal embedding service (see
+    :mod:`ditto.api_server.embedding`). The rename/refactor-robust anti-copy signal:
+    a code embedder scores a renamed+refactored copy high but a genuinely different
+    agent low, so it is orthogonal to same-harness convergence. Stored in shadow
+    mode — computed for every agent (calibration + retroactive) but not yet a hold
+    trigger. Nullable before this landed, when the embedder is disabled
+    (``CODE_EMBEDDER_URL`` unset), or on any best-effort embed failure."""
+
+    code_embed_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """``model@revision`` provenance tag of :attr:`code_embedding` (see
+    :attr:`ditto.api_server.embedding.EmbeddingConfig.model_tag`). Lets a model
+    change drive a re-embed sweep, and lets the gate compare only same-model vectors
+    (a cross-model cosine is meaningless). Nullable alongside the vector."""
+
+    prompt_fingerprint: Mapped[dict | None] = mapped_column(
+        _JSON_VARIANT, nullable=True, deferred=True, deferred_group="anticopy"
+    )
+    """Word-shingle MinHash sketch of the crate's prompt-length string literals
+    (see :func:`ditto.api_server.fingerprint.compute_prompt_fingerprint`), same
+    ``{v,k,card,m}`` shape as :attr:`content_fingerprint` but with a string ``v`` so
+    it never compares against the lexical/structural channels. The prompt
+    surface: because it hashes string *contents*, it survives identifier renaming
+    that defeats the lexical + normalized-source channels. Computed at upload.
+    Stored in shadow mode — captured for every agent (calibration + retroactive
+    analysis) but not yet a hold trigger on its own, since honest agents on the same
+    reference harness share scaffolding prompts and the orthogonal-to-convergence
+    signals it must fuse with are not built yet. Nullable before this landed / no
+    prompt-length literal / unreadable tarball."""
+
+    duplicate_of: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Set when the anti-copy gate holds this agent in ``ath_pending_review``:
+    the ``agent_id`` of the earlier submission it appears to duplicate."""
+
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Human-readable reason a held agent was routed to review (audit trail)."""
+
+    screening_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Public-safe reason category for a failed build/serve screen.
+
+    The screener's raw ``detail`` may contain an untrusted Docker build-log tail,
+    so the endpoint maps it to a fixed category before persisting it here.
+    """
+
+    screening_reason_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Stable public/operator-safe machine code for the screening outcome."""
+
+    screening_policy_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    """Latest anti-cheat screening policy this submission passed.
+
+    Zero marks submissions screened before policy attestation was introduced.
+    Validators may score only submissions at the platform's required version.
+    """
+
+    screened_image_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """SHA-256 of the screener-exported Docker image archive."""
+
+    screened_image_size_bytes: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    """Exact byte size of the screener-exported Docker image archive."""
+
+    screened_image_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Docker content ID verified by the screener and each validator."""
+
+    screened_image_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Screener-owned tag expected inside the Docker save archive."""
+
+    screened_image_upload_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Platform-minted immutable multipart object identity."""
+
+    screened_image_verified_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """When the platform streamed and verified the complete archive bytes."""
+
+    status: Mapped[AgentStatus] = mapped_column(
+        Enum(
+            AgentStatus,
+            name="agentstatus",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+            create_constraint=True,
+        ),
+        nullable=False,
+        server_default=text("'uploaded'"),
+    )
+    """Current state in the submission state machine."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """Upload timestamp (UTC)."""
+
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id", "miner_hotkey", name="agents_agent_id_miner_hotkey_key"
+        ),
+        # Unconditional, exactly as 2026_07_15_add_agent_versions.py creates
+        # it. This used to carry `.ddl_if(dialect="postgresql")`, which was
+        # only ever an accommodation for the SQLite test tier: the gate made
+        # `create_all` skip it, so tests could seed several simultaneous
+        # agents sharing one `(hotkey, name, version)` identity -- rows
+        # production has always forbidden. #446 deleted that tier; nothing
+        # builds this schema on SQLite any more, so the gate is dead.
+        UniqueConstraint(
+            "miner_hotkey",
+            "name",
+            "version",
+            name="agents_hotkey_name_version_key",
+        ),
+        CheckConstraint(
+            "version IS NULL OR version > 0", name="agents_version_positive_check"
+        ),
+        CheckConstraint(
+            "(screened_image_sha256 IS NULL AND screened_image_size_bytes IS NULL "
+            "AND screened_image_id IS NULL AND screened_image_ref IS NULL "
+            "AND screened_image_upload_id IS NULL "
+            "AND screened_image_verified_at IS NULL) OR "
+            "(length(screened_image_sha256) = 64 AND screened_image_size_bytes > 0 "
+            "AND length(screened_image_id) = 71 AND length(screened_image_ref) > 0 "
+            "AND screened_image_upload_id IS NOT NULL "
+            "AND screened_image_verified_at IS NOT NULL)",
+            name="agents_screened_image_fields_check",
+        ),
+        Index("agents_miner_hotkey_idx", "miner_hotkey"),
+        Index("agents_sha256_idx", "sha256"),
+        # Exact-repack duplicate lookups for the quarantine review console.
+        Index("agents_normalized_source_hash_idx", "normalized_source_hash"),
+        Index(
+            "agents_status_evaluating_idx",
+            "status",
+            postgresql_where=text("status = 'evaluating'"),
+        ),
+        # Screener polls for agents in the 'uploaded' state; a partial index
+        # keeps that lookup cheap (mirrors the evaluating index).
+        Index(
+            "agents_status_uploaded_idx",
+            "status",
+            postgresql_where=text("status = 'uploaded'"),
+        ),
+        # The validator's ledger read (GET /scoring/scores) selects agents in
+        # 'scored'; a partial index keeps that scan cheap (mirrors the two above).
+        Index(
+            "agents_status_scored_idx",
+            "status",
+            postgresql_where=text("status = 'scored'"),
+        ),
+        # ``duplicate_of`` points at the earlier submission a held agent copies.
+        ForeignKeyConstraint(
+            ["duplicate_of"],
+            ["agents.agent_id"],
+            ondelete="SET NULL",
+            name="agents_duplicate_of_fkey",
+        ),
+    )
+
+
+class ScreenedImageUpload(Base):
+    """Attempt-bound multipart upload verified before a passing verdict."""
+
+    __tablename__ = "screened_image_uploads"
+
+    image_upload_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True
+    )
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_upload_id: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    image_id: Mapped[str] = mapped_column(Text, nullable=False)
+    image_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="initiated"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="screened_image_uploads_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="screened_image_uploads_attempt_id_fkey",
+        ),
+        CheckConstraint(
+            "status IN ('initiated', 'verified', 'aborted')",
+            name="screened_image_uploads_status_check",
+        ),
+        CheckConstraint("size_bytes > 0", name="screened_image_uploads_size_check"),
+        Index("screened_image_uploads_attempt_idx", "attempt_id"),
+        Index("screened_image_uploads_status_expires_idx", "status", "expires_at"),
+    )
+
+
+class ScreeningAttempt(Base):
+    """One claimed, versioned screening lease for a submission."""
+
+    __tablename__ = "screening_attempts"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    deadline: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    public_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duplicate_of: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    build_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    review_settings_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    review_settings_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_settings_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_settings_checksum: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """This attempt only rebuilds an already-adjudicated submission's missing
+    prerequisites (screened image / dataset); the screener must NOT re-run the
+    anti-cheat source review and cannot quarantine. Set when an EVALUATING agent
+    on the current policy is re-claimed — its review was already cleared, so a
+    re-screen would wrongly re-judge an approved artifact."""
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="screening_attempts_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["duplicate_of"],
+            ["agents.agent_id"],
+            ondelete="SET NULL",
+            name="screening_attempts_duplicate_of_fkey",
+        ),
+        CheckConstraint(
+            "policy_version > 0",
+            name="screening_attempts_policy_version_check",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'passed', 'rejected', 'failed', 'expired', "
+            "'quarantined')",
+            name="screening_attempts_status_check",
+        ),
+        CheckConstraint(
+            "deadline >= started_at",
+            name="screening_attempts_deadline_check",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR finished_at >= started_at",
+            name="screening_attempts_finished_check",
+        ),
+        CheckConstraint(
+            # Verbatim from 2026_07_15_add_exact_duplicate_precheck.py, which
+            # creates this constraint *name* with this predicate. `models.py`
+            # used to declare the same name as `length(reason_code) BETWEEN 1
+            # AND 64` -- strictly weaker, so tests accepted reason codes
+            # production rejects (`suspicious_source` with an underscore was
+            # one, and #446 had to hyphenate three fixtures).
+            "reason_code IS NULL OR reason_code ~ '^[a-z0-9][a-z0-9-]{0,63}$'",
+            name="screening_attempts_reason_code_check",
+        ),
+        CheckConstraint(
+            "(review_settings_revision IS NULL "
+            "AND review_settings_instance_id IS NULL "
+            "AND review_settings_scope IS NULL "
+            "AND review_settings_checksum IS NULL) OR "
+            "(review_settings_revision > 0 "
+            "AND review_settings_instance_id IS NOT NULL "
+            "AND review_settings_scope IS NOT NULL "
+            "AND length(review_settings_checksum) = 64)",
+            name="screening_attempts_review_settings_binding_check",
+        ),
+        Index("screening_attempts_agent_started_idx", "agent_id", "started_at"),
+        Index(
+            "screening_attempts_one_running_idx",
+            "agent_id",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+            sqlite_where=text("status = 'running'"),
+        ),
+    )
+
+
+class AthReview(Base):
+    """Durable, immutable-evidence audit record for an ATH copy hold."""
+
+    __tablename__ = "ath_reviews"
+
+    review_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    opened_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    reopened_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    resolved_by: Mapped[str | None] = mapped_column(Text)
+    resolution: Mapped[str | None] = mapped_column(Text)
+    resolution_reason: Mapped[str | None] = mapped_column(Text)
+    original_duplicate_of: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    original_reason: Mapped[str | None] = mapped_column(Text)
+    original_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    algorithm_provenance: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["original_duplicate_of"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("agent_id", name="ath_reviews_agent_id_key"),
+        CheckConstraint(
+            "status IN ('pending', 'resolved')", name="ath_reviews_status_check"
+        ),
+        CheckConstraint(
+            "resolution IS NULL OR resolution IN ('clear', 'reject')",
+            name="ath_reviews_resolution_check",
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND resolved_at IS NULL AND resolved_by IS NULL "
+            "AND resolution IS NULL AND resolution_reason IS NULL) OR "
+            "(status = 'resolved' AND resolved_at IS NOT NULL "
+            "AND resolved_by IS NOT NULL "
+            "AND length(trim(resolved_by)) BETWEEN 1 AND 120 "
+            "AND resolution IS NOT NULL "
+            "AND resolution IN ('clear', 'reject') "
+            "AND resolution_reason IS NOT NULL "
+            "AND length(trim(resolution_reason)) >= 3)",
+            name="ath_reviews_lifecycle_check",
+        ),
+        Index("ath_reviews_status_opened_idx", "status", "opened_at", "review_id"),
+    )
+
+
+class AthReviewAction(Base):
+    """Append-only operator lifecycle history for an ATH review."""
+
+    __tablename__ = "ath_review_actions"
+
+    action_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    review_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["review_id"], ["ath_reviews.review_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "action IN ('reopen', 'clear', 'reject')",
+            name="ath_review_actions_action_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 3",
+            name="ath_review_actions_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="ath_review_actions_actor_check",
+        ),
+        Index(
+            "ath_review_actions_review_created_idx",
+            "review_id",
+            "created_at",
+            "action_id",
+        ),
+    )
+
+
+class ScreeningRetryOverride(Base):
+    """Append-only operator grant that waives one failed attempt's backoff."""
+
+    __tablename__ = "screening_retry_overrides"
+
+    override_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        UniqueConstraint("attempt_id", name="screening_retry_overrides_attempt_key"),
+        CheckConstraint(
+            "length(artifact_sha256) = 64",
+            name="screening_retry_overrides_sha_length_check",
+        ),
+        CheckConstraint(
+            "expected_score_count >= 0",
+            name="screening_retry_overrides_score_count_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="screening_retry_overrides_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="screening_retry_overrides_actor_check",
+        ),
+        Index(
+            "screening_retry_overrides_agent_created_idx",
+            "agent_id",
+            "created_at",
+            "override_id",
+        ),
+    )
+
+
+class ScreeningQuarantine(Base):
+    """Append-only quarantine decision plus its operator resolution."""
+
+    __tablename__ = "screening_quarantines"
+
+    quarantine_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    finding_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason_code: Mapped[str] = mapped_column(Text, nullable=False)
+    review_audit_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Digest of the signed, public-safe reviewer budget audit."""
+
+    review_audit: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Typed reviewer budget/accounting audit; never source or prompt content."""
+
+    evidence: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    """Bounded public-safe policy evidence trail (module, code, summary,
+    digest) shipped by the screener on quarantine. Display data for the
+    operator console; the signed verdict binds only the digests. Null for
+    rows written before the review payloads landed."""
+
+    finding: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    """Bounded source-review finding (risk, confidence, categories, flagged
+    path/line evidence, summary). Its canonical JSON hashes to
+    ``finding_digest``, which the verdict signature covers, so this payload is
+    verifiable end to end. Null before the review payloads landed and for
+    quarantines with no source-review finding."""
+
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    resolved_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("attempt_id", name="screening_quarantines_attempt_id_key"),
+        CheckConstraint(
+            "policy_version > 0", name="screening_quarantines_policy_check"
+        ),
+        # The three digest/reason-code formats below are declared inline on the
+        # columns by 2026_07_14_add_screening_quarantines.py, so Postgres named
+        # them itself and `models.py` never carried them. Production has always
+        # enforced all three; declaring them here is what lets a test see the
+        # schema production actually has.
+        CheckConstraint(
+            "manifest_digest ~ '^[0-9a-f]{64}$'",
+            name="screening_quarantines_manifest_digest_check",
+        ),
+        CheckConstraint(
+            "finding_digest IS NULL OR finding_digest ~ '^[0-9a-f]{64}$'",
+            name="screening_quarantines_finding_digest_check",
+        ),
+        CheckConstraint(
+            "review_audit_digest IS NULL OR review_audit_digest ~ '^[0-9a-f]{64}$'",
+            name="screening_quarantines_review_audit_digest_check",
+        ),
+        CheckConstraint(
+            "(review_audit IS NULL) = (review_audit_digest IS NULL)",
+            name="screening_quarantines_review_audit_pair_check",
+        ),
+        CheckConstraint(
+            "review_audit IS NULL OR reason_code = 'source-review-inconclusive'",
+            name="screening_quarantines_review_audit_reason_check",
+        ),
+        CheckConstraint(
+            "reason_code ~ '^[a-z0-9][a-z0-9-]{0,63}$'",
+            name="screening_quarantines_reason_code_check",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'resolved')",
+            name="screening_quarantines_status_check",
+        ),
+        CheckConstraint(
+            "resolution IS NULL OR resolution IN ('release', 'rescreen', 'reject')",
+            name="screening_quarantines_resolution_check",
+        ),
+        Index(
+            "screening_quarantines_one_active_agent_idx",
+            "agent_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+        Index("screening_quarantines_created_idx", "created_at"),
+        # Miner-history lookups (all quarantines for one agent, any status).
+        Index("screening_quarantines_agent_idx", "agent_id"),
+    )
+
+
+class ScreeningQuarantineResolution(Base):
+    """Append-only operator action history for a screening quarantine."""
+
+    __tablename__ = "screening_quarantine_resolutions"
+
+    resolution_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    quarantine_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    resolution: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["quarantine_id"],
+            ["screening_quarantines.quarantine_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "resolution IN ('release', 'rescreen', 'reject')",
+            name="screening_quarantine_resolutions_resolution_check",
+        ),
+        Index(
+            "screening_quarantine_resolutions_quarantine_created_idx",
+            "quarantine_id",
+            "created_at",
+        ),
+    )
+
+
+class ScreeningDispute(Base):
+    """One miner-authenticated appeal of a rejected screening decision."""
+
+    __tablename__ = "screening_disputes"
+
+    dispute_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    quarantine_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    resolved_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["quarantine_id"],
+            ["screening_quarantines.quarantine_id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("agent_id", name="screening_disputes_agent_id_key"),
+        UniqueConstraint("quarantine_id", name="screening_disputes_quarantine_id_key"),
+        CheckConstraint(
+            "length(message) BETWEEN 20 AND 1000",
+            name="screening_disputes_message_length_check",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'resolved')",
+            name="screening_disputes_status_check",
+        ),
+        CheckConstraint(
+            "resolution IS NULL OR resolution IN ('release', 'uphold')",
+            name="screening_disputes_resolution_check",
+        ),
+        Index("screening_disputes_status_created_idx", "status", "created_at"),
+    )
+
+
+class EvaluationPayment(Base):
+    """One row of the ``evaluation_payments`` table.
+
+    The composite primary key ``(block_hash, extrinsic_index)`` is the
+    replay-protection mechanism: the same on-chain payment proof cannot
+    be inserted twice. An assigned row has ``agent_id`` set; a payment made for
+    an accidental byte-identical upload instead has ``credit_for_agent_id`` set
+    until it is atomically consumed by a different artifact. The XOR constraint
+    makes those states exclusive. ``UNIQUE (agent_id)`` preserves one payment
+    per evaluated upload, while the composite FK on ``(agent_id, miner_hotkey)``
+    documents the ownership invariant in DDL.
+    """
+
+    __tablename__ = "evaluation_payments"
+
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    """Hash of the block containing the payment extrinsic. PK part 1."""
+
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Zero-based index of the extrinsic within the block. PK part 2."""
+
+    agent_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    """FK to ``agents.agent_id`` when the payment has funded an evaluation.
+
+    ``NULL`` means the payment is a reusable credit created after an accidental
+    byte-identical upload. The proof remains replay-protected by this row and is
+    atomically assigned when the miner submits a different artifact.
+    """
+
+    credit_for_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Earlier same-owner agent whose identical artifact created this credit."""
+
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Signer hotkey on the payment extrinsic. FK-bound to ``agents.miner_hotkey``."""
+
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Coldkey that owns the hotkey at payment time. Snapshot for audit."""
+
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """Payment amount in rao (1 TAO = 1e9 rao)."""
+
+    accepted_under_legacy_fee_amnesty: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    """Whether a pre-cutover reservation accepted its finalized legacy amount."""
+
+    tao_usd_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    """TAO/USD oracle rate used at verification; null only for legacy rows."""
+
+    dest_address: Mapped[str] = mapped_column(Text, nullable=False)
+    """SS58 address that received the payment."""
+
+    timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """On-chain block timestamp."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """Row insertion timestamp."""
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "block_hash", "extrinsic_index", name="evaluation_payments_pkey"
+        ),
+        UniqueConstraint("agent_id", name="evaluation_payments_agent_id_key"),
+        ForeignKeyConstraint(
+            ["agent_id", "miner_hotkey"],
+            ["agents.agent_id", "agents.miner_hotkey"],
+            ondelete="RESTRICT",
+            name="evaluation_payments_agent_id_miner_hotkey_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["credit_for_agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="evaluation_payments_credit_for_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "(agent_id IS NOT NULL) <> (credit_for_agent_id IS NOT NULL)",
+            name="evaluation_payments_assignment_xor_credit",
+        ),
+        CheckConstraint("amount_rao > 0", name="evaluation_payments_amount_rao_check"),
+        CheckConstraint(
+            "tao_usd_rate IS NULL OR tao_usd_rate > 0",
+            name="evaluation_payments_tao_usd_rate_positive",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0",
+            name="evaluation_payments_extrinsic_index_check",
+        ),
+        Index("evaluation_payments_miner_hotkey_idx", "miner_hotkey"),
+        Index(
+            "evaluation_payments_available_credit_idx",
+            "miner_hotkey",
+            postgresql_where=text("agent_id IS NULL"),
+        ),
+    )
+
+
+class Score(Base):
+    """One validator's DittoBench score for one agent.
+
+    The composite primary key ``(agent_id, validator_hotkey)`` keeps a
+    single current score per validator per agent: a validator re-scoring
+    the same agent (new ``run_id``) upserts this row rather than appending
+    history. ``agent_id`` is a single-column FK to ``agents.agent_id`` with
+    ``ON DELETE CASCADE`` because a score is derived data — deleting the
+    agent discards its scores.
+
+    Aggregates (``composite`` / ``tool_mean`` / ``memory_mean`` /
+    ``median_ms`` / ``n``) are first-class columns so weight computation and
+    leaderboards query them directly; ``details`` carries the optional
+    per-case breakdown verbatim for audit/dispute. The platform records what
+    the validator reports and never recomputes ``composite``.
+    """
+
+    __tablename__ = "scores"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    """FK to ``agents.agent_id``. PK part 1."""
+
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """SS58 hotkey of the reporting validator. PK part 2."""
+
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    """Benchmark semantics this signed score and its dataset were produced under.
+
+    Defaults to the floor, not to 2. The old default predated any floor and is
+    now guaranteed to violate ``scores_bench_version_floor``, so it could only
+    ever have produced a runtime IntegrityError. Every production caller passes
+    this explicitly -- ``upsert_score`` requires it -- so the default now serves
+    only fixtures that do not care which era they are in.
+    """
+
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    """Scoring-engine run identifier (part of the value the signature is bound to)."""
+
+    signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The reporting validator's sr25519 signature over the score payload, hex
+    encoded. Persisted so the exposed ledger is self-verifying. Nullable for rows
+    written before the ledger migration."""
+
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """Dataset seed used for the run (anti-overfit reproducibility)."""
+
+    composite: Mapped[float] = mapped_column(Float, nullable=False)
+    """Aggregate benchmark score in [0, 1] (not recomputed by the platform)."""
+
+    tool_mean: Mapped[float] = mapped_column(Float, nullable=False)
+    """Mean tool accuracy in [0, 1]."""
+
+    memory_mean: Mapped[float] = mapped_column(Float, nullable=False)
+    """Mean memory recall in [0, 1]."""
+
+    median_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Median per-case latency in milliseconds."""
+
+    n: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Number of cases scored."""
+
+    details: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    """Optional per-case breakdown ``{"per_case": [...]}`` for audit."""
+
+    model_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Reader-model calls this run made, off the lease's inference grant.
+
+    Denormalized at submit time from ``inference_grants``. That table is hot
+    and short-retention (grants are pruned within days) while scores are
+    permanent, so the join is not merely slow to reproduce later -- after
+    pruning it is impossible. ``NULL`` means *not measured* (no grant existed
+    for the lease), which is distinct from ``0`` meaning *measured, and the
+    model was never called*.
+    """
+
+    model_prompt_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    """Prompt tokens the reader model was sent across this run."""
+
+    model_completion_tokens: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    """Completion tokens the reader model produced across this run."""
+
+    generated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """When the scoring engine produced the report (UTC)."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """When this row was first inserted (UTC)."""
+
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    """When this row was last upserted (UTC)."""
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id", "bench_version", "validator_hotkey", name="scores_pkey"
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="scores_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "composite >= 0 AND composite <= 1",
+            name="scores_composite_range_check",
+        ),
+        CheckConstraint(
+            "tool_mean >= 0 AND tool_mean <= 1", name="scores_tool_mean_range_check"
+        ),
+        CheckConstraint(
+            "memory_mean >= 0 AND memory_mean <= 1",
+            name="scores_memory_mean_range_check",
+        ),
+        CheckConstraint("n >= 0", name="scores_n_check"),
+        CheckConstraint("median_ms >= 0", name="scores_median_ms_check"),
+        CheckConstraint("bench_version > 0", name="scores_bench_version_positive"),
+        # The retired-era floor. Declared NOT VALID in the migration: the
+        # historical v2-v6 rows stay readable, queryable and byte-identical,
+        # while every INSERT and UPDATE from here on must be v7 or later. This
+        # is the guarantee that no application bug can score a retired era --
+        # see MIN_SCOREABLE_BENCH_VERSION.
+        CheckConstraint("bench_version >= 7", name="scores_bench_version_floor"),
+        Index("scores_agent_id_idx", "agent_id"),
+        # Dashboard/ledger reads select one benchmark era before grouping or
+        # ranking scores.  Keep the aggregate columns in the index so the
+        # frequently-polled activity snapshot can stay index-only as older
+        # benchmark eras accumulate.
+        Index(
+            "scores_bench_version_agent_composite_idx",
+            "bench_version",
+            "agent_id",
+            "composite",
+            "validator_hotkey",
+            postgresql_include=["updated_at"],
+        ),
+        Index(
+            "scores_bench_timeline_idx",
+            "bench_version",
+            "agent_id",
+            "updated_at",
+            "validator_hotkey",
+            postgresql_include=["memory_mean", "composite", "n"],
+        ),
+    )
+
+
+class ConfirmationScore(Base):
+    """One append-only shared-seed rescore result: a top-5 confirmation ledger row.
+
+    The continual top-5 shared-seed rescore lane
+    (``docs/top5-rescore-lane.md``) re-scores each emission-set member on the
+    **champion-anchored** CRN seed set. Unlike :class:`Score` (the authoritative
+    k=3 record, one upserted row per validator), this ledger is **append-only**:
+    one immutable row per ``(agent_id, validator_hotkey, bench_version, seed)``,
+    inserted with ``ON CONFLICT DO NOTHING`` and **never UPDATEd or deleted**. The
+    longer a champion reigns, the more rows accumulate — the record grows
+    monotonically and every seed's score is kept forever (auditable, no
+    destructive read-modify-write).
+
+    The KOTH fold (and its ``koth.py`` platform mirror) read the paired evidence
+    from this history — grouped by seed, lower-median across validators — so
+    "more seeds" is just "more rows to median over". The authoritative k=3
+    ``scores`` table is untouched: no 4th ticket, no 4th ``Score`` PK row, no
+    change to finalization. This ledger is a separate, additive store.
+    """
+
+    __tablename__ = "confirmation_scores"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    """FK to ``agents.agent_id``. Unique-key part 1."""
+
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """SS58 hotkey of the reporting validator. Unique-key part 2."""
+
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Benchmark semantics this signed rescore was produced under. Unique-key
+    part 3 — the champion-anchored seed set is keyed on the major version."""
+
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """The champion-anchored CRN seed the member was re-scored on. Unique-key
+    part 4 — a validator contributes at most one composite per seed, immutably."""
+
+    composite: Mapped[float] = mapped_column(Float, nullable=False)
+    """Aggregate score in [0, 1] on this seed's dataset (as reported)."""
+
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    """Scoring-engine run identifier for this seed's benchmark run."""
+
+    signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The reporting validator's sr25519 signature over the parent score payload,
+    hex encoded, so the ledger row is self-verifying alongside the k=3 receipt."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """When this immutable row was appended (UTC). Never updated."""
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            "seed",
+            name="confirmation_scores_pkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="confirmation_scores_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "composite >= 0 AND composite <= 1",
+            name="confirmation_scores_composite_range_check",
+        ),
+        CheckConstraint(
+            "bench_version > 0", name="confirmation_scores_bench_version_positive"
+        ),
+        # Same retired-era floor as ``scores``, and for the same reason: this is
+        # a score ledger too. Also NOT VALID, so the existing v6 confirmation
+        # rows survive untouched.
+        CheckConstraint(
+            "bench_version >= 7", name="confirmation_scores_bench_version_floor"
+        ),
+        CheckConstraint("seed >= 0", name="confirmation_scores_seed_check"),
+        Index("confirmation_scores_agent_version_idx", "agent_id", "bench_version"),
+    )
+
+
+class EfficiencyCohortSnapshot(Base):
+    """One frozen relative token-efficiency cohort (bench_version >= 7).
+
+    The platform-side relative bonus (:mod:`ditto.api_server.efficiency`)
+    freezes, once per efficiency epoch, the quality-qualified lineage-deduped
+    cohort for a ``(bench_version, run_size)`` board together with its robust
+    reference statistics (nearest-rank P25 frontier + median zero point) and
+    the quality floors in force. Rows are **append-only and immutable**: a new
+    epoch inserts a new row; nothing ever UPDATEs or deletes one, so every
+    published bonus stays reproducible from stored data alone. The
+    deterministic validator composite is never derived from or affected by
+    this table.
+    """
+
+    __tablename__ = "efficiency_cohort_snapshots"
+
+    snapshot_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    """Client-generated UUID; referenced by ``efficiency_bonuses`` rows."""
+
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Benchmark contract the cohort was drawn from (always >= 7)."""
+
+    run_size: Mapped[str] = mapped_column(Text, nullable=False)
+    """Generator profile of the cohort's runs (``full`` for ranked boards)."""
+
+    epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """Platform efficiency epoch ordinal (fixed UTC windows since the Unix
+    epoch; see :func:`ditto.api_server.efficiency.epoch_index_for`)."""
+
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    """Whether the cohort met ``n_min`` after lineage dedupe. Inactive
+    snapshots freeze the observation but award no bonus."""
+
+    cohort_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Top-N cap on cohort membership in force at freeze time."""
+
+    n_min: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Minimum deduped cohort size required for activation."""
+
+    bonus_cap: Mapped[float] = mapped_column(Float, nullable=False)
+    """Tier-1 maximum bonus fraction (``B_max``) frozen for this epoch: the
+    value the curve reaches at the P25 frontier."""
+
+    curve_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    """Bonus-curve policy this snapshot was frozen under
+    (:data:`ditto.api_server.efficiency.CURVE_VERSION_SINGLE_TIER` /
+    ``CURVE_VERSION_TWO_TIER``). Stored so a historical snapshot reproduces
+    its bonuses under ITS policy forever, regardless of later curve changes."""
+
+    deep_bonus_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Tier-2 saturation cap frozen for this epoch (two-tier curve only):
+    the flat bonus at or below the deep frontier. ``>= bonus_cap``, <= 0.10.
+    Null under the single-tier policy."""
+
+    deep_frontier_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Deep frontier as a fraction of the P25 reference (two-tier curve
+    only), in (0, 1). Null under the single-tier policy."""
+
+    quality_floor: Mapped[float] = mapped_column(Float, nullable=False)
+    """Composite floor (``Q_min``) applied at freeze time."""
+
+    memory_floor: Mapped[float] = mapped_column(Float, nullable=False)
+    """Memory-mean floor (``M_min``) applied at freeze time, so a harness
+    cannot buy efficiency by sacrificing the memory half."""
+
+    reference_p25_tokens: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Efficient-quartile frontier (nearest-rank P25 of cohort audited chat
+    token totals); null while inactive."""
+
+    reference_median_tokens: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Cohort median of audited chat token totals (the zero-bonus point);
+    null while inactive."""
+
+    members: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    """Frozen cohort membership: a list of ``{agent_id, miner_hotkey,
+    lineage_key, composite, memory_mean, token_total, collapsed_agent_ids}``
+    dicts, the full audit record a bonus is reproducible from. Lineage keys
+    are moderation-adjacent digests; public projections expose only opaque
+    group ordinals, never the raw keys."""
+
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """When this immutable snapshot was frozen (UTC). Never updated."""
+
+    __table_args__ = (
+        UniqueConstraint(
+            "bench_version",
+            "run_size",
+            "epoch_index",
+            name="efficiency_cohort_snapshots_epoch_key",
+        ),
+        CheckConstraint(
+            "bench_version >= 7",
+            name="efficiency_cohort_snapshots_bench_version_check",
+        ),
+        CheckConstraint(
+            "bonus_cap > 0 AND bonus_cap <= 0.1",
+            name="efficiency_cohort_snapshots_cap_check",
+        ),
+        CheckConstraint(
+            "deep_bonus_cap IS NULL OR "
+            "(deep_bonus_cap >= bonus_cap AND deep_bonus_cap <= 0.1)",
+            name="efficiency_cohort_snapshots_deep_cap_check",
+        ),
+        CheckConstraint(
+            "deep_frontier_ratio IS NULL OR "
+            "(deep_frontier_ratio > 0 AND deep_frontier_ratio < 1)",
+            name="efficiency_cohort_snapshots_deep_frontier_check",
+        ),
+        CheckConstraint(
+            "curve_version >= 1",
+            name="efficiency_cohort_snapshots_curve_version_check",
+        ),
+        CheckConstraint("n_min >= 2", name="efficiency_cohort_snapshots_n_min_check"),
+        Index(
+            "efficiency_cohort_snapshots_board_idx",
+            "bench_version",
+            "run_size",
+            "epoch_index",
+        ),
+    )
+
+
+class EfficiencyBonus(Base):
+    """One agent's frozen relative token-efficiency bonus (bench_version >= 7).
+
+    Insert-once per ``(agent_id, bench_version, epoch_index)``: assigned against
+    the frozen cohort snapshot of that epoch (strictly-upside zero rows included,
+    so "no bonus" is as frozen as "5%") and **never updated**, so a published
+    effective score can never drift. ``effective_composite = composite *
+    (1 + bonus)`` is derived at read time; the validator's composite is never
+    modified.
+
+    The key carries ``epoch_index`` because the bonus is *relative*: it is a
+    position against a cohort's token distribution, and that distribution moves.
+    Without the epoch in the key the row was insert-once per bench version
+    FOREVER, so an agent that became more efficient could never earn a better
+    bonus, and an agent measured mid-transition kept that measurement for the
+    life of the contract. That happened at 04:43Z on 2026-07-26, part-way
+    through the 4M -> 25M token-budget change.
+
+    ``bench_version`` stays in the key and stays load-bearing: a bonus earned
+    under one benchmark contract is meaningless under another (different
+    dataset, different difficulty, different token profile). Epoch scoping is
+    strictly *inside* version scoping, not a replacement for it.
+
+    Recomputation is additive, never destructive. A new epoch writes a NEW row;
+    prior epochs' rows are untouched, so ``/public/efficiency/snapshots/{id}``
+    stays immutable and the audit trail is complete.
+    """
+
+    __tablename__ = "efficiency_bonuses"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    """FK to ``agents.agent_id``. PK part 1."""
+
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Benchmark contract of the bonused board. PK part 2."""
+
+    epoch_index: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    """The epoch this bonus was computed in. PK part 3.
+
+    Mirrors ``EfficiencyCohortSnapshot.epoch_index``, which has always carried
+    it -- the asymmetry between the two tables was the defect. Backfilled from
+    the referenced snapshot, so historical rows keep the epoch they were really
+    assigned in rather than collapsing to zero.
+    """
+
+    snapshot_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    """The frozen cohort snapshot this bonus was computed against (the
+    ``bonus_reference`` provenance pointer)."""
+
+    token_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """The audited chat token total the bonus was computed from (median of
+    the quorum's complete relay-metered totals); null when no quorum row
+    carried complete audited usage (bonus is then necessarily 0)."""
+
+    bonus: Mapped[float] = mapped_column(Float, nullable=False)
+    """The frozen additive bonus fraction in ``[0, 0.1]``; never negative."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """When this immutable row was assigned (UTC). Never updated."""
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id",
+            "bench_version",
+            "epoch_index",
+            name="efficiency_bonuses_pkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="efficiency_bonuses_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["snapshot_id"],
+            ["efficiency_cohort_snapshots.snapshot_id"],
+            name="efficiency_bonuses_snapshot_id_fkey",
+        ),
+        CheckConstraint(
+            "bonus >= 0 AND bonus <= 0.1", name="efficiency_bonuses_bonus_range_check"
+        ),
+        CheckConstraint(
+            "bench_version >= 7", name="efficiency_bonuses_bench_version_check"
+        ),
+        CheckConstraint(
+            "epoch_index >= 0", name="efficiency_bonuses_epoch_index_check"
+        ),
+        Index("efficiency_bonuses_snapshot_idx", "snapshot_id"),
+        # The fold and the board both ask "this agent, this version, this
+        # epoch", which the PK already serves. This one serves the other
+        # direction: sweep one epoch's whole board.
+        Index("efficiency_bonuses_epoch_idx", "bench_version", "epoch_index"),
+    )
+
+
+class BenchmarkDataset(Base):
+    """Immutable dataset pin for one agent and benchmark version."""
+
+    __tablename__ = "benchmark_datasets"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    run_size: Mapped[str] = mapped_column(Text, nullable=False)
+    seed_block: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    seed_block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id", "bench_version", name="benchmark_datasets_pkey"
+        ),
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        CheckConstraint("bench_version > 0", name="benchmark_dataset_version_positive"),
+        CheckConstraint("length(sha256) = 64", name="benchmark_dataset_sha_length"),
+    )
+
+
+class BenchmarkRollout(Base):
+    """Durable benchmark transition snapshot; there is at most one open row."""
+
+    __tablename__ = "benchmark_rollouts"
+
+    rollout_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    from_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    desired_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    cohort_size: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    rescore_cohort_target: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default=text("10")
+    )
+    """How many inherited agents this rollout set out to rescore.
+
+    Frozen from the operator setting
+    (``queue_policy_settings_revisions.settings.rescore_cohort_size``) at
+    START and never rewritten, so a later revision cannot resize an in-flight
+    rollout and a historical rollout stays explainable. ``cohort_size`` is how
+    many members were actually qualified; this is the size that was aimed for.
+    """
+    priority_cohort_target: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default=text("5")
+    )
+    """How many top inherited positions must hold a target-version quorum here.
+
+    Frozen from ``queue_policy_settings_revisions.settings.priority_cohort_size``
+    at START, for the same reason as ``rescore_cohort_target``: this is the gate
+    that decides when the rollout may take ledger authority, and re-gating a
+    transition already in flight would move the finish line underneath it.
+
+    Distinct from ``ditto.db.queries.benchmark_rollout.PRIORITY_COHORT_SIZE``,
+    which stays a constant. That constant serves two fused meanings -- the
+    rollout activation gate AND the KOTH top-five emission set. Only the former
+    is queue policy; the latter is a consensus quantity that must keep matching
+    ``MIN_DESIRED_AUTHORITY_AGENTS``. This column is the tunable half, and the
+    constant remains its floor.
+    """
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint("from_version > 0", name="benchmark_rollout_from_positive"),
+        CheckConstraint(
+            "desired_version > from_version", name="benchmark_rollout_forward"
+        ),
+        # No new rollout may ever target a retired era. Combined with
+        # ``benchmark_rollout_forward`` above (desired > from) this also pins
+        # ``from_version`` at 6 or higher for any NEW row, so the only rollout
+        # this table can still open is one that ends at v7 or later.
+        #
+        # NOT VALID in the migration: the six historical rows -- including the
+        # v6->v7 transition whose ``from_version`` is 6 -- stay exactly as they
+        # are, because they are the audit trail of how the fleet got here.
+        CheckConstraint("desired_version >= 7", name="benchmark_rollout_desired_floor"),
+        CheckConstraint(
+            # Retain the historical storage bound for rollout snapshots created
+            # before new transitions were narrowed to ten members.
+            "cohort_size BETWEEN 5 AND 25",
+            name="benchmark_rollout_bounded_members",
+        ),
+        CheckConstraint(
+            # Same storage ceiling as cohort_size: an operator may widen the
+            # target from the default ten up to twenty-five, never past it.
+            # Deliberately NOT related to cohort_size by a constraint --
+            # pre-existing 11-25 member rollouts backfilled a target that is
+            # their own size, and an in-flight rollout is legitimately below it.
+            "rescore_cohort_target BETWEEN 5 AND 25",
+            name="benchmark_rollout_bounded_rescore_target",
+        ),
+        CheckConstraint(
+            # Floor is the KOTH emission-set size: a priority gate below five
+            # would let the ledger flip to the desired version with fewer
+            # recipients than the emission split expects. Ceiling is the same
+            # storage bound as the rescore target. Deliberately NOT constrained
+            # to be <= rescore_cohort_target in SQL: the wire model already
+            # rejects that combination, and a CHECK spanning both columns would
+            # make backfilling a legacy 11-25-member rollout order-dependent.
+            "priority_cohort_target BETWEEN 5 AND 25",
+            name="benchmark_rollout_bounded_priority_target",
+        ),
+        CheckConstraint(
+            # 'superseded' is terminal: an operator abandoned the rollout before
+            # activation. The partial open index below excludes it, so it frees
+            # the single open slot.
+            "status IN ('collecting', 'blocked_ineligible', 'activated', 'superseded')",
+            name="benchmark_rollout_status",
+        ),
+        Index(
+            "benchmark_rollouts_one_open_idx",
+            text("(1)"),
+            unique=True,
+            postgresql_where=text("status IN ('collecting', 'blocked_ineligible')"),
+            sqlite_where=text("status IN ('collecting', 'blocked_ineligible')"),
+        ),
+        Index(
+            "benchmark_rollouts_transition_idx",
+            "from_version",
+            "desired_version",
+            unique=True,
+        ),
+    )
+
+
+class BenchmarkRolloutMember(Base):
+    """An agent qualified during a rolling benchmark activation."""
+
+    __tablename__ = "benchmark_rollout_members"
+
+    rollout_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    frozen_miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    frozen_composite: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("rollout_id", "agent_id"),
+        UniqueConstraint("rollout_id", "position"),
+        ForeignKeyConstraint(
+            ["rollout_id"], ["benchmark_rollouts.rollout_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        CheckConstraint("position > 0", name="benchmark_member_position"),
+    )
+
+
+class BenchmarkRolloutCarryover(Base):
+    """A previous-generation submission the new benchmark era adopted.
+
+    Deliberately a **separate table** from :class:`BenchmarkRolloutMember`
+    rather than a ``kind`` discriminator on it. Every existing query that counts
+    or lists rollout members treats "row in ``benchmark_rollout_members``" as
+    "inherited rescore cohort": ``cohort_size``, ``rollout_cohort_complete``,
+    ``rollout_cohort_score_complete``, ``_validate_frozen_members``,
+    ``rollout_state``'s member list, ``active_bench_version``,
+    ``authority_selection_state``, and ``issue_rollout_ticket``. A discriminator
+    would require a ``kind`` filter on every one of them, and missing a single
+    filter would silently re-gate an open rollout's activation on agents that
+    were never part of its cohort. A separate table cannot be accidentally
+    included by any of those queries.
+
+    The row is the sole admission credential for a carried-over submission (see
+    ``ditto.db.queries.benchmark_admission.benchmark_admission_predicate``), and
+    it is only ever written in the same transaction that pins the agent's
+    desired-version :class:`BenchmarkDataset`. That is what makes admission and
+    dataset generation inseparable rather than merely coordinated.
+    """
+
+    __tablename__ = "benchmark_rollout_carryover"
+
+    rollout_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    """1-based adoption order, so the operator cap is auditable after the fact."""
+    frozen_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Prior-era accepted score count at adoption time, for audit."""
+    frozen_owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    """The owner key this row was deduped under (``coldkey:``/``hotkey:``)."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint("rollout_id", "agent_id"),
+        UniqueConstraint("rollout_id", "position"),
+        ForeignKeyConstraint(
+            ["rollout_id"], ["benchmark_rollouts.rollout_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        CheckConstraint("position > 0", name="benchmark_carryover_position"),
+        CheckConstraint(
+            "frozen_score_count BETWEEN 0 AND 2",
+            name="benchmark_carryover_frozen_score_count",
+        ),
+    )
+
+
+class BenchmarkRolloutAudit(Base):
+    """Append-only operator/public-safe history for benchmark transitions."""
+
+    __tablename__ = "benchmark_rollout_audit"
+
+    audit_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    rollout_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["rollout_id"], ["benchmark_rollouts.rollout_id"], ondelete="CASCADE"
+        ),
+        Index("benchmark_rollout_audit_history_idx", "rollout_id", "recorded_at"),
+    )
+
+
+class ValidatorHeartbeat(Base):
+    """Latest signed build and runtime heartbeat for one validator hotkey."""
+
+    __tablename__ = "validator_heartbeats"
+
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    software_version: Mapped[str] = mapped_column(Text, nullable=False)
+    protocol_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    code_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    active_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    first_seen_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    system_metrics: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    benchmark_progress: Mapped[dict | None] = mapped_column(
+        _JSON_VARIANT, nullable=True
+    )
+    benchmark_progress_reported: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    benchmark_progress_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    capabilities: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    stack: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    stack_health: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    benchmark_capacity: Mapped[dict | None] = mapped_column(
+        _JSON_VARIANT, nullable=True
+    )
+    # The slots the validator's SIGNED capacity claimed as busy, recorded before
+    # the ticket-confirmation filter in ``_validated_heartbeat_work`` narrows
+    # ``benchmark_capacity`` to work the ledger could confirm. A slot can be
+    # genuinely occupied and still fail confirmation (a re-issued lease moves the
+    # deadline the validator cached, so the exact-deadline lookup misses), and
+    # ``benchmark_capacity`` alone cannot tell "this slot is free" apart from
+    # "this slot's progress did not confirm". Only ever used to REFUSE a
+    # revocation, never to grant work or accept a score, so an over-broad claim
+    # costs the validator its own throughput and nothing else.
+    # Shape: ``[{"slot_id": "slot-0", "agent_id": "<uuid>"}, ...]``.
+    claimed_slots: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    reported_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    seen_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(software_version) BETWEEN 1 AND 64",
+            name="validator_heartbeats_software_version_length_check",
+        ),
+        CheckConstraint(
+            "protocol_version > 0",
+            name="validator_heartbeats_protocol_version_check",
+        ),
+        CheckConstraint(
+            "length(code_digest) = 64",
+            name="validator_heartbeats_code_digest_length_check",
+        ),
+        CheckConstraint(
+            "state IN ('polling', 'running_benchmark', 'updating_weights', "
+            "'idle', 'error', 'paused')",
+            name="validator_heartbeats_state_check",
+        ),
+        CheckConstraint(
+            "length(signature) = 128",
+            name="validator_heartbeats_signature_length_check",
+        ),
+        ForeignKeyConstraint(
+            ["active_agent_id"],
+            ["agents.agent_id"],
+            ondelete="SET NULL",
+            name="validator_heartbeats_active_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_progress_agent_id"],
+            ["agents.agent_id"],
+            ondelete="SET NULL",
+            name="validator_heartbeats_benchmark_progress_agent_id_fkey",
+        ),
+        Index("validator_heartbeats_seen_at_idx", "seen_at"),
+        Index(
+            "validator_heartbeats_active_agent_idx",
+            "active_agent_id",
+            postgresql_where=text("active_agent_id IS NOT NULL"),
+        ),
+    )
+
+
+class ScreenerHeartbeat(Base):
+    """Latest signed runtime and host-health report for one screener instance.
+
+    Keyed by (screener_hotkey, instance_id): the prod fleet shares one hotkey,
+    so instance_id (the worker's GCE instance name) is what keeps each worker a
+    distinct row instead of collapsing the fleet into one. Pre-v3 workers that
+    send no instance_id are stored under the ``"legacy"`` sentinel.
+    """
+
+    __tablename__ = "screener_heartbeats"
+
+    screener_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    instance_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, server_default="legacy"
+    )
+    software_version: Mapped[str] = mapped_column(Text, nullable=False)
+    protocol_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    active_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    first_seen_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    system_metrics: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    reported_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    seen_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(software_version) BETWEEN 1 AND 64",
+            name="screener_heartbeats_software_version_length_check",
+        ),
+        CheckConstraint(
+            "length(instance_id) BETWEEN 1 AND 63",
+            name="screener_heartbeats_instance_id_length_check",
+        ),
+        CheckConstraint(
+            "protocol_version > 0",
+            name="screener_heartbeats_protocol_version_check",
+        ),
+        CheckConstraint(
+            "policy_version > 0",
+            name="screener_heartbeats_policy_version_check",
+        ),
+        CheckConstraint(
+            "state IN ('polling', 'screening', 'error', 'paused')",
+            name="screener_heartbeats_state_check",
+        ),
+        CheckConstraint(
+            "length(signature) = 128",
+            name="screener_heartbeats_signature_length_check",
+        ),
+        ForeignKeyConstraint(
+            ["active_agent_id"],
+            ["agents.agent_id"],
+            ondelete="SET NULL",
+            name="screener_heartbeats_active_agent_id_fkey",
+        ),
+        Index("screener_heartbeats_seen_at_idx", "seen_at"),
+        Index(
+            "screener_heartbeats_active_agent_idx",
+            "active_agent_id",
+            postgresql_where=text("active_agent_id IS NOT NULL"),
+        ),
+    )
+
+
+class ScreenerReviewSettingsRevision(Base):
+    """Append-only, operator-audited L2/L3 settings revision."""
+
+    __tablename__ = "screener_review_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope = '*' OR length(scope) BETWEEN 1 AND 63",
+            name="screener_review_settings_scope_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="screener_review_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="screener_review_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="screener_review_settings_actor_check",
+        ),
+        Index(
+            "screener_review_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="screener_review_settings_scope_parent_key",
+        ),
+    )
+
+
+class ArtifactReleaseSettingsRevision(Base):
+    """Append-only, operator-audited public source embargo revision."""
+
+    __tablename__ = "artifact_release_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'public'")
+    )
+    """Whether the public release path is reachable at all (``public`` |
+    ``never``).
+
+    Values are :class:`~ditto.api_models.source_disclosure.SourceDisclosure`;
+    the check constraint is the authority. Typed ``str`` rather than a
+    PostgreSQL ENUM on purpose -- adding a value to a native enum needs its own
+    migration, whereas a CHECK constraint is a one-line swap, and the set of
+    release policies is exactly the kind of thing that grows. Not nullable: the
+    one thing a privacy setting must never be is ambiguous.
+    """
+
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    """The window in hours. Stays ``NOT NULL`` and in range under every policy,
+    including ``never``, where it is retained but inert."""
+
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "embargo_hours BETWEEN 6 AND 8760",
+            name="artifact_release_settings_embargo_hours_check",
+        ),
+        CheckConstraint(
+            "disclosure IN ('public', 'never')",
+            name="artifact_release_settings_disclosure_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="artifact_release_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="artifact_release_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="artifact_release_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="artifact_release_settings_parent_revision_key",
+        ),
+    )
+
+
+class SubmissionSettingsRevision(Base):
+    """Append-only, operator-audited miner submission settings revision."""
+
+    __tablename__ = "submission_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "cooldown_seconds BETWEEN 60 AND 86400",
+            name="submission_settings_cooldown_seconds_check",
+        ),
+        CheckConstraint(
+            "fee_amount_rao BETWEEN 1 AND 1000000000000",
+            name="submission_settings_fee_amount_rao_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="submission_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="submission_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="submission_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="submission_settings_parent_revision_key",
+        ),
+    )
+
+
+class UploadAdmissionReservation(Base):
+    """Short-lived pre-payment reservation for one payment coldkey."""
+
+    __tablename__ = "upload_admission_reservations"
+
+    miner_coldkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    token: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), unique=True, nullable=False
+    )
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    legacy_payment_cutoff_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """Latest block time eligible for the one-time legacy-fee transition."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "cooldown_seconds BETWEEN 60 AND 86400",
+            name="upload_admission_cooldown_seconds_check",
+        ),
+        CheckConstraint(
+            "fee_amount_rao BETWEEN 1 AND 1000000000000",
+            name="upload_admission_fee_amount_rao_check",
+        ),
+        CheckConstraint(
+            "length(sha256) = 64",
+            name="upload_admission_sha256_length_check",
+        ),
+        Index("upload_admission_expires_at_idx", "expires_at"),
+    )
+
+
+class AgentKingship(Base):
+    """King-reign ledger gating public source release, in two write-once stages.
+
+    ``first_crowned_at`` marks that the agent was ever the KOTH champion
+    (eligibility). ``weight_confirmed_at`` marks the first time validators'
+    REVEALED on-chain weights (post commit-reveal) were seen set on this miner;
+    it is ``NULL`` until then. The public window is king-only and measured from
+    ``weight_confirmed_at`` -- so a genuine, on-chain-backed king reveals one
+    window later, while an agent that merely touched the crown off-chain waits
+    until the chain confirms it. Both timestamps are write-once and never move.
+    Written on the validator score path (post-commit); the gate only reads them.
+    """
+
+    __tablename__ = "agent_kingship"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    first_crowned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    weight_confirmed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+    )
+
+
+class ScreenerShadowReview(Base):
+    """Non-authoritative L2/L3 telemetry bound to one live attempt."""
+
+    __tablename__ = "screener_shadow_reviews"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    disposition: Mapped[str] = mapped_column(Text, nullable=False)
+    risk_level: Mapped[str | None] = mapped_column(Text, nullable=True)
+    categories: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    finding_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_basis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    clearance_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    critic_disposition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adjudicator_disposition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_models: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    response_providers: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    usage: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="screener_shadow_reviews_attempt_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="screener_shadow_reviews_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["settings_revision"],
+            ["screener_review_settings_revisions.revision"],
+            ondelete="RESTRICT",
+            name="screener_shadow_reviews_settings_revision_fkey",
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64",
+            name="screener_shadow_reviews_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "length(settings_checksum) = 64",
+            name="screener_shadow_reviews_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "disposition IN ('safe', 'violation', 'inconclusive', 'retryable_infra')",
+            name="screener_shadow_reviews_disposition_check",
+        ),
+        CheckConstraint(
+            "risk_level IS NULL OR risk_level IN ('low', 'medium', 'high')",
+            name="screener_shadow_reviews_risk_check",
+        ),
+        Index("screener_shadow_reviews_created_idx", "created_at"),
+        Index("screener_shadow_reviews_agent_idx", "agent_id", "created_at"),
+    )
+
+
+class ValidatorTicket(Base):
+    """One validator's evaluation ticket for one agent (a k=3 scoring grant).
+
+    A submission is scored by exactly three validators. The platform issues at
+    most three tickets per agent, each to a *distinct* validator hotkey, and
+    refuses further requests ("no job for you"). A ticket is the right to score:
+    the validator loads the agent + the platform-generated dataset, scores it,
+    and must post the signed score back before ``deadline`` or the ticket
+    expires and its slot re-opens for another validator.
+
+    The composite primary key ``(agent_id, validator_hotkey)`` enforces
+    distinctness — a validator can hold at most one ticket per agent, so it can
+    never occupy two of the three slots and skew the median. ``agent_id`` is a
+    single-column FK to ``agents.agent_id`` with ``ON DELETE CASCADE`` because a
+    ticket is derived from a live submission.
+
+    The three composites themselves live in :class:`Score` (one row per
+    ``(agent, validator)``); a ticket tracks only issuance, the deadline, and
+    lifecycle. An agent finalizes (median-of-three) once it has three
+    ``scored`` tickets.
+    """
+
+    __tablename__ = "validator_tickets"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    """FK to ``agents.agent_id``. PK part 1."""
+
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """SS58 hotkey of the ticket-holding validator. PK part 2 (distinctness)."""
+
+    slot_id: Mapped[str] = mapped_column(
+        Text, nullable=False, default="slot-0", server_default="slot-0"
+    )
+    """Heartbeat-v10 execution slot holding this live lease."""
+
+    status: Mapped[TicketStatus] = mapped_column(
+        Enum(
+            TicketStatus,
+            name="ticketstatus",
+            values_callable=lambda enum_cls: [m.value for m in enum_cls],
+            create_constraint=True,
+        ),
+        nullable=False,
+        server_default=text("'issued'"),
+    )
+    """Current state: ``issued`` -> ``scored`` | ``expired``."""
+
+    purpose: Mapped[TicketPurpose] = mapped_column(
+        Text,
+        nullable=False,
+        default=TicketPurpose.CANONICAL_QUORUM,
+        server_default=text("'legacy_unclassified'"),
+    )
+    """Why the current lease was issued; old-writer leases remain unclassified."""
+
+    purpose_revision: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("0"),
+    )
+    """Positive only when a purpose-aware writer classified this lease."""
+
+    legacy_completion_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        # Old application replicas omit this column during the bounded rolling
+        # transition. Purpose-aware writers always send the Python default.
+        server_default=text("true"),
+    )
+    """Bounded migration-only allowance for leases already live at cutover."""
+
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """When the ticket was granted (UTC)."""
+
+    deadline: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    """When an unscored ticket expires and its slot re-opens (UTC)."""
+
+    # Defaulted to the floor for the same reason as ``Score.bench_version``: a
+    # default of 2 is a value this table's own
+    # ``validator_tickets_bench_version_floor`` trigger refuses, so it could
+    # only ever produce a runtime error at INSERT. Every production caller
+    # passes this explicitly.
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    """Benchmark version whose retry budget this ticket consumes."""
+
+    seed: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    """Block-hash-derived dataset seed assigned to this validator run."""
+
+    dataset_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Digest of the dataset rendered from :attr:`seed`."""
+
+    seed_block: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    """Finalized chain block used for the validator-specific seed."""
+
+    seed_block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Hash used to independently re-derive the validator-specific seed."""
+
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    """Number of leases issued to this validator for this agent/version."""
+
+    manual_retry_grants: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    """Audited operator grants that each allow one additional lease after the
+    automatic same-version retry budget is exhausted. Grants never reduce or
+    rewrite :attr:`attempt_count`; the append-only recovery row records why the
+    extra eligibility was created."""
+
+    infra_retry_grants: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    """Automatic cap extensions earned when this lease ended for reasons that
+    were not the agent's fault. Two things qualify: a validator-side
+    infrastructure failure (a signed ``fail_job`` with reason
+    ``infrastructure``), and the platform force-expiring a live lease itself --
+    the latter being the case ditto-platform#460 named but did not reach, since
+    a revoked lease can no longer be resolved by ``fail_job``.
+
+    Each one offsets the :attr:`attempt_count` increment the reissue will add, so
+    neither an outage nor a platform revocation spends the agent's genuine
+    attempt budget. Like :attr:`manual_retry_grants` it only raises the cap; it
+    never rewrites :attr:`attempt_count`, so the ledger keeps saying how many
+    leases were really consumed while the grant says how many the miner should
+    not be billed for."""
+
+    retry_after: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """Earliest time this validator may retry an expired ticket."""
+
+    first_reported_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """When heartbeat ingest first confirmed this lease against a live slot.
+
+    NULL means this lease has never once been observed running, which is a
+    different claim from "it is not running now" and must never be read as the
+    latter. A validator can hold a lease for many minutes before its first
+    progress report -- pulling the screened image, rendering the dataset, or
+    seeding, which alone is allowed 15 minutes for v7 against a 5-minute
+    reporting grace -- and during that window the slot is simply absent from
+    ``capacity.active``, indistinguishable from an idle one.
+
+    So this is the evidence :func:`~ditto.db.queries.lease_liveness.lease_liveness`
+    needs to separate "has been quiet since it started" from "has gone quiet",
+    and it is only ever used to REFUSE a revocation. Set once and never moved:
+    the question it answers is whether this lease has *ever* testified, not when
+    it last did. Reset to NULL on reissue, since a new lease has its own silence
+    to account for.
+    """
+
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Latest signed public-safe failure class reported for this ticket."""
+
+    failed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """When :attr:`failure_reason` was reported. Preserved across reissue."""
+
+    failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The reporter's own code or note behind :attr:`failure_reason`, if any.
+
+    :attr:`failure_reason` is a three-value class chosen to drive reissue policy,
+    which makes it useless for diagnosis: ditto-subnet#279 traced twelve dead
+    ``mnemo*`` leases to ``fail_job(reason="infrastructure")`` and still could not
+    say *which* of the validator's five sandbox infrastructure codes fired,
+    because the wire could not carry it and the code survived only in a
+    validator-host log line. The ~60-minute killer is still unidentified for that
+    reason alone. This is where that code now lands.
+
+    Advisory and validator-supplied: it is not part of the signed fail payload
+    (neither is :attr:`failure_reason`), it drives no policy, and its length is
+    bounded by ``FailJobRequest`` alone -- see
+    ``ditto.api_models.validator.FAILURE_DETAIL_MAX_LENGTH``. The column itself
+    is ``TEXT`` and always has been, so widening that cap (200 -> 4096) needed no
+    migration and no rewrite of existing rows: every value ever stored here is
+    still valid, and the only thing that changed is how much a validator is
+    allowed to send. Written and cleared together with :attr:`failure_reason`, so
+    the pair is always read as one report. NULL means the reporter sent none --
+    which is what every validator predating the field does, and is not an error.
+
+    A value ending in ``...[truncated, N chars]`` is an amputated message, not a
+    whole one: the sender hit the cap and said so. Before that marker existed a
+    truncation was silent, and the half-sentence it left behind read as a
+    complete finding -- which is how the 2026-07-27 inference-decline diagnosis
+    lost the clause that named what the platform had actually done.
+    """
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """When this row was first inserted (UTC)."""
+
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    """When this row was last updated (UTC)."""
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            name="validator_tickets_pkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="validator_tickets_agent_id_fkey",
+        ),
+        Index("validator_tickets_agent_id_idx", "agent_id"),
+        CheckConstraint(
+            "bench_version > 0",
+            name="validator_tickets_bench_version_positive",
+        ),
+        CheckConstraint(
+            "purpose IN ("
+            "'legacy_unclassified', 'canonical_quorum', 'continual_retest'"
+            ")",
+            name="validator_tickets_purpose_valid",
+        ),
+        CheckConstraint(
+            "purpose_revision >= 0",
+            name="validator_tickets_purpose_revision_nonnegative",
+        ),
+        CheckConstraint(
+            "attempt_count > 0",
+            name="validator_tickets_attempt_count_positive",
+        ),
+        CheckConstraint(
+            "manual_retry_grants >= 0",
+            name="validator_tickets_manual_retry_grants_nonnegative",
+        ),
+        # Created by 2026_07_23_add_validator_ticket_datasets.py; production
+        # has enforced it since. NULL is a ticket issued before per-ticket
+        # dataset seeding, not a seed of zero.
+        CheckConstraint(
+            "seed IS NULL OR seed >= 0",
+            name="validator_tickets_seed_nonnegative",
+        ),
+        CheckConstraint(
+            "infra_retry_grants >= 0",
+            name="validator_tickets_infra_retry_grants_nonnegative",
+        ),
+        CheckConstraint(
+            "failure_reason IS NULL OR failure_reason IN "
+            "('infrastructure', 'scoring_error', 'sandbox_oom')",
+            name="validator_tickets_failure_reason",
+        ),
+        CheckConstraint(
+            "slot_id IN ('slot-0', 'slot-1', 'slot-2', 'slot-3', "
+            "'slot-4', 'slot-5', 'slot-6', 'slot-7')",
+            name="validator_tickets_slot_id",
+        ),
+        # The expiry sweep and the live-slot count both scan open tickets only;
+        # a partial index keeps those hot paths off the full table.
+        Index(
+            "validator_tickets_open_idx",
+            "deadline",
+            postgresql_where=text("status = 'issued'"),
+        ),
+        Index(
+            "validator_tickets_one_issued_per_validator_slot_idx",
+            "validator_hotkey",
+            "slot_id",
+            unique=True,
+            postgresql_where=text("status = 'issued'"),
+            sqlite_where=text("status = 'issued'"),
+        ),
+    )
+
+
+class InferenceGrant(Base):
+    """One ticket-scoped platform inference capability."""
+
+    __tablename__ = "inference_grants"
+
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    slot_id: Mapped[str] = mapped_column(Text, nullable=False)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    bearer_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    broker_public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    allowed_models: Mapped[list[str]] = mapped_column(_JSON_VARIANT, nullable=False)
+    route_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    route_profile: Mapped[str | None] = mapped_column(Text, nullable=True)
+    route_quantization: Mapped[str | None] = mapped_column(Text, nullable=True)
+    route_prompt_price_per_token: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    route_completion_price_per_token: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    request_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_budget: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    embedding_model: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_profile: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_provider: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_request_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_token_budget: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    embedding_request_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    embedding_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    embedding_cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    embedding_active_requests: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    request_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    active_requests: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    usage_accounting_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2, server_default=text("1")
+    )
+    """Which metering contract booked this grant's token counters.
+
+    A token total is only comparable within the contract that produced it --
+    the same axis as ``bench_version`` for scores, and for the same reason.
+
+    ``1`` -- reservations were ``max_tokens + len(body)``, byte length used as a
+    token count, roughly 4x the truth. Any request that did not return trusted
+    provider usage (timeout, transport failure, revocation, or a stale sweep)
+    was charged that inflated figure as ``prompt_tokens``.
+
+    ``2`` -- reservations are a real token estimate, so a reclaimed request is
+    charged approximately what it cost.
+
+    Successful calls booked the provider's own numbers under both versions, so
+    the two differ only on the unsettled tail. The marker exists anyway: without
+    it, someone comparing a v1 run against a v2 run later concludes an agent got
+    dramatically more efficient when only the meter changed. There is no
+    backfill and there cannot be one -- the over-charge happened at reservation
+    time, so what those calls really consumed was never recorded.
+    """
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id", "bench_version", "validator_hotkey"],
+            [
+                "validator_tickets.agent_id",
+                "validator_tickets.bench_version",
+                "validator_tickets.validator_hotkey",
+            ],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            "ticket_deadline",
+            name="inference_grants_ticket_lease",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'active', 'revoked', 'exhausted')",
+            name="inference_grants_status",
+        ),
+        CheckConstraint("request_budget > 0", name="inference_grants_request_budget"),
+        CheckConstraint("token_budget > 0", name="inference_grants_token_budget"),
+        CheckConstraint(
+            "embedding_request_budget > 0",
+            name="inference_grants_embedding_request_budget",
+        ),
+        CheckConstraint(
+            "embedding_token_budget > 0",
+            name="inference_grants_embedding_token_budget",
+        ),
+        CheckConstraint(
+            "embedding_dimensions = 768",
+            name="inference_grants_embedding_dimensions",
+        ),
+        CheckConstraint(
+            "embedding_active_requests >= 0",
+            name="inference_grants_embedding_active_requests",
+        ),
+        CheckConstraint(
+            "active_requests >= 0", name="inference_grants_active_requests"
+        ),
+        Index("inference_grants_expiry_idx", "expires_at"),
+    )
+
+
+class InferenceProviderRoute(Base):
+    """Discovered OpenRouter route plus platform-observed serving quality."""
+
+    __tablename__ = "inference_provider_routes"
+
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_revision: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="discovered")
+    calibration_status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="shadow"
+    )
+    context_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quantization: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_price_per_token: Mapped[float | None] = mapped_column(Float, nullable=True)
+    completion_price_per_token: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    ewma_tokens_per_second: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ewma_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ewma_error_rate: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default=text("0")
+    )
+    ewma_timeout_rate: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default=text("0")
+    )
+    ewma_tool_accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ewma_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calibration_tool_accuracy: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    calibration_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calibration_sample_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    calibration_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    calibration_manifest_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    calibrated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    ewma_cost_microusd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sample_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    selected_ticket_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    exploration_ticket_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    last_selected_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    cooldown_until: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    discovered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    last_observed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint("model", "provider", "profile_revision"),
+        UniqueConstraint("profile_revision", name="inference_provider_profile_key"),
+        CheckConstraint(
+            "status IN ('discovered', 'healthy', 'degraded', 'offline')",
+            name="inference_provider_route_status",
+        ),
+        CheckConstraint(
+            "calibration_status IN ('shadow', 'eligible', 'disabled')",
+            name="inference_provider_calibration_status",
+        ),
+        CheckConstraint(
+            "ewma_error_rate >= 0 AND ewma_error_rate <= 1",
+            name="inference_provider_error_rate",
+        ),
+        CheckConstraint(
+            "ewma_timeout_rate >= 0 AND ewma_timeout_rate <= 1",
+            name="inference_provider_timeout_rate",
+        ),
+        CheckConstraint(
+            "calibration_revision >= 0",
+            name="inference_provider_calibration_revision",
+        ),
+        Index(
+            "inference_provider_routes_selection_idx",
+            "model",
+            "calibration_status",
+            "status",
+        ),
+    )
+
+
+class InferenceRoutingPolicy(Base):
+    """Audited operator-tunable policy for one benchmark model."""
+
+    __tablename__ = "inference_routing_policies"
+
+    model: Mapped[str] = mapped_column(Text, primary_key=True)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    speed_weight: Mapped[float] = mapped_column(Float, nullable=False)
+    cost_weight: Mapped[float] = mapped_column(Float, nullable=False)
+    exploration_weight: Mapped[float] = mapped_column(Float, nullable=False)
+    exploration_ticket_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    min_tool_accuracy: Mapped[float] = mapped_column(Float, nullable=False)
+    min_composite: Mapped[float] = mapped_column(Float, nullable=False)
+    min_calibration_samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_error_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    max_timeout_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    ewma_alpha: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "speed_weight >= 0 AND cost_weight >= 0 AND exploration_weight >= 0",
+            name="inference_routing_policy_weights",
+        ),
+        CheckConstraint(
+            "speed_weight + cost_weight + exploration_weight > 0",
+            name="inference_routing_policy_nonzero_weights",
+        ),
+        CheckConstraint(
+            "min_tool_accuracy >= 0 AND min_tool_accuracy <= 1 "
+            "AND min_composite >= 0 AND min_composite <= 1",
+            name="inference_routing_policy_quality",
+        ),
+        CheckConstraint(
+            "max_error_rate >= 0 AND max_error_rate <= 1 "
+            "AND max_timeout_rate >= 0 AND max_timeout_rate <= 1 "
+            "AND ewma_alpha > 0 AND ewma_alpha <= 1",
+            name="inference_routing_policy_reliability",
+        ),
+        CheckConstraint(
+            "exploration_ticket_budget >= 0 AND min_calibration_samples > 0 "
+            "AND cooldown_seconds >= 1 AND revision >= 0",
+            name="inference_routing_policy_bounds",
+        ),
+    )
+
+
+class InferenceRoutingAudit(Base):
+    """Append-only operator history for inference policy and route decisions."""
+
+    __tablename__ = "inference_routing_audit"
+
+    audit_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (Index("inference_routing_audit_history_idx", "recorded_at"),)
+
+
+class InferenceRequest(Base):
+    """Replay ledger and bounded accounting for one proxy request."""
+
+    __tablename__ = "inference_requests"
+
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="started")
+    request_kind: Mapped[str] = mapped_column(Text, nullable=False, default="chat")
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """Estimated tokens held against the grant's allowance while in flight.
+
+    An *estimate*, not a bound, since ``usage_accounting_version = 2``. It is
+    also what every reclamation path charges when a request never returns
+    trusted usage, which is why it being ~4x too large mattered: the figure was
+    not merely reserved, it was booked.
+    """
+    max_chargeable_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    """Hard ceiling on what untrusted provider accounting may claim.
+
+    Byte-derived and therefore tokenizer-independent: a token cannot consume
+    less than one byte of the UTF-8 request body. Split from ``reserved_tokens``
+    when that became an estimate -- clamping real usage to an estimate would
+    mark ordinary token-dense requests non-deliverable. Rows written before the
+    split carry the old reservation here, which *was* this same bound.
+    """
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    cost_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    upstream_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    upstream_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    openrouter_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    fallback_phase: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    terminal_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timed_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint("grant_id", "nonce"),
+        ForeignKeyConstraint(
+            ["grant_id"], ["inference_grants.grant_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "status IN ('started', 'completed', 'failed', 'canceled')",
+            name="inference_requests_status",
+        ),
+        CheckConstraint(
+            "request_kind IN ('chat', 'embedding')",
+            name="inference_requests_kind",
+        ),
+        CheckConstraint(
+            "reserved_tokens > 0", name="inference_requests_reserved_tokens"
+        ),
+        CheckConstraint("generation > 0", name="inference_requests_generation"),
+        CheckConstraint(
+            "upstream_attempts >= 0", name="inference_requests_upstream_attempts"
+        ),
+        CheckConstraint(
+            "openrouter_attempts >= 0",
+            name="inference_requests_openrouter_attempts",
+        ),
+        CheckConstraint(
+            "fallback_phase BETWEEN 0 AND 1",
+            name="inference_requests_fallback_phase",
+        ),
+        Index("inference_requests_started_idx", "started_at"),
+    )
+
+
+class ValidatorLeaseAudit(Base):
+    """Append-only record of every lease the platform revoked before its deadline.
+
+    Force-expiring a live lease destroys an in-flight benchmark run and spends
+    one of the agent's bounded same-version retries, and until this table existed
+    it left no trace at all: no log line, no row, no metric, just a ticket whose
+    ``deadline`` had been silently rewritten to the moment of the revocation. A
+    day of investigation went into reconstructing three such events from ticket
+    timestamps alone. Every revocation now records the evidence it acted on, so
+    the next one is a query rather than an archaeology project.
+
+    Not part of the score audit chain: no score, verdict, or miner-visible
+    outcome is created or replaced here, only a lease lifecycle event.
+    """
+
+    __tablename__ = "validator_lease_audit"
+
+    audit_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    slot_id: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    """What happened to the lease; ``force_expired`` today."""
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    """The liveness reason code that admitted the revocation."""
+    context: Mapped[str] = mapped_column(Text, nullable=False)
+    """Which issuance path revoked it (``issue_ticket``, ``issue_rollout_ticket``,
+    ``score_retest``)."""
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    """The heartbeat freshness, capacity snapshot, and lease age acted on."""
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "bench_version > 0",
+            name="validator_lease_audit_bench_version_positive",
+        ),
+        Index(
+            "validator_lease_audit_agent_idx",
+            "agent_id",
+            "recorded_at",
+        ),
+        Index(
+            "validator_lease_audit_validator_idx",
+            "validator_hotkey",
+            "recorded_at",
+        ),
+    )
+
+
+class ValidatorRetryRecovery(Base):
+    """One immutable operator action that restores bounded validation eligibility.
+
+    A recovery snapshots every ticket before changing only the selected expired
+    rows' retry grant counters. It is separate from the public score audit log:
+    no score or miner verdict is being created, replaced, or removed.
+    """
+
+    __tablename__ = "validator_retry_recoveries"
+
+    recovery_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticket_snapshot: Mapped[list[dict]] = mapped_column(_JSON_VARIANT, nullable=False)
+    granted_validator_hotkeys: Mapped[list[str]] = mapped_column(
+        _JSON_VARIANT, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="validator_retry_recoveries_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="validator_retry_recoveries_actor_length",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 3",
+            name="validator_retry_recoveries_reason_length",
+        ),
+        CheckConstraint(
+            "score_count >= 0",
+            name="validator_retry_recoveries_score_count_nonnegative",
+        ),
+        CheckConstraint(
+            "bench_version > 0",
+            name="validator_retry_recoveries_bench_version_positive",
+        ),
+        Index(
+            "validator_retry_recoveries_agent_created_idx",
+            "agent_id",
+            "bench_version",
+            "created_at",
+            "recovery_id",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "expected_snapshot",
+            name="validator_retry_recoveries_agent_snapshot_key",
+        ),
+    )
+
+
+class ValidatorQueueWithdrawal(Base):
+    """One audited, benchmark-scoped removal from validator assignment.
+
+    The submission, payment, artifact, scores, and ticket history remain intact.
+    A later benchmark era is a separate eligibility decision, so a withdrawal
+    never becomes an implicit permanent miner verdict.
+
+    Two operator routes write this row and both land in the same terminal state,
+    which is why they share a table rather than duplicating the queue predicates
+    that read it. They differ only in what they were allowed to act on, and
+    :attr:`evicted_validator_hotkeys` is what tells them apart:
+
+    * a **withdrawal** (``NULL``) cleans up a submission that had already stopped
+      consuming validator capacity;
+    * an **eviction** (a list, possibly empty) additionally revoked whatever live
+      leases the submission was still holding, naming them.
+
+    A row is *in force* only while :attr:`reinstated_at` is ``NULL``. Reversing
+    an eviction resolves the row rather than deleting it — see
+    :class:`ValidatorQueueReinstatement`.
+    """
+
+    __tablename__ = "validator_queue_withdrawals"
+
+    withdrawal_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticket_snapshot: Mapped[list[dict]] = mapped_column(_JSON_VARIANT, nullable=False)
+    evicted_validator_hotkeys: Mapped[list[str] | None] = mapped_column(
+        _JSON_VARIANT, nullable=True
+    )
+    """The live leases this action revoked, or ``NULL`` for a plain withdrawal.
+
+    Deliberately tri-state. ``NULL`` means the eviction route was not used at
+    all; ``[]`` means it was, and found nothing live to revoke. Collapsing those
+    into one value would make an eviction that arrived a minute too late
+    indistinguishable from an ordinary cleanup, which is precisely the
+    distinction an emissions-relevant action against a paying miner has to be
+    able to defend later.
+    """
+    reinstated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """When this removal was reversed, or ``NULL`` while it is still in force.
+
+    The resolution pointer, deliberately *on the removal row*. Every queue
+    predicate in the codebase already asks one question of this table — "is this
+    agent removed from this era?" — and answering it after reinstatement has to
+    stay a single indexed read rather than a correlated join against another
+    table. The reinstatement's own actor, reason, and evidence live in
+    :class:`ValidatorQueueReinstatement`; this column carries only the fact.
+    """
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="validator_queue_withdrawals_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "bench_version > 0",
+            name="validator_queue_withdrawals_bench_version_positive",
+        ),
+        CheckConstraint(
+            "score_count >= 0",
+            name="validator_queue_withdrawals_score_count_nonnegative",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="validator_queue_withdrawals_actor_length",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="validator_queue_withdrawals_reason_length",
+        ),
+        # One removal *in force* per (agent, benchmark era). Partial rather than
+        # a plain unique constraint because reinstatement is reversible in both
+        # directions: an operator who reinstates a submission and then watches it
+        # starve the fleet again must be able to evict it a second time in the
+        # same era, and a total constraint would make the first reinstatement
+        # permanently disarm the lever the whole feature exists to provide.
+        # Resolved rows stay, so the era's full removal history is preserved.
+        Index(
+            "validator_queue_withdrawals_agent_bench_key",
+            "agent_id",
+            "bench_version",
+            unique=True,
+            postgresql_where=text("reinstated_at IS NULL"),
+        ),
+        Index(
+            "validator_queue_withdrawals_created_idx",
+            "created_at",
+            "withdrawal_id",
+        ),
+    )
+
+
+class ValidatorQueueReinstatement(Base):
+    """One audited reversal of an operator eviction, returning it to the queue.
+
+    Eviction was one-way until this existed, so an operator could only free a
+    starved fleet by ending a paying miner's benchmark era, and the miner's only
+    route back was a fresh submission and a second evaluation fee. That made a
+    capacity lever into a punishment, and it was the sole reason the lever went
+    unused against the ``mnemo*`` family, whose source review found self-imposed
+    per-case deadlines, no hang primitives, and a version trajectory of pure
+    latency reduction — costly, but not shown to be malicious.
+
+    Deliberately its **own append-only row** rather than a mutation of
+    :class:`ValidatorQueueWithdrawal`, and rather than deleting that row:
+
+    * an eviction that was later reversed is a fact worth keeping. It named live
+      validator leases it destroyed, and each of those has a
+      ``validator_lease_audit`` row that ``GET /admin/lease-revocations
+      ?action=operator_evicted`` reads; deleting the eviction would orphan them
+      and quietly rewrite what the operator did on 2026-07-27;
+    * the two actions have different actors, different reasons, and different
+      idempotency keys. Overwriting ``actor``/``reason`` in place would destroy
+      the evictor's justification to record the reinstator's.
+
+    The reversal itself is deliberately *inert*: it restores eligibility and
+    nothing else. It does not resurrect leases, reset ``attempt_count``, mint a
+    no-fault grant, or clear the operator-recovery count. See
+    :attr:`retry_budget_snapshot`.
+    """
+
+    __tablename__ = "validator_queue_reinstatements"
+
+    reinstatement_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True
+    )
+    withdrawal_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticket_snapshot: Mapped[list[dict]] = mapped_column(_JSON_VARIANT, nullable=False)
+    retry_budget_snapshot: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    """The attempt budget as it stood when the submission came back.
+
+    Recorded because "unchanged" is the security property of this route and an
+    assertion nobody can check later is not an assertion. A reinstatement grants
+    no attempt and lifts no cap, so a submission returns with exactly the budget
+    it was evicted with; the pair of numbers here (the agent's fleet-wide
+    ``infra_retry_grants`` at this era, bounded by ``MAX_AGENT_INFRA_RETRY_GRANTS``,
+    and its append-only operator-recovery count) is what lets a reviewer confirm
+    that an evict/reinstate cycle laundered no attempt budget.
+    """
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["withdrawal_id"],
+            ["validator_queue_withdrawals.withdrawal_id"],
+            ondelete="RESTRICT",
+            name="validator_queue_reinstatements_withdrawal_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="validator_queue_reinstatements_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "bench_version > 0",
+            name="validator_queue_reinstatements_bench_version_positive",
+        ),
+        CheckConstraint(
+            "score_count >= 0",
+            name="validator_queue_reinstatements_score_count_nonnegative",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="validator_queue_reinstatements_actor_length",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="validator_queue_reinstatements_reason_length",
+        ),
+        # One reversal per removal. The removal row is resolved exactly once, so
+        # a second reinstatement of the same eviction is a database-level
+        # impossibility rather than a route-level check that could be bypassed.
+        UniqueConstraint(
+            "withdrawal_id",
+            name="validator_queue_reinstatements_withdrawal_key",
+        ),
+        Index(
+            "validator_queue_reinstatements_agent_idx",
+            "agent_id",
+            "bench_version",
+            "created_at",
+        ),
+    )
+
+
+class SubmissionRetirement(Base):
+    """One audited close-out of a submission whose benchmark era has ended.
+
+    Retirement is a *generational* fact, not a verdict. It records that the
+    benchmark version this submission was queued against is no longer the
+    active one, so no validator will ever issue it another ticket: the era
+    closed underneath it. The payment, artifact, screening record, accepted
+    scores and ticket history are all preserved, and the row stays visible and
+    searchable on the submissions page.
+
+    Deliberately a sibling of :class:`ValidatorQueueWithdrawal` rather than a
+    reuse of it. The two answer different questions and a reader must be able to
+    tell them apart:
+
+    * a **withdrawal** says the submission burned its slots and can no longer
+      reach quorum on its own; it is scoped to a benchmark version because a
+      later era is a fresh eligibility decision.
+    * a **retirement** says the submission never got the chance, because the
+      subnet moved to a newer benchmark generation. It names the version that
+      closed (``bench_version``) and the version that superseded it
+      (``superseded_by_version``), so the miner-facing copy can say which
+      generation their work belonged to.
+
+    Retirement is also deliberately *not* an :class:`AgentStatus` value. That
+    enum is the screener/platform wire contract shipped by
+    ``ditto-screening-protocol``, and :data:`SCOREABLE_AGENT_STATUSES` feeds the
+    score ledger. Introducing a status would change scoring semantics for a
+    display problem. The agent row keeps ``status = evaluating``; this table is
+    what the queue predicates and the public projection read.
+    """
+
+    __tablename__ = "submission_retirements"
+
+    retirement_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    superseded_by_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticket_snapshot: Mapped[list[dict]] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="submission_retirements_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "bench_version > 0",
+            name="submission_retirements_bench_version_positive",
+        ),
+        CheckConstraint(
+            "superseded_by_version > bench_version",
+            name="submission_retirements_superseded_by_is_newer",
+        ),
+        CheckConstraint(
+            "score_count >= 0",
+            name="submission_retirements_score_count_nonnegative",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="submission_retirements_actor_length",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="submission_retirements_reason_length",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            name="submission_retirements_agent_bench_key",
+        ),
+        Index(
+            "submission_retirements_created_idx",
+            "created_at",
+            "retirement_id",
+        ),
+    )
+
+
+class ValidatorRequestNonce(Base):
+    """A recently consumed signed validator request nonce.
+
+    Rows are short-lived replay guards. The UUID primary key makes consuming a
+    nonce atomic across every platform replica; expired rows are pruned during
+    subsequent claims.
+    """
+
+    __tablename__ = "validator_request_nonces"
+
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    used_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (Index("validator_request_nonces_expires_at_idx", "expires_at"),)
+
+
+class BannedHotkey(Base):
+    """One row of the ``banned_hotkeys`` table.
+
+    A hotkey-level ban, distinct from the per-agent :attr:`AgentStatus.BANNED`
+    status: it blocks the *miner* (all future uploads) rather than a single
+    submission. Enforced at upload (``/upload/agent`` rejects a banned hotkey
+    before any expensive chain/payment work) and surfaced on the read path
+    (``/retrieval/agent-by-hotkey``). Populated out-of-band by the owner via
+    ``scripts/ban_hotkey.py`` — there is no public write surface.
+    """
+
+    __tablename__ = "banned_hotkeys"
+
+    hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    """SS58 hotkey of the banned miner. Primary key (a hotkey is banned once)."""
+
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Free-text audit note (e.g. "confirmed copy of agent <id>"). Nullable."""
+
+    banned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """When the ban was recorded (UTC)."""
+
+
+class ScoreAuditEntry(Base):
+    """One append-only, hash-chained entry in the public score audit log.
+
+    Every scoring *event* (a validator recording a score, and an agent
+    finalizing at the k=3 median) appends one immutable row here, in the same
+    transaction as the score write. Unlike ``scores`` (which is UPSERTed per
+    ``(agent, validator)`` and so reflects only the *current* score), this table
+    is never updated or deleted — it is the durable, ordered history.
+
+    Tamper-evidence is a hash chain: ``entry_hash`` = SHA-256 over the entry's
+    canonical JSON (which embeds ``prev_hash``), and ``prev_hash`` is the
+    previous entry's ``entry_hash`` (genesis = 64 zeros). Editing or removing any
+    historical entry breaks every subsequent link, so a public consumer that
+    replays the chain can prove nothing was silently rewritten. Each ``score``
+    entry also carries the validator's sr25519 ``signature`` verbatim, so an
+    entry is independently authenticatable against the published validator key —
+    the log adds ordering + immutability on top of the already-signed payload.
+    """
+
+    __tablename__ = "score_audit_log"
+
+    seq: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    """Monotonic append order (BIGSERIAL on Postgres, INTEGER rowid on SQLite)."""
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    """Agent the event is about. Not FK-bound — the log outlives the agent row
+    (agents may be pruned; the audit history must not cascade away)."""
+
+    validator_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Reporting validator for a ``score`` event; null for an ``agent_finalized``
+    event (which is the platform's own median computation, not one validator's)."""
+
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    """Event kind: ``score`` (one validator's signed score) or ``agent_finalized``
+    (quorum reached; the median + participating validators)."""
+
+    payload: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    """The event's immutable content, JSON. For ``score``: the full signed tuple
+    (run_id, seed, composite, tool/memory means, median_ms, n, signature,
+    generated_at). For ``agent_finalized``: median_composite, quorum, the
+    scoring validators, and the pinned dataset. Hashed into ``entry_hash``."""
+
+    prev_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    """The previous entry's ``entry_hash`` (hex); ``"0" * 64`` for the genesis."""
+
+    entry_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    """SHA-256 (hex) over this entry's canonical JSON, which embeds ``prev_hash``.
+    The chain link a public verifier recomputes to detect tampering."""
+
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """When the platform appended the entry (UTC). Part of the hashed content."""
+
+    __table_args__ = (
+        UniqueConstraint("entry_hash", name="score_audit_log_entry_hash_key"),
+        Index("score_audit_log_agent_id_idx", "agent_id"),
+    )
+
+
+class EfficiencyBonusSettingsRevision(Base):
+    """Append-only, operator-audited relative-efficiency-bonus policy revision.
+
+    The hot-swappable successor to the ``DITTO_EFFICIENCY_BONUS_*`` boot env
+    (:class:`ditto.api_server.config.EfficiencyBonusConfig`): each row freezes a
+    full policy (both booleans + all eight numeric knobs) as JSON, and the
+    compute path reads the latest one at run time (short TTL) so a backroom
+    change lands with no redeploy. Rows are **append-only**: nothing UPDATEs or
+    deletes one, so the audit trail is complete. When no row exists the env seed
+    governs, so an untouched deployment is byte-identical to pre-change.
+
+    Scope is subnet-global (only ``*``); the column mirrors the other revision
+    tables' shape and leaves room for future per-board scoping. The frozen knobs
+    that reproduce a published bonus live on ``efficiency_cohort_snapshots``, not
+    here, so changing this policy never mutates an already-frozen snapshot.
+    """
+
+    __tablename__ = "efficiency_bonus_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope = '*' OR length(scope) BETWEEN 1 AND 63",
+            name="efficiency_bonus_settings_scope_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="efficiency_bonus_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="efficiency_bonus_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="efficiency_bonus_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="efficiency_bonus_settings_actor_check",
+        ),
+        Index(
+            "efficiency_bonus_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="efficiency_bonus_settings_scope_parent_key",
+        ),
+    )
+
+
+class ContinualRetestSettingsRevision(Base):
+    """Append-only operator policy for continual aggregation and idle waves."""
+
+    __tablename__ = "continual_retest_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="continual_retest_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="continual_retest_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="continual_retest_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="continual_retest_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="continual_retest_settings_actor_check",
+        ),
+        Index(
+            "continual_retest_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="continual_retest_settings_scope_parent_key",
+        ),
+    )
+
+
+class QueuePolicySettingsRevision(Base):
+    """Append-only operator policy for the validator queue.
+
+    Cohort sizing, the per-validator fresh-vs-cohort lane split, the provisional
+    contender lane, and the previous-generation carryover gate. Each revision
+    stores the WHOLE policy rather than a diff, so any historical revision is
+    reconstructable on its own and a read never merges partial revisions.
+
+    Fields are consumed on three different schedules -- frozen at rollout start,
+    live-but-rollout-locked, and plain live. See
+    ``ditto.api_models.queue_policy_settings`` for which is which and why it
+    matters.
+    """
+
+    __tablename__ = "queue_policy_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="queue_policy_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="queue_policy_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="queue_policy_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="queue_policy_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="queue_policy_settings_actor_check",
+        ),
+        Index(
+            "queue_policy_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="queue_policy_settings_scope_parent_key",
+        ),
+    )
+
+
+class InferenceConcurrencySettingsRevision(Base):
+    """Append-only operator policy for the hosted v7 embedding lane.
+
+    Governs how many hosted embedding requests may be in flight per ticket, per
+    validator, and fleet-wide. Scoped tightly on purpose: the chat lane keeps its
+    boot-time configuration, and the local-Ollama lane used by bench_version 2-6
+    is not reachable from this table at all.
+
+    Each revision stores the WHOLE policy rather than a diff, so any historical
+    revision is reconstructable on its own and a read never merges partials. See
+    ``ditto.api_models.inference_concurrency_settings`` for the bounds and why
+    the shipped defaults sit above what the validator will ever ask for.
+    """
+
+    __tablename__ = "inference_concurrency_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope = '*'", name="inference_concurrency_settings_scope_check"
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="inference_concurrency_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="inference_concurrency_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="inference_concurrency_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="inference_concurrency_settings_actor_check",
+        ),
+        Index(
+            "inference_concurrency_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="inference_concurrency_settings_scope_parent_key",
+        ),
+    )
+
+
+class ValidatorSlotSettingsRevision(Base):
+    """Append-only, operator-audited concurrent-benchmark-slot policy revision.
+
+    A validator advertises its own slot capacity in the heartbeat (bounded to
+    eight by the protocol) and the platform used to honor it unconditionally.
+    Each row here freezes a full policy as JSON -- the per-validator cap plus the
+    disk-utilization circuit breaker -- and ticket dispatch reads the latest one
+    at run time (short TTL) so an operator can cap or ramp fleet parallelism from
+    backroom with no redeploy. Rows are **append-only**: nothing UPDATEs or
+    deletes one, so the audit trail of every cap change is complete.
+
+    When no row exists the module default in
+    ``ditto.api_server.validator_slot_settings`` governs (cap 2), which is also
+    the fallback for every failure path -- an unreadable policy holds the fleet
+    conservative rather than uncapping it.
+
+    Scope is subnet-global (only ``*``); the column mirrors the other revision
+    tables' shape and leaves room for future per-validator scoping.
+    """
+
+    __tablename__ = "validator_slot_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope = '*' OR length(scope) BETWEEN 1 AND 63",
+            name="validator_slot_settings_scope_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="validator_slot_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="validator_slot_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="validator_slot_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="validator_slot_settings_actor_check",
+        ),
+        Index(
+            "validator_slot_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        # The optimistic-concurrency key: two writers that both read revision N
+        # as current cannot both append a child of N.
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="validator_slot_settings_scope_parent_key",
+        ),
+    )
+
+
+class ArtifactFetchAudit(Base):
+    """One durable record of a served artifact — bytes or a presigned URL.
+
+    Every path that hands a caller miner source (the tarball, a source file, a
+    source diff) or a presigned URL to it appends one row here. Before this
+    table the only trace of an artifact fetch was a stdout line, so an artifact
+    leak could be observed in its consequences and never attributed to a
+    fetcher. This is the forensic record that answers "who fetched this
+    artifact, and when".
+
+    Insert-only and *not* FK-bound to ``agents``: the record must outlive the
+    submission it describes, exactly as :class:`ScoreAuditEntry` does. An agent
+    row may be pruned; the history of who read its source must not cascade away.
+
+    Deliberately *not* hash-chained. :class:`ScoreAuditEntry` serializes every
+    append on a ``FOR UPDATE`` head lock to keep one linear chain; that is the
+    right trade for a public tamper-evident score projection, and the wrong one
+    for a read-path audit, where it would turn concurrent artifact fetches into
+    a queue behind a single row. This table takes plain concurrent INSERTs.
+
+    ``requester_kind`` is a closed vocabulary; ``requester_id`` is that kind's
+    identity (validator hotkey, screener hotkey, admin actor) and is NULL only
+    for the unauthenticated public path, where no identity exists to record.
+
+    Distinct from :class:`ValidatorLeaseAudit`, which records lease *revocations*
+    — a destructive write the platform performs on a validator. This records
+    *reads* a caller performs against miner source. They share neither a
+    requester model (that table is validator-only and requires a hotkey, a slot
+    and a bench version on every row; fetches also arrive from an
+    identity-less public route and a shared-hotkey screener fleet) nor a query
+    shape, so they stay separate tables.
+
+    One row per *fetch*, never updated. ``validator_tickets`` is keyed by
+    ``(agent_id, bench_version, validator_hotkey)`` and is UPSERTed on reissue,
+    so a repeated claim/fail loop collapses into one row with an inflated
+    ``attempt_count`` and only the latest ``issued_at``. Because a fetch appends
+    here instead, that same loop leaves one durable row per artifact hand-off —
+    the per-lease history the ticket table cannot keep.
+    """
+
+    __tablename__ = "artifact_fetch_audit"
+
+    seq: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    """Monotonic append order (BIGSERIAL on Postgres, INTEGER rowid on SQLite)."""
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    """Agent whose artifact was served. Not FK-bound — see the class docstring."""
+
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    """Stable identifier of the serving route, e.g. ``validator.agent_artifact``.
+
+    A route *name*, not the request path: paths carry ids and change shape, and
+    the question this column answers is "which door did they come through"."""
+
+    requester_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    """``validator`` | ``screener`` | ``admin`` | ``public``."""
+
+    requester_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Hotkey (validator/screener) or admin actor. NULL only for ``public``."""
+
+    requester_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Screener worker instance within the shared-hotkey fleet, when known.
+
+    ``SCREENER_HOTKEY`` is one shared string across an autoscaled fleet, so the
+    hotkey alone cannot say *which* worker read the source. NULL means the
+    caller did not identify its instance — an attribution gap, not an error."""
+
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    """The claim this fetch was bound to: a screening ``attempt_id`` today.
+
+    Validator leases have no surrogate id — ``validator_tickets`` is keyed by
+    ``(agent_id, validator_hotkey)``, both already recorded above — so the
+    ticket is identified by that pair plus :attr:`bench_version`."""
+
+    bench_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Benchmark era of the authorizing validator ticket, when there was one."""
+
+    artifact_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Digest of the artifact served, so a leaked copy can be matched to a fetch."""
+
+    source_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Peer address when the ASGI transport exposed one; NULL when it did not."""
+
+    detail: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    """Route-specific extras (the source path read, the diff side, ...)."""
+
+    fetched_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    """When the artifact was served (UTC)."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "requester_kind IN ('validator', 'screener', 'admin', 'public')",
+            name="artifact_fetch_audit_requester_kind_check",
+        ),
+        CheckConstraint(
+            "(requester_kind = 'public') = (requester_id IS NULL)",
+            name="artifact_fetch_audit_requester_id_presence_check",
+        ),
+        CheckConstraint(
+            "bench_version IS NULL OR bench_version > 0",
+            name="artifact_fetch_audit_bench_version_check",
+        ),
+        # "Who fetched this agent's artifact, newest first" — the question asked
+        # first when a specific submission is suspected of having leaked.
+        Index(
+            "artifact_fetch_audit_agent_idx",
+            "agent_id",
+            "fetched_at",
+        ),
+        # "Everything this requester ever fetched" — the pivot from a suspected
+        # agent to the full reach of whoever fetched it.
+        Index(
+            "artifact_fetch_audit_requester_idx",
+            "requester_kind",
+            "requester_id",
+            "fetched_at",
+        ),
+        # Bare time-range sweeps ("everything fetched during the leak window").
+        Index(
+            "artifact_fetch_audit_fetched_idx",
+            "fetched_at",
+            "seq",
+        ),
+    )
+
+
+class OwnerAttestation(Base):
+    """One cryptographically-proven owner link.
+
+    Rows live on the ``owner_attestations`` table.
+
+    Two hotkeys declared to be the same operator, with **both** endpoints
+    having signed. Each half is proved by either that hotkey itself or the
+    coldkey bound to it by payment records; the key kind is recorded per side
+    so a reviewer can grade the evidence. Signatures are retained verbatim so
+    any reviewer -- or any miner disputing a hold -- can re-verify the claim
+    offline without trusting this table.
+
+    The pair is stored in canonical (sorted) order as ``hotkey_lo`` /
+    ``hotkey_hi``. The link is **symmetric**: it says one operator holds both
+    keys, and both key holders consented. Symmetry is safe precisely because
+    both halves are signed -- an attacker cannot mint an edge naming a hotkey
+    they do not control, in either direction. ``lo``/``hi`` carry no meaning
+    beyond giving the pair exactly one representation.
+
+    Active links are authoritative same-operator evidence for copy screening,
+    queue-capacity serialization, and one-slot-per-owner emission
+    partitioning. The score ledger retains each underlying submission while
+    selecting only the linked owner's best eligible row for emissions.
+    """
+
+    __tablename__ = "owner_attestations"
+
+    attestation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    """Surrogate key."""
+
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Subnet the attestation was minted for. Signed, so it cannot be replayed
+    onto another subnet running this software."""
+
+    hotkey_lo: Mapped[str] = mapped_column(Text, nullable=False)
+    """Lexicographically smaller of the two linked hotkeys."""
+
+    hotkey_hi: Mapped[str] = mapped_column(Text, nullable=False)
+    """Lexicographically larger of the two linked hotkeys."""
+
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    """Single-use value bound into both signed payloads. Uniquely indexed: this
+    is the replay guard, so a captured attestation cannot be submitted twice."""
+
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """Miner-supplied mint time, signed. Bounds the mint-to-submit window."""
+
+    lo_key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    """``hotkey`` or ``coldkey`` -- which key proved the ``lo`` half."""
+
+    lo_signer: Mapped[str] = mapped_column(Text, nullable=False)
+    """SS58 that actually signed the ``lo`` half. Equals ``hotkey_lo`` for a
+    hotkey proof, or the payment-bound coldkey for a coldkey proof."""
+
+    lo_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    """sr25519 signature for the ``lo`` half, lowercase hex, 128 chars."""
+
+    hi_key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    """``hotkey`` or ``coldkey`` -- which key proved the ``hi`` half."""
+
+    hi_signer: Mapped[str] = mapped_column(Text, nullable=False)
+    """SS58 that actually signed the ``hi`` half."""
+
+    hi_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    """sr25519 signature for the ``hi`` half, lowercase hex, 128 chars."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    """Row insertion time. The authoritative "link became active" instant --
+    ``issued_at`` is miner-supplied and only loosely trusted."""
+
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """When the link stopped counting, or ``NULL`` while active.
+
+    Revocation is **prospective**. Submissions already screened under an active
+    link keep their decision: screening is a point-in-time adjudication, and
+    re-holding already-scored agents on a later revocation would punish
+    reliance and destabilise the ledger. The row is never deleted, so the
+    window during which the link was live stays auditable.
+    """
+
+    revoked_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Who revoked: an operator actor, or the endpoint that withdrew."""
+
+    revoked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Free-text rationale recorded at revocation."""
+
+    __table_args__ = (
+        UniqueConstraint("nonce", name="owner_attestations_nonce_key"),
+        CheckConstraint(
+            "hotkey_lo < hotkey_hi",
+            name="owner_attestations_canonical_order",
+        ),
+        CheckConstraint(
+            "lo_key_kind IN ('hotkey', 'coldkey')",
+            name="owner_attestations_lo_key_kind_check",
+        ),
+        CheckConstraint(
+            "hi_key_kind IN ('hotkey', 'coldkey')",
+            name="owner_attestations_hi_key_kind_check",
+        ),
+        CheckConstraint(
+            "length(lo_signature) = 128",
+            name="owner_attestations_lo_signature_check",
+        ),
+        CheckConstraint(
+            "length(hi_signature) = 128",
+            name="owner_attestations_hi_signature_check",
+        ),
+        CheckConstraint(
+            "(revoked_at IS NULL) = (revoked_by IS NULL)",
+            name="owner_attestations_revocation_pair",
+        ),
+        # At most one *active* link per pair. Canonical ordering means this
+        # constrains the unordered pair, not one arrangement of it. A revoked
+        # link can be re-established with a fresh nonce.
+        Index(
+            "owner_attestations_active_pair_idx",
+            "netuid",
+            "hotkey_lo",
+            "hotkey_hi",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        # The screening-time resolution reads both columns; the link is
+        # symmetric so neither side is privileged.
+        Index("owner_attestations_lo_idx", "netuid", "hotkey_lo"),
+        Index("owner_attestations_hi_idx", "netuid", "hotkey_hi"),
+    )

@@ -83,6 +83,14 @@ def test_all_dittobench_surfaces_release(components, ignored_paths, path: str) -
     }
 
 
+def test_platform_change_does_not_release_validator_stack(
+    components, ignored_paths
+) -> None:
+    assert selected(
+        components, ignored_paths, "apps/platform/ditto/api_server/factory.py"
+    ) == {"platform"}
+
+
 def test_shared_contract_change_releases_both_surfaces(
     components, ignored_paths
 ) -> None:

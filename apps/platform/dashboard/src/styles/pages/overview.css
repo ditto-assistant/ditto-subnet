@@ -1,0 +1,816 @@
+/* Overview page styles, ported verbatim from the monolith <style> block:
+   harness comparison / memory timeline (1620–1826), the two-pane overview
+   split (2378–2404), the compact-board rules (2411–2452), the champion box
+   (2477–2500), the strip suppression (2501–2506) and the snapshot ledger
+   (2508–2529). The cards grid itself is shared (widgets.css). */
+
+/* Third-party harnesses are deliberately kept outside the leaderboard.
+   This comparison panel can grow by adding evidence records in JS without
+   teaching ranking, KOTH, or emissions about off-network runs. */
+.harness-comparison {
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.harness-comparison-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 22px 18px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--accent-2) 4%, var(--bg-elev));
+}
+.harness-comparison-title {
+  min-width: 0;
+}
+.harness-comparison-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--accent-2);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.harness-comparison-kicker .reference-badge {
+  padding: 3px 6px;
+  border: 1px solid color-mix(in oklch, var(--accent-2) 42%, var(--border));
+  border-radius: 3px;
+  color: var(--accent-2);
+  background: color-mix(in oklch, var(--accent-2) 8%, transparent);
+}
+.harness-comparison h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 400;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.harness-comparison-lead {
+  max-width: 72ch;
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.harness-comparison-body {
+  padding: 21px 22px 18px;
+}
+.harness-comparison-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 18px;
+  margin: 0 0 16px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.harness-comparison-summary strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.memory-timeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-bottom: 10px;
+  color: var(--text-dim);
+  font: 10.5px/1.4 var(--mono);
+}
+.memory-timeline-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.memory-timeline-legend i {
+  display: inline-block;
+  width: 25px;
+  border-top: 3px solid var(--memory);
+}
+/* The generation chips carry the ramp, so they are swatches rather than
+   line samples; the two reference series keep their distinct dash. */
+.memory-timeline-legend .legend-group {
+  gap: 9px;
+}
+.memory-timeline-legend .era {
+  gap: 5px;
+  color: var(--text-faint);
+}
+.memory-timeline-legend .era i {
+  width: 11px;
+  height: 11px;
+  border: 0;
+  border-radius: 2px;
+}
+.memory-timeline-legend .hermes i {
+  border-color: var(--ref-hermes);
+  border-top-style: dashed;
+}
+.memory-timeline-legend .openclaw i {
+  border-color: var(--ref-openclaw);
+  border-top-style: dashed;
+}
+/* A reference series that has no run on a contract must say so. Its line
+   stopping is otherwise indistinguishable from the baseline collapsing to
+   zero, which would misreport a third-party system. */
+.memory-timeline-legend em {
+  font-style: normal;
+  color: var(--text-faint);
+}
+/* "collecting" is the same word, and the same accent, the rollout strip
+   uses for a contract that has not settled — see .rollout-status.collecting. */
+.memory-timeline-legend .era.open {
+  color: var(--accent-2);
+}
+.memory-timeline-frame {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--bg-elev-2);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+.memory-timeline-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.timeline-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-axis-label {
+  fill: var(--text-faint);
+  font: 10px var(--mono);
+}
+.timeline-band {
+  fill: color-mix(in oklch, var(--text) 3.5%, transparent);
+}
+.timeline-release {
+  stroke: color-mix(in oklch, var(--text-faint) 72%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-era-label {
+  font: 700 12px var(--mono);
+  letter-spacing: 0.03em;
+  cursor: help;
+}
+.timeline-era-label:focus {
+  outline: none;
+  text-decoration: underline;
+}
+.timeline-era-date {
+  fill: var(--text-faint);
+  font: 9.5px var(--mono);
+}
+/* A contract whose rollout has not settled is marked, not styled as if it
+   were finished. The tint is the rollout strip's own accent at reading
+   strength: enough to separate the band, never enough to compete with the
+   data drawn on top of it. */
+.timeline-band.open {
+  fill: color-mix(in oklch, var(--accent-2) 9%, transparent);
+}
+.timeline-open-label {
+  fill: var(--accent-2);
+  font: 700 9.5px var(--mono);
+  letter-spacing: 0.04em;
+}
+/* The gap where a reference series has no run. The end cap terminates the
+   line visibly and the note names the reason, so an absent measurement is
+   never read as a measured collapse. */
+.timeline-series-end {
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+}
+.timeline-series-end.hermes {
+  stroke: var(--ref-hermes);
+}
+.timeline-series-end.openclaw {
+  stroke: var(--ref-openclaw);
+}
+.timeline-unmeasured {
+  fill: var(--text-faint);
+  font: 10px var(--mono);
+  cursor: help;
+}
+.timeline-unmeasured:focus {
+  outline: none;
+  text-decoration: underline;
+}
+/* Entrance. Every animated mark's end state is its resting state and the
+   animation runs on render, so a hidden tab, a headless shot, or reduced
+   motion all show the finished chart rather than a blank frame. The cloud
+   settles first, then the record line draws over it. */
+.timeline-field {
+  animation: timeline-dot-in 0.34s var(--ease-out-quart) both;
+  animation-delay: calc(var(--i, 0) * 14ms);
+}
+@keyframes timeline-dot-in {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+.timeline-field {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.timeline-path.miner {
+  stroke-dasharray: 1;
+  animation: timeline-draw 0.75s var(--ease-out-expo) both;
+  animation-delay: 0.18s;
+}
+@keyframes timeline-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.timeline-path.hermes,
+.timeline-path.openclaw {
+  animation: timeline-mark-in 0.5s var(--ease-out-quart) both;
+  animation-delay: 0.34s;
+}
+.timeline-point,
+.timeline-champion-halo,
+.timeline-champion-ring,
+.timeline-champion-drop,
+.timeline-champion-plate {
+  animation: timeline-mark-in 0.4s var(--ease-out-quart) both;
+  animation-delay: 0.5s;
+}
+@keyframes timeline-mark-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .timeline-champion-pulse {
+    display: none;
+  }
+}
+.timeline-path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-path.miner {
+  stroke: var(--memory);
+  stroke-width: 3.5;
+}
+.timeline-path.hermes {
+  stroke: var(--ref-hermes);
+  stroke-width: 2.5;
+  stroke-dasharray: 7 5;
+}
+.timeline-path.openclaw {
+  stroke: var(--ref-openclaw);
+  stroke-width: 2.5;
+  stroke-dasharray: 3 5;
+}
+/* Contract boundary: carries the eye across without claiming the score
+   continued. Muted and dashed against the solid in-era segments. */
+.timeline-link {
+  fill: none;
+  stroke: color-mix(in oklch, var(--text-faint) 55%, transparent);
+  stroke-width: 2;
+  stroke-dasharray: 2 6;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+/* The field sits behind the record line: same generation hue, low opacity,
+   small radius, so it reads as density rather than competing marks. Hover
+   brings one back to full strength without lifting the whole cloud. */
+.timeline-field {
+  opacity: 0.2;
+  stroke: none;
+  cursor: help;
+  transition: opacity 0.14s var(--ease-out-quart);
+}
+.timeline-field:hover {
+  opacity: 0.95;
+}
+.timeline-field.champion {
+  opacity: 1;
+}
+/* Champion: halo, drop line, and a slow pulse. The pulse is the only looping
+   motion on the page and it marks live state (who holds the crown). */
+.timeline-champion-halo {
+  fill: color-mix(in oklch, var(--gold) 22%, transparent);
+}
+.timeline-champion-drop {
+  stroke: color-mix(in oklch, var(--gold) 42%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-champion-ring {
+  fill: none;
+  stroke: var(--gold);
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-champion-pulse {
+  fill: none;
+  stroke: var(--gold);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: timeline-pulse 3.2s var(--ease-out-quart) infinite;
+}
+@keyframes timeline-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  70%,
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+.timeline-champion-plate rect {
+  fill: var(--bg);
+  stroke: color-mix(in oklch, var(--gold) 62%, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-champion-plate text {
+  fill: var(--gold);
+  font: 700 11px var(--mono);
+  letter-spacing: 0.02em;
+}
+.timeline-champion-plate .crown-score {
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.timeline-champion-plate {
+  cursor: help;
+}
+.timeline-champion-plate:focus {
+  outline: none;
+}
+.timeline-champion-plate:focus rect {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+.timeline-point {
+  stroke: var(--bg-elev-2);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: help;
+}
+.timeline-point.miner {
+  fill: var(--memory);
+}
+.timeline-point.hermes {
+  fill: var(--ref-hermes);
+}
+.timeline-point.openclaw {
+  fill: var(--ref-openclaw);
+}
+.timeline-point:focus {
+  outline: none;
+  stroke: var(--text);
+  stroke-width: 3.5;
+}
+/* var(--shadow) is undefined in the monolith too (tokens.css note): the
+   tooltip deliberately keeps the same no-shadow rendering. */
+.memory-timeline-tooltip {
+  position: absolute;
+  z-index: 3;
+  width: max-content;
+  max-width: min(270px, 78%);
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font: 11px/1.45 var(--mono);
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 10px));
+}
+.memory-timeline-tooltip.below {
+  transform: translate(-50%, 10px);
+}
+.memory-timeline-note {
+  margin: 10px 0 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.timeline-data-details {
+  margin-top: 13px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+.timeline-data-details > summary {
+  width: fit-content;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+}
+.timeline-data-table-wrap {
+  margin-top: 10px;
+  overflow-x: auto;
+}
+.timeline-data-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font: 10.5px/1.4 var(--mono);
+}
+.timeline-data-table th,
+.timeline-data-table td {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.timeline-data-table th {
+  color: var(--text-faint);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.timeline-data-table td:last-child,
+.timeline-data-table th:last-child {
+  text-align: right;
+}
+.harness-comparison-method {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.harness-comparison-method > summary {
+  width: fit-content;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+}
+.harness-comparison-method > summary:hover {
+  color: var(--accent);
+}
+/* Prose runs the full width with the evidence links on their own row
+   beneath it — a side column of two links left a tall blank gutter under
+   them next to the paragraph. */
+.harness-comparison-method-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 12px;
+}
+.harness-comparison-method p {
+  max-width: 86ch;
+  margin: 0;
+}
+.harness-comparison-method a {
+  flex: none;
+  color: var(--accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.harness-comparison-evidence-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.harness-comparison-state {
+  padding: 28px 18px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .harness-comparison-head {
+    display: block;
+    padding: 18px;
+  }
+  .harness-comparison-body {
+    padding: 18px;
+  }
+  .harness-comparison-method-body {
+    display: block;
+  }
+  .harness-comparison-method a {
+    display: inline-block;
+    margin-top: 10px;
+  }
+  .harness-comparison-evidence-links {
+    display: flex;
+    flex-wrap: wrap;
+  }
+}
+
+/* ── Overview split (2378–2404) ─────────────────────────────── */
+@media (min-width: 1181px) {
+  .overview-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 26px;
+    align-items: start;
+  }
+  /* The wrap's 72px bottom padding serves scrolling pages; the overview is
+     a fixed two-pane shell, so reclaim it for the columns. (If :has is
+     unsupported the columns just sit taller and sticky catches the rest.) */
+  .wrap:has(.page.active[data-page="overview"]) {
+    padding-bottom: 20px;
+  }
+  .overview-rail {
+    /* Budget the page's full vertical chrome (~108px resting offset above:
+       wrap padding + page header; 72px wrap padding below) so both columns
+       fit the viewport at rest and the page itself has nothing to scroll —
+       each column scrolls internally instead. Sticky remains only as a
+       fallback for states that grow the page (banner, wrapped header). */
+    position: sticky;
+    top: 18px;
+    max-height: calc(100vh - 136px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    padding-right: 6px;
+  }
+  .overview-rail .harness-comparison {
+    margin-top: 0;
+  }
+  /* The board column scrolls the same way as the rail: two independent
+     viewport-height columns. Bare scroll container — no surface or frame
+     of its own; the champion box, strips, and board carry their own. */
+  .overview-main {
+    position: sticky;
+    top: 18px;
+    max-height: calc(100vh - 136px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    padding-right: 6px;
+  }
+  .overview-main > :first-child {
+    margin-top: 0;
+  }
+}
+/* The overview board is deliberately compact — score rank, best-scoring
+   agent, emissions, composite — at every viewport; the full column set
+   lives on the Leaderboard page (same block, rendered by that route, so
+   none of these rules match there). Percentage columns under a fixed table
+   layout keep it exactly pane-width with no slack pooling; cell minimums
+   that assume the full-page table are relaxed. */
+.overview-main #board .hide-md,
+.overview-main #board .hide-sm {
+  display: none;
+}
+/* Belt and braces: some engines still count display:none header cells'
+   inline pixel widths in the fixed-layout algorithm, pushing the table
+   wider than the pane and clipping the last column. Zero them. */
+.overview-main #board th.hide-md,
+.overview-main #board th.hide-sm {
+  width: 0 !important;
+}
+/* The paper system's global `table { min-width: 850px }` would keep this
+   table wider than the pane no matter what the columns say — undo it. */
+.overview-main #board {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 0;
+}
+.overview-main #board th[data-sort="rank"] {
+  width: 10% !important;
+}
+.overview-main #board th[data-sort="name"] {
+  width: 38% !important;
+}
+.overview-main #board thead th:nth-child(3) {
+  width: 22% !important;
+}
+.overview-main #board th[data-sort="composite"] {
+  width: 30% !important;
+}
+.overview-main #board th,
+.overview-main #board td {
+  padding-inline: 9px;
+}
+.overview-main #board td {
+  overflow: hidden;
+}
+.overview-main #board .winner-identity {
+  min-width: 0;
+}
+.overview-main #board .metric {
+  min-width: 0;
+}
+.overview-main #board .chain-weight-note {
+  white-space: normal;
+}
+.overview-main #board .emission-badge {
+  white-space: normal;
+}
+/* No sideways scrolling on the compact board: the fixed layout already
+   pins the table to pane width, this clips any rounding remainder. */
+.overview-main .board {
+  overflow-x: hidden;
+}
+/* The compact board keeps the composite trend graph and the gate chip —
+   both read at a glance in a narrow pane. The seed-round count needs its
+   tooltip to mean anything, so it stays on the Leaderboard page and in row
+   detail. Targeting that chip (rather than hiding .cline2 wholesale) is why
+   .cline2's own layout has to live in the stylesheet: an inline `display`
+   outranks every selector here. */
+.overview-main #board .seed-rounds-chip {
+  display: none;
+}
+/* The compact pane can't give the filter a 200px minimum next to three
+   tab pills; let it shrink to share their row (placeholder may clip) and
+   only wrap below ~84px of remaining space. Split widths only: below the
+   breakpoint the board is full-width and the stock sizing (including the
+   640px column-stretch) must win.
+   TODO(board-filter): at narrow pane widths the placeholder clips
+   mid-list ("Filter by agent, UID,"). Accepted for now — the hidden
+   label and the filter's empty state carry the full field list. If it
+   bothers in screenshots, shorten the placeholder to "Filter miners". */
+@media (min-width: 1181px) {
+  .overview-main .board-search {
+    flex: 1 1 120px;
+    min-width: 84px;
+    max-width: 240px;
+  }
+}
+
+/* ── Overview: champion box + snapshot ledger (2477–2529) ────
+   The reigning-KOTH box heads the leaderboard column; the snapshot ledger
+   replaces the card grid in the rail. Both are ruled-frame instruments:
+   mono-caps labels, display-serif values, 1px rules — no card chrome. */
+/* The page's one gold moment: the same champion grammar the timeline
+   crown plate and rank-one rows already own (gold frame, ♛, gold-toned
+   numeral via the contrast-validated rank-one token), at full strength. */
+/* overflow stays visible so tooltip bubbles can escape the frame; the
+   kicker rounds its own top corners instead of relying on parent clip. */
+.champion-box {
+  margin: 0 0 18px;
+  border: 1px solid color-mix(in oklch, var(--gold) 45%, var(--border));
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--gold) 5%, var(--bg-elev));
+}
+.champion-kicker {
+  padding: 10px 16px;
+  border-radius: 3px 3px 0 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--gold) 35%, var(--border));
+  background: color-mix(in oklch, var(--gold) 12%, var(--bg-elev));
+  color: var(--rank-one-text);
+  font: 700 11px/1 var(--mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.champion-kicker .crown {
+  margin-right: 7px;
+  font-size: 12px;
+}
+.champion-body {
+  padding: 16px 16px 14px;
+}
+.champion-state {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.champion-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+}
+.champion-score-label {
+  margin-right: 9px;
+  color: var(--text-dim);
+  font: 700 11px/1 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.champion-name {
+  font-family: var(--display);
+  font-size: clamp(22px, 2.2vw, 30px);
+  line-height: 1.1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.champion-name .entity-link {
+  color: inherit;
+}
+.champion-score {
+  font-family: var(--display);
+  font-size: clamp(32px, 3vw, 44px);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--rank-one-text);
+}
+.champion-meta {
+  margin-top: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--text-dim);
+  font: 11px/1.6 var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.champion-meta b {
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* The overview shows the condensed board: the provisional-standings /
+   registration notice, the rollout progress strip, and the dethrone
+   explainer live on the dedicated Leaderboard page (same block, rendered
+   by that route — these rules only match in the overview). */
+.overview-main #leaderboard-notice,
+.overview-main #rollout-strip,
+.overview-main #emissions-strip,
+.overview-main .lb-context-heading {
+  display: none !important;
+}
+
+.snapshot {
+  margin: 14px 0;
+}
+/* Stat tiles, not ledger rows: in the wide rail a label...value row leaves
+   a chasm between the pair. Same shared-1px-rule tile grid as the brand's
+   bench board — label on top, serif numeral under it. */
+/* overflow stays visible so tile tooltips can escape the grid; the four
+   corner tiles round themselves (featured tile owns the whole left edge). */
+.stat-ledger {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--border);
+}
+.ledger-line {
+  display: block;
+  min-width: 0;
+  padding: 11px 14px;
+  background: var(--bg-elev);
+}
+.stat-ledger .ledger-line.featured {
+  border-radius: 3px 0 0 3px;
+}
+.stat-ledger .ledger-line:nth-child(5) {
+  border-top-right-radius: 3px;
+}
+.stat-ledger .ledger-line:last-child {
+  border-bottom-right-radius: 3px;
+}
+/* The population headline gets the hero treatment: one tall tile
+   anchoring the grid's left edge, the eight singles filling a clean
+   5-column rectangle around it. Detail stays in the tooltip. */
+.ledger-line.featured {
+  grid-row: span 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background: color-mix(in oklch, var(--accent) 8%, var(--bg-elev));
+}
+.ledger-line.featured .ledger-label {
+  color: var(--accent);
+}
+.ledger-line.featured .ledger-value {
+  font-size: clamp(30px, 2.6vw, 40px);
+}
+.ledger-label {
+  display: block;
+  color: var(--text-dim);
+  font: 700 11px/1.4 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ledger-value {
+  margin: 4px 0 0;
+  min-width: 0;
+  font-family: var(--display);
+  font-size: clamp(19px, 1.5vw, 24px);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .stat-ledger {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -1,0 +1,169 @@
+// Fleet report, operations snapshot, health, and validator-name wire shapes
+// (/public/operations, /public/screeners, /public/health,
+// /public/validator-names).
+
+import type { BenchmarkProgress, PipelineFeed } from "./pipeline";
+
+export interface StackIdentity {
+  provenance?: string | null;
+  image_digest?: string | null;
+  source_revision?: string | null;
+  version?: string | null;
+}
+
+export interface StackComponentHealth {
+  /** "healthy" | "degraded" | "unreachable" | "identity_mismatch" | "unknown". */
+  health?: string | null;
+  required?: boolean | null;
+  ready?: boolean | null;
+  model_ready?: boolean | null;
+  /** Unix seconds. */
+  observed_at?: number | null;
+  observed_identity?: StackIdentity | null;
+}
+
+/** What the validator's own probe of its scorer actually saw. The status
+ * above is the validator's conclusion; this separates a scorer that never
+ * answered from one that answered with something unusable. */
+export interface ScorerProbe {
+  /** "served" | "served_degraded" | "http_error" | "unreadable" | "timeout" |
+   * "connect_error" | "not_probed". */
+  outcome?: string;
+  /** Unix seconds. */
+  observed_at?: number | null;
+  http_status?: number | null;
+  reason?: string | null;
+  /** Unix seconds; null means "not since this validator started". */
+  last_served_at?: number | null;
+  consecutive_failures?: number | null;
+}
+
+export interface ScorerBenchmarks {
+  /** "fresh_verified" | "legacy_v2" | "unreachable" | "identity_mismatch". */
+  status?: string;
+  supported_bench_versions?: Array<number | string>;
+  /** Unix seconds. */
+  observed_at?: number | null;
+  software_version?: string | null;
+  source_revision?: string | null;
+  probe?: ScorerProbe | null;
+}
+
+export interface ValidatorCapabilities {
+  screened_images?: boolean | null;
+  require_screened_image?: boolean | null;
+  source_build_fallback?: boolean | null;
+  full_stack_managed?: boolean | null;
+  stack_updater?: boolean | null;
+  sandbox_egress_restricted?: boolean | null;
+  executor_isolation?: string | null;
+  scorer_benchmarks?: ScorerBenchmarks | null;
+}
+
+export interface ValidatorStack {
+  /** "managed" (signed GHCR release) or source build. */
+  mode?: string;
+  compose_schema?: number | string;
+  release_descriptor_digest?: string | null;
+  components?: Record<string, StackIdentity | null | undefined>;
+}
+
+export interface SystemMetrics {
+  cpu_percent: number;
+  memory_percent: number;
+  disk_percent: number;
+  /** "healthy" | "degraded" | anything else reads "Not reported". */
+  docker_status?: string | null;
+  running_containers?: number | null;
+  unhealthy_containers?: number | null;
+}
+
+export interface ScreeningProgress {
+  /** "preparing" | "downloading" | … | "source_review_<n>". */
+  stage?: string;
+  started_at?: string;
+}
+
+/** One fleet row. Validators are keyed by validator_hotkey; the screener
+ * fleet shares one hotkey, so each worker is distinguished by instance_id. */
+export interface FleetEntry {
+  validator_hotkey?: string;
+  screener_hotkey?: string;
+  instance_id?: string | null;
+  /** Worker state: "polling" | "running_benchmark" | "screening" | "idle" | … */
+  state?: string | null;
+  /** "available" | "stale" | "offline" | "paused". */
+  availability?: string | null;
+  /** "healthy" | "warning". */
+  health?: string | null;
+  /** "assignment_mismatch" | "assigning" | "heartbeat_stale". */
+  assignment_state?: string | null;
+  assigned_agent_id?: string | null;
+  assigned_agent_name?: string | null;
+  reported_agent_id?: string | null;
+  active_agent_id?: string | null;
+  active_agent_name?: string | null;
+  screening_progress?: ScreeningProgress | null;
+  software_version?: string | null;
+  protocol_version?: number | string;
+  /** Screeners only. */
+  policy_version?: number | string | null;
+  first_seen_at?: string | null;
+  reported_at?: string | null;
+  seen_at?: string | null;
+  active_benchmark?: BenchmarkProgress | null;
+  active_benchmarks?: BenchmarkProgress[];
+  assigned_benchmarks?: BenchmarkProgress[];
+  healthy_slots?: string[];
+  configured_slots?: number | null;
+  /** "accepting" or a warn label. */
+  admission?: string | null;
+  capabilities?: ValidatorCapabilities | null;
+  stack?: ValidatorStack | null;
+  stack_health?: Record<string, StackComponentHealth | null | undefined> | null;
+  system_metrics?: SystemMetrics | null;
+}
+
+/** /public/screeners, and the validators slice of /public/operations. */
+export interface FleetReport {
+  validators?: FleetEntry[];
+  screeners?: FleetEntry[];
+  reported_count?: number;
+  generated_at?: string;
+}
+
+// ── Operations snapshot (/public/operations) ─────────────────
+
+export interface OperationsPayload {
+  active_bench_version?: number | null;
+  desired_bench_version?: number | null;
+  benchmark_rollout_status?: string | null;
+  validators: FleetReport;
+  activity?: PipelineFeed;
+  generated_at?: string;
+}
+
+// ── Health (/public/health) ──────────────────────────────────
+
+export interface HealthPayload {
+  miners?: number;
+  scored_miners?: number | null;
+  scored_agents?: number | null;
+  total_scores?: number | null;
+  scores_24h?: number | null;
+  avg_latency_ms?: number | null;
+  last_scored_at?: string | null;
+  generated_at?: string;
+}
+
+// ── Validator names (/public/validator-names) ────────────────
+
+export interface ValidatorNameEntry {
+  validator_hotkey?: string;
+  display_name?: string;
+  stake_weight?: number;
+}
+
+export interface ValidatorNamesPayload {
+  validators?: ValidatorNameEntry[];
+}

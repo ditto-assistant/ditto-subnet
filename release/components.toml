@@ -91,6 +91,12 @@ paths = [
   "services/dittobench-api/skills-lock.json",
 ]
 
+[components.platform]
+description = "Subnet API and control plane"
+paths = [
+  "apps/platform/**",
+]
+
 [components.validator_stack]
 description = "Signed, digest-bound validator stack"
 depends_on = ["validator", "sandbox_docker", "dittobench_api"]

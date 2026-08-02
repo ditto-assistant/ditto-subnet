@@ -1,0 +1,19 @@
+/* Shared CSS ported from the monolith <style> block (lines 94-2530),
+ * split by owner. Import order preserves the monolith cascade: tokens,
+ * then reset/ground, shell chrome, shared widgets, modal, search. */
+
+@import "./tokens.css";
+@import "./base.css";
+@import "./shell.css";
+@import "./widgets.css";
+@import "./modal.css";
+@import "./search.css";
+
+/* page styles are appended by the page ports */
+
+@import "./pages/overview.css";
+@import "./pages/leaderboard.css";
+@import "./pages/benchmark.css";
+@import "./pages/operations.css";
+@import "./pages/submissions.css";
+@import "./pages/reviews.css";

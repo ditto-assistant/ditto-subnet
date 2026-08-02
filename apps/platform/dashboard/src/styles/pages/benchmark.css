@@ -1,0 +1,267 @@
+/* Benchmark page styles, ported from the monolith <style> block:
+   version-history changelog items (545–557), about / "what the benchmark
+   tests" base (649–658), themed about/pillars (1894–1900), the reference
+   disclosures (1901–1938), and the @720 stacks (1985–1989). The glossary
+   item styles (.gloss/.gitem/.gex, 526–544) are shared with the run drawer
+   and live in modal.css; the footer lives in shell.css. Source order within
+   this file preserves the monolith cascade. */
+
+/* ── Version-history changelog items (545–557) ── */
+.ver-item {
+  padding: 11px 0 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 52%, transparent);
+}
+.ver-item:last-child {
+  border-bottom: none;
+}
+.ver-current {
+  border-left: 2px solid var(--accent-2);
+  padding-left: 12px;
+  margin-left: -14px;
+}
+.ver-rollout {
+  border-left: 2px solid var(--warn);
+  padding-left: 12px;
+  margin-left: -14px;
+}
+.ver-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ver-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--accent-2);
+  border: 1px solid color-mix(in oklab, var(--accent-2) 42%, transparent);
+  border-radius: 5px;
+  padding: 0 6px;
+}
+.ver-head b {
+  font-size: 14px;
+  color: var(--text);
+}
+.ver-now {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--good);
+  border: 1px solid color-mix(in oklab, var(--good) 45%, transparent);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.ver-next {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--warn);
+  border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.ver-epoch {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.ver-sum {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.55;
+  margin-top: 5px;
+}
+.ver-hl {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* ── About / "what the benchmark tests" (649–658) ── */
+.about > p.lead {
+  color: var(--text-dim);
+  font-size: 13.5px;
+  margin: 0 0 16px;
+  max-width: 78ch;
+}
+.about .pillars {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.about .pillar h2 {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.about .pillar h2 .tag {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.about .pillar.tool h2 .tag {
+  color: var(--tool);
+  border: 1px solid color-mix(in oklab, var(--tool) 42%, transparent);
+  background: color-mix(in oklab, var(--tool) 12%, transparent);
+}
+.about .pillar.mem h2 .tag {
+  color: var(--memory);
+  border: 1px solid color-mix(in oklab, var(--memory) 42%, transparent);
+  background: color-mix(in oklab, var(--memory) 12%, transparent);
+}
+.about .pillar p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.about .note {
+  margin-top: 14px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  line-height: 1.55;
+  max-width: 82ch;
+}
+.about .note b {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+/* ── Themed about + reference disclosures (1894–1938) ── */
+.about {
+  margin-top: 30px;
+}
+.about > p.lead {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.about .pillars {
+  gap: 0;
+  border: 1px solid var(--border);
+}
+.about .pillar {
+  padding: 20px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-elev);
+}
+.about .pillar:last-child {
+  border-right: 0;
+}
+.about .pillar h2 {
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 400;
+}
+.about .pillar p {
+  color: var(--text-dim);
+}
+.benchmark-reference {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+.bench-disclosure {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+}
+.bench-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 12px 16px;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+.bench-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.bench-disclosure-icon {
+  margin-left: auto;
+  color: var(--text-faint);
+  font: 500 17px/1 var(--mono);
+}
+.bench-disclosure-icon::before {
+  content: "+";
+}
+.bench-disclosure[open] > summary {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev-2);
+}
+.bench-disclosure[open] .bench-disclosure-icon::before {
+  content: "−";
+}
+.bench-disclosure > summary:hover strong {
+  color: var(--accent);
+}
+.bench-disclosure-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.bench-disclosure-title strong {
+  font-size: 13.5px;
+}
+.bench-disclosure-title span {
+  color: var(--text-faint);
+  font: 10.5px/1.4 var(--mono);
+}
+.bench-disclosure .tag {
+  margin-left: auto;
+}
+.bench-disclosure .tag + .bench-disclosure-icon {
+  margin-left: 0;
+}
+.bench-disclosure-body {
+  padding: 16px 18px 18px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.bench-disclosure-body > :first-child {
+  margin-top: 0;
+}
+.bench-disclosure-body > :last-child {
+  margin-bottom: 0;
+}
+.bench-disclosure-body ul {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.7;
+}
+
+/* ── Small screens (1985–1989) ── */
+@media (max-width: 720px) {
+  .about .pillars {
+    grid-template-columns: 1fr;
+  }
+  .about .pillar {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .about .pillar:last-child {
+    border-bottom: 0;
+  }
+  .bench-disclosure > summary {
+    align-items: flex-start;
+  }
+  .bench-disclosure .tag {
+    flex: none;
+  }
+}
