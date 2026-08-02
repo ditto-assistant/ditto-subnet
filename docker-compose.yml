@@ -163,6 +163,11 @@ services:
       # path fails the broker's exact-path check. For the same reason the base
       # below has no trailing slash.
       DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL: ${DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL:-https://dittobench.ai/api/v1/inference/chat/completions}
+      # Preserve the canonical grant URL above for exact activation checks, but
+      # carry the validator-owned broker traffic over Platform's direct origin.
+      # This keeps benchmark inference off the dashboard's Cloudflare path;
+      # miners receive neither URL nor the ticket bearer.
+      DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL: ${DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL:-https://platform-api.heyditto.ai/api/v1/inference/chat/completions}
       # Hosted embeddings share the same ticket grant and platform boundary.
       # This URL is consumed only by the trusted local broker; miner containers
       # receive the source-bound broker URL, never this upstream or a bearer.

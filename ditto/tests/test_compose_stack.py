@@ -165,6 +165,10 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
         "${DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL:-"
         "https://dittobench.ai/api/v1/inference/chat/completions}"
     )
+    assert env["DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL"] == (
+        "${DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL:-"
+        "https://platform-api.heyditto.ai/api/v1/inference/chat/completions}"
+    )
     assert env["DITTOBENCH_EMBEDDING_UPSTREAM_URL"] == (
         "${DITTOBENCH_EMBEDDING_UPSTREAM_URL:-"
         "https://dittobench.ai/api/v1/inference/embeddings}"
