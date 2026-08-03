@@ -149,6 +149,14 @@ def _wrapper_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        # Exercise main-ancestry wrapper behavior independently of the
+        # deployment pin. A dependent draft may temporarily point Compose at
+        # an exact feature-branch commit; the dedicated unmerged-smoke test
+        # overrides this context explicitly.
+        "DITTOBENCH_BUILD_CONTEXT": (
+            "https://github.com/ditto-assistant/dittobench-api.git?"
+            f"ref=refs/heads/main&checksum={checksum}"
+        ),
         "DITTO_SUBNET_BUILD_CACHE": str(cache),
         "DITTO_VALIDATOR_UPDATE_STATE_DIR": str(state_dir),
         "FAKE_COMPOSE_CAPTURE": str(capture),

@@ -6,8 +6,8 @@
 # pin — must be this one anchor. A hardcoded copy that could drift from the
 # build context is exactly what let a cached scorer image assert a revision it
 # was not built from (see docs/VALIDATOR.md, "Stale scorer image").
-x-dittobench-revision: &dittobench-revision ef237200de69da8cd2a43eb9ff92b8bce6a3aa26
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=ef237200de69da8cd2a43eb9ff92b8bce6a3aa26}
+x-dittobench-revision: &dittobench-revision 819b60d43f728ef40ffbe8f2d62f3fd8092551f8
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/agent/openrouter-network-shim&checksum=819b60d43f728ef40ffbe8f2d62f3fd8092551f8}
 x-dittobench-software-version: &dittobench-software-version ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
 # Shared secret for the validator -> scorer inference control plane
 # (POST/DELETE /v1/inference/session*). The scorer joins sandbox-docker's
@@ -74,10 +74,16 @@ services:
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
       DOCKER_TLS_CERTDIR: ""
+      DITTOBENCH_OPENROUTER_SHIM_PORT: "11437"
+      DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH: /var/lib/dittobench-openrouter-shim/ca-bundle.pem
     extra_hosts:
       - host.docker.internal:127.0.0.1
     volumes:
       - sandbox-docker-rootful-data:/var/lib/docker
+      # Shared only with dittobench-api. The scorer writes a public CA bundle;
+      # the nested daemon mounts it read-only into miner containers. No private
+      # key is written to this volume.
+      - openrouter-shim-ca:/var/lib/dittobench-openrouter-shim
     healthcheck:
       test: [CMD-SHELL, "docker info >/dev/null 2>&1"]
       interval: 10s
@@ -143,6 +149,12 @@ services:
       DITTOBENCH_V7_CASE_CONCURRENCY: ${VALIDATOR_V7_CASE_CONCURRENCY:-}
       DITTOBENCH_V7_EMBEDDING_CONCURRENCY: ${VALIDATOR_V7_EMBEDDING_CONCURRENCY:-}
       DITTOBENCH_REQUIRE_TICKET_INFERENCE: "true"
+      # Compatibility for harnesses that compiled OpenRouter's public HTTPS URL
+      # instead of reading the injected ticket gateway. The scorer terminates a
+      # validator-local certificate on 11437; sandbox-docker maps only LOCAL
+      # openrouter.ai:443 traffic there while preserving the sandbox source IP.
+      DITTOBENCH_OPENROUTER_SHIM_PORT: "11437"
+      DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH: /var/lib/dittobench-openrouter-shim/ca-bundle.pem
       # Authorizes the validator's session prepare/activate/cancel calls. Same
       # anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
@@ -179,6 +191,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    volumes:
+      - openrouter-shim-ca:/var/lib/dittobench-openrouter-shim
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8000/health"]
       interval: 10s
@@ -283,7 +297,7 @@ services:
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:ef237200de69da8cd2a43eb9ff92b8bce6a3aa26
+      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:819b60d43f728ef40ffbe8f2d62f3fd8092551f8
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
       VALIDATOR_STACK_COMPONENT_PYLON: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
@@ -337,5 +351,6 @@ services:
 
 volumes:
   pylon-data:
+  openrouter-shim-ca:
   sandbox-docker-rootful-data:
   validator-update-bootstrap:

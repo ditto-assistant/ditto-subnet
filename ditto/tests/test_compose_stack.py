@@ -125,7 +125,10 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
 
-    assert sandbox["volumes"] == ["sandbox-docker-rootful-data:/var/lib/docker"]
+    assert set(sandbox["volumes"]) == {
+        "sandbox-docker-rootful-data:/var/lib/docker",
+        "openrouter-shim-ca:/var/lib/dittobench-openrouter-shim",
+    }
     assert "security_opt" not in sandbox
     # `docker system prune` also removes unused networks, which would delete the
     # idle ditto-sandbox bridge between benchmarks and break every harness run.
@@ -142,6 +145,7 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
         "docker container prune --force"
     )
     assert "--dport 11436 -j ACCEPT" in entrypoint
+    assert '--dport "$openrouter_shim_port" -j ACCEPT' in entrypoint
     assert "--dport 11434 -j ACCEPT" not in entrypoint
     assert "--dport 11435 -j ACCEPT" not in entrypoint
 
@@ -203,6 +207,7 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "su-exec rootless" not in entrypoint
     assert "DITTO-SANDBOX-EGRESS" in entrypoint
     assert "--dport 11436 -j ACCEPT" in entrypoint
+    assert '--dport "$openrouter_shim_port" -j ACCEPT' in entrypoint
     assert "--dport 11434 -j ACCEPT" not in entrypoint
     assert "--dport 11435 -j ACCEPT" not in entrypoint
     assert "ditto-sandbox-deny" in entrypoint
@@ -213,6 +218,35 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "-p tcp -j REJECT --reject-with tcp-reset" in entrypoint
     assert "-j REJECT --reject-with icmp-port-unreachable" in entrypoint
     assert "/var/run/docker.sock" not in COMPOSE_PATH.read_text()
+
+
+def test_hardcoded_openrouter_https_is_shimmed_into_the_bound_broker() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    services = compose["services"]
+    scorer = services["dittobench-api"]
+    sandbox = services["sandbox-docker"]
+    entrypoint = (
+        COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
+    ).read_text()
+
+    ca_path = "/var/lib/dittobench-openrouter-shim/ca-bundle.pem"
+    assert scorer["environment"]["DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH"] == ca_path
+    assert (
+        sandbox["environment"]["DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH"] == ca_path
+    )
+    assert scorer["environment"]["DITTOBENCH_OPENROUTER_SHIM_PORT"] == "11437"
+    assert sandbox["environment"]["DITTOBENCH_OPENROUTER_SHIM_PORT"] == "11437"
+    shared_mount = "openrouter-shim-ca:/var/lib/dittobench-openrouter-shim"
+    assert shared_mount in scorer["volumes"]
+    assert shared_mount in sandbox["volumes"]
+    assert "chown 65532:65532" in entrypoint
+
+    # Only host-local port 443 is redirected. Public HTTPS is still rejected;
+    # Docker's per-run /etc/hosts entry makes openrouter.ai the one local name.
+    assert "-m addrtype --dst-type LOCAL -p tcp --dport 443" in entrypoint
+    assert '-j REDIRECT --to-ports "$openrouter_shim_port"' in entrypoint
+    assert "-t nat -I PREROUTING 1 -i 'dtj+'" in entrypoint
+    assert "-t nat -I PREROUTING 1 -i ditto-sandbox0" in entrypoint
 
 
 def test_screened_image_capability_is_enabled_without_a_global_requirement() -> None:
@@ -242,17 +276,17 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert parsed.scheme == "https"
     assert parsed.netloc == "github.com"
     assert parsed.path == "/ditto-assistant/dittobench-api.git"
-    assert query.get("ref") == ["refs/heads/main"]
+    assert query.get("ref") == ["refs/heads/agent/openrouter-network-shim"]
     assert set(query) == {"ref", "checksum"}
     assert len(query["checksum"]) == 1
     checksum = query["checksum"][0]
     assert len(checksum) == 40
     assert checksum == checksum.lower()
     assert all(character in "0123456789abcdef" for character in checksum)
-    # The checksum must remain the exact current main commit. A moving branch
+    # The checksum must remain the exact reviewed source commit. A moving branch
     # paired with a stale checksum makes the documented local Compose build
     # fail before the release materializer can replace the source context.
-    assert checksum == "ef237200de69da8cd2a43eb9ff92b8bce6a3aa26"
+    assert checksum == "819b60d43f728ef40ffbe8f2d62f3fd8092551f8"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]

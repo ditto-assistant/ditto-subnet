@@ -1,6 +1,28 @@
 #!/bin/sh
 set -eu
 
+openrouter_shim_port="${DITTOBENCH_OPENROUTER_SHIM_PORT:-11437}"
+case "$openrouter_shim_port" in
+  '' | *[!0-9]*)
+    printf 'invalid OpenRouter shim port: %s\n' "$openrouter_shim_port" >&2
+    exit 1
+    ;;
+esac
+if [ "$openrouter_shim_port" -lt 1024 ] || [ "$openrouter_shim_port" -gt 65535 ]; then
+  printf 'OpenRouter shim port must be unprivileged: %s\n' "$openrouter_shim_port" >&2
+  exit 1
+fi
+
+# dittobench-api runs as uid 65532 and writes only the public CA bundle here.
+# The same named volume is visible to this nested Docker daemon, which mounts
+# that bundle read-only into miner containers. Private CA/TLS keys never touch
+# the shared filesystem.
+openrouter_shim_ca_path="${DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH:-/var/lib/dittobench-openrouter-shim/ca-bundle.pem}"
+openrouter_shim_ca_dir="${openrouter_shim_ca_path%/*}"
+mkdir -p "$openrouter_shim_ca_dir"
+chown 65532:65532 "$openrouter_shim_ca_dir"
+chmod 0755 "$openrouter_shim_ca_dir"
+
 # Submission builds create a steady stream of images and BuildKit cache in the
 # nested daemon's named volume. Keep cleanup inside this isolation boundary:
 # mounting the host Docker socket would give the stack control over unrelated
@@ -72,6 +94,11 @@ ensure_sandbox_network() {
   iptables -F DITTO-SANDBOX-EGRESS
   iptables -A DITTO-SANDBOX-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   iptables -A DITTO-SANDBOX-EGRESS -m addrtype --dst-type LOCAL -p tcp --dport 11436 -j ACCEPT
+  # Hardcoded https://openrouter.ai traffic resolves to this host gateway. NAT
+  # has already translated its destination port from 443 to the scorer's local
+  # TLS shim, which still sees the original sandbox source IP and therefore
+  # enters the same source-bound ticket session as the documented broker URL.
+  iptables -A DITTO-SANDBOX-EGRESS -m addrtype --dst-type LOCAL -p tcp --dport "$openrouter_shim_port" -j ACCEPT
   iptables -A DITTO-SANDBOX-EGRESS -m limit --limit 12/min --limit-burst 20 \
     -j LOG --log-prefix 'ditto-sandbox-deny ' --log-level warning
   # Deny loudly, not silently. A silent DROP costs a denied TCP connect a full
@@ -102,6 +129,20 @@ ensure_sandbox_network() {
   iptables -I DOCKER-USER 1 -i 'dtj+' -j DITTO-SANDBOX-EGRESS
   while iptables -D INPUT -i 'dtj+' -j DITTO-SANDBOX-EGRESS 2>/dev/null; do :; done
   iptables -I INPUT 1 -i 'dtj+' -j DITTO-SANDBOX-EGRESS
+
+  # Redirect only LOCAL port 443, not public HTTPS. Inner Docker adds exactly
+  # openrouter.ai to /etc/hosts at the host gateway; every other public address
+  # remains non-local and falls through to the deny policy above. REDIRECT in
+  # PREROUTING preserves the miner container's source IP for broker binding.
+  iptables -t nat -N DITTO-OPENROUTER-SHIM 2>/dev/null || true
+  iptables -t nat -F DITTO-OPENROUTER-SHIM
+  iptables -t nat -A DITTO-OPENROUTER-SHIM \
+    -m addrtype --dst-type LOCAL -p tcp --dport 443 \
+    -j REDIRECT --to-ports "$openrouter_shim_port"
+  while iptables -t nat -D PREROUTING -i ditto-sandbox0 -j DITTO-OPENROUTER-SHIM 2>/dev/null; do :; done
+  iptables -t nat -I PREROUTING 1 -i ditto-sandbox0 -j DITTO-OPENROUTER-SHIM
+  while iptables -t nat -D PREROUTING -i 'dtj+' -j DITTO-OPENROUTER-SHIM 2>/dev/null; do :; done
+  iptables -t nat -I PREROUTING 1 -i 'dtj+' -j DITTO-OPENROUTER-SHIM
 }
 
 # Submission builds create a steady stream of images and BuildKit cache in the
