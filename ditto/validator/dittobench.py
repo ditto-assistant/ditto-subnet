@@ -66,11 +66,12 @@ _PROGRESS_STAGE_BY_STATUS: dict[str, BenchmarkProgressStage] = {
     "generating": "generating_dataset",
     "seeding": "starting_harness",
     "running": "running_benchmark",
+    "waiting_for_relay": "waiting_for_relay",
     "scoring": "finalizing",
     "done": "finalizing",
     "failed": "failed_retrying",
 }
-_STABLE_COUNT_STATUSES = {"running", "scoring", "done"}
+_STABLE_COUNT_STATUSES = {"running", "waiting_for_relay", "scoring", "done"}
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 
@@ -243,6 +244,30 @@ def _sandbox_infrastructure_failure_code(payload: dict[str, object]) -> str | No
         if isinstance(code, str) and code in _SANDBOX_INFRASTRUCTURE_CODES
         else None
     )
+
+
+_RELAY_CAUSES = frozenset(
+    {
+        "inference_lane_saturated",
+        "provider_recovery_exhausted",
+    }
+)
+
+
+def _sandbox_infrastructure_failure_detail(
+    payload: dict[str, object], code: str
+) -> str:
+    """Keep the deployed code stable while preserving an allowlisted cause."""
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        return code
+    diagnostics = failure.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return code
+    cause = diagnostics.get("relay_cause")
+    if not isinstance(cause, str) or cause not in _RELAY_CAUSES:
+        return code
+    return f"{code}:{cause}"
 
 
 @dataclass(frozen=True)
@@ -1199,10 +1224,13 @@ class DittobenchClient:
                             code=infrastructure_code,
                         )
                     if infrastructure_code is not None:
+                        infrastructure_detail = _sandbox_infrastructure_failure_detail(
+                            data, infrastructure_code
+                        )
                         raise ValidatorInfrastructureError(
                             f"run {run_id} reported validator infrastructure "
                             f"failure: {infrastructure_code}",
-                            code=infrastructure_code,
+                            code=infrastructure_detail,
                         )
                     raise DittobenchError(f"run {run_id} failed: {error}")
                 # Never sleep past the budget: the abort must keep the whole

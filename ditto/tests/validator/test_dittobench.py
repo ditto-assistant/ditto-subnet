@@ -1000,6 +1000,7 @@ async def test_submit_admission_failure_is_validator_infrastructure(
         ("generating", "generating_dataset", (None, None)),
         ("seeding", "starting_harness", (None, None)),
         ("running", "running_benchmark", (51, 114)),
+        ("waiting_for_relay", "waiting_for_relay", (51, 114)),
         ("scoring", "finalizing", (114, 114)),
         ("done", "finalizing", (114, 114)),
         ("failed", "failed_retrying", (None, None)),
@@ -1487,6 +1488,32 @@ async def test_sandbox_resource_failure_is_retryable_infrastructure(
     # wire as `failure_detail` and lands on the ticket.
     assert caught.value.code == code
     assert failure_detail(caught.value) == code
+
+
+@pytest.mark.asyncio
+async def test_relay_recovery_exhaustion_reaches_failure_detail() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "private relay error",
+                "failure": {
+                    "kind": "validator_infrastructure",
+                    "code": "model_relay_unavailable",
+                    "retryable": True,
+                    "diagnostics": {"relay_cause": "provider_recovery_exhausted"},
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=7
+            )
+    assert caught.value.code == ("model_relay_unavailable:provider_recovery_exhausted")
+    assert failure_detail(caught.value) == caught.value.code
 
 
 def test_failure_detail_falls_back_to_the_exception_when_uncoded() -> None:

@@ -27,6 +27,7 @@ _AGENT = "550e8400-e29b-41d4-a716-446655440000"
         ("starting_harness", None, None),
         ("running_benchmark", None, None),
         ("running_benchmark", 51, 114),
+        ("waiting_for_relay", 51, 114),
         ("finalizing", 114, 114),
         ("submitting_result", 114, 114),
         ("failed_retrying", None, None),

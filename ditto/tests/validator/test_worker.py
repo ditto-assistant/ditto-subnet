@@ -2460,10 +2460,14 @@ class TestRunOnce:
         # dropped silently and the dashboard freezes on the previous stage.
         declared = list(get_args(BenchmarkProgressStage))
         assert set(worker_mod._PROGRESS_STAGE_ORDER) == set(declared)
-        # The Literal is declared in lifecycle order, so ranks must follow it.
+        # The Literal is declared in lifecycle order. Relay waiting is a
+        # reversible running sub-state, so those two intentionally share rank.
         assert list(worker_mod._PROGRESS_STAGE_ORDER) == declared
-        assert list(worker_mod._PROGRESS_STAGE_ORDER.values()) == list(
-            range(len(declared))
+        ranks = list(worker_mod._PROGRESS_STAGE_ORDER.values())
+        assert ranks == sorted(ranks)
+        assert (
+            worker_mod._PROGRESS_STAGE_ORDER["waiting_for_relay"]
+            == (worker_mod._PROGRESS_STAGE_ORDER["running_benchmark"])
         )
 
     async def test_generating_dataset_advances_past_preparing(self) -> None:

@@ -23,6 +23,7 @@ BenchmarkProgressStage = Literal[
     "generating_dataset",
     "starting_harness",
     "running_benchmark",
+    "waiting_for_relay",
     "finalizing",
     "submitting_result",
     "failed_retrying",
