@@ -20,6 +20,7 @@ import inspect
 import logging
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -34,6 +35,7 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     BenchmarkProgressStage,
 )
+from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.validator import (
     ConfirmationDatasetPin,
     ValidatorHeartbeatRequest,
@@ -126,6 +128,9 @@ if TYPE_CHECKING:
     from ditto.validator.stack_health import StackHealthCollector
 
 logger = logging.getLogger(__name__)
+
+_DRAIN_HEARTBEAT_SECONDS = 5.0
+_BOOTSTRAP_SELF_RESUME_SECONDS = 30.0
 
 # A transient chain/Pylon failure setting weights is retried a few times within
 # the epoch; the ledger is durable so the next epoch recovers regardless.
@@ -348,6 +353,32 @@ _CURRENT_SLOT: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+def _stack_can_self_resume(
+    scorer: ScorerBenchmarkCapability, stack_health: ValidatorStackHealth
+) -> bool:
+    """Whether one heartbeat proves the reconciled stack is safe to serve."""
+    if (
+        scorer.status != "fresh_verified"
+        or scorer.probe is None
+        or scorer.probe.outcome != "served"
+    ):
+        return False
+    components = (
+        stack_health.ditto_subnet,
+        stack_health.dittobench_api,
+        stack_health.sandbox_docker,
+        stack_health.model_relay,
+        stack_health.pylon,
+        stack_health.ollama,
+    )
+    return all(
+        component is None
+        or not component.required
+        or (component.health == "healthy" and component.ready is True)
+        for component in components
+    )
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -393,6 +424,7 @@ class ValidatorWorker:
         self._coalesced_heartbeat_task: asyncio.Task[bool] | None = None
         self._background_heartbeat_tasks: set[asyncio.Task[bool]] = set()
         self._platform_accepted = False
+        self._bootstrap_resume_ready = False
         # Cooperative updater drains are acknowledged only after both the
         # independent scoring and weight loops have finished their current
         # unit of work. These flags are mutated without an intervening await,
@@ -1162,6 +1194,9 @@ class ValidatorWorker:
             # rejection must revoke an earlier success instead of leaving the
             # updater-visible state permanently sticky.
             self._platform_accepted = response.accepted
+            self._bootstrap_resume_ready = response.accepted and _stack_can_self_resume(
+                scorer_benchmarks, stack_health
+            )
             self._apply_lease_roster(response, advertised=capacity)
             return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
@@ -1170,6 +1205,7 @@ class ValidatorWorker:
             # that is structural rather than a rule to remember -- the roster is
             # only ever read from a response that exists.
             self._platform_accepted = False
+            self._bootstrap_resume_ready = False
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
             return False
 
@@ -2972,6 +3008,7 @@ class ValidatorWorker:
         stop: asyncio.Event,
         *,
         drain_requested: asyncio.Event | None = None,
+        bootstrap_resume: Callable[[], bool] | None = None,
     ) -> None:
         """Run independent scoring and weight loops until ``stop`` is set.
 
@@ -2988,10 +3025,19 @@ class ValidatorWorker:
             self._run_weights_forever(stop, drain_requested=drain_requested),
             name="validator-weights",
         )
+        bootstrap_resume_pending = bootstrap_resume
         try:
             while not stop.is_set():
                 if drain_requested is not None and drain_requested.is_set():
-                    await self._acknowledge_drain(stop, drain_requested)
+                    await self._acknowledge_drain(
+                        stop,
+                        drain_requested,
+                        bootstrap_resume=bootstrap_resume_pending,
+                    )
+                    # Bootstrap recovery is deliberately one-shot. Once the
+                    # process's initial drain ends, a later operator-requested
+                    # USR1 drain must wait for an explicit USR2 forever.
+                    bootstrap_resume_pending = None
                     continue
                 try:
                     self._scoring_active = True
@@ -3188,7 +3234,11 @@ class ValidatorWorker:
                 observed = current
 
     async def _acknowledge_drain(
-        self, stop: asyncio.Event, drain_requested: asyncio.Event
+        self,
+        stop: asyncio.Event,
+        drain_requested: asyncio.Event,
+        *,
+        bootstrap_resume: Callable[[], bool] | None = None,
     ) -> None:
         """Publish drained only once scoring and weight work are quiescent."""
         while self._weights_active and not stop.is_set():
@@ -3198,7 +3248,11 @@ class ValidatorWorker:
         self._admission = "draining"
         await self._report_heartbeat("idle")
         write_update_state("drained", platform_accepted=self._platform_accepted)
-        await self._wait_for_resume_or_stop(stop, drain_requested)
+        await self._wait_for_resume_or_stop(
+            stop,
+            drain_requested,
+            bootstrap_resume=bootstrap_resume,
+        )
         if not stop.is_set():
             self._admission = "accepting"
             write_update_state("ready", platform_accepted=self._platform_accepted)
@@ -3209,16 +3263,52 @@ class ValidatorWorker:
         return any(event is not None and event.is_set() for event in events)
 
     async def _wait_for_resume_or_stop(
-        self, stop: asyncio.Event, drain_requested: asyncio.Event
+        self,
+        stop: asyncio.Event,
+        drain_requested: asyncio.Event,
+        *,
+        bootstrap_resume: Callable[[], bool] | None = None,
     ) -> None:
-        """Remain quiescent until USR2 resumes work or shutdown is requested."""
-        next_bootstrap_heartbeat = 0.0
+        """Remain quiescent while keeping Platform drain state observable.
+
+        A source updater normally sends USR2 after the reconciled stack passes
+        its health checks. If that updater exits before signaling, an initial
+        bootstrap drain may recover itself after a sustained window of the
+        same signed, functional health evidence. Operator-requested drains do
+        not receive ``bootstrap_resume`` and therefore remain explicit-only.
+        """
+        now = time.monotonic()
+        next_drain_heartbeat = now + _DRAIN_HEARTBEAT_SECONDS
+        healthy_since = now if self._bootstrap_resume_ready else None
         while drain_requested.is_set() and not stop.is_set():
             now = time.monotonic()
-            if not self._platform_accepted and now >= next_bootstrap_heartbeat:
+            if now >= next_drain_heartbeat:
                 await self._report_heartbeat("idle")
                 write_update_state("drained", platform_accepted=self._platform_accepted)
-                next_bootstrap_heartbeat = now + 5.0
+                now = time.monotonic()
+                next_drain_heartbeat = now + _DRAIN_HEARTBEAT_SECONDS
+                if self._bootstrap_resume_ready:
+                    healthy_since = healthy_since or now
+                else:
+                    healthy_since = None
+            if (
+                bootstrap_resume is not None
+                and healthy_since is not None
+                and now - healthy_since >= _BOOTSTRAP_SELF_RESUME_SECONDS
+            ):
+                if bootstrap_resume():
+                    logger.info(
+                        "self-resuming orphaned bootstrap drain after %.0fs of "
+                        "accepted healthy stack heartbeats",
+                        _BOOTSTRAP_SELF_RESUME_SECONDS,
+                    )
+                    drain_requested.clear()
+                    break
+                logger.error(
+                    "bootstrap stack is healthy but resume marker could not be "
+                    "persisted; remaining drained"
+                )
+                healthy_since = now
             await ValidatorWorker._sleep_or_stop(stop, 0.05)
 
     @staticmethod

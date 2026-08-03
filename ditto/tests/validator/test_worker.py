@@ -22,7 +22,10 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgressStage,
 )
 from ditto.api_models.inference import InferenceExchangeResponse, InferenceGrantOffer
-from ditto.api_models.stack_health import ValidatorComponentHealth
+from ditto.api_models.stack_health import (
+    ValidatorComponentHealth,
+    ValidatorStackHealth,
+)
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.api_models.validator import (
     ArtifactResponse,
@@ -38,6 +41,7 @@ from ditto.api_models.validator import (
 from ditto.api_models.validator_capabilities import (
     InferenceCalibrationRoute,
     ScorerBenchmarkCapability,
+    ScorerLivenessProbe,
     V7InferenceCalibration,
 )
 from ditto.chain import ChainError
@@ -1620,6 +1624,133 @@ class TestRunOnce:
         stop.set()
         await asyncio.wait_for(task, timeout=1)
         platform.request_job.assert_awaited_once()
+
+    async def test_drained_worker_keeps_accepted_heartbeat_fresh(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._platform_accepted = True
+        worker._report_heartbeat = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        monkeypatch.setattr(worker_mod, "_DRAIN_HEARTBEAT_SECONDS", 0.0)
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+
+        task = asyncio.create_task(worker._wait_for_resume_or_stop(stop, drain))
+        for _ in range(100):
+            if worker._report_heartbeat.await_count >= 2:
+                break
+            await asyncio.sleep(0.001)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+        assert worker._report_heartbeat.await_count >= 2
+        assert drain.is_set()
+
+    async def test_healthy_bootstrap_drain_self_resumes_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._platform_accepted = True
+        worker._bootstrap_resume_ready = True
+        worker._report_heartbeat = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        monkeypatch.setattr(worker_mod, "_BOOTSTRAP_SELF_RESUME_SECONDS", 0.0)
+        persist_resume = MagicMock(return_value=True)
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+
+        await worker._wait_for_resume_or_stop(
+            stop,
+            drain,
+            bootstrap_resume=persist_resume,
+        )
+
+        persist_resume.assert_called_once_with()
+        assert not drain.is_set()
+
+    async def test_operator_drain_never_self_resumes(self) -> None:
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._platform_accepted = True
+        worker._bootstrap_resume_ready = True
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+
+        task = asyncio.create_task(worker._wait_for_resume_or_stop(stop, drain))
+        await asyncio.sleep(0.01)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+        assert drain.is_set()
+
+    def test_bootstrap_self_resume_requires_fully_serving_stack(self) -> None:
+        healthy = ValidatorComponentHealth(
+            health="healthy", required=True, observed_at=1, ready=True
+        )
+        stack = ValidatorStackHealth(
+            ditto_subnet=healthy,
+            dittobench_api=healthy,
+            sandbox_docker=healthy,
+            pylon=healthy,
+        )
+        scorer = ScorerBenchmarkCapability(
+            status="fresh_verified",
+            supported_bench_versions=(8,),
+            observed_at=1,
+            software_version="0.43.14",
+            source_revision="ab" * 20,
+            probe=ScorerLivenessProbe(
+                outcome="served",
+                observed_at=1,
+                http_status=200,
+                last_served_at=1,
+            ),
+        )
+
+        assert worker_mod._stack_can_self_resume(scorer, stack)
+        assert not worker_mod._stack_can_self_resume(
+            scorer,
+            stack.model_copy(
+                update={
+                    "pylon": ValidatorComponentHealth(
+                        health="unreachable", required=True, observed_at=1
+                    )
+                }
+            ),
+        )
+        assert not worker_mod._stack_can_self_resume(
+            scorer.model_copy(
+                update={
+                    "probe": ScorerLivenessProbe(
+                        outcome="served_degraded",
+                        observed_at=1,
+                        http_status=200,
+                        reason="identity_mismatch",
+                        last_served_at=1,
+                    )
+                }
+            ),
+            stack,
+        )
 
     async def test_heartbeat_failure_does_not_block_scoring(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])

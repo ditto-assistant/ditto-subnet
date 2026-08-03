@@ -72,7 +72,8 @@ async def _amain() -> int:
         "true",
         "yes",
     }
-    if bootstrap_should_start_drained(bootstrap_enabled):
+    bootstrap_drain_pending = bootstrap_should_start_drained(bootstrap_enabled)
+    if bootstrap_drain_pending:
         drain_requested.set()
     _install_signal_handlers(
         asyncio.get_running_loop(),
@@ -131,7 +132,13 @@ async def _amain() -> int:
                     stack_health=StackHealthCollector(config, http),
                 )
                 _apply_ditto_logging()  # re-assert: bittensor has initialised
-                await worker.run_forever(stop, drain_requested=drain_requested)
+                await worker.run_forever(
+                    stop,
+                    drain_requested=drain_requested,
+                    bootstrap_resume=(
+                        mark_bootstrap_resumed if bootstrap_drain_pending else None
+                    ),
+                )
     finally:
         write_update_state("stopping")
         telemetry.close()
