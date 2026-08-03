@@ -18,13 +18,15 @@ env:
   SANDBOX_DOCKER_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker
   DITTOBENCH_API_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-sandbox
   MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
+  PYLON_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-pylon
   # Frozen compat-2 updaters still require a relay-shaped image in their signed
   # descriptor. Build that isolated shim from the final reviewed API revision
   # that still contained the relay target; current API source intentionally does
   # not carry or execute the retired validator-owned inference path.
   MODEL_RELAY_COMPAT_REVISION: c0cac04970523326738cc704aa1bd60cd2623b22
   STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
-  PYLON_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+  PYLON_BASE_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+  PYLON_TURBOBT_REVISION: d36d1a28e761ff9d743bbcc83d091309c4d3599e
   OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
   COMPATIBILITY_EPOCH: "2"
   UPDATE_PROTOCOL: "1"
@@ -81,7 +83,7 @@ jobs:
           git_committer_email: actions@users.noreply.github.com
 
   # ---------------------------------------------------------------------------
-  # Fan-out: independent verification + the four first-party image builds all run
+  # Fan-out: independent verification + the five first-party image builds all run
   # in parallel off the release commit. Release commits use [skip ci], so each
   # re-derives from the exact published source rather than trusting a prior run.
   # ---------------------------------------------------------------------------
@@ -209,6 +211,54 @@ jobs:
             io.heyditto.validator.stack-service=sandbox-docker
           tags: |
             ${{ env.SANDBOX_DOCKER_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+
+  build-pylon:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.pylon.outputs.digest }}
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the patched Pylon image
+        id: pylon
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: Dockerfile.pylon
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            PYLON_BASE_IMAGE=${{ env.PYLON_BASE_IMAGE }}
+          build-contexts: |
+            turbobt=https://github.com/ditto-assistant/turbobt.git?ref=refs/heads/ditto/subscription-id-str&checksum=${{ env.PYLON_TURBOBT_REVISION }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/ditto-assistant/ditto-subnet
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.release.outputs.commit_sha }}
+            io.heyditto.validator.stack-service=pylon
+            io.heyditto.validator.turbobt-revision=${{ env.PYLON_TURBOBT_REVISION }}
+          tags: |
+            ${{ env.PYLON_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 
   build-dittobench:
     needs: release
@@ -351,6 +401,7 @@ jobs:
       - build-validator
       - build-sandbox-docker
       - build-dittobench
+      - build-pylon
     if: needs.release.outputs.released == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
@@ -491,6 +542,22 @@ jobs:
           docker volume rm "$volume"
           trap - EXIT
 
+      - name: Verify the patched Pylon artifact
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+          PYLON_DIGEST: ${{ needs.build-pylon.outputs.digest }}
+        run: |
+          [[ "$PYLON_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          exact="$PYLON_REPOSITORY@$PYLON_DIGEST"
+          docker pull --platform linux/amd64 "$exact"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$exact")" = "https://github.com/ditto-assistant/ditto-subnet"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.turbobt-revision" }}' "$exact")" = "$PYLON_TURBOBT_REVISION"
+          docker run --rm --platform linux/amd64 --entrypoint python "$exact" -c \
+            'from pathlib import Path; p=Path("/app/pylon_service/.venv/lib/python3.13/site-packages/turbobt/substrate/pallets/author.py"); s=p.read_text(); assert "isinstance(subscription_id_raw, str)" in s'
+
       - name: Render the digest-bound stack bundle
         run: |
           uv run python scripts/build-stack-release.py \
@@ -508,7 +575,7 @@ jobs:
             --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@${{ needs.build-dittobench.outputs.scorer_digest }}" \
             --model-relay-image "$MODEL_RELAY_REPOSITORY@${{ needs.build-dittobench.outputs.relay_digest }}" \
             --ollama-image "$OLLAMA_IMAGE" \
-            --pylon-image "$PYLON_IMAGE"
+            --pylon-image "$PYLON_REPOSITORY@${{ needs.build-pylon.outputs.digest }}"
           test "$(grep -c '^' build/stack-release/manifest.env)" = 14
           ! grep -qE '(^|[[:space:]])build:' build/stack-release/compose.yml
 

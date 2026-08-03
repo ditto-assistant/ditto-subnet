@@ -56,7 +56,7 @@ validate_image_repository() {
     SANDBOX_DOCKER_IMAGE) [[ "$2" =~ ^ghcr\.io/ditto-assistant/ditto-subnet-sandbox-docker@sha256:[0-9a-f]{64}$ ]] ;;
     DITTOBENCH_API_IMAGE) [[ "$2" =~ ^ghcr\.io/ditto-assistant/dittobench-api-sandbox@sha256:[0-9a-f]{64}$ ]] ;;
     MODEL_RELAY_IMAGE) [[ "$2" =~ ^ghcr\.io/ditto-assistant/dittobench-api-relay@sha256:[0-9a-f]{64}$ ]] ;;
-    PYLON_IMAGE) [[ "$2" =~ ^docker\.io/backenddevelopersltd/bittensor-pylon@sha256:[0-9a-f]{64}$ ]] ;;
+    PYLON_IMAGE) [[ "$2" =~ ^(ghcr\.io/ditto-assistant/ditto-subnet-pylon|docker\.io/backenddevelopersltd/bittensor-pylon)@sha256:[0-9a-f]{64}$ ]] ;;
     OLLAMA_IMAGE) [[ "$2" =~ ^docker\.io/ollama/ollama@sha256:[0-9a-f]{64}$ ]] ;;
     *) return 1 ;;
   esac

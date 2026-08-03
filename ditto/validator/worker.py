@@ -3091,7 +3091,8 @@ class ValidatorWorker:
                     await self._report_heartbeat("updating_weights")
                 outcome = await self._update_weights()
                 logger.info(
-                    "weight epoch complete: pylon_accepted=%s miner(s)=%d",
+                    "weight request accepted by Pylon: accepted=%s miner(s)=%d; "
+                    "on-chain state is observed separately",
                     outcome.submitted,
                     len(outcome.weights),
                 )

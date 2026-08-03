@@ -25,7 +25,15 @@ x-broker-control-token: &broker-control-token ${DITTOBENCH_BROKER_CONTROL_TOKEN:
 
 services:
   pylon:
-    image: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+    image: ${PYLON_IMAGE:-ditto-subnet-pylon:local}
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.pylon
+      args:
+        PYLON_BASE_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+      additional_contexts:
+        turbobt: https://github.com/ditto-assistant/turbobt.git?ref=refs/heads/ditto/subscription-id-str&checksum=d36d1a28e761ff9d743bbcc83d091309c4d3599e
     platform: linux/amd64
     restart: unless-stopped
     environment:
@@ -299,7 +307,7 @@ services:
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
       VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:7f04e17a10b5cc10cf4b72db27cc4207e175a362
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_PYLON: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+      VALIDATOR_STACK_COMPONENT_PYLON: source:d36d1a28e761ff9d743bbcc83d091309c4d3599e
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
       VALIDATOR_BOOTSTRAP_TOKEN: ${VALIDATOR_BOOTSTRAP_TOKEN:-manual}
       VALIDATOR_HTTP_TIMEOUT_SECONDS: "30"

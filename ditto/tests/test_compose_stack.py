@@ -463,6 +463,31 @@ def test_validator_service_pins_build_and_runtime_contract() -> None:
     assert 'export DITTO_SOURCE_IDENTITY="local-source:$source_revision"' in wrapper
 
 
+def test_source_stack_builds_pylon_with_the_reviewed_turbobt_fix() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    pylon = compose["services"]["pylon"]
+
+    assert pylon["image"] == "${PYLON_IMAGE:-ditto-subnet-pylon:local}"
+    assert pylon["pull_policy"] == "build"
+    assert pylon["build"]["dockerfile"] == "Dockerfile.pylon"
+    context = pylon["build"]["additional_contexts"]["turbobt"]
+    assert context.startswith(
+        "https://github.com/ditto-assistant/turbobt.git?"
+        "ref=refs/heads/ditto/subscription-id-str&checksum="
+    )
+    revision = context.rsplit("checksum=", 1)[1]
+    assert len(revision) == 40
+    assert pylon["build"]["args"]["PYLON_BASE_IMAGE"].startswith(
+        "docker.io/backenddevelopersltd/bittensor-pylon@sha256:"
+    )
+    assert (
+        compose["services"]["ditto-subnet"]["environment"][
+            "VALIDATOR_STACK_COMPONENT_PYLON"
+        ]
+        == f"source:{revision}"
+    )
+
+
 def test_validator_image_and_release_channel_share_compatibility_metadata() -> None:
     dockerfile = DOCKERFILE_PATH.read_text()
     workflow = RELEASE_WORKFLOW_PATH.read_text()
@@ -501,9 +526,9 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert (
         "docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130" in workflow
     )
-    # Validator, sandbox daemon, scorer, the frozen-updater relay shim, and the
-    # final signed stack descriptor are independently built and published from
-    # the exact release.
+    # Validator, sandbox daemon, scorer, patched Pylon, the frozen-updater relay
+    # shim, and the final signed stack descriptor are independently built and
+    # published from the exact release.
     build_action_count = sum(
         workflow.count(action)
         for action in (
@@ -511,10 +536,11 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 5
+    assert build_action_count == 6
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",
+        "ghcr.io/ditto-assistant/ditto-subnet-pylon",
         "ghcr.io/ditto-assistant/dittobench-api-sandbox",
         "ghcr.io/ditto-assistant/ditto-subnet-stack",
     ):

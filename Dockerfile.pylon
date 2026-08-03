@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1
+
+ARG PYLON_BASE_IMAGE=docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+FROM ${PYLON_BASE_IMAGE}
+
+# TurboBT is supplied as an immutable named Git context by the release
+# workflow. Installing it into Pylon's existing virtualenv preserves the
+# reviewed Pylon service image while replacing only the faulty RPC adapter.
+COPY --from=turbobt . /tmp/turbobt
+RUN PDM_BUILD_SCM_VERSION=1.3.0 uv pip install \
+      --python /app/pylon_service/.venv/bin/python \
+      --no-deps \
+      /tmp/turbobt \
+    && rm -rf /tmp/turbobt

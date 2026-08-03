@@ -33,7 +33,7 @@ MANAGED_IMAGES = {
     "VALIDATOR_IMAGE": "ghcr.io/ditto-assistant/ditto-subnet-validator",
     "SANDBOX_DOCKER_IMAGE": "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",
     "DITTOBENCH_API_IMAGE": "ghcr.io/ditto-assistant/dittobench-api-sandbox",
-    "PYLON_IMAGE": "docker.io/backenddevelopersltd/bittensor-pylon",
+    "PYLON_IMAGE": "ghcr.io/ditto-assistant/ditto-subnet-pylon",
 }
 SERVICE_IMAGE_KEYS = {
     "ditto-subnet": "VALIDATOR_IMAGE",

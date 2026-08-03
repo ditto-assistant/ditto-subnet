@@ -118,6 +118,7 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
         "build-validator",
         "build-sandbox-docker",
         "build-dittobench",
+        "build-pylon",
     }
     sign_step = _step(
         jobs["assemble-stack"]["steps"],
@@ -133,6 +134,29 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
         "assemble-stack",
         "smoke-validator-arm64",
     ]
+
+
+def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    revision = workflow["env"]["PYLON_TURBOBT_REVISION"]
+    assert len(revision) == 40
+    assert all(character in "0123456789abcdef" for character in revision)
+
+    build = workflow["jobs"]["build-pylon"]
+    publish = _step(build["steps"], "Build and publish the patched Pylon image")
+    assert publish["with"]["platforms"] == "linux/amd64"
+    context = publish["with"]["build-contexts"]
+    assert context.startswith(
+        "turbobt=https://github.com/ditto-assistant/turbobt.git?"
+        "ref=refs/heads/ditto/subscription-id-str&checksum="
+    )
+    assert context.endswith("${{ env.PYLON_TURBOBT_REVISION }}\n")
+
+    assembly = workflow["jobs"]["assemble-stack"]
+    verify = _step(assembly["steps"], "Verify the patched Pylon artifact")
+    assert "isinstance(subscription_id_raw, str)" in verify["run"]
+    render = _step(assembly["steps"], "Render the digest-bound stack bundle")
+    assert "needs.build-pylon.outputs.digest" in render["run"]
 
 
 def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> None:
