@@ -23,15 +23,8 @@ import os
 import sys
 
 args = sys.argv[1:]
-if args == ["compose", "version", "--short"]:
-    print("2.40.0")
-elif args == ["info"] or args == ["buildx", "version"]:
-    pass
-elif args[:1] == ["compose"]:
-    # Every `docker compose` invocation is a separate process, so accumulate
-    # them. `args` stays the LAST call for the assertions that only care about
-    # the command the wrapper finally exec'd.
-    capture = os.environ["FAKE_COMPOSE_CAPTURE"]
+capture = os.environ.get("FAKE_COMPOSE_CAPTURE")
+if capture:
     try:
         with open(capture) as handle:
             recorded = json.load(handle)
@@ -42,14 +35,46 @@ elif args[:1] == ["compose"]:
         "image": os.environ.get("DITTO_SUBNET_IMAGE"),
         "wallets_dir": os.environ.get("DITTO_BITTENSOR_WALLETS_DIR"),
     }
-    recorded["calls"].append(entry)
+    recorded.setdefault("docker_calls", []).append(entry)
+    if args[:1] == ["compose"] and args != ["compose", "version", "--short"]:
+        recorded["calls"].append(entry)
     recorded.update(entry)
     with open(capture, "w") as handle:
         json.dump(recorded, handle)
+
+if args == ["compose", "version", "--short"]:
+    print("2.40.0")
+elif args == ["info"] or args == ["buildx", "version"]:
+    pass
+elif args[:2] == ["kill", "--signal=USR1"]:
+    with open(os.environ["FAKE_VALIDATOR_STATE"], "w") as handle:
+        handle.write('{"platform_accepted":true,"state":"drained"}')
+elif args[:2] == ["kill", "--signal=USR2"]:
+    with open(os.environ["FAKE_VALIDATOR_STATE"], "w") as handle:
+        handle.write('{"platform_accepted":true,"state":"ready"}')
+elif args[:1] == ["exec"]:
+    with open(os.environ["FAKE_VALIDATOR_STATE"]) as handle:
+        sys.stdout.write(handle.read())
+elif args[:2] == ["inspect", "--format"]:
+    if ".Config.Env" in args[2]:
+        print(
+            "VALIDATOR_BOOTSTRAP_TOKEN="
+            + os.environ.get("FAKE_VALIDATOR_BOOTSTRAP_TOKEN", "manual")
+        )
+    elif ".State.Running" in args[2]:
+        print("true")
+    elif ".State.Health" in args[2]:
+        print(os.environ.get("FAKE_SCORER_HEALTH", "healthy"))
+    else:
+        raise SystemExit("unhandled docker inspect format: " + repr(args))
+elif args[:1] == ["compose"]:
     if "build" in args and os.environ.get("FAKE_COMPOSE_BUILD_FAIL") == "true":
         raise SystemExit(1)
     if "ps" in args:
-        sys.stdout.write(os.environ.get("FAKE_COMPOSE_PS_OUTPUT", ""))
+        if args[-1] == "ditto-subnet":
+            sys.stdout.write(os.environ.get("FAKE_VALIDATOR_PS_OUTPUT", ""))
+        else:
+            sys.stdout.write(os.environ.get("FAKE_COMPOSE_PS_OUTPUT", ""))
 else:
     raise SystemExit("unhandled wrapper docker command: " + repr(args))
 """
@@ -81,6 +106,9 @@ elif "ls-tree" in args:
     if executable:
         records.append(b"100755 " + executable.encode())
     sys.stdout.buffer.write(b"\0".join(records) + b"\0")
+elif "hash-object" in args:
+    sys.stdin.buffer.read()
+    print("a" * 40)
 elif "fetch" in args:
     if os.environ.get("FAKE_DITTOBENCH_FETCH_FAIL") == "true":
         raise SystemExit(1)
@@ -116,6 +144,8 @@ def _wrapper_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
     capture = tmp_path / "compose-capture.json"
     state_dir = tmp_path / "wrapper-state"
     state_dir.mkdir()
+    validator_state = tmp_path / "validator-state.json"
+    validator_state.write_text('{"platform_accepted":true,"state":"working"}')
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -123,6 +153,7 @@ def _wrapper_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
         "DITTO_VALIDATOR_UPDATE_STATE_DIR": str(state_dir),
         "FAKE_COMPOSE_CAPTURE": str(capture),
         "FAKE_DITTOBENCH_CHECKSUM": checksum,
+        "FAKE_VALIDATOR_STATE": str(validator_state),
         "HOME": str(tmp_path / "operator-home"),
     }
     return env, capture, state_dir
@@ -130,6 +161,10 @@ def _wrapper_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
 
 def _compose_calls(capture: Path) -> list[list[str]]:
     return [call["args"] for call in json.loads(capture.read_text())["calls"]]
+
+
+def _docker_calls(capture: Path) -> list[list[str]]:
+    return [call["args"] for call in json.loads(capture.read_text())["docker_calls"]]
 
 
 def _built_revision_marker(env: dict[str, str]) -> Path:
@@ -334,12 +369,76 @@ def test_stack_update_rebuilds_and_replaces_a_stale_scorer_image(
         "--no-build",
         "dittobench-api",
     ]
-    # The operator's own command still runs, and it runs last.
-    assert calls[-1][-2:] == ["up", "-d"]
+    # The operator's own command still runs after the targeted replacement.
+    operator_up = next(
+        index for index, call in enumerate(calls) if call[-2:] == ["up", "-d"]
+    )
+    assert operator_up > calls.index(recreate)
     assert (
         _built_revision_marker(env).read_text().strip()
         == env["FAKE_DITTOBENCH_CHECKSUM"]
     )
+
+
+def test_live_scorer_replacement_drains_and_resumes_validator(tmp_path: Path) -> None:
+    env, capture, _ = _wrapper_env(tmp_path)
+    env["FAKE_COMPOSE_PS_OUTPUT"] = "scorer-container\n"
+    env["FAKE_VALIDATOR_PS_OUTPUT"] = "validator-container\n"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "up", "-d"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = _docker_calls(capture)
+    drain_index = calls.index(["kill", "--signal=USR1", "validator-container"])
+    replace_index = next(
+        index
+        for index, call in enumerate(calls)
+        if call[-5:]
+        == [
+            "up",
+            "-d",
+            "--no-deps",
+            "--no-build",
+            "dittobench-api",
+        ]
+    )
+    resume_index = calls.index(["kill", "--signal=USR2", "validator-container"])
+    assert drain_index < replace_index < resume_index
+    assert (
+        "draining validator before reconciling the live scoring stack" in result.stderr
+    )
+
+
+def test_unhealthy_rebuilt_scorer_keeps_validator_drained(tmp_path: Path) -> None:
+    env, capture, _ = _wrapper_env(tmp_path)
+    env["FAKE_COMPOSE_PS_OUTPUT"] = "scorer-container\n"
+    env["FAKE_VALIDATOR_PS_OUTPUT"] = "validator-container\n"
+    env["FAKE_SCORER_HEALTH"] = "unhealthy"
+    env["DITTO_VALIDATOR_COMPOSE_READY_TIMEOUT_SECONDS"] = "1"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "up", "-d"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "validator remains drained" in result.stderr
+    assert ["kill", "--signal=USR1", "validator-container"] in _docker_calls(capture)
+    assert ["kill", "--signal=USR2", "validator-container"] not in _docker_calls(
+        capture
+    )
+    assert not _built_revision_marker(env).exists()
 
 
 def test_unchanged_pin_starts_the_stack_without_a_rebuild(tmp_path: Path) -> None:
@@ -364,8 +463,30 @@ def test_unchanged_pin_starts_the_stack_without_a_rebuild(tmp_path: Path) -> Non
     assert result.returncode == 0, result.stderr
     calls = _compose_calls(capture)
     assert not any("build" in call for call in calls)
-    assert len(calls) == 1
-    assert calls[0][-2:] == ["up", "-d"]
+    operator_calls = [call for call in calls if call[-2:] == ["up", "-d"]]
+    assert len(operator_calls) == 1
+
+
+def test_unchanged_live_stack_does_not_drain_for_noop_up(tmp_path: Path) -> None:
+    env, capture, _ = _wrapper_env(tmp_path)
+    _built_revision_marker(env).write_text(f"{env['FAKE_DITTOBENCH_CHECKSUM']}\n")
+    env["FAKE_COMPOSE_PS_OUTPUT"] = "scorer-container\n"
+    env["FAKE_VALIDATOR_PS_OUTPUT"] = "validator-container\n"
+    env["FAKE_VALIDATOR_BOOTSTRAP_TOKEN"] = f"source-{'a' * 40}"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "up", "-d"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = _docker_calls(capture)
+    assert ["kill", "--signal=USR1", "validator-container"] not in calls
+    assert ["kill", "--signal=USR2", "validator-container"] not in calls
 
 
 def test_scorer_rebuild_failure_stops_the_stack_command(tmp_path: Path) -> None:

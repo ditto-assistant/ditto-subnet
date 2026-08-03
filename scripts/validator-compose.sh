@@ -8,6 +8,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 STATE_DIR="${DITTO_VALIDATOR_UPDATE_STATE_DIR:-$ROOT_DIR/.validator-update}"
+RUNTIME_STATE_PATH=/tmp/ditto-validator-update-state.json
+DRAINED_VALIDATOR=""
+SCORER_REPLACEMENT_STARTED=false
+SCORER_REPLACED=false
+CLEANUP_ACTIVE=false
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -25,6 +30,109 @@ require_absolute_path() {
     *$'\n'* | *$'\r'*) die "$name must not contain a newline" ;;
   esac
 }
+
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "$name must be a positive integer"
+}
+
+compose_container() {
+  docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" \
+    ps -q "$1" 2>/dev/null || true
+}
+
+validator_runtime_state() {
+  docker exec "$1" sh -c "cat '$RUNTIME_STATE_PATH'" 2>/dev/null || true
+}
+
+validator_bootstrap_token() {
+  docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$1" \
+    2>/dev/null | awk -F= '$1=="VALIDATOR_BOOTSTRAP_TOKEN" {print substr($0,index($0,"=")+1); exit}'
+}
+
+validator_state_is() {
+  local state="$1"
+  local expected="$2"
+  [[ "$state" == *'"platform_accepted":true'* ]] && \
+    [[ "$state" == *\"state\":\"$expected\"* ]]
+}
+
+wait_for_validator_state() {
+  local container="$1"
+  local timeout="$2"
+  shift 2
+  local deadline state expected
+  deadline=$((SECONDS+timeout))
+  while ((SECONDS<deadline)); do
+    state="$(validator_runtime_state "$container")"
+    for expected in "$@"; do
+      if validator_state_is "$state" "$expected"; then
+        return 0
+      fi
+    done
+    sleep 1
+  done
+  return 1
+}
+
+wait_for_scorer_healthy() {
+  local container="$1"
+  local timeout="$2"
+  local deadline running health
+  deadline=$((SECONDS+timeout))
+  while ((SECONDS<deadline)); do
+    running="$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)"
+    health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
+    if [ "$running" = true ] && [ "$health" = healthy ]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+resume_source_validator() {
+  local container="$1"
+  local timeout="$2"
+  docker kill --signal=USR2 "$container" >/dev/null || return 1
+  wait_for_validator_state "$container" "$timeout" ready working
+}
+
+request_source_validator_drain() {
+  local container="$1"
+  local timeout="$2"
+  printf 'draining validator before reconciling the live scoring stack\n' >&2
+  docker kill --signal=USR1 "$container" >/dev/null || \
+    die "could not request validator drain before scorer replacement"
+  DRAINED_VALIDATOR="$container"
+  if ! wait_for_validator_state "$container" "$timeout" drained; then
+    resume_source_validator "$container" 30 || true
+    DRAINED_VALIDATOR=""
+    die "validator did not drain before scorer replacement"
+  fi
+}
+
+cleanup() {
+  local status="$1"
+  [ "$CLEANUP_ACTIVE" = false ] || exit "$status"
+  CLEANUP_ACTIVE=true
+  trap - EXIT INT TERM
+  set +e
+  if [ -n "$DRAINED_VALIDATOR" ]; then
+    if [ "$SCORER_REPLACEMENT_STARTED" = false ] || [ "$SCORER_REPLACED" = true ]; then
+      resume_source_validator "$DRAINED_VALIDATOR" 30 || \
+        printf 'CRITICAL: could not verify validator resume after interrupted scorer replacement\n' >&2
+    else
+      printf 'CRITICAL: scorer replacement was interrupted; validator remains drained for safe operator recovery\n' >&2
+    fi
+  fi
+  exit "$status"
+}
+
+trap 'cleanup $?' EXIT
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 
 command -v docker >/dev/null 2>&1 || die "Docker is not installed"
 command -v git >/dev/null 2>&1 || die "git is not installed"
@@ -55,9 +163,11 @@ docker buildx version >/dev/null 2>&1 || die "Docker Buildx is not installed"
 # with already-built images and during a GitHub outage; ancestry is verified
 # only before a command that can materialize a scorer image.
 materialize_context=false
+up_command=false
 for argument in "$@"; do
   case "$argument" in
-    up | build | create | run | --build) materialize_context=true ;;
+    up) materialize_context=true; up_command=true ;;
+    build | create | run | --build) materialize_context=true ;;
   esac
 done
 if [ "$materialize_context" != "true" ]; then
@@ -226,16 +336,108 @@ if [ "$built_revision" != "$checksum" ]; then
   # `up --no-deps ditto-subnet` cannot leave the previous scorer serving. A
   # stack that is not up yet needs nothing here: its first `up` starts them
   # from the image just built.
-  running="$(
-    docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" \
-      ps --all -q dittobench-api 2>/dev/null || true
-  )"
+  running="$(compose_container dittobench-api)"
   if [ -n "$running" ]; then
+    validator_container="$(compose_container ditto-subnet)"
+    if [ -n "$validator_container" ]; then
+      drain_timeout="${DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-4800}"
+      require_positive_integer \
+        DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS "$drain_timeout"
+      request_source_validator_drain "$validator_container" "$drain_timeout"
+    fi
+    SCORER_REPLACEMENT_STARTED=true
     docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" \
       up -d --no-deps --no-build dittobench-api || \
       die "could not restart dittobench-api on the rebuilt image"
+    running="$(compose_container dittobench-api)"
+    ready_timeout="${DITTO_VALIDATOR_COMPOSE_READY_TIMEOUT_SECONDS:-180}"
+    require_positive_integer \
+      DITTO_VALIDATOR_COMPOSE_READY_TIMEOUT_SECONDS "$ready_timeout"
+    if [ -z "$running" ] || ! wait_for_scorer_healthy "$running" "$ready_timeout"; then
+      die "rebuilt scorer did not become healthy; validator remains drained"
+    fi
+    SCORER_REPLACED=true
+    if [ -n "$DRAINED_VALIDATOR" ] && [ "$up_command" != true ]; then
+      resume_source_validator "$DRAINED_VALIDATOR" 30 || \
+        die "rebuilt scorer is running but validator resume could not be verified"
+      DRAINED_VALIDATOR=""
+    fi
   fi
-  printf '%s\n' "$checksum" > "$built_revision_file"
 fi
 
+if [ "$up_command" = true ]; then
+  drain_timeout="${DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-4800}"
+  ready_timeout="${DITTO_VALIDATOR_COMPOSE_READY_TIMEOUT_SECONDS:-180}"
+  require_positive_integer \
+    DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS "$drain_timeout"
+  require_positive_integer \
+    DITTO_VALIDATOR_COMPOSE_READY_TIMEOUT_SECONDS "$ready_timeout"
+  # Bind bootstrap drain state to the fully rendered source stack. Any source,
+  # pin, image, or operator configuration change gets a new token, so a
+  # replacement validator cannot claim work while Compose is still reconciling
+  # its scorer. A no-op `up` keeps the same token and remains a no-op.
+  stack_identity="$(
+    VALIDATOR_START_DRAINED=true VALIDATOR_BOOTSTRAP_TOKEN=source-template \
+      docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" \
+      config | git hash-object --stdin
+  )" || die "could not derive the source stack deployment identity"
+  [[ "$stack_identity" =~ ^[0-9a-f]{40}$ ]] || \
+    die "source stack deployment identity is malformed"
+  bootstrap_token="source-$stack_identity"
+  for argument in "$@"; do
+    case "$argument" in
+      --force-recreate | --renew-anon-volumes | -V)
+        bootstrap_token="$bootstrap_token-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+        break
+        ;;
+    esac
+  done
+
+  validator_container="$(compose_container ditto-subnet)"
+  if [ -z "$DRAINED_VALIDATOR" ] && [ -n "$validator_container" ] && \
+    [ "$(validator_bootstrap_token "$validator_container")" != "$bootstrap_token" ]; then
+    request_source_validator_drain "$validator_container" "$drain_timeout"
+  fi
+
+  SCORER_REPLACEMENT_STARTED=true
+  SCORER_REPLACED=false
+  if ! VALIDATOR_START_DRAINED=true VALIDATOR_BOOTSTRAP_TOKEN="$bootstrap_token" \
+    docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" "$@"; then
+    die "source stack reconciliation failed; validator remains drained"
+  fi
+  running="$(compose_container dittobench-api)"
+  if [ -n "$running" ] && ! wait_for_scorer_healthy "$running" "$ready_timeout"; then
+    die "reconciled scorer did not become healthy; validator remains drained"
+  fi
+  SCORER_REPLACED=true
+  validator_container="$(compose_container ditto-subnet)"
+  if [ -n "$DRAINED_VALIDATOR" ]; then
+    [ -n "$validator_container" ] || \
+      die "source stack has no running validator after reconciliation"
+    DRAINED_VALIDATOR="$validator_container"
+    wait_for_validator_state "$validator_container" "$ready_timeout" drained || \
+      die "replacement validator did not remain drained during reconciliation"
+    resume_source_validator "$validator_container" "$ready_timeout" || \
+      die "source stack is healthy but validator resume could not be verified"
+    DRAINED_VALIDATOR=""
+  elif [ -n "$validator_container" ]; then
+    state="$(validator_runtime_state "$validator_container")"
+    if validator_state_is "$state" drained; then
+      DRAINED_VALIDATOR="$validator_container"
+      resume_source_validator "$validator_container" "$ready_timeout" || \
+        die "new source validator resume could not be verified"
+      DRAINED_VALIDATOR=""
+    elif ! validator_state_is "$state" ready && ! validator_state_is "$state" working; then
+      die "source validator did not publish a safe post-reconciliation state"
+    fi
+  fi
+  if [ "$built_revision" != "$checksum" ]; then
+    printf '%s\n' "$checksum" > "$built_revision_file"
+  fi
+  exit 0
+fi
+
+if [ "$built_revision" != "$checksum" ]; then
+  printf '%s\n' "$checksum" > "$built_revision_file"
+fi
 exec docker compose --project-directory "$ROOT_DIR" -f "$COMPOSE_FILE" "$@"

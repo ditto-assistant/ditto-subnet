@@ -226,7 +226,10 @@ Two things prevent that now.
 1. `scripts/validator-compose.sh` records the revision it last built. When a
    command that can start containers runs against a **different** pin, it forces
    `docker compose build --pull dittobench-api` and replaces that container
-   before running your command. An unchanged pin does nothing, so
+   before running your command. If the source-built stack is live, the wrapper
+   first asks the validator to drain and waits for every active benchmark and
+   weight update to finish; it resumes only after the rebuilt scorer is serving.
+   An unchanged pin does nothing, so
    restarts stay fast and work without network access. A failed rebuild stops
    the command instead of starting the previous image.
 2. The validator refuses to call a scorer verified unless its identity is
