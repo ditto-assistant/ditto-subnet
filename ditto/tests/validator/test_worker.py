@@ -350,7 +350,7 @@ def _config() -> MagicMock:
     cfg.koth_rank_shares = (0.65, 0.14, 0.10, 0.07, 0.04)
     cfg.koth_dethrone_z = 1.64
     cfg.koth_confirmation_seeds = 3
-    cfg.top5_max_confirmation_seeds = 16
+    cfg.top5_max_confirmation_seeds = 32
     cfg.top5_catch_up_rate = 2
     cfg.top5_max_cohort_size = 25
     cfg.miner_emission_share = 1.0

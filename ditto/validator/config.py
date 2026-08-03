@@ -42,9 +42,11 @@ KOTH_TAIL_SIZE = 4  # ranked runners-up after the champion
 KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
-# Backwards-compatible minimum planning horizon. Retest growth is deliberately
-# unbounded: the planner extends this horizon from observed durable history.
-TOP5_MAX_CONFIRMATION_SEEDS = 16
+# Continual evidence targets a one-sided 95% uncertainty half-width no wider
+# than KOTH_MARGIN. Eight is the minimum credible variance sample; 32 is the
+# hard fleet-work stop when current variance would otherwise ask for more.
+TOP5_MIN_CONFIRMATION_SEEDS = 8
+TOP5_MAX_CONFIRMATION_SEEDS = 32
 TOP5_CATCH_UP_RATE = 2
 # Hard ceiling on the operator-requested continual retest cohort. Mirrors the
 # platform's own cap so the two agree on what an operator may ask for.
@@ -267,7 +269,7 @@ class ValidatorConfig:
     seed set). ``1`` reproduces the single-seed pre-P4 sweep, byte-identical."""
 
     top5_max_confirmation_seeds: int
-    """Maximum champion-anchored seed depth retained by the continual lane."""
+    """Hard ceiling on the variance-sized continual shared-seed target."""
 
     top5_catch_up_rate: int
     """Missing seeds a new top-five entrant may catch up per claimed round."""

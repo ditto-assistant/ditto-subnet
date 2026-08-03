@@ -20,6 +20,7 @@ from ditto.validator.weights import (
     _beats,
     _dethrone_band_scale,
     _effective_composite,
+    _elastic_confirmation_seed_ceiling,
     _entry_confirmations,
     _entry_seed_composites,
     _entry_stderr,
@@ -178,6 +179,22 @@ class TestVersionedHighScoreBandDecay:
 
 
 class TestTop5ConfirmationSet:
+    def test_elastic_ceiling_scales_between_floor_and_cap(self) -> None:
+        moderate = _e(
+            "moderate",
+            0.5,
+            bench_version=6,
+            confirmations=[0.49, 0.51],
+            seeds=[1, 2],
+        )
+
+        assert (
+            _elastic_confirmation_seed_ceiling(
+                [moderate], margin=0.007, z=1.64, maximum=32
+            )
+            == 11
+        )
+
     def test_extends_past_the_legacy_sixteen_seed_horizon(self) -> None:
         champion = _e(
             "champ",
@@ -185,14 +202,14 @@ class TestTop5ConfirmationSet:
             bench_version=6,
         )
         seed_family = confirmation_seeds([str(champion.agent_id)], version=6, count=17)
-        champion.confirmation_composites = [0.9] * 16
+        champion.confirmation_composites = [0.80, 1.00] * 8
         champion.confirmation_seeds = seed_family[:16]
         tail = _e(
             "tail",
             0.8,
             bench_version=6,
             minutes=1,
-            confirmations=[0.8] * 16,
+            confirmations=[0.70, 0.90] * 8,
             seeds=seed_family[:16],
         )
 
@@ -203,7 +220,7 @@ class TestTop5ConfirmationSet:
             dethrone_z=1.64,
             tail_size=4,
             baseline_seeds=3,
-            max_seeds=16,
+            max_seeds=32,
         )
 
         assert plan is not None
@@ -211,6 +228,33 @@ class TestTop5ConfirmationSet:
         assert {member.seeds_to_score for member in plan.members} == {
             (seed_family[16],)
         }
+
+    def test_stops_at_eight_when_seed_variance_is_already_tight(self) -> None:
+        champion = _e("champ", 0.9, bench_version=6)
+        seeds = confirmation_seeds([str(champion.agent_id)], version=6, count=8)
+        champion.confirmation_composites = [0.9] * 8
+        champion.confirmation_seeds = seeds
+        tail = _e(
+            "tail",
+            0.8,
+            bench_version=6,
+            minutes=1,
+            confirmations=[0.8] * 8,
+            seeds=seeds,
+        )
+
+        assert (
+            top5_confirmation_set(
+                [tail, champion],
+                current_version=6,
+                margin=0.007,
+                dethrone_z=1.64,
+                tail_size=4,
+                baseline_seeds=3,
+                max_seeds=32,
+            )
+            is None
+        )
 
     def test_bootstraps_champion_and_catches_up_tail(self) -> None:
         champion = _e("champ", 0.9, bench_version=6)

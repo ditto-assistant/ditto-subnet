@@ -27,6 +27,7 @@ from ditto.validator.config import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
     KOTH_BAND_DECAY_START_COMPOSITE,
+    TOP5_MIN_CONFIRMATION_SEEDS,
 )
 from ditto.validator.crn import confirmation_seeds
 
@@ -434,6 +435,68 @@ class Top5ConfirmationPlan:
     members: tuple[Top5Member, ...]
 
 
+def _elastic_confirmation_seed_ceiling(
+    entries: Sequence[LedgerEntry],
+    *,
+    margin: float,
+    z: float,
+    maximum: int,
+) -> int:
+    """Mirror Platform's variance-sized target over the emission set."""
+    floor = max(2, TOP5_MIN_CONFIRMATION_SEEDS)
+    cap = max(floor, int(maximum))
+    if margin <= 0.0 or z <= 0.0:
+        return cap
+    max_variance = 0.0
+    measured = False
+    for entry in entries:
+        history = _entry_seed_composites(entry)
+        if history is None or len(history) < 2:
+            continue
+        values = list(history.values())
+        measured = True
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+        max_variance = max(max_variance, variance)
+    if not measured:
+        return floor
+    required = math.ceil(max_variance * (z / margin) ** 2)
+    return min(cap, max(floor, required))
+
+
+def _bounded_continual_seed_set(
+    champion: LedgerEntry,
+    entries: Sequence[LedgerEntry],
+    *,
+    current_version: int,
+    ceiling: int,
+) -> tuple[int, ...]:
+    """Most-shared durable seeds first, then fresh champion-anchored CRNs."""
+    anchor = confirmation_seeds(
+        [str(champion.agent_id)], version=current_version, count=ceiling
+    )
+    anchor_order = {seed: index for index, seed in enumerate(anchor)}
+    coverage: dict[int, int] = {}
+    for entry in entries:
+        history = _entry_seed_composites(entry) or {}
+        for seed in history:
+            coverage[seed] = coverage.get(seed, 0) + 1
+    targets = sorted(
+        coverage,
+        key=lambda seed: (-coverage[seed], anchor_order.get(seed, ceiling), seed),
+    )[:ceiling]
+    if len(targets) < ceiling:
+        selected = set(targets)
+        for seed in anchor:
+            if seed in selected:
+                continue
+            targets.append(seed)
+            selected.add(seed)
+            if len(targets) == ceiling:
+                break
+    return tuple(targets)
+
+
 def top5_confirmation_set(
     entries: Sequence[LedgerEntry],
     *,
@@ -480,17 +543,20 @@ def top5_confirmation_set(
     requested = tail_size if cohort_size is None else int(cohort_size) - 1
     cohort_tail = min(max(requested, tail_size), max(1, int(max_cohort_size)) - 1)
     members = [champion, *_tail(scored, champion, cohort_tail)]
-    # The old hard 16-seed horizon permanently exhausted the lane. Extend past
-    # every seed already observed so one fresh deterministic anchor seed always
-    # exists, while retaining ``max_seeds`` as the compatibility minimum.
-    observed_seeds: set[int] = set()
-    for member in members:
-        member_map = _entry_seed_composites(member)
-        if member_map is not None:
-            observed_seeds.update(member_map)
-    cap = max(1, int(max_seeds), len(observed_seeds) + 1)
-    full = confirmation_seeds(
-        [str(champion.agent_id)], version=current_version, count=cap
+    # Size one shared target from the noisiest emission member. The extended
+    # cohort consumes spare capacity but cannot inflate the statistical budget.
+    emission_members = members[: tail_size + 1]
+    cap = _elastic_confirmation_seed_ceiling(
+        emission_members,
+        margin=margin,
+        z=dethrone_z,
+        maximum=max_seeds,
+    )
+    full = _bounded_continual_seed_set(
+        champion,
+        emission_members,
+        current_version=current_version,
+        ceiling=cap,
     )
     champion_map = _entry_seed_composites(champion) or {}
     covered = 0

@@ -31,6 +31,7 @@ class TestKothConfig:
         assert cfg.koth_rank_shares == (0.65, 0.14, 0.10, 0.07, 0.04)
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
+        assert cfg.top5_max_confirmation_seeds == 32
         assert cfg.miner_emission_share == 1.0
         assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
         # Cadence knobs stay env-driven, with these defaults.
