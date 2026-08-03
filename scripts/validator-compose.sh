@@ -13,6 +13,7 @@ DRAINED_VALIDATOR=""
 SCORER_REPLACEMENT_STARTED=false
 SCORER_REPLACED=false
 CLEANUP_ACTIVE=false
+up_command=false
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -92,6 +93,27 @@ wait_for_scorer_healthy() {
   return 1
 }
 
+running_container_is_ready() {
+  local container="$1"
+  local running health
+  running="$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)"
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
+  [ "$running" = true ] && { [ "$health" = healthy ] || [ "$health" = none ]; }
+}
+
+resume_verified_reconciled_stack() {
+  local service container validator=""
+  for service in pylon sandbox-docker dittobench-api ditto-subnet; do
+    container="$(compose_container "$service")"
+    [ -n "$container" ] && running_container_is_ready "$container" || return 1
+    if [ "$service" = ditto-subnet ]; then
+      validator="$container"
+    fi
+  done
+  validator_state_is "$(validator_runtime_state "$validator")" drained || return 1
+  resume_source_validator "$validator" 30
+}
+
 resume_source_validator() {
   local container="$1"
   local timeout="$2"
@@ -123,8 +145,25 @@ cleanup() {
     if [ "$SCORER_REPLACEMENT_STARTED" = false ] || [ "$SCORER_REPLACED" = true ]; then
       resume_source_validator "$DRAINED_VALIDATOR" 30 || \
         printf 'CRITICAL: could not verify validator resume after interrupted scorer replacement\n' >&2
+    elif resume_verified_reconciled_stack; then
+      printf 'verified reconciled source stack and resumed validator after interruption\n' >&2
     else
       printf 'CRITICAL: scorer replacement was interrupted; validator remains drained for safe operator recovery\n' >&2
+    fi
+  elif [ "$status" -ne 0 ] && [ "$up_command" = true ] && \
+    [ "$SCORER_REPLACEMENT_STARTED" = true ] && \
+    [ "$SCORER_REPLACED" = false ]; then
+    # A source-managed updater can be terminated after `docker compose up`
+    # created a healthy replacement but before this wrapper delivered USR2.
+    # That leaves the new validator permanently drained even though every
+    # component is ready. Recover only from affirmative, current evidence: all
+    # four required containers must be running/healthy and the validator must
+    # have published a platform-accepted `drained` state. Any ambiguity keeps
+    # the fail-closed behavior above.
+    if resume_verified_reconciled_stack; then
+      printf 'verified reconciled source stack and resumed new validator after interruption\n' >&2
+    else
+      printf 'CRITICAL: source stack reconciliation was interrupted; validator remains drained for safe operator recovery\n' >&2
     fi
   fi
   exit "$status"
@@ -163,7 +202,6 @@ docker buildx version >/dev/null 2>&1 || die "Docker Buildx is not installed"
 # with already-built images and during a GitHub outage; ancestry is verified
 # only before a command that can materialize a scorer image.
 materialize_context=false
-up_command=false
 for argument in "$@"; do
   case "$argument" in
     up) materialize_context=true; up_command=true ;;

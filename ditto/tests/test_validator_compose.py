@@ -75,6 +75,15 @@ elif args[:1] == ["compose"]:
             sys.stdout.write(os.environ.get("FAKE_VALIDATOR_PS_OUTPUT", ""))
         else:
             sys.stdout.write(os.environ.get("FAKE_COMPOSE_PS_OUTPUT", ""))
+    elif (
+        "up" in args
+        and "--no-deps" not in args
+        and os.environ.get("FAKE_COMPOSE_UP_FAIL") == "true"
+    ):
+        if os.environ.get("FAKE_COMPOSE_UP_LEAVES_DRAINED") == "true":
+            with open(os.environ["FAKE_VALIDATOR_STATE"], "w") as handle:
+                handle.write('{"platform_accepted":true,"state":"drained"}')
+        raise SystemExit(1)
 else:
     raise SystemExit("unhandled wrapper docker command: " + repr(args))
 """
@@ -447,6 +456,63 @@ def test_unhealthy_rebuilt_scorer_keeps_validator_drained(tmp_path: Path) -> Non
         capture
     )
     assert not _built_revision_marker(env).exists()
+
+
+def test_interrupted_reconciliation_resumes_only_after_full_health_verification(
+    tmp_path: Path,
+) -> None:
+    """An outer source updater may time out just after Compose creates services.
+
+    The wrapper must not strand that platform-accepted validator in bootstrap
+    drain when the complete replacement is already healthy.
+    """
+    env, capture, _ = _wrapper_env(tmp_path)
+    _built_revision_marker(env).write_text(f"{env['FAKE_DITTOBENCH_CHECKSUM']}\n")
+    env["FAKE_COMPOSE_PS_OUTPUT"] = "service-container\n"
+    env["FAKE_VALIDATOR_PS_OUTPUT"] = "validator-container\n"
+    env["FAKE_COMPOSE_UP_FAIL"] = "true"
+    env["FAKE_COMPOSE_UP_LEAVES_DRAINED"] = "true"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "up", "-d"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "verified reconciled source stack and resumed validator after interruption"
+        in result.stderr
+    )
+    assert ["kill", "--signal=USR2", "validator-container"] in _docker_calls(capture)
+
+
+def test_interrupted_reconciliation_stays_drained_when_a_component_is_missing(
+    tmp_path: Path,
+) -> None:
+    env, capture, _ = _wrapper_env(tmp_path)
+    _built_revision_marker(env).write_text(f"{env['FAKE_DITTOBENCH_CHECKSUM']}\n")
+    env["FAKE_VALIDATOR_PS_OUTPUT"] = "validator-container\n"
+    env["FAKE_COMPOSE_UP_FAIL"] = "true"
+    env["FAKE_COMPOSE_UP_LEAVES_DRAINED"] = "true"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "up", "-d"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "validator remains drained for safe operator recovery" in result.stderr
+    assert ["kill", "--signal=USR2", "validator-container"] not in _docker_calls(
+        capture
+    )
 
 
 def test_unchanged_pin_starts_the_stack_without_a_rebuild(tmp_path: Path) -> None:
