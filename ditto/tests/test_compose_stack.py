@@ -276,7 +276,7 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     assert parsed.scheme == "https"
     assert parsed.netloc == "github.com"
     assert parsed.path == "/ditto-assistant/dittobench-api.git"
-    assert query.get("ref") == ["refs/heads/agent/openrouter-network-shim"]
+    assert query.get("ref") == ["refs/heads/main"]
     assert set(query) == {"ref", "checksum"}
     assert len(query["checksum"]) == 1
     checksum = query["checksum"][0]
@@ -286,7 +286,7 @@ def test_dittobench_context_has_one_full_ref_checksum_pin() -> None:
     # The checksum must remain the exact reviewed source commit. A moving branch
     # paired with a stale checksum makes the documented local Compose build
     # fail before the release materializer can replace the source context.
-    assert checksum == "819b60d43f728ef40ffbe8f2d62f3fd8092551f8"
+    assert checksum == "7f04e17a10b5cc10cf4b72db27cc4207e175a362"
 
     compose = yaml.safe_load(raw_compose)
     expected = compose["x-dittobench-build-context"]
