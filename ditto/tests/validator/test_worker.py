@@ -973,6 +973,83 @@ class TestRunOnce:
         assert outcome.queue_depth == 2
         assert pending == {}
 
+    async def test_empty_initial_poll_waits_for_sibling_claim_to_resolve(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fast 204 must not race a slower successful sibling claim.
+
+        Platform allocation serializes parts of concurrent claims. An empty
+        slot can therefore receive its 204 before a sibling's successful
+        response returns, even though both requests started together. Looking
+        only at ``running`` in that window retires the empty slot for the whole
+        sweep and leaves the validator at one active benchmark.
+        """
+        long_job = _job("5MinerA" + "x" * 41, slot_id="slot-0")
+        late_job = _job("5MinerB" + "x" * 41, slot_id="slot-1")
+        slot_zero_claim_started = asyncio.Event()
+        release_slot_zero_claim = asyncio.Event()
+        slot_one_returned_empty = asyncio.Event()
+        late_job_claimed = asyncio.Event()
+        slot_zero_claimed = False
+        slot_one_polls = 0
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            nonlocal slot_one_polls, slot_zero_claimed
+            if slot_id == "slot-0":
+                if slot_zero_claimed:
+                    return None
+                slot_zero_claimed = True
+                slot_zero_claim_started.set()
+                await release_slot_zero_claim.wait()
+                return long_job
+            slot_one_polls += 1
+            if slot_one_polls == 1:
+                await slot_zero_claim_started.wait()
+                slot_one_returned_empty.set()
+                return None
+            if slot_one_polls == 2:
+                late_job_claimed.set()
+                return late_job
+            return None
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 2
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 2
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        monkeypatch.setattr(
+            worker_mod, "_IDLE_SLOT_REPOLL_SECONDS", 0.01, raising=False
+        )
+        release_long_job = asyncio.Event()
+
+        async def score(job: JobResponse) -> ScoreReport:
+            if job.slot_id == "slot-0":
+                await release_long_job.wait()
+                return _report("run-slot-0", 0.7)
+            return _report("run-slot-1", 0.8)
+
+        monkeypatch.setattr(worker, "_score_job", score)
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.wait_for(slot_one_returned_empty.wait(), timeout=2)
+        # Let the empty response reach the worker before the successful sibling
+        # claim resolves. This is the production ordering that exposed the race.
+        await asyncio.sleep(0)
+        release_slot_zero_claim.set()
+        await asyncio.wait_for(late_job_claimed.wait(), timeout=2)
+        release_long_job.set()
+        outcome = await asyncio.wait_for(sweep, timeout=5)
+
+        assert slot_one_polls >= 2
+        assert outcome.queue_depth == 2
+
     async def test_idle_slot_dispatches_retests_while_sibling_holds_canonical_lease(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

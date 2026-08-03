@@ -617,12 +617,13 @@ class ValidatorWorker:
             budget_lock = asyncio.Lock()
             claimed = 0
             running = 0
-            # Set whenever a slot finishes a lease, so a waiting slot re-polls
-            # the instant the pool changes instead of sitting out the interval.
-            # Cleared and read under ``budget_lock`` together with ``running``,
-            # which is what makes the wakeup impossible to miss: a sibling that
-            # has not yet decremented is a sibling whose ``set`` is still to come.
-            lease_finished = asyncio.Event()
+            pending_claims = 0
+            # Set whenever a claim resolves or a slot finishes a lease, so a
+            # waiting slot re-polls the instant the pool changes instead of
+            # sitting out the interval. Cleared and read under ``budget_lock``
+            # together with ``running`` and ``pending_claims``, which makes the
+            # wakeup impossible to miss.
+            lease_state_changed = asyncio.Event()
             # Only one idle slot needs to fan out the host-level continual
             # retest lane.  Platform claims remain slot-bound, so that one
             # dispatcher can fill every currently free slot while ordinary
@@ -631,7 +632,7 @@ class ValidatorWorker:
             idle_retest_dispatch = asyncio.Lock()
 
             async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
-                nonlocal claimed, running
+                nonlocal claimed, pending_claims, running
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
@@ -642,11 +643,14 @@ class ValidatorWorker:
                             if claimed >= self._config.queue_limit:
                                 break
                             claimed += 1
+                            pending_claims += 1
                         try:
                             job = await self._platform.request_job(slot_id=slot_id)
                         except PlatformError as error:
                             async with budget_lock:
                                 claimed -= 1
+                                pending_claims -= 1
+                                lease_state_changed.set()
                             logger.warning(
                                 "job request failed for %s; slot is isolated: %s",
                                 slot_id,
@@ -657,10 +661,18 @@ class ValidatorWorker:
                         if job is None:
                             async with budget_lock:
                                 claimed -= 1
-                                siblings_running = running
-                                if siblings_running:
-                                    lease_finished.clear()
-                            if siblings_running == 0:
+                                pending_claims -= 1
+                                siblings_running = bool(running)
+                                sibling_work_possible = bool(
+                                    siblings_running or pending_claims
+                                )
+                                if sibling_work_possible:
+                                    lease_state_changed.clear()
+                                else:
+                                    # Wake empty siblings that were waiting for
+                                    # this last outstanding claim to settle.
+                                    lease_state_changed.set()
+                            if not sibling_work_possible:
                                 # Nothing of this worker's is in flight, so an
                                 # empty poll really is an empty queue. End the
                                 # sweep and let the ordinary sweep cadence bring
@@ -676,7 +688,7 @@ class ValidatorWorker:
                             # per-slot leases.  A single host-level dispatcher
                             # is therefore enough to fan out across all free
                             # slots without duplicate local fanouts.
-                            if not idle_retest_dispatch.locked():
+                            if siblings_running and not idle_retest_dispatch.locked():
                                 async with idle_retest_dispatch:
                                     await self._run_top5_confirmation_lane(
                                         stop_requested=stop_requested,
@@ -697,9 +709,12 @@ class ValidatorWorker:
                                 _IDLE_SLOT_REPOLL_SECONDS,
                                 stop_requested,
                                 drain_requested,
-                                lease_finished,
+                                lease_state_changed,
                             )
                             continue
+                        async with budget_lock:
+                            pending_claims -= 1
+                            lease_state_changed.set()
                         slot_claimed += 1
                         if job.slot_id != slot_id:
                             await self._report_ticket_failed(
@@ -825,7 +840,7 @@ class ValidatorWorker:
                         finally:
                             async with budget_lock:
                                 running -= 1
-                                lease_finished.set()
+                                lease_state_changed.set()
                     return slot_scored, slot_failed, slot_claimed
                 finally:
                     _CURRENT_SLOT.reset(token)
