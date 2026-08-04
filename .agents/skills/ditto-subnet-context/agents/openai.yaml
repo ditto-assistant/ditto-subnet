@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ditto Subnet Context"
+  short_description: "Route monorepo work to exact context"
+  default_prompt: "Use $ditto-subnet-context to locate the owning surfaces, invariants, and validation for this task."

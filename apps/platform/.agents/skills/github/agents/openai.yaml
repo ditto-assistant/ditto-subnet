@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub for Subnet Platform"
+  short_description: "Route Platform PR work through the monorepo"
+  default_prompt: "Use $github to manage this Platform change in the ditto-subnet monorepo stack."

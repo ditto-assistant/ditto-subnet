@@ -116,7 +116,6 @@ paths = [
 description = "Subnet API, database migrations, relays, and control plane"
 depends_on = ["screening_protocol"]
 paths = [
-  "apps/platform/.agents/**",
   "apps/platform/alembic/**",
   "apps/platform/ditto/**",
   "apps/platform/docker/**",

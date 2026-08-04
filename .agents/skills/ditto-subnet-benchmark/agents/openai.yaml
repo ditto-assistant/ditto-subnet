@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ditto Subnet Benchmark"
+  short_description: "Protect scoring and benchmark integrity"
+  default_prompt: "Use $ditto-subnet-benchmark to trace and change this scoring, validator, or benchmark behavior safely."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ditto Subnet Worktree"
+  short_description: "Create safe monorepo worktrees"
+  default_prompt: "Use $ditto-subnet-worktree to create an isolated ditto-subnet worktree for this task."

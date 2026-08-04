@@ -1,5 +1,23 @@
 # Repository guidance
 
+## Monorepo context
+
+This repository owns the complete public SN118 system: miner and validator code
+at the root, Platform and Backroom under `apps/`, services and workers under
+`services/` and `workers/`, shared contracts under `packages/`, benchmark
+research under `research/`, and cloud state under `infra/`.
+
+Start substantial work with:
+
+```bash
+python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py "<task>"
+```
+
+Use `.agents/skills/ditto-subnet-worktree` for isolation. Do not use
+multi-repository temp clones or cross-repository synchronization for components
+already present in this tree. Read the nearest nested `AGENTS.md` or `CLAUDE.md`
+before editing a component.
+
 ## Semantic-release commit types
 
 - Do not use `test:` as a commit or pull-request title prefix; it is not a valid

@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "topics": [
+    {
+      "id": "overview",
+      "title": "Monorepo ownership and change routing",
+      "keywords": ["monorepo", "architecture", "full stack", "ownership", "where", "component", "cross surface", "new chat"],
+      "summary": "Route work by owned runtime surface and preserve atomic cross-component changes.",
+      "owns": ["release/components.toml", "docker-compose.yml"],
+      "read": ["AGENTS.md", "docs/FULL-STACK-UPDATES.md", "docs/MONOREPO-RELEASES.md"],
+      "search": ["rg -n '^\\[component\\.|^paths =|^depends_on =' release/components.toml", "find apps services packages research infra -maxdepth 2 -type d | sort"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "git diff --check"],
+      "invariants": ["One repository commit is the source identity for every affected component.", "Do not recreate cross-repository synchronization for code already in this tree."],
+      "related": ["release-delivery", "contracts", "worktrees"]
+    },
+    {
+      "id": "worktrees",
+      "title": "Isolated worktrees and stacked pull requests",
+      "keywords": ["worktree", "branch", "pr", "pull request", "stack", "gh stack", "rebase", "resync", "checkout"],
+      "summary": "Use one lightweight monorepo worktree and a noninteractive gh stack.",
+      "owns": [".agents/skills/ditto-subnet-worktree", ".agents/skills/github"],
+      "read": [".agents/skills/ditto-subnet-worktree/SKILL.md", ".agents/skills/github/SKILL.md"],
+      "search": ["git worktree list", "gh stack view --json"],
+      "validate": ["git status --short --branch", "gh stack view --json"],
+      "invariants": ["Never mutate a dirty source checkout to obtain isolation.", "Never merge unless the user separately authorizes it."],
+      "related": ["overview"]
+    },
+    {
+      "id": "validator-miner",
+      "title": "Validator, miner CLI, chain, and Compose runtime",
+      "keywords": ["validator", "miner", "weights", "chain", "pylon", "heartbeat", "lease", "compose", "hotkey", "wallet"],
+      "summary": "The validator evaluates leased jobs and sets weights; the miner CLI packages, pays for, and uploads agents.",
+      "owns": ["ditto/validator", "ditto/miner_cli", "ditto/chain", "docker-compose.yml"],
+      "read": ["docs/VALIDATOR.md", "docs/MINER.md", "docs/UNTRUSTED-EXECUTION-RUNBOOK.md"],
+      "search": ["rg -n 'request_job|submit_score|set_weights|heartbeat' ditto/validator", "rg -n 'upload|payment|tarball' ditto/miner_cli"],
+      "validate": ["uv run pytest ditto/tests/validator ditto/tests/miner_cli -q", "RELAY_API_KEY=validation-placeholder docker compose config --quiet"],
+      "invariants": ["The validator is stateless; durable queue and score state belong to Platform.", "Never expose signing material or provider credentials to untrusted jobs."],
+      "related": ["dittobench-scoring", "contracts", "release-delivery"]
+    },
+    {
+      "id": "platform-api",
+      "title": "Platform API, database, migrations, and queue control",
+      "keywords": ["platform", "api", "fastapi", "database", "postgres", "alembic", "migration", "queue", "ticket", "lease", "admin endpoint"],
+      "summary": "Platform owns HTTP contracts, durable state, scheduling, admission, leases, and administrative control.",
+      "owns": ["apps/platform/ditto/api_server", "apps/platform/ditto/api_models", "apps/platform/ditto/db", "apps/platform/alembic"],
+      "read": ["apps/platform/CLAUDE.md", "apps/platform/docs/submission-contract.md", "apps/platform/docs/validator-retry-model.md"],
+      "search": ["rg -n 'APIRouter|@router|create_api_server' apps/platform/ditto/api_server", "rg -n 'down_revision|safe_add_column|safe_drop_column' apps/platform/alembic apps/platform/ditto/db"],
+      "validate": ["cd apps/platform && python scripts/check_migration_order.py origin/main", "cd apps/platform && make lint lint-copy typecheck test"],
+      "invariants": ["Alembic must have exactly one head and hot-table migrations must use the safe helpers.", "Platform API changes mark Backroom affected; dashboard-only changes do not."],
+      "related": ["backroom", "contracts", "screener-capacity"]
+    },
+    {
+      "id": "platform-dashboard",
+      "title": "Platform operator dashboard",
+      "keywords": ["dashboard", "frontend", "leaderboard", "overview", "submissions", "ui", "react", "vite"],
+      "summary": "The Platform dashboard visualizes public and operator-facing Platform data without owning API semantics.",
+      "owns": ["apps/platform/dashboard"],
+      "read": ["apps/platform/dashboard/package.json", "apps/platform/README.md"],
+      "search": ["rg -n 'createRoute|useQuery|fetch\\(' apps/platform/dashboard/src", "rg -n 'leaderboard|submission|pipeline' apps/platform/dashboard/src"],
+      "validate": ["cd apps/platform/dashboard && pnpm check", "cd apps/platform/dashboard && pnpm test", "cd apps/platform/dashboard && pnpm build"],
+      "invariants": ["Dashboard-only changes do not affect Backroom release selection.", "Displayed rank and score semantics must come from authoritative Platform responses."],
+      "related": ["platform-api"]
+    },
+    {
+      "id": "backroom",
+      "title": "Public subnet Backroom Worker",
+      "keywords": ["backroom", "cloudflare worker", "oauth", "admin", "operator", "review", "wrangler", "dittobench.ai"],
+      "summary": "The public SN118 operator console runs as a Cloudflare Worker and calls Platform administrative APIs.",
+      "owns": ["apps/backroom"],
+      "read": ["apps/backroom/AGENTS.md", "apps/backroom/docs/oauth.md", "apps/backroom/docs/platform-contract-sync.md"],
+      "search": ["rg -n 'DITTO_ADMIN_API_TOKEN|GOOGLE_CLIENT|SESSION_SECRET' apps/backroom", "rg -n 'admin.service|platform-api' apps/backroom/src"],
+      "validate": ["cd apps/backroom && pnpm check", "cd apps/backroom && pnpm test", "cd apps/backroom && pnpm build"],
+      "invariants": ["Keep OAuth, administrator lists, sessions, and Platform tokens out of browser code.", "Generate the Platform contract locally; never dispatch to a sibling repository."],
+      "related": ["platform-api", "release-delivery", "infra-cloud"]
+    },
+    {
+      "id": "screener-capacity",
+      "title": "Screener queue, autoscaling, Targon, GCE, and trusted builds",
+      "keywords": ["screener", "screening", "capacity", "autoscale", "targon", "gce", "builder", "kaniko", "rental", "scale zero", "worker"],
+      "summary": "Platform queues work; the fenced controller reconciles Targon-first capacity with bounded GCE fallback and a separate trusted builder.",
+      "owns": ["services/screener-orchestrator", "apps/platform/ditto/api_server/endpoints/admin_screener_capacity.py", "infra/terraform/stacks/gcp-platform"],
+      "read": ["infra/docs/screener-scaling.md", "apps/platform/docs/screener-protocol.md", "docs/UNTRUSTED-EXECUTION-RUNBOOK.md"],
+      "search": ["rg -n 'Targon|GCE|fence|epoch|heartbeat|scale' services/screener-orchestrator", "rg -n 'screener|builder' .github/workflows infra/terraform/stacks/gcp-platform"],
+      "validate": ["uv run --project services/screener-orchestrator pytest services/screener-orchestrator/tests -q", "terraform -chdir=infra/terraform/stacks/gcp-platform validate"],
+      "invariants": ["Targon is primary and GCE normally targets zero; fallback remains bounded and independently fenced.", "Untrusted builds never receive cloud, GitHub, Platform, or provider credentials."],
+      "related": ["platform-api", "release-delivery", "infra-cloud"]
+    },
+    {
+      "id": "dittobench-scoring",
+      "title": "DittoBench execution, v8 scoring, and inference relay",
+      "keywords": ["dittobench", "scorer", "scoring", "v8", "benchmark", "relay", "sandbox", "run size", "efficiency", "seed"],
+      "summary": "DittoBench executes untrusted harnesses, enforces protocol contracts, and computes the versioned score consumed by validators.",
+      "owns": ["services/dittobench-api/cmd", "services/dittobench-api/internal", "services/dittobench-api/PROTOCOL.md"],
+      "read": ["services/dittobench-api/README.md", "services/dittobench-api/docs/seed-and-scoring.md", "services/dittobench-api/docs/relative-efficiency-bonus-spec.md"],
+      "search": ["rg -n 'BenchVersion|v8|Composite|Score' services/dittobench-api/internal services/dittobench-api/cmd", "rg -n 'relay|inference|embedding' services/dittobench-api/cmd services/dittobench-api/internal"],
+      "validate": ["cd services/dittobench-api && go test ./...", "uv run pytest ditto/tests/test_validator_compose.py ditto/tests/test_compose_stack.py -q"],
+      "invariants": ["Research adapters do not create alternate production scoring paths.", "Any scoring change must preserve explicit version negotiation and frozen calibration inputs."],
+      "related": ["validator-miner", "research-adapters", "contracts"]
+    },
+    {
+      "id": "research-adapters",
+      "title": "Datagen research and third-party benchmark adapters",
+      "keywords": ["research", "datagen", "longmemeval", "openclaw", "hermes", "adapter", "calibration", "baseline", "provider study"],
+      "summary": "Research data, calibration evidence, and third-party adapters live beside DittoBench but outside production score semantics unless deliberately promoted.",
+      "owns": ["research/dittobench-datagen", "services/dittobench-api/integrations", "services/dittobench-api/docs"],
+      "read": ["services/dittobench-api/docs/calibration-trust.md", "services/dittobench-api/docs/longmemeval-benchmark/README.md", "services/dittobench-api/integrations/longmemeval/README.md"],
+      "search": ["find research/dittobench-datagen services/dittobench-api/integrations -maxdepth 3 -type f | sort", "rg -n 'baseline|calibration|adapter|judge' research/dittobench-datagen services/dittobench-api/integrations"],
+      "validate": ["cd services/dittobench-api && go test ./...", "cd services/dittobench-api/integrations/longmemeval && python -m pytest -q"],
+      "invariants": ["Keep raw evidence and reproducible manifests with research conclusions.", "Do not change v8 scoring merely to improve an adapter result."],
+      "related": ["dittobench-scoring"]
+    },
+    {
+      "id": "contracts",
+      "title": "Cross-component protocols and generated contracts",
+      "keywords": ["contract", "protocol", "openapi", "api model", "schema", "wire", "generated", "compatibility"],
+      "summary": "Shared wire and screening contracts must change atomically with every producer, consumer, generated artifact, and compatibility test.",
+      "owns": ["packages/ditto-screening-protocol", "ditto/api_models", "apps/platform/ditto/api_models", "apps/backroom/src/generated"],
+      "read": ["apps/platform/docs/screener-protocol.md", "services/dittobench-api/PROTOCOL.md", "apps/backroom/docs/platform-contract-sync.md"],
+      "search": ["rg -n 'contract|protocol|schema|api_models' packages ditto apps/platform/ditto apps/backroom/scripts", "rg -n 'generate|generated' apps/backroom/scripts apps/platform/scripts scripts"],
+      "validate": ["uv run pytest ditto/tests/contract apps/platform/ditto/tests/contract -q", "cd apps/backroom && pnpm check && pnpm test"],
+      "invariants": ["Change producers and consumers in one stack, not through bot PRs.", "Generated artifacts must identify the same monorepo revision as their source."],
+      "related": ["platform-api", "backroom", "validator-miner", "dittobench-scoring"]
+    },
+    {
+      "id": "release-delivery",
+      "title": "Affected components, semantic release, builds, and deployments",
+      "keywords": ["release", "semantic release", "deploy", "build", "affected", "version", "image", "rollback", "github actions", "ci"],
+      "summary": "The affected-component graph selects versioned artifacts and automatic application deploys from one exact release commit.",
+      "owns": ["release/components.toml", ".github/workflows/release.yml", ".github/workflows/platform-deploy.yml", ".github/workflows/screener-controller-deploy.yml"],
+      "read": ["docs/MONOREPO-RELEASES.md", "docs/FULL-STACK-UPDATES.md", "infra/docs/ci-bootstrap.md"],
+      "search": ["rg -n 'needs\\.|uses:|environment:|if:' .github/workflows/release.yml", "rg -n '^\\[component\\.|depends_on|paths' release/components.toml"],
+      "validate": ["uv run pytest ditto/tests/test_release_plan.py ditto/tests/test_release_workflow.py -q", "git diff --check"],
+      "invariants": ["A fix releases every affected component; infra changes remain protected plan/apply.", "API changes affect Backroom, dashboard-only changes do not."],
+      "related": ["infra-cloud", "screener-capacity", "backroom"]
+    },
+    {
+      "id": "infra-cloud",
+      "title": "GCP, Cloudflare, Terraform, Ansible, and secrets",
+      "keywords": ["infra", "terraform", "ansible", "gcp", "gcloud", "cloudflare", "secret", "wif", "iam", "oauth", "domain", "vm"],
+      "summary": "Terraform owns reviewed cloud state; GitHub OIDC identities deploy applications; Ansible converges hosts; secrets stay in provider stores.",
+      "owns": ["infra/terraform", "infra/ansible", "infra/docs"],
+      "read": ["infra/docs/ci-bootstrap.md", "infra/docs/screener-scaling.md", "apps/backroom/docs/oauth.md"],
+      "search": ["rg -n 'workload_identity|service_account|secret|cloudflare' infra/terraform", "rg -n 'deploy|systemd|pm2|worker' infra/ansible .github/workflows"],
+      "validate": ["terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check", "terraform -chdir=infra/terraform/stacks/gcp-platform validate", "terraform -chdir=infra/terraform/stacks/cloudflare-dittobench validate"],
+      "invariants": ["Never read, print, or persist provider secret values while testing integrations.", "Automatic app deploys and protected infrastructure apply are separate authority boundaries."],
+      "related": ["release-delivery", "screener-capacity", "backroom"]
+    }
+  ]
+}

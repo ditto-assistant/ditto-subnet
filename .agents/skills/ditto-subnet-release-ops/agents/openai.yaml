@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ditto Subnet Release Ops"
+  short_description: "Operate releases, capacity, and infra"
+  default_prompt: "Use $ditto-subnet-release-ops to change or diagnose this release, deployment, screener-capacity, or infrastructure path."

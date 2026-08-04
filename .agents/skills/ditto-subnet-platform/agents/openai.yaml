@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ditto Subnet Platform"
+  short_description: "Work across Platform and Backroom"
+  default_prompt: "Use $ditto-subnet-platform to implement this Platform or Backroom change with the correct contracts and tests."
