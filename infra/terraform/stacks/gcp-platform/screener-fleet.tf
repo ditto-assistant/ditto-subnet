@@ -56,6 +56,16 @@ variable "screener_fleet_readiness_port" {
   default     = 8099
 }
 
+variable "screener_fleet_release_sha" {
+  description = "Exact semantic-release source commit booted by every fresh GCE screener. Required when the fleet is enabled; mutable branches are forbidden."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.screener_fleet_release_sha == "" || can(regex("^[0-9a-f]{40}$", var.screener_fleet_release_sha))
+    error_message = "screener_fleet_release_sha must be empty or a full lowercase commit SHA."
+  }
+}
+
 variable "screener_fleet_image" {
   description = "Boot image for fleet instances. Default is stock Debian 13. After the ditto-subnet screener bake publishes the golden family, select it for faster first claim. bootstrap-screener.sh is idempotent and stores no baked credential."
   type        = string
@@ -106,6 +116,13 @@ locals {
   screener_fleet_secrets_count = (var.enable_screener_fleet || var.enable_screener_fleet_secrets) ? 1 : 0
   screener_queue_metric        = "custom.googleapis.com/ditto/screener/queue_depth"
   screener_fleet_tag           = "ditto-screener-fleet"
+}
+
+check "screener_fleet_uses_released_source" {
+  assert {
+    condition     = !var.enable_screener_fleet || can(regex("^[0-9a-f]{40}$", var.screener_fleet_release_sha))
+    error_message = "enable_screener_fleet requires screener_fleet_release_sha at an immutable semantic-release commit."
+  }
 }
 
 # --- Read-only deploy key for the private ditto-subnet monorepo ---------------
@@ -195,7 +212,7 @@ resource "google_compute_instance_template" "screener_fleet" {
       project           = var.project
       deploy_key_secret = google_secret_manager_secret.screener_repo_deploy_key[0].secret_id
       repo_url          = "git@github.com:ditto-assistant/ditto-subnet.git"
-      git_ref           = "main"
+      git_revision      = var.screener_fleet_release_sha
       platform_api_url  = "https://${var.api_domain_prod}"
       screener_hotkey   = "5G6fGXnXFYdLM3ZyAm9whUbCY4ziQzcbMiTEqZB5c9KekTtR"
       netuid            = 118

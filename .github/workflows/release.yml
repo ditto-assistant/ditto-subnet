@@ -185,12 +185,44 @@ jobs:
       - name: Set up Python 3.11
         run: uv python install 3.11
 
+      - name: Set up Python 3.12 for Platform and screener verification
+        if: >-
+          needs.plan.outputs.platform == 'true' ||
+          needs.plan.outputs.screener == 'true'
+        run: uv python install 3.12
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: needs.plan.outputs.backroom == 'true'
+        with:
+          version: 10.34.5
+          run_install: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: >-
+          needs.plan.outputs.platform == 'true' ||
+          needs.plan.outputs.backroom == 'true'
+        with:
+          node-version: 24
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        if: needs.plan.outputs.dittobench_api == 'true'
+        with:
+          go-version: "1.23"
+          cache-dependency-path: services/dittobench-api/go.sum
+
       - name: Install Rust for starter-kit verification
         if: needs.plan.outputs.miner_starter_kit == 'true'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: stable
           components: rustfmt
+
+      - name: Install Go for datagen verification
+        if: needs.plan.outputs.dittobench_datagen == 'true'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: research/dittobench-datagen/go.mod
 
       - name: Cache starter-kit Cargo dependencies
         if: needs.plan.outputs.miner_starter_kit == 'true'
@@ -221,6 +253,62 @@ jobs:
           cargo build --locked --verbose
           cargo test --locked --verbose
           python3 -m unittest scripts/test_submission_lab.py scripts/test_submission_workbench.py
+
+      - name: Gate Platform release on exact merge source
+        if: needs.plan.outputs.platform == 'true'
+        working-directory: apps/platform
+        run: |
+          uv sync --locked --group dev --python 3.12
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy ditto/
+          uv run pytest
+          npm ci
+          npm run lint:copy
+          npm --prefix dashboard ci
+          npm --prefix dashboard run check
+          npm --prefix dashboard test
+          npm --prefix dashboard run build
+
+      - name: Gate Backroom release on exact merge source
+        if: needs.plan.outputs.backroom == 'true'
+        working-directory: apps/backroom
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm generate-routes
+          pnpm check
+          pnpm test
+          pnpm build
+
+      - name: Gate DittoBench API release on exact merge source
+        if: needs.plan.outputs.dittobench_api == 'true'
+        working-directory: services/dittobench-api
+        run: go test ./...
+
+      - name: Gate DittoBench datagen release on exact merge source
+        if: needs.plan.outputs.dittobench_datagen == 'true'
+        working-directory: research/dittobench-datagen
+        run: go test ./...
+
+      - name: Gate screener release on exact merge source
+        if: needs.plan.outputs.screener == 'true'
+        working-directory: workers/screener
+        run: |
+          uv sync --locked --group dev --python 3.12
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy ditto_screener
+          uv run pytest -m "not integration"
+
+      - name: Gate screener orchestrator release on exact merge source
+        if: needs.plan.outputs.screener_orchestrator == 'true'
+        working-directory: services/screener-orchestrator
+        run: |
+          uv sync --locked --group dev --python 3.11
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy screener_capacity
+          uv run pytest
 
   deploy_platform:
     needs: [plan, release]
@@ -278,6 +366,7 @@ jobs:
       always() &&
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener_orchestrator == 'true' &&
+      vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true' &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
     uses: ./.github/workflows/screener-controller-deploy.yml
     with:
@@ -337,10 +426,18 @@ jobs:
           build_id="$(jq -er .build_id <<<"$response")"
           echo "build_id=$build_id" >>"$GITHUB_OUTPUT"
           for _ in $(seq 1 200); do
-            response="$(curl -fsS \
+            if ! response="$(curl -fsS \
               -H "Authorization: Bearer $(<"$token_file")" \
-              "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$build_id")"
-            status="$(jq -er .status <<<"$response")"
+              "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$build_id")"; then
+              echo "::warning::Platform build poll unavailable; retrying without authorizing a fallback"
+              sleep 15
+              continue
+            fi
+            if ! status="$(jq -er .status <<<"$response")"; then
+              echo "::warning::Platform build poll returned an invalid response; retrying"
+              sleep 15
+              continue
+            fi
             case "$status" in
               succeeded)
                 echo "mode=targon" >>"$GITHUB_OUTPUT"

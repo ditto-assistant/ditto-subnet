@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -170,6 +172,69 @@ def test_shared_contract_change_releases_both_surfaces(
         "validator",
         "validator_stack",
     }
+
+
+def test_git_changed_paths_includes_deleted_runtime_files() -> None:
+    with TemporaryDirectory() as directory:
+        repository = Path(directory)
+        subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=repository,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Release Plan Test"],
+            cwd=repository,
+            check=True,
+        )
+        runtime = repository / "workers" / "screener" / "retired.py"
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text("retired = True\n")
+        subprocess.run(["git", "add", "."], cwd=repository, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "add runtime"], cwd=repository, check=True
+        )
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        runtime.unlink()
+        subprocess.run(["git", "add", "-u"], cwd=repository, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "delete runtime"], cwd=repository, check=True
+        )
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "release-plan.py"),
+                "--config",
+                str(ROOT / "release" / "components.toml"),
+                "--base",
+                base,
+                "--head",
+                head,
+            ],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    plan = json.loads(completed.stdout)
+    assert plan["components"]["screener"] is True
+    assert plan["components"]["screener_orchestrator"] is True
 
 
 @pytest.mark.parametrize(

@@ -1788,6 +1788,7 @@ class ScreenerNodeBootstrapGrant(Base):
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     provider_resource_id: Mapped[str] = mapped_column(Text, nullable=False)
     controller_epoch: Mapped[str] = mapped_column(Text, nullable=False)
+    image_reference: Mapped[str | None] = mapped_column(Text)
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
@@ -1817,6 +1818,11 @@ class ScreenerNodeBootstrapGrant(Base):
             "length(token_hash) = 64",
             name="screener_node_bootstrap_grants_token_hash_check",
         ),
+        CheckConstraint(
+            "image_reference IS NULL OR image_reference ~ "
+            "'^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'",
+            name="screener_node_bootstrap_grants_image_reference_check",
+        ),
         Index("screener_node_bootstrap_grants_node_idx", "node_id", "created_at"),
     )
 
@@ -1844,6 +1850,7 @@ class ScreenerNode(Base):
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     capacity: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    image_reference: Mapped[str | None] = mapped_column(Text)
     registered_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -1880,6 +1887,11 @@ class ScreenerNode(Base):
         CheckConstraint(
             "capacity BETWEEN 1 AND 16", name="screener_nodes_capacity_check"
         ),
+        CheckConstraint(
+            "image_reference IS NULL OR image_reference ~ "
+            "'^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'",
+            name="screener_nodes_image_reference_check",
+        ),
         Index("screener_nodes_provider_status_idx", "provider", "status"),
         UniqueConstraint(
             "environment",
@@ -1897,6 +1909,8 @@ class ScreenerCapacitySnapshot(Base):
 
     environment: Mapped[str] = mapped_column(Text, primary_key=True)
     controller_epoch: Mapped[str] = mapped_column(Text, nullable=False)
+    controller_source_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_ready: Mapped[bool] = mapped_column(Boolean, nullable=False)
     controller_heartbeat_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
@@ -1907,7 +1921,6 @@ class ScreenerCapacitySnapshot(Base):
     active_leases: Mapped[int] = mapped_column(Integer, nullable=False)
     desired_slots: Mapped[int] = mapped_column(Integer, nullable=False)
     global_cap: Mapped[int] = mapped_column(Integer, nullable=False)
-    provider_ready: Mapped[bool] = mapped_column(Boolean, nullable=False)
     targon_capability: Mapped[str] = mapped_column(Text, nullable=False)
     targon_available: Mapped[int] = mapped_column(Integer, nullable=False)
     targon_healthy: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1933,6 +1946,10 @@ class ScreenerCapacitySnapshot(Base):
         CheckConstraint(
             "targon_capability IN ('go', 'nogo', 'unknown')",
             name="screener_capacity_snapshots_targon_capability_check",
+        ),
+        CheckConstraint(
+            "controller_source_sha ~ '^[0-9a-f]{40}$'",
+            name="screener_capacity_snapshots_source_sha_check",
         ),
         CheckConstraint(
             "runnable_backlog >= 0 AND active_leases >= 0 AND "

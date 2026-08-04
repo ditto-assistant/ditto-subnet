@@ -15,6 +15,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -29,6 +30,9 @@ from uuid import uuid4
 from screener_capacity.targon import TargonAPIError, TargonClient
 
 Capability = Literal["go", "nogo", "unknown"]
+IMAGE_REFERENCE_RE = re.compile(
+    r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+)
 
 _SENSITIVE_ENV_MARKERS = (
     "CREDENTIAL",
@@ -100,6 +104,26 @@ def _validate_public_worker_env(values: dict[str, str]) -> None:
             "Targon worker environment contains prohibited credential-like keys: "
             + ", ".join(sensitive)
         )
+
+
+def _source_sha() -> str:
+    """Resolve the exact checked-out controller source without trusting argv."""
+
+    repository = Path(__file__).resolve().parents[3]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ControllerError("controller source revision is unavailable") from error
+    revision = result.stdout.strip()
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ControllerError("controller source revision is invalid")
+    return revision
 
 
 def _json_request(
@@ -174,7 +198,36 @@ class PlatformControl:
             raise ControllerError("Platform capacity response is invalid")
         return body
 
-    def bootstrap_grant(self, *, node_id: str, resource_id: str, epoch: str) -> str:
+    def latest_screener_image(self) -> str | None:
+        body = _json_request(
+            "GET",
+            f"{self._base}/api/v1/screener/controller/trusted-image-builds/latest"
+            f"?environment={self.environment}",
+            token=self._token,
+            allow_not_found=True,
+        )
+        if body is None:
+            return None
+        if not isinstance(body, dict) or body.get("status") != "succeeded":
+            raise ControllerError("Platform released image response is invalid")
+        destination = body.get("destination")
+        digest = body.get("image_digest")
+        if not isinstance(destination, str) or not isinstance(digest, str):
+            raise ControllerError("Platform released image identity is incomplete")
+        repository = destination.rsplit(":", 1)[0]
+        reference = f"{repository}@{digest}"
+        if IMAGE_REFERENCE_RE.fullmatch(reference) is None:
+            raise ControllerError("Platform released image identity is invalid")
+        return reference
+
+    def bootstrap_grant(
+        self,
+        *,
+        node_id: str,
+        resource_id: str,
+        epoch: str,
+        image_reference: str,
+    ) -> str:
         body = _json_request(
             "POST",
             f"{self._base}/api/v1/screener/controller/bootstrap-grants",
@@ -185,6 +238,7 @@ class PlatformControl:
                 "provider": "targon",
                 "provider_resource_id": resource_id,
                 "controller_epoch": epoch,
+                "image_reference": image_reference,
             },
         )
         token = body.get("registration_token") if isinstance(body, dict) else None
@@ -222,7 +276,9 @@ class PlatformControl:
             and isinstance(row.get("provider_resource_id"), str)
         }
 
-    def drain_node(self, *, node_id: str, epoch: str) -> None:
+    def drain_node(
+        self, *, node_id: str, epoch: str, reason: str = "capacity scale-down"
+    ) -> None:
         _json_request(
             "PUT",
             f"{self._base}/api/v1/screener/controller/nodes/{node_id}",
@@ -230,7 +286,7 @@ class PlatformControl:
             payload={
                 "environment": self.environment,
                 "status": "draining",
-                "reason": "capacity controller scale-down after queue drained",
+                "reason": f"capacity controller {reason}",
                 "controller_epoch": epoch,
             },
             allow_not_found=True,
@@ -403,6 +459,8 @@ def _targon_counts(
     rows: list[dict[str, Any]],
     node_states: dict[str, dict[str, Any]],
     stuck_uids: set[str],
+    *,
+    desired_image: str | None = None,
 ) -> ProviderCounts:
     healthy = pending = draining = 0
     for row in rows:
@@ -413,15 +471,20 @@ def _targon_counts(
         ready = state.get("ready_replicas", 0) if isinstance(state, dict) else 0
         uid = str(row.get("uid", ""))
         node = node_states.get(uid, {})
+        image_outdated = desired_image is not None and (
+            node.get("image_reference") != desired_image
+        )
         if (
             status == "running"
             and isinstance(ready, int)
             and ready > 0
             and node.get("ready") is True
+            and not image_outdated
         ):
             healthy += 1
         elif (
-            uid in stuck_uids
+            image_outdated
+            or uid in stuck_uids
             or status
             in {
                 "suspending",
@@ -436,6 +499,51 @@ def _targon_counts(
     return ProviderCounts(healthy=healthy, pending=pending, draining=draining)
 
 
+def _load_state(path: Path) -> dict[str, Any]:
+    try:
+        loaded = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _write_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, sort_keys=True))
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
+def _provider_state(path: Path) -> tuple[bool, str | None, str | None]:
+    state = _load_state(path)
+    code = state.get("last_provider_error_code")
+    error_at = state.get("last_provider_error_at")
+    return (
+        state.get("provider_ready") is True,
+        code if isinstance(code, str) else None,
+        error_at if isinstance(error_at, str) else None,
+    )
+
+
+def _persist_provider_state(
+    path: Path,
+    *,
+    ready: bool,
+    error_code: str | None,
+    error_at: str | None,
+) -> None:
+    state = _load_state(path)
+    state.update(
+        {
+            "provider_ready": ready,
+            "last_provider_error_code": error_code,
+            "last_provider_error_at": error_at,
+        }
+    )
+    _write_state(path, state)
+
+
 def _pending_state(
     path: Path,
     rows: list[dict[str, Any]],
@@ -444,11 +552,8 @@ def _pending_state(
     timeout_seconds: int,
 ) -> set[str]:
     """Persist first-seen times so stuck provisioning survives restarts."""
-    try:
-        loaded = json.loads(path.read_text()) if path.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        loaded = {}
-    prior = loaded.get("pending_since", {}) if isinstance(loaded, dict) else {}
+    loaded = _load_state(path)
+    prior = loaded.get("pending_since", {})
     if not isinstance(prior, dict):
         prior = {}
     now = time.time()
@@ -463,11 +568,8 @@ def _pending_state(
             if isinstance(value, (int, float)) and 0 <= value <= now
             else now
         )
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"pending_since": pending_since}, sort_keys=True))
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, path)
+    loaded["pending_since"] = pending_since
+    _write_state(path, loaded)
     return {
         uid
         for uid, started in pending_since.items()
@@ -482,13 +584,13 @@ class Settings:
     platform_token_file: Path
     environment: str
     epoch: str
+    source_sha: str
     global_cap: int
     jobs_per_slot: int
     interval_seconds: int
     targon_capability_file: Path | None
     targon_api_key_file: Path | None
     targon_prefix: str
-    targon_worker_image: str | None
     targon_resource: str
     targon_worker_env_file: Path | None
     gcp_bootstrap_service_account: str | None
@@ -523,6 +625,7 @@ def _snapshot(
     return {
         "environment": settings.environment,
         "controller_epoch": settings.epoch,
+        "controller_source_sha": settings.source_sha,
         "runnable_backlog": demand.runnable,
         "active_leases": demand.active,
         "desired_slots": demand.desired,
@@ -553,6 +656,7 @@ def _record_provider_failure(
     platform: PlatformControl,
     snapshot: dict[str, Any],
     *,
+    state_file: Path,
     code: str,
     detail: str,
 ) -> None:
@@ -569,6 +673,13 @@ def _record_provider_failure(
             }
         ],
     }
+    with contextlib.suppress(OSError):
+        _persist_provider_state(
+            state_file,
+            ready=False,
+            error_code=code,
+            error_at=str(failed["last_provider_error_at"]),
+        )
     with contextlib.suppress(ControllerError):
         platform.renew(failed)
 
@@ -584,6 +695,12 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         jobs_per_slot=settings.jobs_per_slot, cap=settings.global_cap
     )
     capability, reason = _capability(settings.targon_capability_file)
+    desired_targon_image: str | None = None
+    if capability == "go":
+        desired_targon_image = platform.latest_screener_image()
+        if desired_targon_image is None:
+            capability = "nogo"
+            reason = "TARGON_WORKER_IMAGE_UNPUBLISHED"
     targon_counts = ProviderCounts()
     targon_rows: list[dict[str, Any]] = []
     targon_client: TargonClient | None = None
@@ -611,7 +728,12 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 node_states,
                 timeout_seconds=settings.targon_provisioning_timeout_seconds,
             )
-            targon_counts = _targon_counts(targon_rows, node_states, stuck_uids)
+            targon_counts = _targon_counts(
+                targon_rows,
+                node_states,
+                stuck_uids,
+                desired_image=(desired_targon_image if capability == "go" else None),
+            )
             targon_available = sum(
                 max(0, int(row.get("available", 0)))
                 for row in targon_client.inventory()
@@ -636,10 +758,20 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     )
     current_target = gce_fleet.target()
     gce_counts = gce_fleet.counts()
+    provider_success_at = datetime.now(UTC).isoformat()
+
+    outdated_targon_uids = {
+        str(row.get("uid", ""))
+        for row in targon_rows
+        if capability == "go"
+        and str(row.get("uid", ""))
+        and node_states.get(str(row.get("uid", "")), {}).get("image_reference")
+        != desired_targon_image
+    }
 
     worker_env: dict[str, str] = {}
     if capability == "go":
-        if targon_client is None or settings.targon_worker_image is None:
+        if targon_client is None or desired_targon_image is None:
             capability = "nogo"
             reason = "TARGON_WORKER_CONFIG_MISSING"
         elif (
@@ -721,7 +853,33 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 "detail": f"{len(stuck_uids)} workload(s) exceeded provisioning grace",
             }
         )
+    newly_outdated_targon_uids = {
+        uid
+        for uid in outdated_targon_uids
+        if node_states.get(uid, {}).get("status")
+        not in {"draining", "quarantined", "revoked"}
+    }
+    if newly_outdated_targon_uids:
+        events.append(
+            {
+                "event_type": "targon_image_rollout",
+                "provider": "targon",
+                "detail": (
+                    f"{len(newly_outdated_targon_uids)} workload(s) draining for "
+                    f"released source {desired_targon_image}"
+                ),
+            }
+        )
 
+    prior_provider_ready, prior_error_code, prior_error_at = _provider_state(
+        settings.state_file
+    )
+    starting_provider_ready = prior_provider_ready and provider_error_code is None
+    starting_error_code = provider_error_code
+    starting_error_at = provider_error_at
+    if provider_error_code is None and not prior_provider_ready:
+        starting_error_code = prior_error_code
+        starting_error_at = prior_error_at
     snapshot = _snapshot(
         settings=settings,
         demand=demand,
@@ -733,9 +891,9 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         gce_target=target,
         events=events,
         provider_success_at=provider_success_at,
-        provider_error_code=provider_error_code,
-        provider_error_at=provider_error_at,
-        provider_ready=provider_error_code is None,
+        provider_error_code=starting_error_code,
+        provider_error_at=starting_error_at,
+        provider_ready=starting_provider_ready,
     )
     if settings.dry_run:
         return snapshot
@@ -755,6 +913,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             _record_provider_failure(
                 platform,
                 snapshot,
+                state_file=settings.state_file,
                 code="GCE_SCALE_UP_FAILED",
                 detail="GCE fallback scale-up failed",
             )
@@ -799,6 +958,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 _record_provider_failure(
                     platform,
                     snapshot,
+                    state_file=settings.state_file,
                     code="TARGON_TEARDOWN_FAILED",
                     detail="Targon fail-closed teardown failed",
                 )
@@ -813,6 +973,51 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             ):
                 platform.drain_node(node_id=node_id, epoch=settings.epoch)
     elif capability == "go" and targon_client is not None:
+        for row in targon_rows:
+            uid = str(row.get("uid", ""))
+            name = str(row.get("name", ""))
+            if uid not in outdated_targon_uids or not name:
+                continue
+            node = node_states.get(uid, {})
+            node_id = str(node.get("node_id", name))
+            already_retiring = node.get("status") in {
+                "draining",
+                "quarantined",
+                "revoked",
+            }
+            if not already_retiring:
+                platform.drain_node(
+                    node_id=node_id,
+                    epoch=settings.epoch,
+                    reason="release-image replacement",
+                )
+                # Give the individual worker a reconciliation pass to stop
+                # accepting work. Other nodes may stay busy indefinitely.
+                if node:
+                    continue
+            if _node_has_active_lease(node):
+                continue
+            try:
+                state = row.get("state") or {}
+                if str(state.get("status", "")).casefold() not in {
+                    "suspended",
+                    "registered",
+                    "error",
+                }:
+                    platform.fence(epoch=settings.epoch)
+                    targon_client.suspend(uid)
+                platform.fence(epoch=settings.epoch)
+                targon_client.delete(uid)
+                deleted_targon_uids.add(uid)
+            except (TargonAPIError, ControllerError) as error:
+                _record_provider_failure(
+                    platform,
+                    snapshot,
+                    state_file=settings.state_file,
+                    code="TARGON_IMAGE_ROLLOUT_FAILED",
+                    detail="Targon released-image teardown failed",
+                )
+                raise ControllerError("Targon image rollout teardown failed") from error
         for row in targon_rows:
             uid = str(row.get("uid", ""))
             name = str(row.get("name", ""))
@@ -847,6 +1052,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 _record_provider_failure(
                     platform,
                     snapshot,
+                    state_file=settings.state_file,
                     code="TARGON_STUCK_TEARDOWN_FAILED",
                     detail="Targon stuck-workload teardown failed",
                 )
@@ -882,6 +1088,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 _record_provider_failure(
                     platform,
                     snapshot,
+                    state_file=settings.state_file,
                     code="TARGON_RETIRED_TEARDOWN_FAILED",
                     detail="Targon retired-node teardown failed",
                 )
@@ -890,6 +1097,8 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             target=str(settings.gcp_bootstrap_service_account),
             delegate=settings.gcp_bootstrap_delegate_service_account,
         )
+        # Draining outdated nodes are not supply. Provision their replacements
+        # even while unrelated nodes own leases; deletion above is lease-scoped.
         difference = planned_targon - targon_counts.supplied
         if difference > 0:
             occupied_names = {str(row.get("name", "")) for row in targon_rows}
@@ -904,7 +1113,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                     platform.fence(epoch=settings.epoch)
                     created = targon_client.create_rental(
                         name=name,
-                        image=str(settings.targon_worker_image),
+                        image=str(desired_targon_image),
                         resource_name=settings.targon_resource,
                     )
                     created_uid = str(created["uid"])
@@ -913,6 +1122,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                         node_id=node_id,
                         resource_id=created_uid,
                         epoch=settings.epoch,
+                        image_reference=str(desired_targon_image),
                     )
                     bootstrap_access_token = token_minter.mint()
                     env = {
@@ -959,6 +1169,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                         _record_provider_failure(
                             platform,
                             snapshot,
+                            state_file=settings.state_file,
                             code="GCE_EMERGENCY_SCALE_UP_FAILED",
                             detail=(
                                 "GCE emergency lease floor failed after Targon error"
@@ -968,6 +1179,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                     _record_provider_failure(
                         platform,
                         snapshot,
+                        state_file=settings.state_file,
                         code="TARGON_SCALE_UP_FAILED",
                         detail="Targon scale-up failed; GCE emergency floor requested",
                     )
@@ -1012,6 +1224,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                     _record_provider_failure(
                         platform,
                         snapshot,
+                        state_file=settings.state_file,
                         code="TARGON_SCALE_DOWN_FAILED",
                         detail="Targon scale-down failed",
                     )
@@ -1027,11 +1240,28 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             _record_provider_failure(
                 platform,
                 snapshot,
+                state_file=settings.state_file,
                 code="GCE_SCALE_DOWN_FAILED",
                 detail="GCE scale-down failed",
             )
             raise
-    return snapshot
+    provider_ready = provider_error_code is None
+    completed = {
+        **snapshot,
+        "provider_ready": provider_ready,
+        "last_provider_error_code": (None if provider_ready else provider_error_code),
+        "last_provider_error_at": None if provider_ready else provider_error_at,
+    }
+    # Readiness describes a fully completed reconciliation pass. Persist it so
+    # a failed pass cannot publish an optimistic heartbeat on the next retry.
+    platform.renew(completed)
+    _persist_provider_state(
+        settings.state_file,
+        ready=provider_ready,
+        error_code=completed["last_provider_error_code"],
+        error_at=completed["last_provider_error_at"],
+    )
+    return completed
 
 
 def _settings(args: argparse.Namespace) -> Settings:
@@ -1041,6 +1271,7 @@ def _settings(args: argparse.Namespace) -> Settings:
         platform_token_file=Path(args.platform_token_file),
         environment=args.environment,
         epoch=f"{args.environment}:{uuid4()}",
+        source_sha=_source_sha(),
         global_cap=args.global_cap,
         jobs_per_slot=args.jobs_per_slot,
         interval_seconds=args.interval_seconds,
@@ -1051,7 +1282,6 @@ def _settings(args: argparse.Namespace) -> Settings:
             Path(args.targon_api_key_file) if args.targon_api_key_file else None
         ),
         targon_prefix=args.targon_prefix,
-        targon_worker_image=args.targon_worker_image,
         targon_resource=args.targon_resource,
         targon_worker_env_file=(
             Path(args.targon_worker_env_file) if args.targon_worker_env_file else None
@@ -1084,7 +1314,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--targon-capability-file")
     parser.add_argument("--targon-api-key-file")
     parser.add_argument("--targon-prefix", default="ditto-screener-prod-")
-    parser.add_argument("--targon-worker-image")
     parser.add_argument("--targon-resource", default="cpu-medium")
     parser.add_argument("--targon-worker-env-file")
     parser.add_argument("--gcp-bootstrap-service-account")

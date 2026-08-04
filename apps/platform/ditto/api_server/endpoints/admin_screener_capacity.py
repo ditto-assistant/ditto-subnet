@@ -155,6 +155,8 @@ async def screener_capacity(
         snapshot_view = ScreenerCapacitySnapshotResponse(
             environment=snapshot.environment,
             controller_epoch=snapshot.controller_epoch,
+            controller_source_sha=snapshot.controller_source_sha,
+            provider_ready=snapshot.provider_ready,
             controller_heartbeat_at=_required_aware(snapshot.controller_heartbeat_at),
             controller_lease_expires_at=_required_aware(
                 snapshot.controller_lease_expires_at
@@ -163,7 +165,6 @@ async def screener_capacity(
             active_leases=snapshot.active_leases,
             desired_slots=snapshot.desired_slots,
             global_cap=snapshot.global_cap,
-            provider_ready=snapshot.provider_ready,
             targon_capability=cast(
                 Literal["go", "nogo", "unknown"], snapshot.targon_capability
             ),
@@ -203,6 +204,7 @@ async def screener_capacity(
                 screener_hotkey=node.screener_hotkey,
                 status=cast(ScreenerNodeStatus, node.status),
                 capacity=node.capacity,
+                image_reference=node.image_reference,
                 token_expires_at=_required_aware(node.token_expires_at),
                 registered_at=_required_aware(node.registered_at),
                 rotated_at=_required_aware(node.rotated_at),

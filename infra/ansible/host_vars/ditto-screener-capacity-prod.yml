@@ -19,4 +19,3 @@ screener_capacity_targon_runtime_capability_expires_at: "2026-08-09T00:00:00Z"
 
 # Populated only after the monorepo publishes the reviewed worker image. A
 # missing value is another independent fail-closed runtime gate.
-screener_capacity_targon_worker_image: ""

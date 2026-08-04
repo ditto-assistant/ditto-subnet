@@ -118,7 +118,8 @@ jobs:
       - name: Enable NumPy-accelerated IAP transport
         run: |
           gcloud_python="$(gcloud info --format='value(basic.python_location)')"
-          "$gcloud_python" -m pip install --disable-pip-version-check numpy
+          "$gcloud_python" -m pip install --disable-pip-version-check \
+            --require-hashes -r workers/screener/requirements-iap.txt
           "$gcloud_python" -c 'import numpy; print(f"NumPy {numpy.__version__} enabled for gcloud IAP")'
 
       - name: Deploy exact commit to ${{ matrix.name }} (${{ matrix.zone }})

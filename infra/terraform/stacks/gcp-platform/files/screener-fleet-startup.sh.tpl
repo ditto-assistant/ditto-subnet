@@ -41,9 +41,19 @@ github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+V
 KNOWN_HOSTS
 chmod 0644 /root/.ssh/known_hosts
 
+if [[ ! "${git_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "refusing to boot without an immutable released source SHA" >&2
+  exit 2
+fi
 rm -rf /opt/ditto/bootstrap-src
-GIT_SSH_COMMAND="ssh -i /root/.ssh/screener_deploy_key -o UserKnownHostsFile=/root/.ssh/known_hosts" \
-  git clone --depth 1 --branch "${git_ref}" "${repo_url}" /opt/ditto/bootstrap-src
+install -d -m 0755 /opt/ditto/bootstrap-src
+export GIT_SSH_COMMAND="ssh -i /root/.ssh/screener_deploy_key -o UserKnownHostsFile=/root/.ssh/known_hosts"
+git -C /opt/ditto/bootstrap-src init --quiet
+git -C /opt/ditto/bootstrap-src remote add origin "${repo_url}"
+git -C /opt/ditto/bootstrap-src fetch --depth 1 origin "${git_revision}"
+resolved_revision="$(git -C /opt/ditto/bootstrap-src rev-parse FETCH_HEAD)"
+test "$resolved_revision" = "${git_revision}"
+git -C /opt/ditto/bootstrap-src checkout --detach "$resolved_revision"
 
 exec env \
   SCREENER_GCP_PROJECT="${project}" \
@@ -55,4 +65,5 @@ exec env \
   SCREENER_READINESS_PORT="${readiness_port}" \
   SCREENER_DEPLOY_KEY_FILE=/root/.ssh/screener_deploy_key \
   SCREENER_REPOSITORY_URL="${repo_url}" \
+  SCREENER_EXPECTED_SHA="${git_revision}" \
   /opt/ditto/bootstrap-src/workers/screener/scripts/bootstrap-screener.sh

@@ -108,13 +108,31 @@ resource "google_service_account_iam_member" "screener_controller_mint_bootstrap
   member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
 
-# Region MIG resize/get plus instance inventory. Kept on a dedicated identity;
-# it has no OS Login, storage, registry, or other Platform roles.
-resource "google_project_iam_member" "screener_controller_compute_admin" {
+# Only the two permissions used by `gcloud compute instance-groups managed
+# describe/list-instances/resize`; the controller cannot create VMs, images,
+# disks, networks, or mutate any other fleet.
+resource "google_project_iam_custom_role" "screener_controller_fleet_reconciler" {
   count   = local.screener_capacity_controller_count
   project = var.project
-  role    = "roles/compute.instanceAdmin.v1"
+  role_id = "dittoScreenerFleetReconciler"
+  title   = "Ditto screener fleet reconciler"
+  permissions = [
+    "compute.regionInstanceGroupManagers.get",
+    "compute.regionInstanceGroupManagers.update",
+  ]
+}
+
+resource "google_project_iam_member" "screener_controller_fleet_reconciler" {
+  count   = local.screener_capacity_controller_count
+  project = var.project
+  role    = google_project_iam_custom_role.screener_controller_fleet_reconciler[0].name
   member  = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
+
+  condition {
+    title       = "only_ditto_screener_fleet"
+    description = "Restrict controller mutations to the production screener MIG."
+    expression  = "resource.name.endsWith('/regions/${var.region}/instanceGroupManagers/ditto-screener-fleet')"
+  }
 }
 
 module "screener_capacity_controller_vm" {

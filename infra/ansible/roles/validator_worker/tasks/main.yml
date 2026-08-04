@@ -38,9 +38,10 @@
   block:
     - name: Download uv installer
       ansible.builtin.get_url:
-        url: https://astral.sh/uv/install.sh
+        url: https://github.com/astral-sh/uv/releases/download/0.11.28/uv-installer.sh
         dest: /tmp/uv-install.sh
         mode: "0755"
+        checksum: sha256:b7b3fe80cad1142a2a5794050b7db7b3291d1bac1423b0732571dd9366e8ca8b
     - name: Install uv to /usr/local/bin
       ansible.builtin.command: /tmp/uv-install.sh
       environment:

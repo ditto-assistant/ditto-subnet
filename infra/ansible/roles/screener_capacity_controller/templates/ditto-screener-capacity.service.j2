@@ -29,8 +29,7 @@ ExecStart={{ screener_capacity_venv }}/bin/python -m screener_capacity.controlle
   --state-file {{ screener_capacity_state_dir }}/state.json \
   --gce-project {{ screener_capacity_gce_project }} \
   --gce-region {{ screener_capacity_gce_region }} \
-  --gce-mig {{ screener_capacity_gce_mig }}{% if screener_capacity_targon_worker_image | length > 0 %} \
-  --targon-worker-image {{ screener_capacity_targon_worker_image }}{% endif %}
+  --gce-mig {{ screener_capacity_gce_mig }}
 Restart=always
 RestartSec=10
 NoNewPrivileges=true

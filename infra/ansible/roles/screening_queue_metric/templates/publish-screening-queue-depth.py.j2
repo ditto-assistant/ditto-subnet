@@ -14,6 +14,10 @@ import sys
 import urllib.request
 
 ACTIVITY_URL = "http://127.0.0.1:{{ screening_queue_metric_api_port }}/api/v1/public/activity?limit=1"
+WATCHDOG_URL = (
+    "http://127.0.0.1:{{ screening_queue_metric_api_port }}"
+    "/api/v1/public/screener-capacity-watchdog?environment={{ screening_queue_metric_env }}"
+)
 METADATA_TOKEN_URL = (
     "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token"
 )
@@ -28,11 +32,24 @@ def _get(url: str, headers: dict | None = None) -> bytes:
         return resp.read()
 
 
+def fallback_depth(counts: dict, watchdog: dict) -> int:
+    """Publish backlog only when Platform proves the normal writer is stale."""
+
+    if watchdog.get("activate_fallback") is not True:
+        return 0
+    waiting = int(counts.get("waiting_screening", 0))
+    active = int(counts.get("screening", 0))
+    return max(0, waiting) + max(0, active)
+
+
 def main() -> int:
     counts = json.loads(_get(ACTIVITY_URL)).get("status_counts", {})
-    # In-flight (`screening`) is included on purpose: it keeps the autoscaler
-    # from scaling in under workers that are mid-build.
-    depth = int(counts.get("waiting_screening", 0)) + int(counts.get("screening", 0))
+    watchdog = json.loads(_get(WATCHDOG_URL))
+    # A fresh fenced controller owns both providers and therefore suppresses
+    # this independent signal. Only a stale/missing controller may wake GCE.
+    # In-flight work remains included once fallback is active so the watchdog
+    # never under-supplies leases it did not create.
+    depth = fallback_depth(counts, watchdog)
 
     project = _get(PROJECT_URL, {"Metadata-Flavor": "Google"}).decode()
     token = json.loads(_get(METADATA_TOKEN_URL, {"Metadata-Flavor": "Google"}))[
@@ -65,7 +82,11 @@ def main() -> int:
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         resp.read()
-    print(f"published {METRIC_TYPE} env={METRIC_ENV} depth={depth}")
+    reason = str(watchdog.get("reason", "invalid"))
+    print(
+        f"published {METRIC_TYPE} env={METRIC_ENV} depth={depth} "
+        f"watchdog={reason}"
+    )
     return 0
 
 

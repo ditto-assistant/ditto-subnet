@@ -88,6 +88,7 @@ def test_deploy_workflow_enables_numpy_before_iap_transport() -> None:
     verify = deploy_job.index('import numpy; print(f"NumPy {numpy.__version__}')
     transport = deploy_job.index("deploy-screener-via-ssh.sh")
     assert setup < python < install < verify < transport
+    assert "--require-hashes -r workers/screener/requirements-iap.txt" in deploy_job
 
 
 def test_deploy_streams_updater_over_one_ssh_session() -> None:

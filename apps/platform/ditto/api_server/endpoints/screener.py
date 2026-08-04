@@ -448,6 +448,7 @@ async def create_bootstrap_grant(
         provider=payload.provider,
         provider_resource_id=payload.provider_resource_id,
         controller_epoch=payload.controller_epoch,
+        image_reference=payload.image_reference,
         token_hash=hashlib.sha256(token.encode()).hexdigest(),
         expires_at=expires_at,
     )
@@ -566,6 +567,7 @@ async def register_screener_node(
                     token_expires_at=expires_at,
                     status="active",
                     capacity=1,
+                    image_reference=grant.image_reference,
                     registered_at=now,
                     rotated_at=now,
                 )
@@ -788,6 +790,34 @@ async def queue_release_image_build(
 
 
 @router.get(
+    "/controller/trusted-image-builds/latest",
+    response_model=TrustedImageBuildView,
+)
+async def get_latest_release_image_build(
+    _controller: ControllerDep,
+    session: SessionDep,
+    environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
+) -> TrustedImageBuildView:
+    """Return the newest successfully published immutable screener image."""
+    row = await session.scalar(
+        select(TrustedImageBuild)
+        .where(
+            TrustedImageBuild.environment == environment,
+            TrustedImageBuild.component == "screener",
+            TrustedImageBuild.status == "succeeded",
+            TrustedImageBuild.image_digest.is_not(None),
+        )
+        .order_by(
+            TrustedImageBuild.completed_at.desc(), TrustedImageBuild.created_at.desc()
+        )
+        .limit(1)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="no successful screener image")
+    return _trusted_build_view(row)
+
+
+@router.get(
     "/controller/trusted-image-builds/{build_id}",
     response_model=TrustedImageBuildView,
 )
@@ -1003,6 +1033,7 @@ async def list_controller_nodes(
                     "status": node.status,
                     "ready": ready,
                     "active_lease": node.screener_hotkey in active_hotkeys,
+                    "image_reference": node.image_reference,
                     "heartbeat_seen_at": seen_at,
                 }
             )

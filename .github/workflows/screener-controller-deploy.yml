@@ -8,6 +8,8 @@ on:
         type: string
         required: true
   workflow_dispatch:
+    # Break-glass operator path: unlike the release caller, a reviewed manual
+    # dispatch intentionally does not consult SCREENER_CAPACITY_CONTROLLER_ENABLED.
     inputs:
       revision:
         description: Exact released monorepo commit

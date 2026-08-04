@@ -46,6 +46,10 @@ Manual Platform and screener dispatches also require the selected commit to be
 the target of a semantic `vX.Y.Z` release tag. The visible `force` input is the
 break-glass path for an exact non-release commit; using it delegates the
 exception to the protected environment reviewer and is never automatic.
+The capacity-controller workflow's direct manual dispatch is a separate
+break-glass operator override: it intentionally bypasses
+`SCREENER_CAPACITY_CONTROLLER_ENABLED`, while still requiring the protected
+`prod` environment and an exact 40-character revision.
 
 ## Protected environment configuration
 

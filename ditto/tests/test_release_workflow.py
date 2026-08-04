@@ -77,6 +77,7 @@ def test_release_auto_deploys_controller_and_builder_from_exact_release() -> Non
 
     assert deploy["needs"] == ["plan", "release", "deploy_platform"]
     assert "needs.plan.outputs.screener_orchestrator == 'true'" in deploy["if"]
+    assert "vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true'" in deploy["if"]
     assert deploy["uses"] == "./.github/workflows/screener-controller-deploy.yml"
     assert deploy["with"]["revision"] == "${{ needs.release.outputs.commit_sha }}"
     assert deploy["secrets"] == "inherit"
@@ -103,6 +104,12 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     # publication cannot race ahead of the exact merged source gate.
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     verify_steps = workflow["jobs"]["verify-source"]["steps"]
+    node_setup = next(
+        step
+        for step in verify_steps
+        if str(step.get("uses", "")).startswith("actions/setup-node@")
+    )
+    assert node_setup["with"]["node-version"] == 24
     version_gate = _step(verify_steps, "Require a new datagen component version")
     assert version_gate["if"] == "needs.plan.outputs.dittobench_datagen == 'true'"
     assert "verify-version-bump.sh" in version_gate["run"]
@@ -119,6 +126,35 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert "cargo build --locked --verbose" in starter_verification["run"]
     assert "cargo test --locked --verbose" in starter_verification["run"]
 
+    datagen_verification = _step(
+        verify_steps, "Gate DittoBench datagen release on exact merge source"
+    )
+    assert datagen_verification["if"] == (
+        "needs.plan.outputs.dittobench_datagen == 'true'"
+    )
+    assert datagen_verification["working-directory"] == ("research/dittobench-datagen")
+    assert "go test ./..." in datagen_verification["run"]
+
+    component_gates = {
+        "Gate Platform release on exact merge source": (
+            "needs.plan.outputs.platform == 'true'"
+        ),
+        "Gate Backroom release on exact merge source": (
+            "needs.plan.outputs.backroom == 'true'"
+        ),
+        "Gate DittoBench API release on exact merge source": (
+            "needs.plan.outputs.dittobench_api == 'true'"
+        ),
+        "Gate screener release on exact merge source": (
+            "needs.plan.outputs.screener == 'true'"
+        ),
+        "Gate screener orchestrator release on exact merge source": (
+            "needs.plan.outputs.screener_orchestrator == 'true'"
+        ),
+    }
+    for name, condition in component_gates.items():
+        assert _step(verify_steps, name)["if"] == condition
+
 
 def test_screener_runner_fallback_requires_platform_authorization() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
@@ -133,6 +169,7 @@ def test_screener_runner_fallback_requires_platform_authorization() -> None:
     assert "no provider authorized a fallback" in request["run"]
     assert "timed out without a Platform-issued fallback" in request["run"]
     assert "reusing immutable fallback image" in fallback["run"]
+    assert "Platform build poll unavailable; retrying" in request["run"]
     assert "gcloud artifacts docker images describe" in record["run"]
     assert '"$digest" != "$TARGON_DIGEST"' in record["run"]
     assert "--retry-all-errors" in record["run"]

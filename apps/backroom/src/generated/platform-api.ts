@@ -2682,6 +2682,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/controller/trusted-image-builds/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Latest Release Image Build
+         * @description Return the newest successfully published immutable screener image.
+         */
+        get: operations["get_latest_release_image_build_api_v1_screener_controller_trusted_image_builds_latest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/controller/trusted-image-builds/{build_id}": {
         parameters: {
             query?: never;
@@ -10829,6 +10849,10 @@ export interface components {
         PublicScreenerWatchdogResponse: {
             /** Activate Fallback */
             activate_fallback: boolean;
+            /** Controller Epoch */
+            controller_epoch?: string | null;
+            /** Controller Source Sha */
+            controller_source_sha?: string | null;
             /** Controller Stale */
             controller_stale: boolean;
             /**
@@ -10837,10 +10861,15 @@ export interface components {
              */
             generated_at: string;
             /**
+             * Provider Ready
+             * @default false
+             */
+            provider_ready: boolean;
+            /**
              * Reason
              * @enum {string}
              */
-            reason: "controller_fresh" | "controller_stale" | "controller_missing";
+            reason: "controller_fresh" | "controller_stale" | "controller_missing" | "provider_not_ready";
         };
         /**
          * PublicScreeningAttempt
@@ -12343,6 +12372,8 @@ export interface components {
             controller_epoch: string;
             /** Environment */
             environment: string;
+            /** Image Reference */
+            image_reference?: string | null;
             /** Node Id */
             node_id: string;
             /**
@@ -12408,6 +12439,8 @@ export interface components {
             active_leases: number;
             /** Controller Epoch */
             controller_epoch: string;
+            /** Controller Source Sha */
+            controller_source_sha: string;
             /** Desired Slots */
             desired_slots: number;
             /** Environment */
@@ -12469,6 +12502,8 @@ export interface components {
              * Format: date-time
              */
             controller_lease_expires_at: string;
+            /** Controller Source Sha */
+            controller_source_sha: string;
             /** Desired Slots */
             desired_slots: number;
             /** Environment */
@@ -12542,6 +12577,8 @@ export interface components {
             active_lease: boolean;
             /** Heartbeat Seen At */
             heartbeat_seen_at?: string | null;
+            /** Image Reference */
+            image_reference?: string | null;
             /** Node Id */
             node_id: string;
             /**
@@ -12688,6 +12725,8 @@ export interface components {
             environment: string;
             /** Heartbeat Seen At */
             heartbeat_seen_at?: string | null;
+            /** Image Reference */
+            image_reference?: string | null;
             /** Node Id */
             node_id: string;
             /** Policy Version */
@@ -18312,6 +18351,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_latest_release_image_build_api_v1_screener_controller_trusted_image_builds_latest_get: {
+        parameters: {
+            query?: {
+                environment?: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedImageBuildView"];
                 };
             };
             /** @description Validation Error */

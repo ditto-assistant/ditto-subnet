@@ -68,6 +68,19 @@ jobs:
       - name: Initialize
         run: terraform -chdir=${{ steps.root.outputs.path }} init
 
+      - name: Bind the screener fleet to the latest semantic release
+        if: inputs.root == 'gcp-platform'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          revision="$(git rev-list -n 1 "$tag^{commit}")"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$revision" HEAD
+          echo "TF_VAR_screener_fleet_release_sha=$revision" >> "$GITHUB_ENV"
+
       - name: Create exact private plan
         env:
           TF_VAR_db_password: ${{ secrets.PLATFORM_DB_PASSWORD }}

@@ -46,6 +46,11 @@ if [[ "$SCREENER_BAKE_ONLY" != "1" ]]; then
   SCREENER_MNEMONIC_SECRET="${SCREENER_MNEMONIC_SECRET:?missing SCREENER_MNEMONIC_SECRET}"
   SCREENER_API_TOKEN_SECRET="${SCREENER_API_TOKEN_SECRET:?missing SCREENER_API_TOKEN_SECRET}"
   SCREENER_DEPLOY_KEY_FILE="${SCREENER_DEPLOY_KEY_FILE:?missing SCREENER_DEPLOY_KEY_FILE}"
+  SCREENER_EXPECTED_SHA="${SCREENER_EXPECTED_SHA:?missing SCREENER_EXPECTED_SHA}"
+  if [[ ! "$SCREENER_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "SCREENER_EXPECTED_SHA must be an immutable released commit" >&2
+    exit 2
+  fi
 fi
 
 SCREENER_ROOT=/opt/ditto/screener
@@ -174,7 +179,11 @@ if [[ ! -x /usr/local/bin/uv ]]; then
   # /tmp/uv-install.sh is a symlink/TOCTOU foothold for a local user.
   uv_installer="$(mktemp)"
   trap 'rm -f "$uv_installer"' EXIT
-  curl -fsSL https://astral.sh/uv/install.sh -o "$uv_installer"
+  curl -fsSL \
+    https://github.com/astral-sh/uv/releases/download/0.11.28/uv-installer.sh \
+    -o "$uv_installer"
+  echo "b7b3fe80cad1142a2a5794050b7db7b3291d1bac1423b0732571dd9366e8ca8b  $uv_installer" \
+    | sha256sum --check
   UV_INSTALL_DIR=/usr/local/bin sh "$uv_installer"
   rm -f "$uv_installer"
   trap - EXIT
@@ -228,6 +237,20 @@ if [[ ! -d "$checkout/.git" ]]; then
 fi
 runuser -u "$SCREENER_USER" -- git -C "$checkout" sparse-checkout set \
   workers/screener packages/ditto-screening-protocol
+
+# A new clone and a golden-image checkout can both point at mutable or stale
+# source. Resolve the reviewed release commit before executing any worker-owned
+# installer, synchronizing dependencies, or opening the claim loop.
+if [[ "$SCREENER_BAKE_ONLY" != "1" ]]; then
+  runuser -u "$SCREENER_USER" -- git -C "$checkout" fetch --prune origin \
+    "$SCREENER_EXPECTED_SHA"
+  resolved_sha="$(runuser -u "$SCREENER_USER" -- git -C "$checkout" rev-parse FETCH_HEAD)"
+  if [[ "$resolved_sha" != "$SCREENER_EXPECTED_SHA" ]]; then
+    echo "release SHA resolved to unexpected commit $resolved_sha" >&2
+    exit 1
+  fi
+  runuser -u "$SCREENER_USER" -- git -C "$checkout" reset --hard "$resolved_sha"
+fi
 
 # Untrusted Dockerfiles are built only by a daemon running as the unprivileged
 # screener identity. The system daemon remains temporarily for additive service
@@ -304,6 +327,7 @@ unset mnemonic api_token
 
 # --- Hand off to the exact-commit updater ------------------------------------
 target_sha="$(runuser -u "$SCREENER_USER" -- git -C "$checkout" rev-parse HEAD)"
+test "$target_sha" = "$SCREENER_EXPECTED_SHA"
 
 SCREENER_EXPECTED_SHA="$target_sha" \
   SCREENER_GCP_PROJECT="$SCREENER_GCP_PROJECT" \

@@ -4141,16 +4141,30 @@ async def screener_capacity_watchdog(
             controller_stale=True,
             activate_fallback=True,
             reason="controller_missing",
+            controller_epoch=None,
+            controller_source_sha=None,
+            provider_ready=False,
         )
     expiry = snapshot.controller_lease_expires_at
     if expiry.tzinfo is None:
         expiry = expiry.replace(tzinfo=UTC)
     stale = now >= expiry
+    activate_fallback = stale or not snapshot.provider_ready
+    reason: Literal["controller_fresh", "controller_stale", "provider_not_ready"]
+    if stale:
+        reason = "controller_stale"
+    elif not snapshot.provider_ready:
+        reason = "provider_not_ready"
+    else:
+        reason = "controller_fresh"
     return PublicScreenerWatchdogResponse(
         generated_at=now,
         controller_stale=stale,
-        activate_fallback=stale,
-        reason="controller_stale" if stale else "controller_fresh",
+        activate_fallback=activate_fallback,
+        reason=reason,
+        controller_epoch=snapshot.controller_epoch,
+        controller_source_sha=snapshot.controller_source_sha,
+        provider_ready=snapshot.provider_ready and not stale,
     )
 
 

@@ -19,7 +19,6 @@ screener_capacity_jobs_per_slot: 6
 screener_capacity_interval_seconds: 30
 screener_capacity_targon_prefix: ditto-screener-prod-
 screener_capacity_targon_resource: cpu-medium
-screener_capacity_targon_worker_image: ""
 screener_capacity_targon_provisioning_timeout_seconds: 600
 screener_capacity_gce_project: ditto-app-dev
 screener_capacity_gce_region: us-central1

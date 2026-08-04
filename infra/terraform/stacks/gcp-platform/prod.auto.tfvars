@@ -1,0 +1,21 @@
+# Reviewed, non-secret production intent. Terraform loads this file
+# automatically in local and GitHub Actions plans so an omitted CLI flag cannot
+# silently propose destroying an already-managed optional service.
+
+manage_dns           = true
+enable_datapipeline  = true
+enable_embedder      = true
+enable_validator     = true
+enable_screener      = true
+enable_screener_prod = true
+
+# The fleet and its secret/IAM phase already exist in production. The new
+# Targon-first controller stays staged off until its secret versions, service
+# accounts, and fresh provider capability attestation are proven.
+enable_screener_fleet_secrets       = true
+enable_screener_fleet               = true
+enable_screener_capacity_controller = false
+
+screener_fleet_min_replicas         = 0
+screener_fleet_max_replicas         = 6
+screener_fleet_backlog_per_instance = 6

@@ -664,11 +664,12 @@ def _capacity_payload(epoch: str) -> dict[str, object]:
     return {
         "environment": "prod",
         "controller_epoch": epoch,
+        "controller_source_sha": "a" * 40,
+        "provider_ready": True,
         "runnable_backlog": 0,
         "active_leases": 0,
         "desired_slots": 0,
         "global_cap": 6,
-        "provider_ready": True,
         "targon_capability": "nogo",
         "targon_available": 6,
         "targon_healthy": 0,
@@ -853,6 +854,15 @@ class TestFederatedScreenerNodes:
         assert completed.status_code == 200, completed.text
         assert completed.json()["image_digest"] == "sha256:" + "b" * 64
 
+        latest = await client.get(
+            "/api/v1/screener/controller/trusted-image-builds/latest?environment=prod",
+            headers=headers,
+        )
+        assert latest.status_code == 200, latest.text
+        assert latest.json()["build_id"] == str(build_id)
+        assert latest.json()["source_sha"] == "a" * 40
+        assert latest.json()["image_digest"] == "sha256:" + "b" * 64
+
         overwritten = await client.put(
             f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
             headers=headers,
@@ -914,6 +924,10 @@ class TestFederatedScreenerNodes:
                 "provider": "targon",
                 "provider_resource_id": resource_id,
                 "controller_epoch": "prod:first",
+                "image_reference": (
+                    "us-central1-docker.pkg.dev/ditto-app-dev/"
+                    "ditto-public-runtime/screener@sha256:" + "b" * 64
+                ),
             },
         )
         assert grant.status_code == 200, grant.text
@@ -969,6 +983,9 @@ class TestFederatedScreenerNodes:
         assert readiness.status_code == 200
         assert readiness.json()["nodes"][0]["ready"] is False
         assert readiness.json()["nodes"][0]["active_lease"] is False
+        assert readiness.json()["nodes"][0]["image_reference"].endswith(
+            "@sha256:" + "b" * 64
+        )
 
         heartbeat_timestamp = int(datetime.now(UTC).timestamp())
         heartbeat_message = (
@@ -1111,6 +1128,34 @@ class TestFederatedScreenerNodes:
             "controller_stale": False,
             "activate_fallback": False,
             "reason": "controller_fresh",
+            "controller_epoch": "prod:first",
+            "controller_source_sha": "a" * 40,
+            "provider_ready": True,
+        }
+
+        provider_failure = await client.put(
+            "/api/v1/screener/controller/capacity",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={
+                **_capacity_payload("prod:first"),
+                "provider_ready": False,
+                "last_provider_error_code": "TARGON_SCALE_UP_FAILED",
+                "last_provider_error_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        assert provider_failure.status_code == 200, provider_failure.text
+        degraded = await client.get(
+            "/api/v1/public/screener-capacity-watchdog?environment=prod"
+        )
+        assert degraded.status_code == 200
+        assert degraded.json() == {
+            "generated_at": degraded.json()["generated_at"],
+            "controller_stale": False,
+            "activate_fallback": True,
+            "reason": "provider_not_ready",
+            "controller_epoch": "prod:first",
+            "controller_source_sha": "a" * 40,
+            "provider_ready": False,
         }
 
 

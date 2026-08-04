@@ -1,0 +1,7 @@
+# PyPI wheel hashes for CPython 3.12-3.14 on the Linux x86_64 GitHub runner.
+# Keep this transport-only dependency separate from the screener runtime lock.
+numpy==2.5.1 \
+    --hash=sha256:59fda5e192b570217ec2580c96f00e9a7e12ef6866a900eb089b62c1a32545ca \
+    --hash=sha256:9726558e8db4a5bf7929a70ae50f63abda4daf0efe810e3bfbab95976f75fc1a \
+    --hash=sha256:54ad769f17bc2d833b620851989f62054fb9ab93c969d9e1dc3c8e3d56beea21 \
+    --hash=sha256:99d5095fa265a0c4152e7bb12759e14381ef5496152f1ce58f44bdf55c44beb4

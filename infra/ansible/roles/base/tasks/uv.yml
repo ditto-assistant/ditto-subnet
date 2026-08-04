@@ -4,10 +4,16 @@
     path: /usr/local/bin/uv
   register: uv_stat
 
-- name: Install uv (latest)
+- name: Install pinned uv
   ansible.builtin.shell: |
     set -euo pipefail
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    installer=/tmp/uv-installer-0.11.28.sh
+    curl --fail --silent --show-error --location \
+      --output "$installer" \
+      https://github.com/astral-sh/uv/releases/download/0.11.28/uv-installer.sh
+    echo "b7b3fe80cad1142a2a5794050b7db7b3291d1bac1423b0732571dd9366e8ca8b  $installer" \
+      | sha256sum --check
+    sh "$installer"
     cp "$HOME/.local/bin/uv" /usr/local/bin/uv
     chmod 755 /usr/local/bin/uv
   args:

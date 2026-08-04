@@ -24,6 +24,7 @@ _NODE_ID = r"^[a-zA-Z0-9._-]{1,63}$"
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _SIGNATURE = r"^[0-9a-fA-F]{128}$"
 _EPOCH = r"^[a-zA-Z0-9._:-]{1,100}$"
+_IMAGE_REFERENCE = r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
 
 
 class ScreenerBootstrapGrantRequest(BaseModel):
@@ -34,6 +35,7 @@ class ScreenerBootstrapGrantRequest(BaseModel):
     provider: ScreenerProvider
     provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    image_reference: Annotated[str, Field(pattern=_IMAGE_REFERENCE)] | None = None
 
 
 class ScreenerBootstrapGrantResponse(BaseModel):
@@ -102,6 +104,7 @@ class ScreenerControllerNodeState(BaseModel):
     status: ScreenerNodeStatus
     ready: bool
     active_lease: bool
+    image_reference: str | None = None
     heartbeat_seen_at: datetime | None = None
 
 
@@ -125,11 +128,12 @@ class ScreenerCapacitySnapshotRequest(BaseModel):
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    controller_source_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+    provider_ready: bool
     runnable_backlog: Annotated[int, Field(ge=0)]
     active_leases: Annotated[int, Field(ge=0)]
     desired_slots: Annotated[int, Field(ge=0)]
     global_cap: Annotated[int, Field(ge=0)]
-    provider_ready: bool
     targon_capability: Literal["go", "nogo", "unknown"]
     targon_available: Annotated[int, Field(ge=0)]
     targon_healthy: Annotated[int, Field(ge=0)]
@@ -166,6 +170,7 @@ class ScreenerNodeView(BaseModel):
     screener_hotkey: str
     status: ScreenerNodeStatus
     capacity: int
+    image_reference: str | None = None
     token_expires_at: datetime
     registered_at: datetime
     rotated_at: datetime

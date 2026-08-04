@@ -2086,7 +2086,15 @@ class PublicScreenerWatchdogResponse(BaseModel):
     generated_at: datetime
     controller_stale: bool
     activate_fallback: bool
-    reason: Literal["controller_fresh", "controller_stale", "controller_missing"]
+    reason: Literal[
+        "controller_fresh",
+        "controller_stale",
+        "controller_missing",
+        "provider_not_ready",
+    ]
+    controller_epoch: str | None = None
+    controller_source_sha: str | None = None
+    provider_ready: bool = False
 
 
 class PublicScreeningReviewEvidence(BaseModel):

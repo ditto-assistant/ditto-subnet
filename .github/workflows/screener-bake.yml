@@ -41,9 +41,11 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
 
-      - uses: hashicorp/setup-packer@c53928b6ab74a1fe01b014715f51f43e5d1e9545 # main
+      # The action itself is commit-pinned; it installs the explicit Packer
+      # version below. This is a version pin, not a locally verified binary hash.
+      - uses: hashicorp/setup-packer@c53928b6ab74a1fe01b014715f51f43e5d1e9545
         with:
-          version: latest
+          version: 1.14.2
 
       - name: Package the sparse screener checkout for baking
         run: >-

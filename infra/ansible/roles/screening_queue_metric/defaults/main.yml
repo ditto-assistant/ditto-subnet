@@ -6,8 +6,9 @@
 # A systemd timer on the platform app VM polls the app's OWN public activity
 # endpoint on localhost (no auth, no Cloudflare hop) and writes
 # custom.googleapis.com/ditto/screener/queue_depth with an env label. The
-# depth = waiting_screening + screening: in-flight work is included so the
-# autoscaler doesn't shrink the fleet under instances that are mid-build.
+# depth = waiting_screening + screening only while Platform proves the fenced
+# controller lease is stale or absent. A fresh controller publishes zero so
+# the GCE ONLY_SCALE_OUT watchdog cannot race healthy Targon-first capacity.
 #
 # OFF by default; enabled per-host (host_vars/ditto-platform-prod.yml). The VM's
 # runtime SA needs roles/monitoring.metricWriter (granted by screener-fleet.tf,

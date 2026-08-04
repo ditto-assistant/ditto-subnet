@@ -27,6 +27,7 @@ def upgrade() -> None:
         sa.Column("provider", sa.Text(), nullable=False),
         sa.Column("provider_resource_id", sa.Text(), nullable=False),
         sa.Column("controller_epoch", sa.Text(), nullable=False),
+        sa.Column("image_reference", sa.Text(), nullable=True),
         sa.Column("token_hash", sa.Text(), nullable=False),
         sa.Column("expires_at", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("consumed_at", sa.TIMESTAMP(timezone=True), nullable=True),
@@ -53,6 +54,11 @@ def upgrade() -> None:
             "length(token_hash) = 64",
             name="screener_node_bootstrap_grants_token_hash_check",
         ),
+        sa.CheckConstraint(
+            "image_reference IS NULL OR image_reference ~ "
+            "'^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'",
+            name="screener_node_bootstrap_grants_image_reference_check",
+        ),
         sa.PrimaryKeyConstraint("grant_id"),
         sa.UniqueConstraint("token_hash"),
     )
@@ -77,6 +83,7 @@ def upgrade() -> None:
         sa.Column("token_expires_at", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("status", sa.Text(), server_default="active", nullable=False),
         sa.Column("capacity", sa.Integer(), server_default="1", nullable=False),
+        sa.Column("image_reference", sa.Text(), nullable=True),
         sa.Column(
             "registered_at",
             sa.TIMESTAMP(timezone=True),
@@ -117,6 +124,11 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "capacity BETWEEN 1 AND 16", name="screener_nodes_capacity_check"
         ),
+        sa.CheckConstraint(
+            "image_reference IS NULL OR image_reference ~ "
+            "'^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'",
+            name="screener_nodes_image_reference_check",
+        ),
         sa.PrimaryKeyConstraint("node_id"),
         sa.UniqueConstraint(
             "environment",
@@ -133,6 +145,8 @@ def upgrade() -> None:
         "screener_capacity_snapshots",
         sa.Column("environment", sa.Text(), nullable=False),
         sa.Column("controller_epoch", sa.Text(), nullable=False),
+        sa.Column("controller_source_sha", sa.Text(), nullable=False),
+        sa.Column("provider_ready", sa.Boolean(), nullable=False),
         sa.Column(
             "controller_heartbeat_at", sa.TIMESTAMP(timezone=True), nullable=False
         ),
@@ -143,7 +157,6 @@ def upgrade() -> None:
         sa.Column("active_leases", sa.Integer(), nullable=False),
         sa.Column("desired_slots", sa.Integer(), nullable=False),
         sa.Column("global_cap", sa.Integer(), nullable=False),
-        sa.Column("provider_ready", sa.Boolean(), nullable=False),
         sa.Column("targon_capability", sa.Text(), nullable=False),
         sa.Column("targon_available", sa.Integer(), nullable=False),
         sa.Column("targon_healthy", sa.Integer(), nullable=False),
@@ -168,6 +181,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "targon_capability IN ('go', 'nogo', 'unknown')",
             name="screener_capacity_snapshots_targon_capability_check",
+        ),
+        sa.CheckConstraint(
+            "controller_source_sha ~ '^[0-9a-f]{40}$'",
+            name="screener_capacity_snapshots_source_sha_check",
         ),
         sa.CheckConstraint(
             "runnable_backlog >= 0 AND active_leases >= 0 AND "
