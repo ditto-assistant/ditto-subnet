@@ -1,0 +1,101 @@
+---
+# Generic postflight guard: fail the play if a file we just rendered still
+# carries an unresolved placeholder token.
+#
+# WHY THIS EXISTS (2026-07-23, prod). `gcp-platform-app.yml` was run against
+# ditto-platform-prod with only GCP_OSLOGIN_USER exported — the only variable
+# the playbook header documented at the time. Every `lookup('env', …) |
+# default('TODO_TF_OUTPUT_…', true)` in group_vars/role_platform_app.yml fell
+# back to its placeholder, the converge reported `ok=54 changed=2 failed=0`,
+# and /opt/ditto-platform/.env was rewritten with
+# `POSTGRES_HOST=TODO_TF_OUTPUT_pg_internal_ip`. Nothing failed: the running API
+# still held its old environment in memory, so prod stayed up and would only
+# have died at the next restart or reboot. It was caught by luck, when a later
+# `scripts/update.sh` hit socket.gaierror at the Alembic step.
+#
+# A per-variable assertion list (see platform_app/tasks/preflight.yml) covers
+# the values we know about today, but that list rots: the next `default('TODO_…')`
+# someone adds renders exactly the same way, silently. This guard is
+# name-agnostic — it reads the finished file back off the host and rejects the
+# whole class, so a new placeholder variable is caught without anyone
+# remembering to register it anywhere.
+#
+# Usage — invoke immediately after the template task that writes the file:
+#
+#   - name: Guard the rendered env file against unresolved placeholders
+#     ansible.builtin.include_role:
+#       name: env_render_guard
+#     vars:
+#       env_render_guard_path: "{{ platform_root }}/.env"
+#       env_render_guard_hint: "run: source infra/ansible/scripts/platform-app-env.sh"
+#
+# SECRECY: these files hold Secret Manager material. The read is `no_log`, and
+# the failure message names only the KEYS of offending lines (everything left of
+# the first `=`) — never a value.
+
+- name: Assert the placeholder guard was given a path
+  ansible.builtin.assert:
+    that: env_render_guard_path | length > 0
+    fail_msg: >-
+      env_render_guard was included without env_render_guard_path — it would
+      scan nothing and pass vacuously. Set it to the rendered file's path.
+    quiet: true
+
+- name: Stat the rendered file
+  ansible.builtin.stat:
+    path: "{{ env_render_guard_path }}"
+  register: env_render_guard_stat
+
+# In --check mode a first-time render never happens, so there is nothing on disk
+# to scan. Say so out loud instead of passing silently — a clean --check run is
+# NOT evidence that a real converge would render resolved values.
+- name: Report that the placeholder scan could not run in check mode
+  ansible.builtin.debug:
+    msg: >-
+      CHECK MODE: {{ env_render_guard_label }} does not exist on the host, so it
+      was not scanned for unresolved placeholders. A passing --check run does not
+      prove the real converge renders resolved values.
+  when:
+    - not env_render_guard_stat.stat.exists
+    - ansible_check_mode
+
+- name: Assert the rendered file exists
+  ansible.builtin.assert:
+    that: env_render_guard_stat.stat.exists
+    fail_msg: >-
+      {{ env_render_guard_label }} was expected on the host after its template
+      task ran, but is missing — the render did not take effect.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Read the rendered file back for placeholder scanning
+  ansible.builtin.slurp:
+    src: "{{ env_render_guard_path }}"
+  register: env_render_guard_slurp
+  no_log: true
+  when: env_render_guard_stat.stat.exists
+
+- name: Assert no unresolved placeholder survived into the rendered file
+  vars:
+    # Keys only — values are never surfaced. Comment lines are skipped so a
+    # template can document a placeholder without tripping the guard.
+    env_render_guard_offenders: >-
+      {{ (env_render_guard_slurp.content | b64decode).splitlines()
+         | reject('match', '\s*#')
+         | select('search', env_render_guard_pattern)
+         | map('regex_replace', '=.*$', '')
+         | map('trim')
+         | list }}
+  ansible.builtin.assert:
+    that: env_render_guard_offenders | length == 0
+    fail_msg: |
+      Unresolved placeholder(s) were rendered into {{ env_render_guard_label }}.
+      Offending keys: {{ env_render_guard_offenders | join(', ') }}
+
+      A placeholder here means a variable fell back to its `default('TODO_…')`
+      because the value was never supplied — the file on the host is now wrong
+      and the service will fail on its next restart, NOT now. Supply the missing
+      values and re-run; do not restart the service until this passes.
+      {{ env_render_guard_hint }}
+    quiet: true
+  when: env_render_guard_stat.stat.exists

@@ -1,0 +1,53 @@
+# Copy to terraform.tfvars (gitignored) for local plans/applies.
+# In CI all values come from GitHub Actions secrets exported as TF_VAR_*.
+#
+# project / region / zone default to ditto-app-dev / us-central1 / us-central1-a.
+# The runtime SA is created by this stack (identity.tf); leave
+# run_service_account_email unset unless overriding it.
+
+# Only needed when manage_dns = true (cloudflare vars default to empty otherwise):
+cloudflare_zone_id = "TODO_HEYDITTO_ZONE_ID"
+
+# Sensitive — never commit (prefer TF_VAR_cloudflare_api_token / TF_VAR_db_password
+# / TF_VAR_pylon_open_access_token in CI):
+# cloudflare_api_token = "..."
+# db_password          = "..."   # password for the `ditto` role on ditto-pg-platform
+
+# NOTE: the upload payment SS58 address is NOT set here — it is supplied at
+# deploy time from the ditto-subnet repo's GitHub environment secret
+# DITTO_UPLOAD_PAYMENT_ADDRESS (see that repo's deploy.yml).
+
+# Per-env Pylon open-access tokens (sensitive — set via TF_VAR_pylon_open_access_token):
+# pylon_open_access_token = {
+#   dev  = "..."
+#   prod = "..."
+# }
+
+# Hostnames (defaults shown; override if you want different names):
+# api_domain_dev  = "platform-api-dev.heyditto.ai"
+# api_domain_prod = "platform-api.heyditto.ai"
+
+# Set false to stand up the VMs before pointing DNS at them:
+# manage_dns = true
+
+# Live-VM enable flags — KEEP THESE TRUE in a local terraform.tfvars: without
+# them a full plan proposes destroying the running embedder/screener/validator.
+# enable_embedder      = true
+# enable_validator     = true
+# enable_screener      = true
+# enable_screener_prod = true
+
+# Autoscaled prod screener fleet (regional MIG + queue-depth autoscaler; see
+# screener-fleet.tf + docs/screener-scaling.md before enabling). Two-phase
+# stand-up: apply with _secrets first, populate the deploy-key version + the
+# metric point, THEN enable the fleet itself (avoids booting a VM before a key
+# version exists). Enabling the fleet implies the secrets phase.
+# enable_screener_fleet_secrets = true
+# enable_screener_fleet         = true
+# enable_screener_capacity_controller = true
+# Fast-relief burst tuning (see docs/screener-scaling.md):
+# screener_fleet_min_replicas         = 0
+# screener_fleet_backlog_per_instance = 3
+# Golden image (after baking via ditto-screener's Bake workflow) — pre-provisioned
+# boot cuts time-to-first-claim ~5-10min -> ~1-2min:
+# screener_fleet_image = "projects/ditto-app-dev/global/images/family/ditto-screener-fleet"

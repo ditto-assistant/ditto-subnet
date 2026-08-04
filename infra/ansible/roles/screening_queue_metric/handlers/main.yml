@@ -1,0 +1,7 @@
+---
+- name: restart screening-queue-metric timer
+  ansible.builtin.systemd:
+    name: "{{ screening_queue_metric_unit }}.timer"
+    state: restarted
+    daemon_reload: true
+  when: screening_queue_metric_enabled

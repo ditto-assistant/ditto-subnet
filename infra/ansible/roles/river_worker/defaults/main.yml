@@ -1,0 +1,23 @@
+---
+river_worker_user: deploy
+river_worker_group: ditto
+river_worker_slot_dir: /opt/ditto/worker
+river_worker_logs_dir: /opt/ditto/logs
+river_worker_secrets_dir: /opt/ditto/secrets
+river_worker_bin: /opt/ditto/worker/worker
+river_worker_env_file: /opt/ditto/worker/worker.env
+river_worker_unit: ditto-worker
+
+# Metrics/health port (matches the Hetzner allocation for prod).
+river_worker_metrics_port: 3480
+
+# River drains in-flight jobs on SIGTERM for up to drain_timeout; the unit's
+# TimeoutStopSec gives that plus buffer (see cmd/worker WORKER_DEPLOY.md).
+river_worker_drain_timeout: "30m"
+river_worker_timeout_stop_sec: 2400
+
+river_worker_max_kg_workers: 4
+river_worker_max_embed_workers: 4
+
+river_worker_env: prod
+river_worker_db_name: ditto_prod

@@ -1,0 +1,30 @@
+[Unit]
+Description=Allowlisting egress proxy for the untrusted-miner sandbox (SN118 C-ISO)
+Documentation=https://github.com/ditto-assistant/dittobench-api/blob/main/docs/sandbox-egress-hardening.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Managed container: clear any stale instance, then run in the foreground so
+# systemd owns its lifecycle. It attaches to the isolated sandbox network at a
+# fixed IP (the firewall rules key on it) and is NOT published to the host — the
+# only client is the sandbox container on the same network.
+ExecStartPre=-/usr/bin/docker rm -f {{ dittobench_egress_proxy_container }}
+ExecStart=/usr/bin/docker run --rm \
+  --name {{ dittobench_egress_proxy_container }} \
+  --network {{ dittobench_sandbox_network }} \
+  --ip {{ dittobench_egress_proxy_ip }} \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  -e EGRESS_PROXY_ADDR=:{{ dittobench_egress_proxy_port }} \
+  -e EGRESS_PROXY_ALLOW={{ dittobench_egress_allow }} \
+  -e EGRESS_PROXY_ALLOW_PORTS={{ dittobench_egress_allow_ports }} \
+  {{ dittobench_egress_proxy_image }}
+ExecStop=-/usr/bin/docker rm -f {{ dittobench_egress_proxy_container }}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+---
+# See tasks/main.yml for what this role does and why it exists.
+
+# Absolute path of the file that was just rendered. REQUIRED — the role asserts
+# it is set rather than silently scanning nothing (which is the exact failure
+# mode this role exists to prevent).
+env_render_guard_path: ""
+
+# What to call the file in messages (defaults to the path).
+env_render_guard_label: "{{ env_render_guard_path }}"
+
+# The placeholder class. Deliberately narrow and SHOUTY so it can never collide
+# with a legitimate rendered value (a hostname, URL, token or base64 secret):
+#   TODO_<CAPS>   the `default('TODO_TF_OUTPUT_…')` idiom used in group_vars
+#   CHANGEME / REPLACE_ME / FIXME_<CAPS>   the other common stand-ins
+# Comment lines are excluded before matching, so a template may still *document*
+# a placeholder in prose.
+env_render_guard_pattern: "TODO_[A-Z0-9_]+|FIXME_[A-Z0-9_]+|CHANGEME|REPLACE_ME"
+
+# Extra, caller-specific remediation text appended to the failure message
+# (e.g. "run: source infra/ansible/scripts/platform-app-env.sh").
+env_render_guard_hint: ""

@@ -1,0 +1,55 @@
+---
+# Converge the ditto-platform app VMs (infra/terraform/stacks/gcp-platform → ditto-platform-dev,
+# ditto-platform-prod). Installs Docker + Node/pm2 + uv (via base), clones the
+# repo, renders /opt/ditto-platform/.env from Secret Manager + host_vars, and
+# writes the Caddy vhost. It does NOT start the app: the app needs
+# DITTO_UPLOAD_PAYMENT_ADDRESS (injected into deploy-owned .env.deploy), so the
+# first start happens on the first deploy.
+#
+# Per-VM config (env, domain, branch, database, bucket) lives in
+# host_vars/ditto-platform-{dev,prod}.yml; shared config in
+# group_vars/role_platform_app.yml. After this runs, the ditto-subnet repo's
+# deploy.yml (push dev|main → IAP SSH → scripts/update.sh) brings up + drives the app.
+#
+# ---------------------------------------------------------------------------
+# INVOCATION — this play needs FIVE environment variables, not one.
+#
+# On 2026-07-23 this header showed only GCP_OSLOGIN_USER. A prod converge run
+# exactly as documented rendered POSTGRES_HOST=TODO_TF_OUTPUT_pg_internal_ip and
+# dropped DATA_PIPELINE_URL from /opt/ditto-platform/.env, and still reported
+# ok=54 changed=2 failed=0. Keep this list complete.
+#
+# Easiest (reads the values from Terraform outputs — see
+# ../scripts/platform-app-env.sh):
+#
+#   export GCP_OSLOGIN_USER=…            # gcloud compute os-login describe-profile
+#   source infra/ansible/scripts/platform-app-env.sh
+#   ansible-playbook -i infra/ansible/inventory/gcp.yml \
+#     infra/ansible/playbooks/gcp-platform-app.yml --limit ditto-platform-prod
+#
+# Or by hand — `terraform -chdir=infra/terraform/stacks/gcp-platform output -raw <name>`:
+#
+#   GCP_OSLOGIN_USER=…                          your OS Login username
+#   PLATFORM_PG_HOST=…                          REQUIRED  <- pg_internal_ip
+#   PLATFORM_STORAGE_ACCESS_KEY=…               REQUIRED  <- storage_hmac_access_id
+#   PLATFORM_EMBEDDER_URL=…                     optional  <- embedder_url
+#   PLATFORM_DATAPIPELINE_URL=…                 optional  <- datapipeline_url
+#
+# REQUIRED ones are asserted by the platform_app role before it renders
+# anything, and any TODO_ placeholder that reaches the written .env fails the
+# play (roles/env_render_guard). The two optional ones are opt-in by design —
+# empty means the feature is DISABLED (no embeddings / no dataset pinning, which
+# v7 needs), so the play warns loudly rather than failing. Leaving them unset on
+# a host that had them set SILENTLY TURNS THE FEATURE OFF: always export all
+# four for prod.
+# ---------------------------------------------------------------------------
+- name: Converge ditto-platform app VMs
+  hosts: role_platform_app
+  become: true
+  gather_facts: true
+  roles:
+    - base
+    - platform_app
+    # Screening-backlog gauge for the prod screener fleet autoscaler. No-op
+    # unless screening_queue_metric_enabled (host_vars/ditto-platform-prod.yml).
+    - screening_queue_metric

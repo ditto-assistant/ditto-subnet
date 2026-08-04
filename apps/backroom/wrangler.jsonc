@@ -5,12 +5,8 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "main": "./src/server.ts",
   "workers_dev": false,
-  "routes": [
-    {
-      "pattern": "backroom.dittobench.ai",
-      "custom_domain": true,
-    },
-  ],
+  // The Worker service is deployed first; Terraform owns the production
+  // custom-domain attachment in infra/terraform/stacks/cloudflare-dittobench.
   "vars": {
     "GOOGLE_REDIRECT_URI": "https://backroom.dittobench.ai/auth/callback",
     "DITTO_PLATFORM_API_BASE_URL": "https://platform-api.heyditto.ai",

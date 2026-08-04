@@ -1,0 +1,55 @@
+---
+- name: Ensure 'ditto' group exists
+  ansible.builtin.group:
+    name: "{{ deploy_group | default('ditto') }}"
+    state: present
+
+- name: Ensure 'deploy' service account exists
+  ansible.builtin.user:
+    name: "{{ deploy_user | default('deploy') }}"
+    groups: "{{ deploy_group | default('ditto') }}"
+    shell: /bin/bash
+    state: present
+    create_home: true
+    comment: "Ditto Deploy"
+    password: "*"  # disabled password
+
+- name: Ensure team members exist with sudo + ditto group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: "{{ [deploy_group | default('ditto'), 'sudo'] }}"
+    shell: /bin/bash
+    state: present
+    create_home: true
+    password: "*"
+  loop: "{{ base_team_members }}"
+
+- name: Ensure ~/.ssh exists for team members
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.ssh"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0700"
+  loop: "{{ base_team_members }}"
+
+- name: Ensure team sudoers grant
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/ditto-team
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+    content: |
+      # Managed by infra/ansible/roles/base. Edits here are wiped on next run.
+      # Service management without password
+      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl restart ditto-*
+      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl stop ditto-*
+      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl start ditto-*
+      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl status ditto-*
+      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload
+      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl reload caddy
+      %ditto ALL=(ALL) NOPASSWD: /bin/journalctl *
+
+      # Switch to deploy user
+      %ditto ALL=(deploy) NOPASSWD: ALL

@@ -1,0 +1,10 @@
+---
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart ditto-pylon
+  ansible.builtin.systemd:
+    name: ditto-pylon
+    state: restarted
+  when: validator_pylon_identity_enabled | default(false)

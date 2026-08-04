@@ -1,0 +1,21 @@
+---
+- name: Install SSH hardening drop-in
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/ditto.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by infra/ansible/roles/base. Edits here are wiped on next run.
+      PermitRootLogin no
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no
+      UsePAM yes
+      {% if base_ssh_set_allow_users | default(true) %}
+      AllowUsers {{ base_ssh_allow_users | join(' ') }}
+      {% endif %}
+      MaxAuthTries 3
+      LoginGraceTime 30
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+  notify: restart sshd

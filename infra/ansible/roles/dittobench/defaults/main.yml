@@ -1,0 +1,151 @@
+---
+# The DittoBench scoring engine (dittobench-api), co-located on the SN118
+# validator VM. Unlike the public Cloud Run practice deploy, this instance BUILDS
+# and RUNS untrusted miner harnesses in Docker (the `git_url` / `tarball_url`
+# sandbox path Cloud Run can't host), so it runs as a host systemd service with
+# access to the Docker daemon — NOT in a container.
+#
+# It listens on loopback and is called only by the co-located validator worker.
+
+dittobench_user: "{{ deploy_user | default('deploy') }}"
+dittobench_group: "{{ deploy_group | default('ditto') }}"
+
+dittobench_root: /opt/ditto/dittobench # git checkout + built binary
+dittobench_repo: "ditto-assistant/dittobench-api"
+#
+# NOT THE VALIDATOR-FLEET SOURCE OF TRUTH. The SN118 validator fleet does not
+# run this role. Fleet validators run the ditto-subnet docker compose stack
+# (ditto-subnet/docker-compose.yml) and self-update through the stack updater
+# (VALIDATOR_STACK_UPDATER / VALIDATOR_STACK_AUTO_UPDATE); their dittobench-api
+# build is pinned by DITTOBENCH_BUILD_CONTEXT in that compose file and is
+# repinned by ditto-subnet PRs, not here. See ditto-subnet/docs/VALIDATOR.md.
+#
+# This role converges exactly one host: the GCE dev validator VM
+# ditto-validator-dev (ditto-app-dev / us-central1-a, label role=validator; see
+# inventory/validator-static.yml + playbooks/gcp-validator.yml), which runs
+# dittobench-api as a host systemd unit built from the checkout below. Bumping
+# this pin changes only that dev VM, on the next converge; it does NOT ship
+# anything to the fleet and is not a release gate for a benchmark rollout.
+#
+# Immutable merged-main pin. Contains dittobench-api#98 (v7 strict per-case
+# scoring and deepened composite gates, version-gated on bench_version >= 7, so
+# v2-v6 replays are unaffected) and its quality-only v7 token contract — v7
+# admission requires no reviewed token baseline, and v7 is never token-scored
+# (scoring_enabled=false in the embedded v7 manifest); activation is the
+# platform's backroom bench rollout, not a validator-side env flag. Also
+# contains #97 (fail closed on platform inference faults) and pins
+# dittobench-datagen v0.12.0 in go.mod — the same generator release the
+# datapipeline Cloud Run image is pinned to in
+# infra/terraform/stacks/gcp-platform/datapipeline.tf. Keep those two in step.
+dittobench_branch: 001d3aa28ef3089322a26870563cb2247afdb0e2
+dittobench_bin: /opt/ditto/dittobench/dittobench-api
+dittobench_env_file: /opt/ditto/dittobench/dittobench.env
+dittobench_logs_dir: "{{ ditto_logs | default('/opt/ditto/logs') }}"
+dittobench_secrets_dir: "{{ ditto_secrets | default('/opt/ditto/secrets') }}"
+dittobench_unit: dittobench-api
+dittobench_relay_bin: /opt/ditto/dittobench/model-relay
+dittobench_relay_env_file: /opt/ditto/dittobench/model-relay.env
+dittobench_relay_unit: dittobench-model-relay
+dittobench_relay_port: 11435
+dittobench_relay_enabled: "{{ not (validator_platform_inference_enforced | default(false) | bool) }}"
+dittobench_openrouter_secret: validator-openrouter-key
+
+# The port the worker reaches over localhost. The VM firewall exposes only
+# IAP-SSH (22), so this port is never reachable off-box; binding is incidental.
+dittobench_port: 8080
+dittobench_max_concurrent_runs: "{{ validator_benchmark_capacity | default(1) }}"
+dittobench_ticket_inference_enforced: "{{ validator_platform_inference_enforced | default(false) }}"
+dittobench_platform_inference_proxy_url: "{{ validator_platform_api_url | default('https://platform-api-dev.heyditto.ai') }}/api/v1/inference/chat/completions"
+
+# SSRF guard RELAXED — required on the validator, for three reasons:
+#   1. the Docker sandbox publishes each harness container on 127.0.0.1 and the
+#      in-process runner must connect to it (the guard would refuse loopback);
+#   2. the tarball fetch must reach the platform's presigned URL (trusted, since
+#      the validator — not the miner — supplies it);
+#   3. it disables the public per-IP submit rate limiter (this endpoint is
+#      loopback-only, driven by the single trusted local worker).
+# The VM firewall (IAP-SSH only) is what actually keeps the port off the internet.
+dittobench_allow_private: true
+
+# ditto-harness is PUBLIC, so miner-harness `docker build`s no longer receives
+# the BuildKit `gh_token` secret. The token file remains required by the
+# non-persisting Git credential helper used for the private source checkout.
+dittobench_private_harness_dep: false
+dittobench_gh_token_file: "{{ ditto_secrets | default('/opt/ditto/secrets') }}/dittobench-gh-token"
+
+# A single GitHub token (fine-grained PAT or App token) with READ on
+# ditto-assistant/{dittobench-api, ditto-subnet, ditto-harness}. Used to clone
+# this repo + the subnet worker over HTTPS AND as the BuildKit gh_token above.
+# Provisioned out-of-band into Secret Manager by the key owner (see the runbook).
+dittobench_gh_token_secret: validator-gh-token
+
+# Generator/judge model identifiers. The frozen v6 relay is provisioned only
+# during the bounded transition; v7 inference is always ticket-bound.
+dittobench_generator_model: "google/gemini-3.1-flash-lite"
+dittobench_scorer_model: "google/gemini-3.1-flash-lite"
+
+# Pinned Go toolchain used to build the (pure-Go) binary on the VM. Kept >= the
+# repo's go.mod directive. Installed to /usr/local/go if absent/mismatched.
+dittobench_go_version: "1.23.6"
+dittobench_go_linux_amd64_sha256: "9379441ea310de000f33a4dc767bd966e72ab2826270e038e78b2c53c2e7802d"
+dittobench_go_root: /usr/local/go
+
+# GCP project the VM's attached SA reads Secret Manager from.
+dittobench_gcp_project: "{{ gcp_project | default('ditto-app-dev') }}"
+
+# Docker apt architecture (Debian).
+dittobench_docker_apt_arch: amd64
+
+# --- C-ISO: untrusted-sandbox egress enforcement -------------------------------
+# When enabled, each untrusted miner container is confined to an isolated docker
+# network whose ONLY permitted egress is an allowlisting CONNECT proxy
+# (dittobench-api cmd/egress-proxy) reaching OpenRouter; a DOCKER-USER firewall
+# DROPs any direct egress that bypasses the proxy (fail-closed). The harness's
+# host-side embedding backend (Ollama) is a trusted local dependency, not egress,
+# and is reached over INPUT via a scoped UFW allow (below) — moving the sandbox
+# off the default docker0 bridge takes it outside the pre-existing 172.17.0.0/16
+# Ollama allow, so C-ISO must re-grant it for the sandbox subnet.
+# See dittobench-api docs/sandbox-egress-hardening.md.
+#
+# Default OFF so a plain converge preserves today's full-egress behavior; the
+# validator host_vars turn it on. The three DITTOBENCH_SANDBOX_* values are
+# rendered into dittobench.env and read by internal/sandbox.
+dittobench_sandbox_egress_enabled: false
+
+# The isolated bridge network + a fixed subnet (needed to pin the proxy IP for
+# the firewall rules).
+dittobench_sandbox_network: ditto-sandbox
+dittobench_sandbox_subnet: "172.31.240.0/24"
+dittobench_sandbox_gateway: "172.31.240.1"
+dittobench_egress_proxy_ip: "172.31.240.2"
+dittobench_egress_proxy_port: 3128
+
+# The harness reaches one host-local trusted service at host.docker.internal
+# (the docker0 gateway) — both host-local INPUT paths, not forwarded egress, so
+# they do not weaken the fail-closed *external* egress posture (FORWARD still
+# drops sandbox→internet). Moving the sandbox off the default docker0 bridge
+# takes it outside the pre-existing 172.17.0.0/16 host allow, so C-ISO must
+# re-grant both for the sandbox subnet via scoped UFW INPUT allows.
+dittobench_sandbox_host_gateway_ip: "172.17.0.1"
+
+# Ollama is reachable only by the trusted scorer process. The source-bound
+# broker exposes the locked embedding operation without exposing Ollama's model
+# management or generation APIs to untrusted harnesses.
+dittobench_sandbox_host_embed_port: ""
+
+# The dedicated source-bound broker carries platform inference, the locked
+# embedding operation, and the
+#    authoritative observed-trajectory tool channel. It exposes no scorer
+#    control-plane routes, so no broad ephemeral host range is opened.
+dittobench_sandbox_host_broker_port: 11436
+
+# Drop all Linux caps on the untrusted container (DITTOBENCH_SANDBOX_HARDEN).
+dittobench_sandbox_harden: true
+
+# The legacy provider remains reachable only during the bounded transition.
+# Once platform inference is enforced, public harness egress becomes empty and
+# inference is reachable only through the trusted ticket broker.
+dittobench_egress_allow: "{{ '' if validator_platform_inference_enforced | default(false) | bool else 'openrouter.ai' }}"
+dittobench_egress_allow_ports: "443"
+dittobench_egress_proxy_image: "ditto-egress-proxy:local"
+dittobench_egress_proxy_container: ditto-egress-proxy

@@ -1,0 +1,28 @@
+[Unit]
+Description=DittoBench scoring engine (SN118 validator, co-located)
+Documentation=https://github.com/ditto-assistant/dittobench-api
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ dittobench_user }}
+Group={{ dittobench_group }}
+WorkingDirectory={{ dittobench_root }}
+EnvironmentFile={{ dittobench_env_file }}
+ExecStart={{ dittobench_bin }} -port {{ dittobench_port }}
+Restart=always
+RestartSec=5
+StandardOutput=append:{{ dittobench_logs_dir }}/{{ dittobench_unit }}.log
+StandardError=append:{{ dittobench_logs_dir }}/{{ dittobench_unit }}.log
+LimitNOFILE=65536
+
+# This service intentionally runs UNsandboxed relative to the worker: it shells
+# out to `docker build` / `docker run` to compile and execute untrusted miner
+# harnesses, so it needs the docker group and host access. Isolation of the
+# untrusted code is the Docker sandbox's job (internal/sandbox), not systemd's.
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

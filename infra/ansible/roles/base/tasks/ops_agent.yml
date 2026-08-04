@@ -1,0 +1,95 @@
+---
+# Google Cloud Ops Agent — ships logs (and host metrics) to Cloud Logging.
+#
+# Why this exists: the SN118 screener's L2/L3 shadow reviewer failed silently
+# for two days. Every observation was rejected by the platform with HTTP 422,
+# and the only symptom was a WARNING line in a log file on the VM. Nothing from
+# these hosts reached Cloud Logging, so `gcloud logging read` showed nothing at
+# all and the failure was invisible until someone SSH'd in and grepped by hand.
+#
+# Default OFF. Enable per group in group_vars once reviewed, e.g.
+#   base_install_ops_agent: true
+# The agent needs roles/logging.logWriter (and roles/monitoring.metricWriter for
+# metrics) on the VM's attached service account.
+
+- name: Ensure the Google Cloud apt keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the Google Cloud packages signing key
+  ansible.builtin.get_url:
+    url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+    dest: /etc/apt/keyrings/google-cloud-ops-agent.asc
+    owner: root
+    group: root
+    mode: "0644"
+  register: base_ops_agent_key
+  retries: 3
+  delay: 5
+  until: base_ops_agent_key is succeeded
+
+- name: Add the Cloud Ops Agent apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/etc/apt/keyrings/google-cloud-ops-agent.asc]
+      https://packages.cloud.google.com/apt
+      google-cloud-ops-agent-{{ ansible_distribution_release }}-all main
+    filename: google-cloud-ops-agent
+    state: present
+    update_cache: true
+
+- name: Install the Cloud Ops Agent
+  ansible.builtin.apt:
+    name: google-cloud-ops-agent
+    state: present
+
+# journald is collected by the agent's built-in default pipeline, so units that
+# log to the journal need no configuration here. The screener currently writes
+# to a file instead (StandardOutput=append:/opt/ditto/logs/ditto-screener.log),
+# so it is tailed explicitly below. Once those units are switched to journald,
+# this receiver and its pipeline can be deleted.
+- name: Configure Cloud Ops Agent log collection
+  ansible.builtin.copy:
+    dest: /etc/google-cloud-ops-agent/config.yaml
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by infra/ansible/roles/base. Edits here are wiped on next run.
+      logging:
+        receivers:
+          ditto_file_logs:
+            type: files
+            include_paths:
+              - /opt/ditto/logs/*.log
+            wildcard_refresh_interval: 60s
+        processors:
+          ditto_severity:
+            type: parse_regex
+            field: message
+            regex: >-
+              ^(?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+
+              (?<severity>DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+(?<message>.*)$
+            time_key: timestamp
+            time_format: "%Y-%m-%d %H:%M:%S,%L"
+        service:
+          pipelines:
+            ditto_files:
+              receivers: [ditto_file_logs]
+              processors: [ditto_severity]
+      metrics:
+        service:
+          pipelines:
+            default_pipeline:
+              receivers: [hostmetrics]
+  notify: restart ops agent
+
+- name: Ensure the Cloud Ops Agent is enabled and running
+  ansible.builtin.systemd:
+    name: google-cloud-ops-agent
+    enabled: true
+    state: started

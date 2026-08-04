@@ -1,0 +1,87 @@
+---
+# Applies to the GCP Postgres VM(s) (label role=postgres → group role_postgres).
+# Hetzner hosts are in group role_dittobox, so none of this touches them.
+
+# --- GCP placement ---
+gcp_project: ditto-app-dev
+gcp_region: us-central1
+gcp_zone: us-central1-a
+
+# --- Connection over IAP (the VM has no public IP) ---
+# Set GCP_OSLOGIN_USER to your OS Login username, e.g. nick_anderson_omniaura_ai
+# (run `gcloud compute os-login describe-profile` to find it).
+ansible_user: "{{ lookup('env', 'GCP_OSLOGIN_USER') | default('', true) }}"
+ansible_ssh_common_args: >-
+  -o ProxyCommand="gcloud compute start-iap-tunnel {{ inventory_hostname }} 22
+  --listen-on-stdin --zone={{ gcp_zone }} --project={{ gcp_project }}
+  --verbosity=warning"
+
+# --- base role: this VM serves Postgres only; it never runs Caddy ---
+base_install_caddy: false
+
+# Externally-provided Postgres password — MUST equal TF_VAR_db_password used by
+# envs/gcp-prod so the Cloud Run connection-URI secrets authenticate. Provide via
+# env (do not hard-code).
+#
+# postgres_app_password_required makes the postgres role hard-fail rather than
+# fall back to a box-generated password on a host that has none yet: a generated
+# password here authenticates no client and the converge would still report
+# success. A converge that only re-runs against an already-provisioned host
+# without $DITTO_PG_PASSWORD keeps working (the existing password is left
+# untouched) — it just warns.
+postgres_app_password: "{{ lookup('env', 'DITTO_PG_PASSWORD') | default('', true) }}"
+postgres_app_password_required: true
+
+# --- Postgres: prod + 1 staging database on one VM (cost-optimal) ---
+postgres_databases:
+  - ditto_prod
+  - ditto_staging
+
+# Allow the VPC subnet so Cloud Run's DIRECT URI (:5432) can reach Postgres.
+# PgBouncer (:6432) fronts the pooled path; both are subnet-only via firewall.
+postgres_hba_hosts:
+  - { database: all, user: ditto, address: 10.10.0.0/24, method: scram-sha-256 }
+
+# Tuning for e2-standard-4 (4 vCPU / 16 GB) — scaled down from the 64 GB box.
+# Replaces the role default wholesale (Ansible does not deep-merge dicts).
+# This VM intentionally carries only prod + 1 staging DB (see below), not the
+# Hetzner box's full 8-slot fleet. CAVEAT: shared_buffers drops 16GB→4GB vs the
+# live box; validate prod's working set before cutover (see envs/gcp-prod pg_vm).
+postgres_tuning:
+  listen_addresses: "'*'" # private interface for Cloud Run; firewall-restricted
+  shared_buffers: "4GB"
+  effective_cache_size: "12GB"
+  work_mem: "8MB"
+  maintenance_work_mem: "1GB"
+  wal_buffers: "16MB"
+  huge_pages: "try"
+  wal_level: "replica"
+  max_wal_senders: 3
+  wal_keep_size: "1GB"
+  max_wal_size: "4GB"
+  min_wal_size: "1GB"
+  checkpoint_timeout: "15min"
+  checkpoint_completion_target: 0.9
+  random_page_cost: 1.1
+  effective_io_concurrency: 200
+  max_parallel_workers: 4
+  max_parallel_workers_per_gather: 2
+  max_parallel_maintenance_workers: 2
+  max_connections: 100 # PgBouncer fronts most clients; PG itself needs fewer
+  autovacuum_vacuum_scale_factor: 0.05
+  autovacuum_analyze_scale_factor: 0.025
+  autovacuum_vacuum_cost_delay: "2ms"
+  log_min_duration_statement: 500
+  log_checkpoints: "on"
+  log_lock_waits: "on"
+  log_temp_files: 0
+  log_directory: "'/opt/ditto/logs/postgresql'"
+  logging_collector: "on"
+  log_filename: "'postgresql-%Y-%m-%d.log'"
+  log_rotation_age: "1d"
+  log_rotation_size: "100MB"
+  shared_preload_libraries: "'pg_stat_statements'"
+
+# --- River worker (co-located; connects to Postgres on localhost) ---
+river_worker_env: prod
+river_worker_db_name: ditto_prod

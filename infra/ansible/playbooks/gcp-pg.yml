@@ -1,0 +1,32 @@
+---
+# Converge the GCP Postgres + River-worker VM (envs/gcp-prod → ditto-pg-prod).
+#
+# Runs base (no Caddy — see group_vars/role_postgres.yml), Postgres (16 GB
+# tuning + VPC-subnet pg_hba), PgBouncer (the :6432 the Cloud Run DSNs point
+# at), and the River worker systemd unit.
+#
+#   GCP_OSLOGIN_USER=…      your OS Login username (gcloud compute os-login
+#                           describe-profile) — this VM is IAP-only
+#   DITTO_PG_PASSWORD=…     the 'ditto' role password. MUST equal
+#                           TF_VAR_db_password for envs/gcp-prod, or the Cloud
+#                           Run connection-URI secrets stop authenticating.
+#                           Required when this host has no password yet (the
+#                           postgres role would otherwise generate a random one
+#                           that nobody holds, and still report success); on a
+#                           re-converge it may be omitted and the existing
+#                           password is left untouched.
+#
+#   GCP_OSLOGIN_USER=… DITTO_PG_PASSWORD=… \
+#     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-pg.yml
+#
+# Note: the worker binary is shipped by CI (like the Hetzner model); the
+# river_worker role installs the unit and only starts it once the binary exists.
+- name: Converge GCP Postgres + worker VM
+  hosts: role_postgres
+  become: true
+  gather_facts: true
+  roles:
+    - base
+    - postgres
+    - pgbouncer
+    - river_worker

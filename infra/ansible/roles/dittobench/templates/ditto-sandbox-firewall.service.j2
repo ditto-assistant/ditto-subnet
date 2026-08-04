@@ -1,0 +1,16 @@
+[Unit]
+Description=DOCKER-USER firewall for the untrusted-miner sandbox (SN118 C-ISO)
+Documentation=https://github.com/ditto-assistant/dittobench-api/blob/main/docs/sandbox-egress-hardening.md
+After=docker.service
+Requires=docker.service
+# A docker daemon restart can recreate DOCKER-USER, so re-bind to docker's
+# lifecycle and reapply the rules whenever docker (re)starts.
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/sbin/ditto-sandbox-firewall.sh
+
+[Install]
+WantedBy=multi-user.target

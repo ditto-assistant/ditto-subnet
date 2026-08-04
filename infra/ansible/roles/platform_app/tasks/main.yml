@@ -1,0 +1,280 @@
+---
+# Provision a ditto-platform app VM: Docker (Pylon sidecar) + Node/pm2 (API
+# launcher) on top of base (which already installed uv + Caddy), then clone the
+# repo, render .env from Secret Manager, write the Caddy vhost, and first-start.
+#
+# Day-2 releases do NOT re-run this role — they go through the ditto-platform
+# repo's deploy.yml (IAP SSH -> scripts/update.sh).
+
+# --- Preflight: never render a placeholder into a live .env (see preflight.yml
+# for the 2026-07-23 incident this guards). Must stay FIRST: it has to fail
+# before anything on the host is touched.
+- name: Validate env-sourced configuration before rendering anything
+  ansible.builtin.import_tasks: preflight.yml
+
+# --- gcloud (used to read secrets via the VM's attached runtime SA / ADC) ---
+- name: Ensure gcloud is available (GCE Debian images normally ship it)
+  ansible.builtin.command: gcloud --version
+  register: platform_gcloud_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Google Cloud CLI if missing
+  when: platform_gcloud_check.rc != 0
+  block:
+    - name: Add Google Cloud apt key
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/cloud.google.gpg
+        mode: "0644"
+
+    # apt_repository is deprecated (removed in ansible-core 2.25). The
+    # deb822_repository migration is deferred — see roles/README.md
+    # "Deferred: apt_repository -> deb822_repository".
+    - name: Add Google Cloud apt repo
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main"
+        filename: google-cloud-sdk
+        state: present
+
+    - name: Install google-cloud-cli
+      ansible.builtin.apt:
+        name: google-cloud-cli
+        state: present
+        update_cache: true
+
+# --- Docker engine + compose plugin (for the Pylon sidecar) ---
+- name: Add Docker apt key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /usr/share/keyrings/docker.asc
+    mode: "0644"
+
+# apt_repository is deprecated (removed in ansible-core 2.25). The
+# deb822_repository migration is deferred — see roles/README.md
+# "Deferred: apt_repository -> deb822_repository".
+- name: Add Docker apt repo
+  ansible.builtin.apt_repository:
+    repo: "deb [arch={{ platform_docker_apt_arch }} signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts['distribution_release'] }} stable"
+    filename: docker
+    state: present
+
+- name: Install Docker engine + compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Ensure Docker is enabled and running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Add the deploy user to the docker group
+  ansible.builtin.user:
+    name: "{{ platform_owner }}"
+    groups: docker
+    append: true
+
+# --- Node + pm2 (the API process manager; scripts/ecosystem.config.js) ---
+- name: Install Node.js + npm
+  ansible.builtin.apt:
+    name:
+      - nodejs
+      - npm
+    state: present
+
+- name: Install pm2 globally
+  community.general.npm:
+    name: pm2
+    global: true
+    state: present
+
+# --- Read-only GitHub deploy key (clone/pull the private repo over SSH) ---
+- name: Ensure deploy user .ssh dir
+  ansible.builtin.file:
+    path: "/home/{{ platform_owner }}/.ssh"
+    state: directory
+    owner: "{{ platform_owner }}"
+    group: "{{ platform_group }}"
+    mode: "0700"
+
+- name: Fetch GitHub deploy key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_github_deploy_key }} --project={{ gcp_project }}"
+  register: platform_deploy_key
+  changed_when: false
+  no_log: true
+
+- name: Write GitHub deploy key
+  ansible.builtin.copy:
+    content: "{{ platform_deploy_key.stdout }}\n"
+    dest: "/home/{{ platform_owner }}/.ssh/id_ed25519"
+    owner: "{{ platform_owner }}"
+    group: "{{ platform_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Trust github.com host key
+  ansible.builtin.known_hosts:
+    path: "/home/{{ platform_owner }}/.ssh/known_hosts"
+    name: github.com
+    key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519 github.com') }}"
+    state: present
+  become_user: "{{ platform_owner }}"
+
+# --- Clone / update the repo at the env's branch ---
+- name: Ensure monorepo checkout root dir
+  ansible.builtin.file:
+    path: "{{ platform_checkout_root }}"
+    state: directory
+    owner: "{{ platform_owner }}"
+    group: "{{ platform_group }}"
+    mode: "0755"
+
+- name: Clone/checkout ditto-subnet at the env branch
+  ansible.builtin.git:
+    repo: "{{ platform_repo_url }}"
+    dest: "{{ platform_checkout_root }}"
+    version: "{{ platform_branch }}"
+    accept_hostkey: true
+    # Don't clobber working-tree changes a deploy may have made; update.sh owns pulls.
+    update: true
+    force: false
+  become_user: "{{ platform_owner }}"
+  environment:
+    GIT_SSH_COMMAND: "ssh -i /home/{{ platform_owner }}/.ssh/id_ed25519 -o IdentitiesOnly=yes"
+
+# --- Render apps/platform/.env from Secret Manager + host/group vars ---
+- name: Read app secrets from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ item.secret }} --project={{ gcp_project }}"
+  register: platform_secret_reads
+  changed_when: false
+  no_log: true
+  loop:
+    - { key: db_password, secret: "{{ secret_db_password }}" }
+    - { key: hmac_secret, secret: "{{ secret_hmac_secret }}" }
+    - { key: pylon_token, secret: "{{ secret_pylon_token }}" }
+    - { key: admin_api_token, secret: "{{ secret_admin_api_token }}" }
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Assemble secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ dict(platform_secret_reads.results | map(attribute='item.key') | zip(platform_secret_reads.results | map(attribute='stdout'))) }}"
+  no_log: true
+
+- name: Read platform OpenRouter key when ticket inference is enabled
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_platform_openrouter_key }} --project={{ gcp_project }}"
+  register: platform_openrouter_read
+  changed_when: false
+  no_log: true
+  when: platform_inference_proxy_enabled | bool
+
+- name: Fold the platform OpenRouter key into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'openrouter_api_key': platform_openrouter_read.stdout}) }}"
+  no_log: true
+  when: platform_inference_proxy_enabled | bool
+
+# The screener token is optional (only where a screener is allowlisted), so it is
+# read + folded in separately rather than in the required-secrets loop above.
+- name: Read screener API token from Secret Manager (when a screener is configured)
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_screener_api_token }} --project={{ gcp_project }}"
+  register: platform_screener_token_read
+  changed_when: false
+  no_log: true
+  when: platform_screener_hotkey | length > 0
+
+- name: Fold the screener token into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'screener_api_token': platform_screener_token_read.stdout}) }}"
+  no_log: true
+  when: platform_screener_hotkey | length > 0
+
+- name: Read screener capacity-controller token from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_screener_controller_api_token }} --project={{ gcp_project }}"
+  register: platform_screener_controller_token_read
+  changed_when: false
+  no_log: true
+  when: secret_screener_controller_api_token | length > 0
+
+- name: Fold the capacity-controller token into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'screener_controller_api_token': platform_screener_controller_token_read.stdout}) }}"
+  no_log: true
+  when: secret_screener_controller_api_token | length > 0
+
+- name: Render .env
+  ansible.builtin.template:
+    src: platform.env.j2
+    dest: "{{ platform_root }}/.env"
+    owner: "{{ platform_owner }}"
+    group: "{{ platform_group }}"
+    mode: "0640"
+  no_log: true
+
+# Postflight backstop for the whole placeholder class, including variables
+# nobody thought to register in platform_required_env_values.
+- name: Guard the rendered .env against unresolved placeholders
+  ansible.builtin.include_role:
+    name: env_render_guard
+  vars:
+    env_render_guard_path: "{{ platform_root }}/.env"
+    env_render_guard_label: "{{ platform_root }}/.env on {{ inventory_hostname }}"
+    env_render_guard_hint: >-
+      Export the Terraform-derived values first:
+      `source infra/ansible/scripts/platform-app-env.sh`
+      (see infra/ansible/playbooks/gcp-platform-app.yml for the full invocation).
+
+# What got turned off by an empty optional value, restated at the end of the run
+# so it is not buried under 50 ok= lines (this is how silently-disabled dataset
+# pinning went unnoticed on 2026-07-23).
+- name: Report integrations rendered as DISABLED
+  ansible.builtin.debug:
+    msg: >-
+      .env rendered, but these optional integrations are DISABLED on
+      {{ inventory_hostname }} (their PLATFORM_* env vars were empty):
+      {{ platform_disabled_integrations | join(', ') }}.
+      See the WARNING earlier in this run for what each one turns off.
+  when: platform_disabled_integrations | default([]) | length > 0
+
+# --- Caddy vhost (base installed the binary; we own this VM's Caddyfile) ---
+# A caddy-owned log dir so Caddy can both write AND roll (create new files). The
+# shared /opt/ditto/logs is deploy:ditto and not caddy-writable.
+- name: Ensure caddy log directory exists
+  ansible.builtin.file:
+    path: /opt/ditto/logs/caddy
+    state: directory
+    owner: caddy
+    group: caddy
+    mode: "0755"
+
+- name: Write Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: /etc/caddy/Caddyfile
+    owner: root
+    group: caddy
+    mode: "0644"
+  notify: reload caddy
+
+- name: Ensure Caddy is enabled and running
+  ansible.builtin.systemd:
+    name: caddy
+    enabled: true
+    state: started
+
+# NOTE: this role does NOT start the app. The app needs DITTO_UPLOAD_PAYMENT_ADDRESS
+# (injected from the ditto-platform GitHub environment into a separate
+# deploy-owned .env.deploy file). That first deploy brings up Pylon,
+# migrates, and pm2-starts. We only install the pm2 boot unit here so that once
+# the deploy has `pm2 save`d, the app resurrects across reboots.
+- name: Generate pm2 systemd startup unit (survive reboots)
+  ansible.builtin.command: "pm2 startup systemd -u {{ platform_owner }} --hp /home/{{ platform_owner }}"
+  register: platform_pm2_startup
+  changed_when: "'already' not in platform_pm2_startup.stdout | lower"

@@ -1,0 +1,20 @@
+# Managed by infra/ansible/roles/pgbouncer. Edits here are wiped on next run.
+[databases]
+{% for d in pgbouncer_databases %}
+{{ d }}
+{% endfor %}
+
+[pgbouncer]
+listen_addr = {{ pgbouncer_listen_addr }}
+listen_port = {{ pgbouncer_listen_port }}
+auth_type = {{ pgbouncer_auth_type }}
+auth_file = /etc/pgbouncer/userlist.txt
+admin_users = {{ postgres_app_user }}
+pool_mode = {{ pgbouncer_pool_mode }}
+max_client_conn = {{ pgbouncer_max_client_conn }}
+default_pool_size = {{ pgbouncer_default_pool_size }}
+min_pool_size = {{ pgbouncer_min_pool_size }}
+reserve_pool_size = {{ pgbouncer_reserve_pool_size }}
+ignore_startup_parameters = extra_float_digits
+logfile = /var/log/postgresql/pgbouncer.log
+pidfile = /var/run/postgresql/pgbouncer.pid

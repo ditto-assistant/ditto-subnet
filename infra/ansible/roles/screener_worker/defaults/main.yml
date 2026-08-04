@@ -1,0 +1,76 @@
+---
+# The SN118 screener worker (ditto-assistant/ditto-subnet/workers/screener). A
+# standalone, stateless daemon that drains the platform's `uploaded` queue, runs
+# a `docker build` + `/health` serve check on each submitted harness, and posts a
+# signed pass/fail verdict (uploaded -> evaluating | screening_failed) — the
+# cheap pre-evaluation gate so an image that does not build never costs a full
+# DittoBench run. Co-located with the validator + dittobench on the same VM.
+#
+# It drives only a dedicated rootless Docker daemon owned by a separate empty
+# host identity. It must never control the rootful /var/run/docker.sock.
+
+screener_user: "{{ deploy_user | default('deploy') }}"
+screener_group: "{{ deploy_group | default('ditto') }}"
+
+screener_root: /opt/ditto/screener # sparse monorepo checkout + runtime state
+screener_repo_url: "https://github.com/ditto-assistant/ditto-subnet.git"
+screener_branch: main
+screener_source_dir: /opt/ditto/screener/src/workers/screener
+screener_venv: "{{ screener_source_dir }}/.venv"
+screener_env_file: /opt/ditto/screener/screener.env
+screener_state_dir: "{{ screener_root }}/state"
+screener_logs_dir: "{{ ditto_logs | default('/opt/ditto/logs') }}"
+screener_secrets_dir: "{{ ditto_secrets | default('/opt/ditto/secrets') }}"
+screener_unit: ditto-screener
+screener_executor_unit: ditto-screener-docker
+screener_executor_user: ditto-builder
+screener_executor_group: ditto-builder
+screener_executor_home: /var/lib/ditto-screener-docker
+screener_docker_host: unix:///run/ditto-screener-docker/docker.sock
+
+# --- Worker config (rendered into screener.env; see ditto/screener/config.py) ---
+screener_platform_api_url: "https://platform-api-dev.heyditto.ai"
+
+# The screener's PUBLIC SS58 hotkey. It must hold a validator_permit on the
+# netuid (screeners reuse the validator permit set — no distinct screener_permit
+# yet), so on the dev localnet we reuse the VALIDATOR hotkey: the screener signs
+# only verdicts (never weights), so sharing a hotkey with the validator worker is
+# safe. Empty = install the unit but do NOT start it (set in host_vars).
+screener_hotkey: ""
+screener_netuid: 118 # override to the dev localnet netuid in host_vars
+
+# Cadence / gate limits.
+screener_poll_seconds: 30
+screener_queue_limit: 20
+# Hard cap on one `docker build`. Keep at or below the platform's screening
+# lease window (ditto-platform _SCREENING_LEASE_TTL, 45m): the worker clamps each
+# build to the remaining lease, so a value above the lease is never used in full,
+# while a value below a legitimate cold dependency build false-fails it as a timeout.
+screener_build_timeout_seconds: 2700
+screener_run_timeout_seconds: 120
+screener_build_memory: 2g
+# The untrusted build runs one-at-a-time and needs enough bounded headroom for
+# compiler/linker peaks across Rust, Go, TypeScript, Python, and other Dockerized
+# implementations. This does not enlarge the finished harness runtime budget.
+screener_image_build_memory: 8g
+screener_pids_limit: 512
+# Download DoS bound; MUST stay >= the platform's upload cap
+# (DITTO_MAX_TARBALL_SIZE_BYTES, default 20 MiB) or the gate false-fails a
+# legitimately-uploaded tarball. Keep in sync if the platform cap changes.
+screener_max_tarball_bytes: "{{ 20 * 1024 * 1024 }}"
+
+# --- Secrets (Secret Manager ids; values populated out-of-band) ---
+# Reuse the validator's signing key: the same hotkey holds the permit, and the
+# screener only signs verdicts. One secret, two consumers.
+screener_mnemonic_secret: validator-hotkey-mnemonic
+# Bearer token shared with the platform's /screener/* endpoints. This is the
+# dedicated, no-funds auth that replaced the validator-permit gate: the platform
+# allowlists screener_hotkey and requires this token on every request. Empty =
+# the worker renders no token (dev/localnet on the pre-token code); set the prod
+# secret id in host_vars.
+screener_api_token_secret: ""
+
+# uv install location (used if uv isn't already on PATH from the base role).
+screener_uv_bin: /usr/local/bin/uv
+
+screener_gcp_project: "{{ gcp_project | default('ditto-app-dev') }}"

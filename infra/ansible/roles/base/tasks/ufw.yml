@@ -1,0 +1,39 @@
+---
+# The Hetzner Cloud Firewall (managed by Terraform) already restricts ingress
+# to SSH + Cloudflare on 80/443. UFW is a second line in case the cloud
+# firewall is misconfigured.
+- name: Ensure UFW defaults
+  community.general.ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+
+- name: Open ports we serve
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: tcp
+    comment: "{{ item.comment }}"
+  loop:
+    - { port: "22",  comment: SSH }
+    - { port: "80",  comment: HTTP }
+    - { port: "443", comment: HTTPS }
+
+# Per-host extra rules (e.g. the platform Postgres VM opening 5432 to the VPC
+# subnet so the app VMs can reach it — the GCP firewall allows it, but UFW would
+# otherwise default-deny it). Default empty leaves every other host unchanged.
+- name: Open extra UFW ports
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.proto | default('tcp') }}"
+    src: "{{ item.src | default('any') }}"
+    comment: "{{ item.comment | default('') }}"
+  loop: "{{ base_ufw_extra_rules | default([]) }}"
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+    logging: low

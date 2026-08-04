@@ -1,0 +1,28 @@
+---
+# Applies to the dedicated SN118 screener VM (label role=screener → group
+# role_screener). Per-VM specifics (platform URL, netuid, hotkey) live in
+# host_vars/ditto-screener-{dev,prod}.yml. This host runs ONLY the screener, so
+# it needs none of the validator/Pylon wiring.
+
+# --- GCP placement ---
+gcp_project: ditto-app-dev
+gcp_region: us-central1
+gcp_zone: us-central1-a
+
+# --- Connection over IAP (the VM has no public IP; SSH via the IAP tunnel) ---
+# Mirrors group_vars/role_validator.yml. Set GCP_OSLOGIN_USER to your OS Login
+# username.
+ansible_user: "{{ lookup('env', 'GCP_OSLOGIN_USER') | default('', true) }}"
+ansible_ssh_common_args: >-
+  -o StrictHostKeyChecking=accept-new
+  -o ProxyCommand="gcloud compute start-iap-tunnel {{ inventory_hostname }} 22
+  --listen-on-stdin --zone={{ gcp_zone }} --project={{ gcp_project }}
+  --verbosity=warning"
+
+# OS Login + IAM is the SSH gate; don't emit sshd AllowUsers (would lock out the
+# OS Login user Ansible connects as).
+base_ssh_set_allow_users: false
+
+# The base role's checksum-pinned Go install is redundant here: the screener
+# builds nothing on the host; crate builds happen inside Docker. Skip it.
+base_install_go: false

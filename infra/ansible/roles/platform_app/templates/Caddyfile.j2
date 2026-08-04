@@ -1,0 +1,56 @@
+# Managed by Ansible (platform_app role). Single-vhost reverse proxy for the
+# ditto-platform API and its public aliases. Caddy manages certificates for the
+# primary domain and every explicitly configured alias.
+{
+    email {{ platform_caddy_email }}
+}
+
+{{ ([platform_domain] + platform_alias_domains) | join(', ') }} {
+    encode zstd gzip
+{% if platform_inference_relay_ports %}
+    # --- Inference plane -> the relay pool (platform_inference_relay_ports) ---
+    #
+    # `ditto-api` is a single fork-mode uvicorn process on ONE core. Inference is
+    # ~71.7% of requests and ~81.7% of in-flight request-time on that event loop,
+    # which is what delays validator heartbeat ingest, lets `seen_at` go stale,
+    # and makes the platform force-expire live leases. ditto-platform#444 added
+    # the DITTO_ROLE=relay processes that serve exactly /health, /metrics and
+    # /api/v1/inference/*; this block is what actually sends them traffic.
+    #
+    # TWO `handle` blocks, not one `handle` plus a bare `reverse_proxy`: handle
+    # blocks are mutually exclusive by construction, so routing does not depend
+    # on Caddy's directive-ordering rules. Everything that is not inference --
+    # dashboard, uploads, scoring, the validator API -- keeps going to
+    # platform_api_port exactly as before.
+    #
+    # The matcher covers all three inference routes (/chat/completions,
+    # /embeddings, /exchange). There is no bare /api/v1/inference route, so
+    # nothing is left behind by the trailing /*.
+    #
+    # Health checking is PASSIVE on purpose: a relay that is restarting is
+    # skipped for fail_duration rather than 502'ing the caller. Caddy only
+    # retries a different upstream on a DIAL failure -- never once bytes have
+    # gone downstream -- so streaming completions are never replayed.
+    handle /api/v1/inference/* {
+        reverse_proxy {% for port in platform_inference_relay_ports %}localhost:{{ port }} {% endfor %}{
+            lb_policy least_conn
+            fail_duration 10s
+            max_fails 1
+            lb_try_duration 5s
+        }
+    }
+
+    handle {
+        reverse_proxy localhost:{{ platform_api_port }}
+    }
+{% else %}
+    reverse_proxy localhost:{{ platform_api_port }}
+{% endif %}
+
+    log {
+        output file /opt/ditto/logs/caddy/platform.log {
+            roll_size 50MiB
+            roll_keep 10
+        }
+    }
+}

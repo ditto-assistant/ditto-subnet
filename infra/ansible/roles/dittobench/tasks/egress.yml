@@ -1,0 +1,116 @@
+---
+# C-ISO enforcement: isolate the untrusted-miner sandbox to an allowlisting
+# egress proxy + a DOCKER-USER firewall. Included from main.yml when
+# dittobench_sandbox_egress_enabled. See dittobench-api
+# docs/sandbox-egress-hardening.md. Idempotent + safe to re-run.
+
+- name: Ensure iptables is present (DOCKER-USER firewall)
+  ansible.builtin.apt:
+    name: iptables
+    state: present
+
+- name: Check the isolated sandbox docker network exists
+  ansible.builtin.command: "docker network inspect {{ dittobench_sandbox_network }}"
+  register: dittobench_net_check
+  changed_when: false
+  failed_when: false
+
+- name: Create the isolated sandbox docker network
+  ansible.builtin.command: >-
+    docker network create
+    --driver bridge
+    --subnet {{ dittobench_sandbox_subnet }}
+    --gateway {{ dittobench_sandbox_gateway }}
+    {{ dittobench_sandbox_network }}
+  when: dittobench_net_check.rc != 0
+  register: dittobench_net_create
+  changed_when: dittobench_net_create.rc == 0
+
+- name: Check the egress-proxy image exists
+  ansible.builtin.command: "docker image inspect {{ dittobench_egress_proxy_image }}"
+  register: dittobench_proxy_img_check
+  changed_when: false
+  failed_when: false
+
+# The dittobench-api checkout (cloned in main.yml) carries Dockerfile.egress-proxy
+# + cmd/egress-proxy. Rebuild when the checkout changed or the image is missing.
+- name: Build the egress-proxy image
+  ansible.builtin.command:
+    cmd: "docker build -f Dockerfile.egress-proxy -t {{ dittobench_egress_proxy_image }} ."
+    chdir: "{{ dittobench_root }}/src"
+  become_user: "{{ dittobench_user }}"
+  when: (dittobench_clone.changed | default(false)) or dittobench_proxy_img_check.rc != 0
+  register: dittobench_proxy_build
+  changed_when: true
+  notify: restart ditto-egress-proxy
+
+# The sandbox subnet is off the default docker0 bridge, so the pre-existing
+# 172.17.0.0/16 host allow does not cover it. Re-grant the legacy fixed network
+# host-local dittobench services (INPUT via the docker0 gateway — not forwarded
+# egress). External egress stays proxy-only via the FORWARD rules below.
+- name: Allow the sandbox subnet to reach the host embedding backend (Ollama)
+  community.general.ufw:
+    rule: allow
+    direction: in
+    src: "{{ dittobench_sandbox_subnet }}"
+    dest: "{{ dittobench_sandbox_host_gateway_ip }}"
+    port: "{{ dittobench_sandbox_host_embed_port }}"
+    proto: tcp
+    comment: "ditto-sandbox harness -> host ollama embeddings (C-ISO)"
+  when: dittobench_sandbox_host_embed_port | string | length > 0
+
+- name: Allow the sandbox subnet to reach the trusted broker
+  community.general.ufw:
+    rule: allow
+    direction: in
+    src: "{{ dittobench_sandbox_subnet }}"
+    dest: "{{ dittobench_sandbox_host_gateway_ip }}"
+    port: "{{ dittobench_sandbox_host_broker_port }}"
+    proto: tcp
+    comment: "ditto-sandbox harness -> host ticket broker and observed-exec (C-ISO)"
+  when: dittobench_sandbox_host_broker_port | string | length > 0
+
+- name: Install the sandbox firewall script
+  ansible.builtin.template:
+    src: ditto-sandbox-firewall.sh.j2
+    dest: /usr/local/sbin/ditto-sandbox-firewall.sh
+    owner: root
+    group: root
+    mode: "0750"
+  notify: reload ditto-sandbox-firewall
+
+- name: Install the sandbox firewall unit (reapplies DOCKER-USER rules after docker)
+  ansible.builtin.template:
+    src: ditto-sandbox-firewall.service.j2
+    dest: /etc/systemd/system/ditto-sandbox-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - reload ditto-sandbox-firewall
+
+- name: Install the egress-proxy container unit
+  ansible.builtin.template:
+    src: ditto-egress-proxy.service.j2
+    dest: /etc/systemd/system/ditto-egress-proxy.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart ditto-egress-proxy
+
+- name: Enable + start the sandbox firewall
+  ansible.builtin.systemd:
+    name: ditto-sandbox-firewall
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Enable + start the egress proxy
+  ansible.builtin.systemd:
+    name: ditto-egress-proxy
+    enabled: true
+    state: started
+    daemon_reload: true

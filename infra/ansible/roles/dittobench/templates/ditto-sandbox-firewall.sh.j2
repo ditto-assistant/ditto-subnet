@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Managed by Ansible (dittobench role) — do not edit by hand.
+# C-ISO enforcement: confine the untrusted-miner sandbox subnet so its ONLY
+# forwarded egress is the allowlisting proxy; everything else is dropped
+# (fail-closed). The host Ollama backend is host-local (INPUT, not FORWARD) so
+# these FORWARD rules do not touch it — but it still needs a scoped UFW INPUT
+# allow for the sandbox subnet (see the dittobench role's egress.yml), since the
+# sandbox is off the default docker0 bridge the 172.17.0.0/16 Ollama allow
+# covers. Idempotent — safe to re-run.
+# See dittobench-api docs/sandbox-egress-hardening.md.
+set -euo pipefail
+
+SUBNET="{{ dittobench_sandbox_subnet }}"
+PROXY_IP="{{ dittobench_egress_proxy_ip }}"
+CHAIN="DITTO-SANDBOX"
+INPUT_CHAIN="DITTO-SANDBOX-INPUT"
+
+# DOCKER-USER is created + consulted first by Docker. The unit is ordered
+# After=docker.service, so this is belt-and-braces.
+if ! iptables -L DOCKER-USER -n >/dev/null 2>&1; then
+  echo "DOCKER-USER chain absent (is docker running?)" >&2
+  exit 1
+fi
+
+# Our own chain, so we can flush/reapply without touching Docker's rules.
+iptables -N "$CHAIN" 2>/dev/null || true
+iptables -F "$CHAIN"
+
+# Jump into our chain from DOCKER-USER exactly once (at the top).
+iptables -C DOCKER-USER -j "$CHAIN" 2>/dev/null || iptables -I DOCKER-USER 1 -j "$CHAIN"
+
+# 1. The proxy's own egress (the allowlist enforcer) is permitted.
+iptables -A "$CHAIN" -s "$PROXY_IP"/32 -j RETURN
+# 2. Sandbox -> proxy is permitted (the only destination the sandbox may reach).
+iptables -A "$CHAIN" -s "$SUBNET" -d "$PROXY_IP"/32 -j RETURN
+# Per-run ICC-disabled bridges use random subnets but a fixed dtj* interface
+# prefix. They may reach only the same allowlisting proxy.
+iptables -A "$CHAIN" -i 'dtj+' -d "$PROXY_IP"/32 -j RETURN
+# 3. Established/related replies pass.
+iptables -A "$CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+# 4. Everything else FROM the sandbox subnet is dropped (fail-closed). A harness
+#    that ignores HTTPS_PROXY and dials the internet directly fails here.
+iptables -A "$CHAIN" -s "$SUBNET" -j DROP
+iptables -A "$CHAIN" -i 'dtj+' -j DROP
+# Traffic not sourced from the sandbox subnet falls through unchanged.
+
+# Dynamic per-run bridges reach host-local services through INPUT, not FORWARD.
+# Permit only embeddings and the dedicated source-bound broker; explicitly drop
+# every other localhost/metadata/control-plane probe from a harness.
+iptables -N "$INPUT_CHAIN" 2>/dev/null || true
+iptables -F "$INPUT_CHAIN"
+iptables -C INPUT -j "$INPUT_CHAIN" 2>/dev/null || iptables -I INPUT 1 -j "$INPUT_CHAIN"
+iptables -A "$INPUT_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+{% if dittobench_sandbox_host_embed_port | string | length > 0 %}
+iptables -A "$INPUT_CHAIN" -i 'dtj+' -p tcp --dport {{ dittobench_sandbox_host_embed_port }} -j ACCEPT
+{% endif %}
+iptables -A "$INPUT_CHAIN" -i 'dtj+' -p tcp --dport {{ dittobench_sandbox_host_broker_port }} -j ACCEPT
+iptables -A "$INPUT_CHAIN" -i 'dtj+' -m limit --limit 12/min --limit-burst 20 -j LOG --log-prefix 'ditto-sandbox-input-deny '
+iptables -A "$INPUT_CHAIN" -i 'dtj+' -j DROP

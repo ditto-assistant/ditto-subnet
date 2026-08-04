@@ -1,0 +1,54 @@
+---
+# Per-VM config for the prod app VM. inventory_hostname = the GCE instance name.
+platform_env: prod
+platform_branch: main
+platform_domain: platform-api.heyditto.ai
+
+# Origin minted into every v7 inference grant's proxy_url. Served by the same
+# Caddy vhost as platform_domain (it is in platform_alias_domains below), so
+# this is a naming change, not a routing change. Kept separate from
+# platform_domain so it can move without changing the primary vhost/cert.
+#
+# TWO-SIDED CONTRACT: the validator broker rejects any activation whose
+# proxy_url is not byte-identical to its own
+# DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL. Never change this without shipping
+# the matching ditto-subnet value. No trailing slash.
+platform_inference_public_base_url: https://dittobench.ai
+
+platform_alias_domains:
+  - subnet.heyditto.ai
+  - dittobench.ai
+  - www.dittobench.ai
+  - api.dittobench.ai
+  - dittobench.com
+  - www.dittobench.com
+  - api.dittobench.com
+platform_db_name: ditto_platform_prod
+platform_bucket: ditto-platform-agents-prod
+
+# Route /api/v1/inference/* to the ditto-api-relay-{1,2} pm2 processes instead
+# of the single-core `ditto-api` event loop. These ports mirror RELAY_PORTS in
+# ditto-platform scripts/ecosystem.config.js; the relays are already running and
+# healthy on this host. Prod only — ditto-platform-dev stays single-process.
+#
+# Setting this back to [] and re-converging is the durable rollback: it restores
+# the byte-exact pre-relay Caddyfile.
+platform_inference_relay_ports: [8010, 8011]
+
+# Per-env Secret Manager secret ids (shared ones are in the platform_app role).
+# Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
+secret_pylon_token: platform-prod-pylon-open-access-token
+
+# Platform-operated screener auth: allowlist the dedicated prod screener hotkey
+# and share its bearer token (the same SCREENER_API_TOKEN configured on
+# ditto-screener-prod). This replaces the validator-permit gate, so the screener
+# key holds no stake and needs no on-chain registration.
+platform_screener_hotkey: "5G6fGXnXFYdLM3ZyAm9whUbCY4ziQzcbMiTEqZB5c9KekTtR"
+secret_screener_api_token: "screener-api-token-prod"
+secret_screener_controller_api_token: "screener-controller-api-token-prod"
+
+# Publish the screening backlog (waiting_screening + screening) to Cloud
+# Monitoring every 60s — the prod screener fleet's autoscaling signal
+# (terraform infra/terraform/stacks/gcp-platform/screener-fleet.tf). Needs the metricWriter
+# grant from enable_screener_fleet applied first.
+screening_queue_metric_enabled: true

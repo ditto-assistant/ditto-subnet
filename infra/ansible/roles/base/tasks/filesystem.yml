@@ -1,0 +1,31 @@
+---
+- name: Ensure /opt/ditto root + subdirectories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ deploy_user | default('deploy') }}"
+    group: "{{ deploy_group | default('ditto') }}"
+    mode: "0755"
+  loop:
+    - "{{ ditto_root }}"
+    - "{{ ditto_root }}/backend"
+    - "{{ ditto_root }}/staging"
+    - "{{ ditto_root }}/share"
+    - "{{ ditto_root }}/staging-share"
+    - "{{ ditto_root }}/pipelines"
+    - "{{ ditto_root }}/pipelines-staging"
+    - "{{ ditto_root }}/logs"
+    - "{{ ditto_root }}/logs/postgresql"
+    - "{{ ditto_root }}/backups"
+    - "{{ ditto_root }}/backups/daily"
+    - "{{ ditto_root }}/backups/wal"
+    - "{{ ditto_root }}/scripts"
+    - "{{ ditto_repos }}"
+
+- name: Secure /opt/ditto/secrets
+  ansible.builtin.file:
+    path: "{{ ditto_secrets }}"
+    state: directory
+    owner: "{{ deploy_user | default('deploy') }}"
+    group: "{{ deploy_group | default('ditto') }}"
+    mode: "0750"

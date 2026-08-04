@@ -1,0 +1,57 @@
+---
+# PgBouncer in front of Postgres so Cloud Run's scale-out doesn't storm the DB
+# with connections. Transaction pooling on :6432; the Cloud Run pooler DSN
+# points here, the direct DSN goes straight to Postgres :5432.
+
+- name: Install pgbouncer
+  ansible.builtin.apt:
+    name: pgbouncer
+    state: present
+
+# Pull the app role's SCRAM verifier from Postgres so PgBouncer can both
+# authenticate clients and log in to Postgres with the same secret.
+- name: Fetch SCRAM verifier for the app role
+  community.postgresql.postgresql_query:
+    db: postgres
+    query: "SELECT passwd FROM pg_shadow WHERE usename = %(u)s"
+    named_args:
+      u: "{{ postgres_app_user }}"
+  become_user: postgres
+  register: pgbouncer_scram
+  changed_when: false
+  no_log: true
+
+- name: Assert the app role has a SCRAM password
+  ansible.builtin.assert:
+    that:
+      - pgbouncer_scram.query_result | length == 1
+      - pgbouncer_scram.query_result[0].passwd is string
+      - pgbouncer_scram.query_result[0].passwd is search('^SCRAM-SHA-256')
+    fail_msg: "Postgres role '{{ postgres_app_user }}' has no SCRAM password — run the postgres role first."
+
+- name: Render userlist.txt
+  ansible.builtin.template:
+    src: userlist.txt.j2
+    dest: /etc/pgbouncer/userlist.txt
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  vars:
+    pgbouncer_user_verifier: "{{ pgbouncer_scram.query_result[0].passwd }}"
+  no_log: true
+  notify: restart pgbouncer
+
+- name: Render pgbouncer.ini
+  ansible.builtin.template:
+    src: pgbouncer.ini.j2
+    dest: /etc/pgbouncer/pgbouncer.ini
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: restart pgbouncer
+
+- name: Ensure pgbouncer is enabled + running
+  ansible.builtin.systemd:
+    name: pgbouncer
+    enabled: true
+    state: started

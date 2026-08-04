@@ -1,0 +1,74 @@
+---
+# Variables shared across every dittobox.
+# Single source of truth — was previously scripts/dittobox/config.sh.
+
+ditto_root: /opt/ditto
+ditto_ops_bin: /opt/ditto/ops/bin
+ditto_secrets: /opt/ditto/secrets
+ditto_logs: /opt/ditto/logs
+ditto_backups: /opt/ditto/backups
+ditto_repos: /opt/ditto/repos
+
+deploy_user: deploy
+deploy_group: ditto
+team_members:
+  - peyton
+  - omar
+  - nick
+  - nickanderson
+
+# Port allocations — was scripts/dittobox/config.sh lines 18-43.
+# 340x: prod backend blue/green
+# 341x: prod share blue/green
+# 342x: admin services (prod 3420 / staging 3421)
+# 345x-351x: staging-2..8 backend (34x0/34x2) + share (34x4/34x6) blue/green
+# 352x: River worker metrics/health (one per env: prod 3520, staging 3521,
+#       staging-2..8 3522..3528)
+#
+# Backend/share/admin ports below were verified against the live box (`ss -tlnp`,
+# 2026-06-17) and match exactly. The worker ports were corrected the same day:
+# the old map listed a single staging worker at 3481, but the box actually runs
+# NINE River workers — prod plus one per staging slot — on 3520-3528 (the prod
+# worker is NOT GCP-only; it runs here). Workers + other single-instance units
+# (admin, pipelines) are deployed by the backend repo's CI / out-of-band, not by
+# this repo — see bluegreen_transition and docs/infra-state.md §2.
+ports:
+  backend:
+    prod:      { blue: 3400, green: 3402 }
+    staging:   { blue: 3401, green: 3403 }
+    staging_2: { blue: 3450, green: 3452 }
+    staging_3: { blue: 3460, green: 3462 }
+    staging_4: { blue: 3470, green: 3472 }
+    staging_5: { blue: 3480, green: 3482 }
+    staging_6: { blue: 3490, green: 3492 }
+    staging_7: { blue: 3500, green: 3502 }
+    staging_8: { blue: 3510, green: 3512 }
+  share:
+    prod:      { blue: 3410, green: 3412 }
+    staging:   { blue: 3411, green: 3413 }
+    staging_2: { blue: 3454, green: 3456 }
+    staging_3: { blue: 3464, green: 3466 }
+    staging_4: { blue: 3474, green: 3476 }
+    staging_5: { blue: 3484, green: 3486 }
+    staging_6: { blue: 3494, green: 3496 }
+    staging_7: { blue: 3504, green: 3506 }
+    staging_8: { blue: 3514, green: 3516 }
+  admin:
+    prod: 3420
+    staging: 3421
+  worker:
+    prod: 3520
+    staging: 3521
+    staging_2: 3522
+    staging_3: 3523
+    staging_4: 3524
+    staging_5: 3525
+    staging_6: 3526
+    staging_7: 3527
+    staging_8: 3528
+  postgres: 5432
+
+# GCP — only used by certain on-box helpers.
+gcp:
+  project: ditto-app-dev
+  region: us-central1

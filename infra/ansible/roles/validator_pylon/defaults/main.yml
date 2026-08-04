@@ -1,0 +1,44 @@
+---
+# E1: co-located Pylon sidecar giving the SN118 validator the identity WRITE
+# path (put_weights). Pylon holds the mounted validator hotkey and signs
+# set_weights itself; the worker authorizes it with a shared self-generated
+# bearer token. See infra docs/validator-deploy.md and ditto-subnet
+# docs/ROAD-TO-PRODUCTION.md (E1 / W-PYLON).
+#
+# Gated by validator_pylon_identity_enabled (group_vars/role_validator.yml,
+# default false). The dev localnet uses the SDK weight path; enable this for
+# testnet/finney AND set validator_use_sdk_weights: false +
+# validator_subtensor_network/validator_netuid for the target network.
+
+validator_pylon_user: "{{ deploy_user | default('deploy') }}"
+validator_pylon_group: "{{ deploy_group | default('ditto') }}"
+validator_pylon_gcp_project: "{{ gcp_project | default('ditto-app-dev') }}"
+
+# Pylon container (amd64-only image; same as the platform sidecar).
+validator_pylon_image: "backenddevelopersltd/bittensor-pylon:latest"
+validator_pylon_container: ditto-pylon
+# Loopback only: the co-located worker reaches it at PYLON_URL. Never exposed
+# off-box (the VM firewall is IAP-SSH only regardless).
+validator_pylon_host_port: 8001
+
+# The on-disk bittensor wallet the mnemonic is written to + mounted RO into
+# Pylon. NOTE: PYLON_IDENTITIES/PYLON_ID_VALIDATOR_* below assume the identity
+# name "validator" (env key suffix is the upper-cased name).
+validator_pylon_wallet_name: validator
+validator_pylon_hotkey_name: default
+
+# Netuid + chain ws Pylon signs against — mirror the worker's target network.
+validator_pylon_netuid: "{{ validator_netuid | default(118) }}"
+validator_pylon_bittensor_network: "{{ validator_subtensor_network | default('finney') }}"
+
+# On-disk wallet dir (mounted RO into Pylon at /root/.bittensor/wallets).
+validator_pylon_wallet_dir: "{{ ditto_secrets | default('/opt/ditto/secrets') }}/bittensor-wallets"
+
+# Reuse the worker's venv (has bittensor) to materialize the wallet from the
+# mnemonic. This role is ordered AFTER validator_worker so the venv exists.
+validator_pylon_venv: "{{ validator_venv | default('/opt/ditto/validator/src/.venv') }}"
+
+# Secret Manager ids (values populated out-of-band; see the runbook).
+validator_pylon_mnemonic_secret: "{{ validator_mnemonic_secret | default('validator-hotkey-mnemonic') }}"
+# validator_pylon_identity_token_secret / _open_access_token_secret come from
+# group_vars/role_validator.yml (shared with validator_worker).

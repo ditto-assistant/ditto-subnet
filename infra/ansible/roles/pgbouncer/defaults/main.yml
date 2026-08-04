@@ -1,0 +1,18 @@
+---
+# SCOPE: PgBouncer is a GCP-TARGET component only. It fronts the Postgres VM
+# (ditto-pg-prod) on :6432 for Cloud Run's Direct VPC egress (gcp-pg.yml). The
+# live Hetzner dittobox runs NO PgBouncer — its on-box services connect straight
+# to local Postgres on 127.0.0.1:5432. Do not add this role to the dittobox
+# (site.yml) playbook.
+pgbouncer_listen_addr: "*" # firewall restricts :6432 to the VPC subnet
+pgbouncer_listen_port: 6432
+pgbouncer_pool_mode: transaction
+pgbouncer_max_client_conn: 1000
+pgbouncer_default_pool_size: 25
+pgbouncer_min_pool_size: 0
+pgbouncer_reserve_pool_size: 5
+pgbouncer_auth_type: scram-sha-256
+
+# Wildcard: every database routes to the local Postgres on :5432.
+pgbouncer_databases:
+  - "* = host=127.0.0.1 port=5432"

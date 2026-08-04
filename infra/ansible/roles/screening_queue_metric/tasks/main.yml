@@ -1,0 +1,49 @@
+---
+# Install the screening-queue-depth publisher (script + systemd timer). See
+# defaults/main.yml for what/why. No-op unless screening_queue_metric_enabled.
+
+- name: Install queue-depth publisher script
+  ansible.builtin.template:
+    src: publish-screening-queue-depth.py.j2
+    dest: "{{ screening_queue_metric_script }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: screening_queue_metric_enabled
+  notify: restart screening-queue-metric timer
+
+- name: Install publisher service unit
+  ansible.builtin.template:
+    src: screening-queue-metric.service.j2
+    dest: "/etc/systemd/system/{{ screening_queue_metric_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  when: screening_queue_metric_enabled
+  notify: restart screening-queue-metric timer
+
+- name: Install publisher timer unit
+  ansible.builtin.template:
+    src: screening-queue-metric.timer.j2
+    dest: "/etc/systemd/system/{{ screening_queue_metric_unit }}.timer"
+    owner: root
+    group: root
+    mode: "0644"
+  when: screening_queue_metric_enabled
+  notify: restart screening-queue-metric timer
+
+- name: Enable + start the publisher timer
+  ansible.builtin.systemd:
+    name: "{{ screening_queue_metric_unit }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: screening_queue_metric_enabled
+
+- name: Disable the publisher timer when the feature is off
+  ansible.builtin.systemd:
+    name: "{{ screening_queue_metric_unit }}.timer"
+    enabled: false
+    state: stopped
+  when: not screening_queue_metric_enabled
+  failed_when: false

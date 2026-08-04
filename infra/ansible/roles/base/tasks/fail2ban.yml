@@ -1,0 +1,28 @@
+---
+- name: Configure fail2ban jail.local
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by infra/ansible/roles/base. Edits here are wiped on next run.
+      [DEFAULT]
+      bantime  = {{ base_fail2ban_bantime }}
+      findtime = {{ base_fail2ban_findtime }}
+      maxretry = {{ base_fail2ban_maxretry }}
+      backend  = systemd
+
+      [sshd]
+      enabled  = true
+      port     = ssh
+      filter   = sshd
+      maxretry = 3
+      bantime  = 1h
+  notify: restart fail2ban
+
+- name: Enable + start fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started

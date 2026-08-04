@@ -1,0 +1,45 @@
+---
+- name: Check installed Go version
+  ansible.builtin.command: /usr/local/go/bin/go version
+  register: go_version_check
+  failed_when: false
+  changed_when: false
+
+- name: Detect current Go version string
+  ansible.builtin.set_fact:
+    current_go_version: >-
+      {{
+        (go_version_check.stdout | regex_search('go(\d+\.\d+\.\d+)', '\\1') | first)
+        if go_version_check.rc == 0 else ''
+      }}
+
+- name: Download Go {{ base_go_version }}
+  ansible.builtin.get_url:
+    url: "https://go.dev/dl/go{{ base_go_version }}.linux-amd64.tar.gz"
+    dest: "/tmp/go{{ base_go_version }}.linux-amd64.tar.gz"
+    checksum: "sha256:{{ base_go_linux_amd64_sha256 }}"
+    mode: "0644"
+  when: current_go_version != base_go_version
+
+- name: Remove old /usr/local/go
+  ansible.builtin.file:
+    path: /usr/local/go
+    state: absent
+  when: current_go_version != base_go_version
+
+- name: Extract Go {{ base_go_version }}
+  ansible.builtin.unarchive:
+    src: "/tmp/go{{ base_go_version }}.linux-amd64.tar.gz"
+    dest: /usr/local
+    remote_src: true
+    creates: /usr/local/go/bin/go
+  when: current_go_version != base_go_version
+
+- name: Add Go to PATH for login shells
+  ansible.builtin.copy:
+    dest: /etc/profile.d/go.sh
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      export PATH=$PATH:/usr/local/go/bin

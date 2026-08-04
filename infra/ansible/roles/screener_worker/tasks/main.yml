@@ -1,0 +1,221 @@
+---
+# Provision the SN118 screener worker from the public ditto-subnet monorepo,
+# install its dedicated rootless executor, build the worker venv, render only
+# runtime secrets, and install a hardened systemd unit. Submitted Dockerfiles
+# receive no GitHub, provider, signing, or platform credential.
+
+- name: Ensure screener + logs + secrets dirs
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ screener_user }}"
+    group: "{{ screener_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ screener_root }}", mode: "0755" }
+    - { path: "{{ screener_state_dir }}", mode: "0750" }
+    - { path: "{{ screener_root }}/.bittensor", mode: "0700" }
+    - { path: "{{ screener_logs_dir }}", mode: "0750" }
+    - { path: "{{ screener_secrets_dir }}", mode: "0750" }
+
+# --- uv (the worker runs in a uv-managed venv) ---
+- name: Check for uv
+  ansible.builtin.command: "{{ screener_uv_bin }} --version"
+  register: screener_uv_check
+  changed_when: false
+  failed_when: false
+
+- name: Install uv if missing
+  when: screener_uv_check.rc != 0
+  block:
+    - name: Download uv installer
+      ansible.builtin.get_url:
+        url: https://astral.sh/uv/install.sh
+        dest: /tmp/uv-install.sh
+        mode: "0755"
+    - name: Install uv to /usr/local/bin
+      ansible.builtin.command: /tmp/uv-install.sh
+      environment:
+        UV_INSTALL_DIR: /usr/local/bin
+      changed_when: true
+
+# --- Public worker checkout; untrusted builds receive no repository token ---
+- name: Inspect the existing screener checkout origin
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ screener_root }}/src"
+      - remote
+      - get-url
+      - origin
+  register: screener_existing_origin
+  changed_when: false
+  failed_when: false
+
+- name: Remove the retired co-located ditto-subnet screener checkout
+  ansible.builtin.file:
+    path: "{{ screener_root }}/src"
+    state: absent
+  when:
+    - screener_existing_origin.rc == 0
+    - screener_existing_origin.stdout | trim != screener_repo_url
+
+- name: Clone/update ditto-subnet at the pinned branch
+  ansible.builtin.git:
+    repo: "{{ screener_repo_url }}"
+    dest: "{{ screener_root }}/src"
+    version: "{{ screener_branch }}"
+    force: true
+  become_user: "{{ screener_user }}"
+  register: screener_clone
+
+- name: Inspect the dedicated executor unit before converge
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ screener_executor_unit }}.service"
+  register: screener_executor_unit_file
+
+- name: Install and verify the separate rootless build executor
+  ansible.builtin.command:
+    cmd: "{{ screener_source_dir }}/scripts/install-rootless-docker.sh"
+    chdir: "{{ screener_source_dir }}"
+  environment:
+    SCREENER_USER: "{{ screener_user }}"
+    SCREENER_GROUP: "{{ screener_group }}"
+    SCREENER_ROOT: "{{ screener_root }}"
+    SCREENER_ROOTLESS_UNIT: "{{ screener_executor_unit }}"
+    SCREENER_EXECUTOR_USER: "{{ screener_executor_user }}"
+    SCREENER_EXECUTOR_GROUP: "{{ screener_executor_group }}"
+    SCREENER_EXECUTOR_HOME: "{{ screener_executor_home }}"
+  register: screener_rootless_install
+  changed_when: screener_clone.changed or not screener_executor_unit_file.stat.exists
+  notify:
+    - reload systemd (screener)
+    - restart screener executor
+    - restart ditto-screener
+
+- name: Assert the executor returned the pinned rootless socket
+  ansible.builtin.assert:
+    that:
+      - screener_rootless_install.stdout | trim == screener_docker_host
+    fail_msg: "rootless screener executor returned an unexpected Docker endpoint"
+
+- name: Remove worker access to the rootful Docker control group
+  ansible.builtin.user:
+    name: "{{ screener_user }}"
+    groups:
+      - "{{ screener_executor_group }}"
+    append: false
+
+- name: Disable the unused rootful Docker daemon and socket after verification
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop:
+    - docker.service
+    - docker.socket
+
+- name: Inspect the legacy rootful-Docker metadata guard
+  ansible.builtin.stat:
+    path: /etc/systemd/system/ditto-imds-guard.service
+  register: screener_legacy_imds_guard
+
+- name: Disable the legacy rootful-Docker metadata guard when present
+  ansible.builtin.systemd:
+    name: ditto-imds-guard.service
+    enabled: false
+    state: stopped
+  when: screener_legacy_imds_guard.stat.exists
+
+- name: Inspect the worker virtual environment before sync
+  ansible.builtin.stat:
+    path: "{{ screener_venv }}/bin/ditto-screener"
+  register: screener_venv_before_sync
+
+- name: Build the worker venv (uv sync)
+  ansible.builtin.command:
+    cmd: "{{ screener_uv_bin }} sync --frozen"
+    chdir: "{{ screener_source_dir }}"
+  become_user: "{{ screener_user }}"
+  environment:
+    UV_PROJECT_ENVIRONMENT: "{{ screener_venv }}"
+  when: screener_clone.changed or not screener_venv_before_sync.stat.exists
+  changed_when: true
+  notify: restart ditto-screener
+
+# --- Secrets for the env file ---
+- name: Read screener signing mnemonic from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ screener_mnemonic_secret }} --project={{ screener_gcp_project }}"
+  register: screener_mnemonic_read
+  changed_when: false
+  no_log: true
+
+- name: Read screener API token from Secret Manager (when configured)
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ screener_api_token_secret }} --project={{ screener_gcp_project }}"
+  register: screener_api_token_read
+  changed_when: false
+  no_log: true
+  when: screener_api_token_secret | length > 0
+
+- name: Render worker env file
+  ansible.builtin.template:
+    src: screener.env.j2
+    dest: "{{ screener_env_file }}"
+    owner: "{{ screener_user }}"
+    group: "{{ screener_group }}"
+    mode: "0640"
+  vars:
+    screener_mnemonic: "{{ screener_mnemonic_read.stdout }}"
+    screener_api_token: "{{ screener_api_token_read.stdout | default('') }}"
+  no_log: true
+  notify: restart ditto-screener
+
+- name: Guard the rendered worker env file against unresolved placeholders
+  ansible.builtin.include_role:
+    name: env_render_guard
+  vars:
+    env_render_guard_path: "{{ screener_env_file }}"
+    env_render_guard_label: "{{ screener_env_file }} on {{ inventory_hostname }}"
+
+# --- systemd unit ---
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: ditto-screener.service.j2
+    dest: "/etc/systemd/system/{{ screener_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd (screener)
+    - restart ditto-screener
+
+- name: Stat the worker entrypoint
+  ansible.builtin.stat:
+    path: "{{ screener_venv }}/bin/ditto-screener"
+  register: screener_entrypoint
+
+- name: Enable the worker unit
+  ansible.builtin.systemd:
+    name: "{{ screener_unit }}"
+    enabled: true
+    daemon_reload: true
+
+# The worker fails fast without a signing key / hotkey, so only start it once a
+# hotkey is configured (host_vars) AND the venv exists. Until then it's installed
+# + enabled but not running.
+- name: Start the screener worker (only when configured)
+  ansible.builtin.systemd:
+    name: "{{ screener_unit }}"
+    state: started
+  when:
+    - screener_hotkey | length > 0
+    - screener_entrypoint.stat.exists
+
+- name: Note when the worker is intentionally not started
+  ansible.builtin.debug:
+    msg: >-
+      ditto-screener installed + enabled but NOT started: set screener_hotkey in
+      host_vars and populate the {{ screener_mnemonic_secret }} secret, then
+      re-run this play (or `systemctl start {{ screener_unit }}`).
+  when: screener_hotkey | length == 0
