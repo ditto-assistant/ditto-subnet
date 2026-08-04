@@ -2,6 +2,7 @@
 // base with an 8s abort timeout, plus a small promise pool for fan-out.
 
 import { API_BASE } from "./config";
+import { sharedOperationsJSON } from "../data/operations-cache";
 
 const TIMEOUT_MS = 8000;
 
@@ -15,7 +16,7 @@ export class HTTPError extends Error {
 /** GET API_BASE+path as JSON. Non-2xx rejects with `Error("HTTP <status>")`.
  * A caller signal (Solid Query supplies one per query) cancels obsolete route
  * reads; the local controller still enforces the dashboard-wide deadline. */
-export async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const ctrl = new AbortController();
   const abortFromCaller = (): void => ctrl.abort(signal?.reason);
   if (signal?.aborted) abortFromCaller();
@@ -37,6 +38,17 @@ export async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T>
   }
   if (!response.ok) throw new HTTPError(response.status);
   return (await response.json()) as T;
+}
+
+export function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
+  if (path === "/public/operations") {
+    // The payload is public and user-agnostic. One same-origin tab performs
+    // each refresh; every other loaded dashboard reuses its broadcast result.
+    // The shared request owns its timeout so one component abort cannot cancel
+    // the snapshot all other tabs are waiting for.
+    return sharedOperationsJSON(() => fetchJSON<T>(path));
+  }
+  return fetchJSON<T>(path, signal);
 }
 
 /** The API's typed error detail when it sent one, else a generic message. */

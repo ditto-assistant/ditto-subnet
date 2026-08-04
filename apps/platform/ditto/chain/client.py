@@ -565,11 +565,17 @@ class ChainClient:
         return f"{url}{separator}authorization={quote(api_key, safe='')}"
 
     def _historical_substrate_urls(self) -> tuple[str, ...]:
-        """Return the free-first archive try list, then configured paid RPC."""
-        urls = list(self._config.public_archive_rpc_urls)
+        """Return configured archive first, then credential-free fallbacks.
+
+        A configured URL without a key is still usable when the provider offers
+        a free tier. A missing, rejected, or exhausted paid credential never
+        removes the built-in public archives from the try list.
+        """
+        urls: list[str] = []
         configured_url = self._configured_archive_url()
         if configured_url:
             urls.append(configured_url)
+        urls.extend(self._config.public_archive_rpc_urls)
         if not urls:
             urls.append(self._substrate_url())
         # Preserve order while preventing duplicate calls when an operator

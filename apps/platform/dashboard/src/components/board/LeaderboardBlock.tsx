@@ -826,7 +826,7 @@ export function LeaderboardBlock(props: { mode: "overview" | "page" }): JSX.Elem
     if (store.unavailable()) return "Live standings are temporarily unavailable";
     const d = store.payload();
     if (!d)
-      return "one rank per payment-owner family · expand a row for other scored submissions · KOTH emissions shown separately";
+      return "one rank per payment-owner family · open an agent for full submission details · KOTH emissions shown separately";
     if (d.selection_mode === "historical")
       return "historical scores only · does not drive current validator weights";
     if (store.settledView())

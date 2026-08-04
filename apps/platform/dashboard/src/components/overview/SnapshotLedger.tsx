@@ -2,10 +2,11 @@
 // renderHealth 6756–6768 + the headline-stat half of render() 4817–4830 +
 // the h-validators fill from loadOperations 9443). API failures render
 // stated absence — every value falls back to an en dash, never sample data.
-import { Show, createMemo } from "solid-js";
+import { Show, createMemo, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { useEndpoint } from "../../data/useEndpoint";
+import { operationsResource } from "../../data/operations";
 import { REFRESH_MS } from "../../lib/config";
 import type { ResourceState } from "../../data/useEndpoint";
 import { fx, median, relTime } from "../../lib/format";
@@ -23,10 +24,14 @@ function latest<T>(resource: ResourceState<T>): T | undefined {
   }
 }
 
-export function SnapshotLedger(props: { store: LeaderboardStore }): JSX.Element {
+export function SnapshotLedger(props: {
+  store: LeaderboardStore;
+  operations?: ResourceState<OperationsPayload>;
+}): JSX.Element {
   const store = props.store;
   const health = useEndpoint<HealthPayload>("/public/health", { pollMs: REFRESH_MS });
-  const operations = useEndpoint<OperationsPayload>("/public/operations", { pollMs: REFRESH_MS });
+  const operations = props.operations ?? operationsResource();
+  if (!props.operations) onMount(() => operations.refresh());
 
   const h = (): HealthPayload | undefined => latest(health);
 

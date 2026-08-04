@@ -1258,10 +1258,13 @@ def verified_scorer_for_version(
     ):
         return None
     if version >= 7 and (
-        not capabilities.ticket_inference
-        or not capabilities.signed_score_quorum
-        or scorer.v7_calibration is None
+        not capabilities.ticket_inference or not capabilities.signed_score_quorum
     ):
+        return None
+    # The calibration manifest is part of the retired v7 scoring contract, not
+    # a general requirement for every later benchmark. A v8-only scorer must not
+    # carry v7 metadata merely to pass Platform's capability gate.
+    if version == 7 and scorer.v7_calibration is None:
         return None
     # V8 accepts arbitrary-language miner images, so a scorer binary claiming
     # support is insufficient. Require an explicit signed executor boundary as

@@ -4,7 +4,7 @@
 
 Please do not open a public issue for a suspected vulnerability.
 
-Use [GitHub private vulnerability reporting](https://github.com/ditto-assistant/ditto-platform/security/advisories/new) to contact the maintainers privately. Include the affected component, reproduction steps, impact, and any suggested mitigation. We will acknowledge the report, investigate it, and coordinate disclosure with you.
+Use [GitHub private vulnerability reporting](https://github.com/ditto-assistant/ditto-subnet/security/advisories/new) to contact the maintainers privately. Include the affected component, reproduction steps, impact, and any suggested mitigation. We will acknowledge the report, investigate it, and coordinate disclosure with you.
 
 If GitHub private reporting is unavailable, email [support@heyditto.ai](mailto:support@heyditto.ai) with the subject `ditto-platform security report`.
 

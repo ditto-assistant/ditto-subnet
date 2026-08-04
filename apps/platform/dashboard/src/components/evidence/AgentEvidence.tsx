@@ -71,8 +71,6 @@ type RankedEntry = LeaderboardEntry & { rank?: number | null };
 
 /** Board fields the confirmation-retest section reads (continual fold). */
 interface BoardConfirmationFields {
-  completed_wave_composites?: Array<number | string> | null;
-  confirmation_seed_composites?: Array<number | string> | null;
   confirmation_seed_depth?: number | null;
   completed_wave_count?: number | null;
   aggregate_method?: string | null;
@@ -232,8 +230,8 @@ function FamilyStanding(props: {
                 <strong>Ranked family representative</strong>
                 <p>
                   This is the best canonical generation among {v().family.member_count} scored
-                  submissions sharing one leaderboard and emissions slot. Expand its family on the
-                  leaderboard to see the others.
+                  submissions sharing one leaderboard and emissions slot. The other scored
+                  generations are loaded here only after opening the agent.
                 </p>
               </section>
             }
@@ -521,18 +519,32 @@ function ConfirmationScores(props: {
   );
   const activeVersion = () => Number(props.pipeline.active_bench_version);
   const benchBadge = () => benchmarkVersionLabel(benchmarkVersionKey(activeVersion()));
+  const confirmationSeedMedians = createMemo(() => {
+    const bySeed = new Map<string, number[]>();
+    for (const score of props.pipeline.confirmation_scores || []) {
+      if (Number(score.bench_version) !== activeVersion() || score.seed == null) continue;
+      const value = Number(score.composite);
+      if (!Number.isFinite(value)) continue;
+      const key = String(score.seed);
+      bySeed.set(key, [...(bySeed.get(key) || []), value]);
+    }
+    return [...bySeed.entries()]
+      .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
+      .map(([, values]): number => {
+        const sortedValues = [...values].sort((left, right) => left - right);
+        const middle = Math.floor(sortedValues.length / 2);
+        return sortedValues.length % 2
+          ? sortedValues[middle]!
+          : (sortedValues[middle - 1]! + sortedValues[middle]!) / 2;
+      });
+  });
   const completedWaves = createMemo(() => {
-    const entry = boardEntry();
-    return entry && Array.isArray(entry.completed_wave_composites)
-      ? entry.completed_wave_composites.map(Number).filter(Number.isFinite)
+    const count = Number(boardEntry()?.completed_wave_count) || 0;
+    return boardEntry()?.aggregate_method === "continual_mean"
+      ? confirmationSeedMedians().slice(0, count)
       : [];
   });
-  const pendingSeeds = createMemo(() => {
-    const entry = boardEntry();
-    return entry && Array.isArray(entry.confirmation_seed_composites)
-      ? entry.confirmation_seed_composites.map(Number).filter(Number.isFinite)
-      : [];
-  });
+  const pendingSeeds = confirmationSeedMedians;
   const counts = createMemo(() =>
     retestAttemptCounts(
       (props.pipeline.validation_attempts || []).filter(

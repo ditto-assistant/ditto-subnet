@@ -305,6 +305,9 @@ deploy_owned_keys=(
   DITTO_DASHBOARD_WANDB_URL
   DITTO_TAOSTATS_API_KEY
   DITTO_TAOSTATS_VALIDATOR_NAMES_URL
+  SUBTENSOR_ARCHIVE_RPC_API_KEY
+  SUBTENSOR_ARCHIVE_RPC_AUTH_MODE
+  SUBTENSOR_ARCHIVE_RPC_URL
 )
 
 # Recover deterministically from duplicate, truncated, or no-final-newline
@@ -364,6 +367,9 @@ unset deploy_owned_key
 # wandb project URL injected into the served dashboard's telemetry link.
 upsert_env DITTO_UPLOAD_PAYMENT_ADDRESS "${DITTO_UPLOAD_PAYMENT_ADDRESS:-}"
 upsert_env DITTO_DASHBOARD_WANDB_URL "${DITTO_DASHBOARD_WANDB_URL:-}"
+upsert_env SUBTENSOR_ARCHIVE_RPC_URL "${SUBTENSOR_ARCHIVE_RPC_URL:-}"
+upsert_env SUBTENSOR_ARCHIVE_RPC_AUTH_MODE \
+  "${SUBTENSOR_ARCHIVE_RPC_AUTH_MODE:-}"
 
 # Validator-name enrichment is optional decoration. Read its API key directly
 # on the VM via the attached runtime service account so the value never crosses
@@ -383,6 +389,24 @@ else
   echo "==> Taostats key unavailable; keeping validator-name enrichment unchanged" >&2
 fi
 unset taostats_api_key taostats_secret_id taostats_secret_project
+
+# Historical payment verification prefers an operator-configured archive RPC,
+# but its credential is optional. Read it on the VM so it never crosses Actions
+# or SSH. If the secret has not been created (or access is temporarily down),
+# preserve an existing value; with none present the client uses the free public
+# archive list. A rejected/stale key also fails through to that same list.
+archive_rpc_secret_project="${SUBTENSOR_ARCHIVE_RPC_SECRET_PROJECT:-ditto-app-dev}"
+archive_rpc_secret_id="${SUBTENSOR_ARCHIVE_RPC_SECRET_ID:-platform-subtensor-archive-rpc-api-key}"
+archive_rpc_api_key=""
+if command -v gcloud >/dev/null 2>&1 && \
+  archive_rpc_api_key="$(timeout 15s gcloud secrets versions access latest \
+    --project="$archive_rpc_secret_project" \
+    --secret="$archive_rpc_secret_id" 2>/dev/null)"; then
+  upsert_env SUBTENSOR_ARCHIVE_RPC_API_KEY "$archive_rpc_api_key"
+else
+  echo "==> archive RPC key unavailable; free archive fallback remains enabled" >&2
+fi
+unset archive_rpc_api_key archive_rpc_secret_id archive_rpc_secret_project
 
 set -a
 . ./.env

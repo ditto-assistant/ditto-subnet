@@ -122,7 +122,7 @@ re-score sweep before old scores are compared to new.
 - **Upload** — `ditto/api_server/endpoints/upload.py`.
 - **Screener protocol and state transitions** — `ditto/api_server/endpoints/screener.py`.
 - **Platform-operated build/run worker (public source)** —
-  `ditto-assistant/ditto-screener`.
+  `ditto-assistant/ditto-subnet/workers/screener`.
 - **Tarball ingest + Docker sandbox (mode B)** — `dittobench-api`
   `internal/sandbox/` (`Dockerfile`-at-root build-context rule, safe extractor).
 - **Validator deploy** — infra `docs/validator-deploy.md`.

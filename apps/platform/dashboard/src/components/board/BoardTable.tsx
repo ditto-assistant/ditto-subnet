@@ -1,10 +1,10 @@
 // The board itself: toolbar (view tabs + the in-place filter), the
-// compact table with its sortable headers, family child rows, and the
-// pager. Ports render()'s row half (renderBoardRows 5037–5188), the view
+// compact table with its sortable headers, family child rows, and pager. Ports render()'s row half
+// (renderBoardRows 5037–5188), the view
 // controls (5267–5352), boardMatches (5027–5035) and boardCompare
 // (3876–3887). Solid's keyed <For> replaces the sectionChanged innerHTML
-// gate: an unchanged slice never rebuilds, so focus and expanded state
-// survive background refreshes by construction.
+// gate: an unchanged slice never rebuilds, so focus survives background
+// refreshes by construction.
 import { For, Show, createEffect, createMemo } from "solid-js";
 import type { JSX } from "solid-js";
 
@@ -32,7 +32,6 @@ import { pushEntityRoute } from "../../stores/routeStore";
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
 import { Pager } from "../ui/Pager";
-import { Sparkline } from "../ui/Sparkline";
 import { EmptyRow } from "../ui/States";
 import {
   boardDir,
@@ -48,8 +47,8 @@ import {
   setBoardQuery,
   setBoardSort,
   setBoardTab,
-  navigateBoardPage,
   toggleFamily,
+  navigateBoardPage,
   writeBoardPage,
 } from "./board-state";
 import type { BoardSortKey, BoardTab as BoardTabName } from "./board-state";
@@ -66,7 +65,8 @@ import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
 
 // Matching agent name, UID, and hotkey covers how people actually look a
 // miner up: by what they called it, by the number on the board, or by
-// pasting a key from the chain. Family members match their parent row too.
+// pasting a key from the chain. Compact family children match by display name;
+// their full identity and evidence remain click-loaded.
 export function boardMatches(entry: BoardEntry, needle: string): boolean {
   if (!needle) return true;
   const fields: unknown[] = [
@@ -76,7 +76,7 @@ export function boardMatches(entry: BoardEntry, needle: string): boolean {
     entry.miner_uid,
   ];
   (entry.submission_family?.members ?? []).forEach((member) => {
-    fields.push(member.agent_name, member.miner_hotkey);
+    fields.push(member.agent_name);
   });
   return fields.some(
     (field) =>
@@ -257,7 +257,6 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
           <Bar kind="memory" value={props.entry.memory_mean} />
         </div>
         <div class="cline2 score-stack-context">
-          <Sparkline history={props.entry.history} />
           <RolloutChip
             entry={props.entry}
             settledView={props.store.settledView()}
@@ -318,12 +317,8 @@ function BoardRow(props: {
     (emission() ? ", KOTH " + emission()?.role : "") +
     ". Activate for run detail.";
   const familyKey = (): string => String(e().agent_id);
-  const familyMembers = (): NonNullable<NonNullable<BoardEntry["submission_family"]>["members"]> =>
-    (e().submission_family?.members ?? []).filter(
-      (member) => String(member.agent_id) !== String(e().agent_id),
-    );
+  const familyMembers = () => e().submission_family?.members ?? [];
   const familyExpanded = (): boolean => expandedFamilies().has(familyKey());
-
   function activate(ev: Event): void {
     const target = ev.target as Element;
     if (

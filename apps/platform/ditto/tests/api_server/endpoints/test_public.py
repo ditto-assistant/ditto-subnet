@@ -1427,7 +1427,7 @@ class TestPublicLeaderboard:
                 rows=[
                     ConfirmationSeedScore(
                         UUID(agent_id),
-                        "5V1",
+                        _VALIDATOR_C,
                         seed,
                         0.90,
                         f"r{agent_id}-{seed}",
@@ -1471,14 +1471,20 @@ class TestPublicLeaderboard:
         assert entries[champion_id]["aggregate_method"] == "continual_mean"
         assert entries[champion_id]["aggregate_sample_count"] == 6
         assert entries[champion_id]["completed_wave_count"] == 3
-        assert entries[champion_id]["initial_quorum_composites"] == pytest.approx(
-            [0.90, 0.90, 0.90]
-        )
-        assert entries[champion_id]["completed_wave_composites"] == pytest.approx(
-            [0.90, 0.90, 0.90]
-        )
+        assert "initial_quorum_composites" not in entries[champion_id]
+        assert "completed_wave_composites" not in entries[champion_id]
         assert entries[tail_id]["composite"] == pytest.approx(0.80)
         assert entries[tail_id]["official_composite"] == pytest.approx(0.85)
+
+        # Raw quorum and per-seed evidence are detail data. They load only when
+        # the user opens an agent instead of riding every leaderboard row.
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{champion_id}/pipeline")
+        ).json()
+        assert len(pipeline["provisional_scores"]) == 3
+        assert [score["composite"] for score in pipeline["confirmation_scores"]] == (
+            pytest.approx([0.90, 0.90, 0.90])
+        )
 
     async def test_new_entrant_cannot_remove_retained_samples(
         self,
@@ -1577,9 +1583,7 @@ class TestPublicLeaderboard:
         settled = {entry["agent_id"]: entry for entry in before["entries"]}
         assert settled[champion_id]["completed_wave_count"] == 3
         assert settled[champion_id]["confirmation_seed_depth"] == 3
-        assert settled[champion_id]["confirmation_seed_composites"] == pytest.approx(
-            [0.90, 0.90, 0.90]
-        )
+        assert "confirmation_seed_composites" not in settled[champion_id]
 
         # A brand-new finalized agent joins the emission set with zero retests.
         entrant_id = await _seed_k3(
@@ -1602,19 +1606,15 @@ class TestPublicLeaderboard:
         # every retained sample regardless of the new scheduling membership.
         assert entries[entrant_id]["completed_wave_count"] == 0
         assert entries[champion_id]["completed_wave_count"] == 3
-        assert entries[champion_id]["completed_wave_composites"] == pytest.approx(
-            [0.90, 0.90, 0.90]
-        )
+        assert "completed_wave_composites" not in entries[champion_id]
         assert entries[champion_id]["aggregate_method"] == "continual_mean"
         assert entries[champion_id]["official_composite"] == pytest.approx(0.90)
         # ...but the append-only audit trail must still be visible.
         assert entries[champion_id]["confirmation_seed_depth"] == 3
-        assert entries[champion_id]["confirmation_seed_composites"] == pytest.approx(
-            [0.90, 0.90, 0.90]
-        )
+        assert "confirmation_seed_composites" not in entries[champion_id]
         assert entries[tail_id]["confirmation_seed_depth"] == 3
         assert entries[entrant_id]["confirmation_seed_depth"] == 0
-        assert entries[entrant_id]["confirmation_seed_composites"] == []
+        assert "confirmation_seed_composites" not in entries[entrant_id]
 
     async def test_reports_the_depth_a_non_member_actually_folded(
         self,
@@ -1722,8 +1722,8 @@ class TestPublicLeaderboard:
         outsider = entries[outsider_id]
 
         # It folded the wave, so it must say so. This was 0/canonical_median.
-        assert len(outsider["completed_wave_composites"]) == 3
         assert outsider["completed_wave_count"] == 3
+        assert "completed_wave_composites" not in outsider
         assert outsider["aggregate_method"] == "continual_mean"
         assert outsider["aggregate_sample_count"] == 3 + 3
         # And the report agrees with the arithmetic: mean(0.80 x3, 0.60 x3).
@@ -1864,13 +1864,11 @@ class TestPublicLeaderboard:
         assert entries[tail_id]["completed_wave_count"] == 3
         assert entries[champion_id]["aggregate_method"] == "continual_mean"
         assert entries[tail_id]["aggregate_method"] == "continual_mean"
-        # Equal sample composition: both averaged the same three live seeds.
-        assert entries[champion_id]["completed_wave_composites"] == pytest.approx(
-            [0.60, 0.60, 0.60]
-        )
-        assert entries[tail_id]["completed_wave_composites"] == pytest.approx(
-            [0.60, 0.60, 0.60]
-        )
+        # The board reports only the fold scalars; sample evidence is deferred.
+        assert entries[champion_id]["aggregate_sample_count"] == 6
+        assert entries[tail_id]["aggregate_sample_count"] == 6
+        assert "completed_wave_composites" not in entries[champion_id]
+        assert "completed_wave_composites" not in entries[tail_id]
         # The stale-only member permanently retains its own accepted samples.
         # They affect its mean but cannot become paired evidence against either
         # live member because the seed identities do not intersect.
@@ -2123,10 +2121,11 @@ class TestPublicLeaderboard:
         assert entries[champion_id]["aggregate_method"] == "continual_mean"
         assert entries[champion_id]["official_composite"] == pytest.approx(0.75)
         assert entries[tail_id]["completed_wave_count"] == 3
-        # Equal sample composition: both agents averaged the same three seeds.
-        assert entries[champion_id]["completed_wave_composites"] == pytest.approx(
-            entries[tail_id]["completed_wave_composites"]
-        )
+        # Equal sample composition is represented by compact fold counts here;
+        # the actual samples live on the click-loaded pipeline payload.
+        assert entries[champion_id]["aggregate_sample_count"] == 6
+        assert entries[tail_id]["aggregate_sample_count"] == 6
+        assert "completed_wave_composites" not in entries[champion_id]
         # The entrant has run nothing, so it stays on the canonical median --
         # the same estimator every agent outside the emission set already uses.
         assert entries[entrant_id]["completed_wave_count"] == 0
@@ -2696,8 +2695,23 @@ class TestPublicLeaderboard:
         assert board["count"] == 1
         entry = board["entries"][0]
         assert entry["agent_id"] == representative
-        family = entry["submission_family"]
+        compact_family = entry["submission_family"]
+        assert compact_family == {
+            "members": [
+                {
+                    "agent_id": str(hidden_generation),
+                    "agent_name": "agent",
+                    "agent_version": None,
+                    "canonical_composite": pytest.approx(0.91),
+                }
+            ]
+        }
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{hidden_generation}/pipeline")
+        ).json()
+        family = pipeline["submission_family"]
         assert family["member_count"] == 2
+        assert family["selection_rule"] == "best_official_score_per_payment_owner"
         assert [member["agent_id"] for member in family["members"]] == [
             representative,
             hidden_generation,
@@ -2707,9 +2721,6 @@ class TestPublicLeaderboard:
             False,
         ]
 
-        pipeline = (
-            await client.get(f"/api/v1/public/agent/{hidden_generation}/pipeline")
-        ).json()
         assert pipeline["submission_family"] == family
 
     async def test_attested_owner_family_keeps_linked_coldkeys_visible(
@@ -2768,15 +2779,25 @@ class TestPublicLeaderboard:
         board = (await client.get("/api/v1/public/leaderboard")).json()
 
         assert board["count"] == 1
-        family = board["entries"][0]["submission_family"]
+        compact_family = board["entries"][0]["submission_family"]
+        assert [member["agent_id"] for member in compact_family["members"]] == [
+            str(hidden)
+        ]
+        assert set(compact_family["members"][0]) == {
+            "agent_id",
+            "agent_name",
+            "agent_version",
+            "canonical_composite",
+        }
+        hidden_pipeline = (
+            await client.get(f"/api/v1/public/agent/{hidden}/pipeline")
+        ).json()
+        family = hidden_pipeline["submission_family"]
         assert family["member_count"] == 2
         assert [member["agent_id"] for member in family["members"]] == [
             representative,
             hidden,
         ]
-        hidden_pipeline = (
-            await client.get(f"/api/v1/public/agent/{hidden}/pipeline")
-        ).json()
         assert hidden_pipeline["submission_family"] == family
 
     async def test_open_rollout_exposes_settled_and_rollout_state_per_entry(
@@ -3033,10 +3054,20 @@ class TestPublicLeaderboard:
 
         body = (await client.get("/api/v1/public/leaderboard")).json()
         by_miner = {e["miner_hotkey"]: e for e in body["entries"]}
-        assert by_miner[_MINER_A]["calibration_brier"] == pytest.approx(0.12)
-        assert by_miner[_MINER_A]["calibration_n"] == 34
-        assert by_miner[_MINER_B]["calibration_brier"] is None
-        assert by_miner[_MINER_B]["calibration_n"] is None
+        assert "calibration_brier" not in by_miner[_MINER_A]
+        assert "calibration_brier" not in by_miner[_MINER_B]
+        calibrated_id = by_miner[_MINER_A]["agent_id"]
+        malformed_id = by_miner[_MINER_B]["agent_id"]
+        calibrated = (
+            await client.get(f"/api/v1/public/agent/{calibrated_id}/pipeline")
+        ).json()["provisional_scores"][0]
+        malformed = (
+            await client.get(f"/api/v1/public/agent/{malformed_id}/pipeline")
+        ).json()["provisional_scores"][0]
+        assert calibrated["calibration_brier"] == pytest.approx(0.12)
+        assert calibrated["calibration_n"] == 34
+        assert malformed["calibration_brier"] is None
+        assert malformed["calibration_n"] is None
 
     async def test_never_leaks_integrity_fields(
         self,
@@ -3088,8 +3119,15 @@ class TestPublicLeaderboard:
         raw = resp.text
         for answer_key in ('"expected"', '"called"', '"case_id"', "search_web"):
             assert answer_key not in raw
-        # …but the safe, redacted per-case view IS surfaced for analysis.
-        cases = entry["case_results"]
+        # …but the safe, redacted per-case view IS surfaced after the user
+        # opens the agent, rather than inflating every leaderboard row.
+        assert "case_results" not in entry
+        detail_response = await client.get(
+            f"/api/v1/public/agent/{entry['agent_id']}/scores"
+        )
+        for answer_key in ('"expected"', '"called"', '"case_id"', "search_web"):
+            assert answer_key not in detail_response.text
+        cases = detail_response.json()["scores"][0]["case_results"]
         assert cases and cases[0]["category"] == "web_search"
         assert cases[0]["score"] == pytest.approx(0.6)
         assert cases[0]["correct"] is False
@@ -3611,6 +3649,19 @@ def _v7_capable_row(
     )
 
 
+def _v8_only_capable_row(
+    now: datetime, *, hotkey: str, seen_at: datetime
+) -> SimpleNamespace:
+    """The v0.44 heartbeat: v8 is verified without retired v7 metadata."""
+
+    row = _v7_capable_row(now, hotkey=hotkey, seen_at=seen_at)
+    row.protocol_version = 18
+    scorer = row.capabilities["scorer_benchmarks"]
+    scorer["supported_bench_versions"] = [8]
+    scorer.pop("v7_calibration")
+    return row
+
+
 def _legacy_row(now: datetime, *, hotkey: str) -> SimpleNamespace:
     """The validator this gate exists for: ancient software, no capabilities.
 
@@ -3687,6 +3738,18 @@ class TestActiveBenchCapabilityGate:
         entry = self._snapshot(
             [_v7_capable_row(now, hotkey=_VALIDATOR_C, seen_at=now)],
             version=7,
+            now=now,
+        ).validators[0]
+
+        assert entry.bench_serviceability == "serving"
+        assert entry.health == "healthy"
+        assert entry.health_reasons == []
+
+    def test_a_v8_only_validator_passes_without_v7_calibration(self) -> None:
+        now = datetime(2026, 8, 4, 20, 20, tzinfo=UTC)
+        entry = self._snapshot(
+            [_v8_only_capable_row(now, hotkey=_VALIDATOR_C, seen_at=now)],
+            version=8,
             now=now,
         ).validators[0]
 
@@ -8098,8 +8161,7 @@ class TestNeverDiscloseReleasePolicy:
             ]
             if entry["agent_id"] == agent_id
         )
-        assert entry["artifact_release"]["status"] == "withheld"
-        assert entry["artifact_release"]["download_available"] is False
+        assert "artifact_release" not in entry
 
         storage.presigned_get_url.assert_not_awaited()
 

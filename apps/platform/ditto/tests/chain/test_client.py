@@ -596,13 +596,12 @@ class TestCheckExtrinsicSuccess:
         assert "super-secret" not in str(exc_info.value)
         assert "<redacted>" in str(exc_info.value)
 
-    async def test_free_archives_fail_over_before_configured_provider(
+    async def test_configured_provider_is_tried_before_free_archives(
         self, install_substrate_module: AsyncMock
     ):
-        install_substrate_module.query.side_effect = [
-            RuntimeError("State discarded"),
-            MagicMock(value=[make_event_record(3, event_id="ExtrinsicSuccess")]),
-        ]
+        install_substrate_module.query.return_value = MagicMock(
+            value=[make_event_record(3, event_id="ExtrinsicSuccess")]
+        )
         config = make_chain_config(
             public_archive_rpc_urls=(
                 "wss://archive.chain.opentensor.ai:443",
@@ -620,16 +619,14 @@ class TestCheckExtrinsicSuccess:
             "async_substrate_interface"
         ].AsyncSubstrateInterface
         assert [call.kwargs["url"] for call in substrate_factory.call_args_list] == [
-            "wss://archive.chain.opentensor.ai:443",
-            "wss://bittensor-finney.api.onfinality.io/public-ws",
+            "wss://paid.example/archive?authorization=paid-key",
         ]
 
-    async def test_configured_paid_provider_is_last_resort(
+    async def test_configured_provider_failure_falls_through_to_free_archive(
         self, install_substrate_module: AsyncMock
     ):
         install_substrate_module.query.side_effect = [
-            RuntimeError("first unavailable"),
-            RuntimeError("second unavailable"),
+            RuntimeError("configured unavailable"),
             MagicMock(value=[make_event_record(3, event_id="ExtrinsicSuccess")]),
         ]
         config = make_chain_config(
@@ -649,10 +646,32 @@ class TestCheckExtrinsicSuccess:
             "async_substrate_interface"
         ].AsyncSubstrateInterface
         assert [call.kwargs["url"] for call in substrate_factory.call_args_list] == [
-            "wss://free-one.example",
-            "wss://free-two.example",
             "wss://paid.example/archive?authorization=paid-key",
+            "wss://free-one.example",
         ]
+
+    async def test_configured_free_tier_url_needs_no_key(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = MagicMock(
+            value=[make_event_record(3, event_id="ExtrinsicSuccess")]
+        )
+        config = make_chain_config(
+            public_archive_rpc_urls=("wss://public-fallback.example",),
+            archive_rpc_url="wss://provider.example/free-tier",
+            archive_rpc_api_key=None,
+        )
+
+        async with ChainClient(config) as client:
+            ok = await client.check_extrinsic_success("0xhash", 3)
+
+        assert ok is True
+        substrate_factory = sys.modules[
+            "async_substrate_interface"
+        ].AsyncSubstrateInterface
+        substrate_factory.assert_called_once_with(
+            url="wss://provider.example/free-tier"
+        )
 
     async def test_provider_timeout_falls_through_to_next_archive(
         self, install_substrate_module: AsyncMock

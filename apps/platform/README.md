@@ -32,7 +32,7 @@ protected operational data, and it does not grant access to admin endpoints.
 ```
 
 - **Miner side & validator daemon:** [`ditto-subnet`](https://github.com/ditto-assistant/ditto-subnet)
-- **Platform-operated screening worker:** [`ditto-screener`](https://github.com/ditto-assistant/ditto-screener)
+- **Platform-operated screening worker:** [`workers/screener`](https://github.com/ditto-assistant/ditto-subnet/tree/main/workers/screener)
 - **Reference memory harness (what miners fork):** [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness)
 - **This repo** is the platform/API only. It is intentionally split out so it can
   be deployed and scaled independently of the miner/validator code.
@@ -82,7 +82,7 @@ never costs a full benchmark.
 It authenticates with a dedicated screener credential (an allowlisted
 hotkey plus a bearer token), not a validator permit, so the screener key holds no
 stake. The authoritative worker is deployed from the public, MIT-licensed
-[`ditto-screener`](https://github.com/ditto-assistant/ditto-screener) repository;
+[`workers/screener`](https://github.com/ditto-assistant/ditto-subnet/tree/main/workers/screener) directory;
 it remains platform-operated, and validators do not run it.
 
 | Method & path | Purpose |

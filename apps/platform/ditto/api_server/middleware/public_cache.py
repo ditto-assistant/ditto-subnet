@@ -15,6 +15,10 @@ This middleware enforces the endpoints' own declared TTLs in-process:
 - Concurrent misses on one key are single-flighted: one request computes,
   the rest await and share the same body, so a poll storm at TTL expiry
   costs one database pass instead of dozens.
+- ``stale-while-revalidate`` responses return their last snapshot immediately
+  while one detached refresh rebuilds the entry through the inner app.
+- Identity and gzip representations are keyed separately, so cache hits reuse
+  already-compressed bytes instead of burning CPU recompressing large payloads.
 - The store is bounded (LRU, ``_MAX_ENTRIES``) so per-agent routes cannot
   grow memory without limit.
 
@@ -25,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import re
 import time
@@ -32,8 +37,10 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+from starlette.types import Message, Scope
 
 if TYPE_CHECKING:
     from starlette.requests import Request
@@ -41,8 +48,12 @@ if TYPE_CHECKING:
 _PREFIX = "/api/v1/public/"
 _MAX_ENTRIES = 512
 _MAX_AGE = re.compile(r"max-age=(\d+)")
+_STALE_WHILE_REVALIDATE = re.compile(r"stale-while-revalidate=(\d+)")
+_REFRESH_FAILURE_BACKOFF_SECONDS = 5.0
 
-_CACHEABLE_HEADERS = ("cache-control", "content-type")
+_CACHEABLE_HEADERS = ("cache-control", "content-encoding", "content-type", "vary")
+
+logger = logging.getLogger(__name__)
 
 
 def compute_etag(body: bytes) -> str:
@@ -77,7 +88,7 @@ def if_none_match(header: str | None, etag: str) -> bool:
 
 
 class _Entry:
-    __slots__ = ("body", "etag", "expires_at", "headers", "status")
+    __slots__ = ("body", "etag", "expires_at", "headers", "stale_until", "status")
 
     def __init__(
         self,
@@ -86,22 +97,28 @@ class _Entry:
         body: bytes,
         etag: str,
         expires_at: float,
+        stale_until: float,
     ) -> None:
         self.status = status
         self.headers = headers
         self.body = body
         self.etag = etag
         self.expires_at = expires_at
+        self.stale_until = stale_until
 
 
-def _ttl_from_cache_control(value: str | None) -> float:
+def _policy_from_cache_control(value: str | None) -> tuple[float, float]:
     if not value:
-        return 0.0
+        return 0.0, 0.0
     lowered = value.lower()
     if "no-store" in lowered or "private" in lowered:
-        return 0.0
-    match = _MAX_AGE.search(lowered)
-    return float(match.group(1)) if match else 0.0
+        return 0.0, 0.0
+    max_age = _MAX_AGE.search(lowered)
+    stale = _STALE_WHILE_REVALIDATE.search(lowered)
+    return (
+        float(max_age.group(1)) if max_age else 0.0,
+        float(stale.group(1)) if stale else 0.0,
+    )
 
 
 class PublicCacheMiddleware(BaseHTTPMiddleware):
@@ -118,6 +135,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
         self._now = now
         self._entries: OrderedDict[str, _Entry] = OrderedDict()
         self._inflight: dict[str, asyncio.Future[_Entry | None]] = {}
+        self._refreshing: dict[str, asyncio.Task[None]] = {}
         self._disabled = (
             os.environ.get("PUBLIC_CACHE_DISABLED", "") == "1"
             if disabled is None
@@ -129,6 +147,15 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
         if entry is None:
             return None
         if entry.expires_at <= self._now():
+            return None
+        self._entries.move_to_end(key)
+        return entry
+
+    def _get_stale(self, key: str) -> _Entry | None:
+        entry = self._entries.get(key)
+        if entry is None or entry.expires_at > self._now():
+            return None
+        if entry.stale_until <= self._now():
             self._entries.pop(key, None)
             return None
         self._entries.move_to_end(key)
@@ -143,17 +170,17 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _not_modified(entry: _Entry, cache_state: str) -> Response:
         """Build a 304 with an empty body but the entry's revalidation headers."""
-        # The 200 this revalidates carries "Vary: Accept-Encoding" (added by
-        # the outer gzip layer, which never touches an under-floor 304); RFC
-        # 9110 §15.4.5 says the 304 must repeat it.
+        # The cached 200 varies by the identity/gzip representation; RFC 9110
+        # §15.4.5 says the 304 must repeat that Vary header.
         headers = {
             "ETag": entry.etag,
             "X-Public-Cache": cache_state,
-            "Vary": "Accept-Encoding",
         }
         cache_control = entry.headers.get("cache-control")
         if cache_control is not None:
             headers["Cache-Control"] = cache_control
+        vary = entry.headers.get("vary")
+        headers["Vary"] = vary or "Accept-Encoding"
         return Response(status_code=304, headers=headers)
 
     @classmethod
@@ -162,8 +189,9 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
         if if_none_match(inm, entry.etag):
             return cls._not_modified(entry, cache_state)
         headers = dict(entry.headers)
-        headers["ETag"] = entry.etag
-        headers["X-Public-Cache"] = cache_state
+        headers.setdefault("vary", "Accept-Encoding")
+        headers["etag"] = entry.etag
+        headers["x-public-cache"] = cache_state
         return Response(content=entry.body, status_code=entry.status, headers=headers)
 
     async def _fetch(
@@ -171,7 +199,9 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
     ) -> tuple[Response, _Entry | None]:
         """Run the downstream app and capture the body when cacheable."""
         response = await call_next(request)
-        ttl = _ttl_from_cache_control(response.headers.get("cache-control"))
+        ttl, stale_ttl = _policy_from_cache_control(
+            response.headers.get("cache-control")
+        )
         if response.status_code != 200 or ttl <= 0:
             return response, None
         body = b"".join([chunk async for chunk in response.body_iterator])
@@ -180,14 +210,129 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
             for name, value in response.headers.items()
             if name.lower() in _CACHEABLE_HEADERS
         }
+        headers.setdefault("vary", "Accept-Encoding")
         etag = compute_etag(body)
-        entry = _Entry(response.status_code, headers, body, etag, self._now() + ttl)
+        expires_at = self._now() + ttl
+        entry = _Entry(
+            response.status_code,
+            headers,
+            body,
+            etag,
+            expires_at,
+            expires_at + stale_ttl,
+        )
         rebuilt = Response(
             content=body, status_code=response.status_code, headers=dict(headers)
         )
         rebuilt.headers["ETag"] = etag
         rebuilt.headers["X-Public-Cache"] = "MISS"
+        rebuilt.headers["Vary"] = headers["vary"]
         return rebuilt, entry
+
+    @staticmethod
+    def _cache_key(request: Request) -> str:
+        # Gzip now sits inside this middleware, so compressed and identity
+        # representations are stored independently and never recompressed on a
+        # cache hit. Match SizedGZipMiddleware's representation choice.
+        encoding = (
+            "gzip"
+            if "gzip" in request.headers.get("accept-encoding", "")
+            else "identity"
+        )
+        return f"{request.url.path}?{request.url.query}|{encoding}"
+
+    async def _refresh_from_scope(self, key: str, scope: Scope) -> None:
+        """Rebuild one stale entry through the inner ASGI app.
+
+        This bypasses this cache middleware itself but still runs gzip and the
+        endpoint/dependency stack. The synthetic GET has no body and drops a
+        caller's conditional validator so the rebuild always captures a 200.
+        """
+        started = False
+        status = 500
+        raw_headers: list[tuple[bytes, bytes]] = []
+        body_parts: list[bytes] = []
+
+        inner_scope = dict(scope)
+        inner_scope["headers"] = [
+            (name, value)
+            for name, value in scope.get("headers", [])
+            if name.lower() != b"if-none-match"
+        ]
+
+        async def receive() -> Message:
+            nonlocal started
+            if not started:
+                started = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            return {"type": "http.disconnect"}
+
+        async def send(message: Message) -> None:
+            nonlocal status, raw_headers
+            if message["type"] == "http.response.start":
+                status = int(message["status"])
+                raw_headers = list(message.get("headers", []))
+            elif message["type"] == "http.response.body":
+                body_parts.append(message.get("body", b""))
+
+        try:
+            await self.app(inner_scope, receive, send)
+            headers_obj = Headers(raw=raw_headers)
+            ttl, stale_ttl = _policy_from_cache_control(
+                headers_obj.get("cache-control")
+            )
+            if status != 200 or ttl <= 0:
+                self._backoff_stale(key)
+                logger.warning(
+                    "public cache background refresh returned status=%d key=%s",
+                    status,
+                    key,
+                )
+                return
+            body = b"".join(body_parts)
+            headers = {
+                name: value
+                for name, value in headers_obj.items()
+                if name.lower() in _CACHEABLE_HEADERS
+            }
+            headers.setdefault("vary", "Accept-Encoding")
+            expires_at = self._now() + ttl
+            self._store(
+                key,
+                _Entry(
+                    status,
+                    headers,
+                    body,
+                    compute_etag(body),
+                    expires_at,
+                    expires_at + stale_ttl,
+                ),
+            )
+        except Exception:
+            # Keep serving the bounded stale entry and avoid turning a failed
+            # refresh into one retry per incoming poller.
+            self._backoff_stale(key)
+            logger.warning(
+                "public cache background refresh failed key=%s", key, exc_info=True
+            )
+        finally:
+            self._refreshing.pop(key, None)
+
+    def _backoff_stale(self, key: str) -> None:
+        entry = self._entries.get(key)
+        if entry is not None:
+            entry.expires_at = min(
+                entry.stale_until,
+                self._now() + _REFRESH_FAILURE_BACKOFF_SECONDS,
+            )
+
+    def _start_refresh(self, key: str, request: Request) -> None:
+        if key in self._refreshing:
+            return
+        self._refreshing[key] = asyncio.create_task(
+            self._refresh_from_scope(key, dict(request.scope)),
+            name=f"public-cache-refresh:{request.url.path}",
+        )
 
     async def dispatch(self, request: Request, call_next) -> Response:
         if (
@@ -197,11 +342,16 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
-        key = f"{request.url.path}?{request.url.query}"
+        key = self._cache_key(request)
         inm = request.headers.get("if-none-match")
         cached = self._get_fresh(key)
         if cached is not None:
             return self._respond(cached, inm, "HIT")
+
+        stale = self._get_stale(key)
+        if stale is not None:
+            self._start_refresh(key, request)
+            return self._respond(stale, inm, "STALE")
 
         waiting = self._inflight.get(key)
         if waiting is not None:

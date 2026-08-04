@@ -37,6 +37,7 @@ code-quality standard; no pydantic here (nothing crosses the HTTP boundary).
 
 from __future__ import annotations
 
+import gzip
 import io
 import re
 import tarfile
@@ -66,7 +67,14 @@ def pack(crate: Crate) -> bytes:
     therefore invisible at the tar level too, matching what a real copier does.
     """
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=6) as tar:
+    # ``tarfile.open(mode="w:gz")`` fixes member mtimes below but still writes
+    # the current wall clock into the outer gzip header. Crossing a one-second
+    # boundary therefore made otherwise identical archives differ. Own the
+    # gzip stream so both archive layers have an explicit epoch timestamp.
+    with (
+        gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6, mtime=0) as gz,
+        tarfile.open(fileobj=gz, mode="w") as tar,
+    ):
         for path in sorted(crate):
             data = crate[path]
             info = tarfile.TarInfo(name=path)

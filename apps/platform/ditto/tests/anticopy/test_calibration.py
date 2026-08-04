@@ -55,6 +55,15 @@ class TestPacking:
         reordered = dict(reversed(list(_SEED.items())))
         assert pack(_SEED) == pack(reordered)  # sorted-path emission
 
+    def test_pack_does_not_embed_the_wall_clock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("gzip.time.time", lambda: 1.0)
+        first = pack(_SEED)
+        monkeypatch.setattr("gzip.time.time", lambda: 2.0)
+        assert pack(_SEED) == first
+        assert first[4:8] == b"\x00\x00\x00\x00"
+
 
 class TestLadder:
     def test_tier1_cosmetic_preserves_normalized_hash(self) -> None:

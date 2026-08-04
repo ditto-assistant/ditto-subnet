@@ -299,18 +299,13 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # must be outermost so its contextvar is live for every downstream
     # middleware + handler + log line, including any future auth that
     # short-circuits before reaching the app.
-    # PublicCacheMiddleware is innermost: cache hits skip the endpoint (and
-    # its database work) while request-id logging still records every hit.
-    app.add_middleware(PublicCacheMiddleware)
-    # Gzip sits OUTSIDE the public cache (added after it, so it wraps it on
-    # the wire): the cache stores and compares uncompressed bodies (so ETags
-    # are stable), and compression happens outward on every response,
-    # including cache HITs and the 368KB dashboard HTML. SizedGZipMiddleware
-    # (not stock GZipMiddleware) enforces the sub-1KB "leave it uncompressed"
-    # floor from the declared Content-Length, which survives the cache
-    # middleware's BaseHTTPMiddleware re-chunking; stock gzip only applies the
-    # floor to single-message bodies and would compress everything here.
+    # Gzip is inside the public cache: each identity/gzip representation is
+    # built once and cached independently, so a 200KB operations cache HIT
+    # does not burn CPU recompressing the same user-agnostic bytes.
     app.add_middleware(SizedGZipMiddleware, minimum_size=1000, compresslevel=6)
+    # PublicCacheMiddleware wraps gzip. Cache hits skip both endpoint/DB work
+    # and compression while request-id logging still records every request.
+    app.add_middleware(PublicCacheMiddleware)
     app.add_middleware(AuthPassThroughMiddleware)
     app.add_middleware(RequestIDMiddleware)
 

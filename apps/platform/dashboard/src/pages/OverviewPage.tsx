@@ -12,8 +12,14 @@ import { leaderboardStore } from "../components/board/leaderboard-data";
 import { ChampionBox } from "../components/overview/ChampionBox";
 import { HarnessComparison } from "../components/overview/HarnessComparison";
 import { SnapshotLedger } from "../components/overview/SnapshotLedger";
+import type { ResourceState } from "../data/useEndpoint";
+import type { OperationsPayload } from "../types/fleet";
 
-export function OverviewPage(): JSX.Element {
+export function OverviewPage(
+  props: {
+    operations?: ResourceState<OperationsPayload>;
+  } = {},
+): JSX.Element {
   const store = leaderboardStore();
   return (
     <section class="page active" data-page="overview">
@@ -25,7 +31,7 @@ export function OverviewPage(): JSX.Element {
           aria-label="Memory timeline and subnet snapshot, scrolls separately from the leaderboard"
         >
           <HarnessComparison store={store} />
-          <SnapshotLedger store={store} />
+          <SnapshotLedger store={store} operations={props.operations} />
         </aside>
         <div
           class="overview-main"

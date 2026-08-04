@@ -197,7 +197,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <a
           id="github-link"
           class="btn ghost"
-          href="https://github.com/ditto-assistant/ditto-platform"
+          href="https://github.com/ditto-assistant/ditto-subnet/tree/main/apps/platform"
           target="_blank"
           rel="noopener"
           aria-label="Platform source on GitHub"
@@ -232,27 +232,39 @@ export function SiteFooter(): JSX.Element {
         <a id="foot-wandb" href={WANDB_URL} target="_blank" rel="noopener">
           Full per-epoch telemetry (wandb) ↗
         </a>
-        <a href="https://github.com/ditto-assistant/ditto-platform" target="_blank" rel="noopener">
+        <a
+          href="https://github.com/ditto-assistant/ditto-subnet/tree/main/apps/platform"
+          target="_blank"
+          rel="noopener"
+        >
           Platform source ↗
         </a>
         <a href="https://github.com/ditto-assistant/ditto-subnet" target="_blank" rel="noopener">
           Subnet &amp; validator ↗
         </a>
-        <a href="https://github.com/ditto-assistant/ditto-screener" target="_blank" rel="noopener">
+        <a
+          href="https://github.com/ditto-assistant/ditto-subnet/tree/main/workers/screener"
+          target="_blank"
+          rel="noopener"
+        >
           Screening worker ↗
         </a>
-        <a href="https://github.com/ditto-assistant/dittobench-api" target="_blank" rel="noopener">
+        <a
+          href="https://github.com/ditto-assistant/ditto-subnet/tree/main/services/dittobench-api"
+          target="_blank"
+          rel="noopener"
+        >
           Scoring engine ↗
         </a>
         <a
-          href="https://github.com/ditto-assistant/dittobench-datagen"
+          href="https://github.com/ditto-assistant/ditto-subnet/tree/main/research/dittobench-datagen"
           target="_blank"
           rel="noopener"
         >
           Dataset &amp; grader ↗
         </a>
         <a
-          href="https://github.com/ditto-assistant/dittobench-starter-kit"
+          href="https://github.com/ditto-assistant/ditto-subnet/tree/main/miners/dittobench-starter-kit"
           target="_blank"
           rel="noopener"
         >

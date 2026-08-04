@@ -29,27 +29,11 @@ import type {
 } from "../../types/leaderboard";
 import { leaderboardVersionView } from "./board-state";
 
-/** One payment-owner family member row (wire shape; the shared types module
- * does not carry the family object). */
-export interface FamilyMember {
-  agent_id?: string | null;
-  agent_name?: string | null;
-  agent_version?: number | null;
-  miner_hotkey?: string | null;
-  canonical_composite: number;
-  representative?: boolean;
-}
-
-export interface SubmissionFamily {
-  member_count?: number;
-  members?: FamilyMember[];
-}
-
-/** The board's working entry shape: wire entry + the continual-aggregate
- * fields the chips read + the family + the client-assigned display rank. */
+/** The board's working entry shape: lean wire entry + continual-aggregate
+ * scalars and the client-assigned display rank. Family children carry only
+ * identity/version/score; full family and score evidence loads after a click. */
 export type BoardEntry = LeaderboardEntry &
   ContinualAggregate & {
-    submission_family?: SubmissionFamily | null;
     rank: number | null;
   };
 

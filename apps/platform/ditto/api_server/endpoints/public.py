@@ -93,6 +93,8 @@ from ditto.api_models import (
     PublicInferenceRun,
     PublicKothEmissions,
     PublicLeaderboardEntry,
+    PublicLeaderboardFamily,
+    PublicLeaderboardFamilyMember,
     PublicLeaderboardResponse,
     PublicMetricDoc,
     PublicModelUse,
@@ -282,7 +284,6 @@ from ditto.db.queries.scores import (
     get_submission_scores,
     list_eligible_ledger,
     list_memory_leader_timeline,
-    list_miner_composite_history,
     list_provisional_ledger,
     list_public_submissions,
     list_scored_bench_versions,
@@ -313,7 +314,7 @@ router = APIRouter(prefix="/public", tags=["public"])
 # instead of showing empty panels for a round trip. The window is deliberately
 # short here, so a stale board is never more than a couple of minutes old.
 _CACHE_CONTROL = "public, max-age=30, stale-while-revalidate=120"
-_OPERATIONS_CACHE_CONTROL = "public, max-age=5"
+_OPERATIONS_CACHE_CONTROL = "public, max-age=5, stale-while-revalidate=30"
 _TIMELINE_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 # v1 predates the memory subscore, so it has nothing to plot on this axis.
 _TIMELINE_MIN_BENCH_VERSION = 2
@@ -1721,7 +1722,7 @@ def _public_entry(
     efficiency_bonus: float | None = None,
     efficiency_snapshot_id: UUID | None = None,
     efficiency_bonus_preview: float | None = None,
-    submission_family: PublicSubmissionFamily | None = None,
+    submission_family: PublicLeaderboardFamily | None = None,
     average_run_cost_microusd: int | None = None,
     inference_run_count: int = 0,
 ) -> PublicLeaderboardEntry:
@@ -1857,12 +1858,17 @@ def _public_submission_family(
     members: list[Any],
     *,
     representative_agent_id: UUID,
+    selection_rule: Literal[
+        "best_official_score_per_payment_owner",
+        "best_canonical_score_per_payment_owner",
+    ] = "best_official_score_per_payment_owner",
 ) -> PublicSubmissionFamily | None:
     """Project a payment-owner family without exposing its coldkey."""
     if not members:
         return None
     return PublicSubmissionFamily(
         member_count=len(members),
+        selection_rule=selection_rule,
         members=[
             PublicSubmissionFamilyMember(
                 agent_id=member.agent_id,
@@ -1876,6 +1882,25 @@ def _public_submission_family(
             for member in members
         ],
     )
+
+
+def _public_leaderboard_family(
+    members: tuple[Any, ...],
+    *,
+    representative_agent_id: UUID,
+) -> PublicLeaderboardFamily | None:
+    """Project only the grouped children the leaderboard actually renders."""
+    children = [
+        PublicLeaderboardFamilyMember(
+            agent_id=member.agent_id,
+            agent_name=member.agent_name,
+            agent_version=member.agent_version,
+            canonical_composite=member.canonical_composite,
+        )
+        for member in members
+        if member.agent_id != representative_agent_id
+    ]
+    return PublicLeaderboardFamily(members=children) if children else None
 
 
 def _public_koth_emissions(
@@ -2100,7 +2125,34 @@ async def benchmark_timeline(
     )
 
 
-@router.get("/leaderboard", response_model=PublicLeaderboardResponse)
+_LEADERBOARD_DETAIL_FIELDS = {
+    "artifact_release",
+    "initial_quorum_composites",
+    "completed_wave_composites",
+    "confirmation_seed_composites",
+    "raw_composite",
+    "efficiency_snapshot_id",
+    "calibration_brier",
+    "calibration_n",
+    "dataset_sha256",
+    "models",
+    "per_category",
+    "integrity",
+    "tokens",
+    "token_usage",
+    "model_use",
+    "token_efficiency",
+    "composite_breakdown",
+    "history",
+    "case_results",
+}
+
+
+@router.get(
+    "/leaderboard",
+    response_model=PublicLeaderboardResponse,
+    response_model_exclude={"entries": {"__all__": _LEADERBOARD_DETAIL_FIELDS}},
+)
 async def leaderboard(
     request: Request,
     response: Response,
@@ -2160,7 +2212,10 @@ async def leaderboard(
     ledger_rows = await list_eligible_ledger(
         session,
         include_fingerprints=False,
+        include_details=False,
+        include_family_members=True,
         bench_version=bench_version,
+        owner_score="canonical" if bench_version is not None else "official",
     )
     selected_versions = {row.agent_id: row.bench_version for row in ledger_rows}
     registration = await _current_registration(request)
@@ -2173,7 +2228,11 @@ async def leaderboard(
     )
     fold_stderrs = {
         row.agent_id: _ledger_stderr(
-            row.details if isinstance(row.details, dict) else None,
+            (
+                {"composite_stderr": row.stored_composite_stderr}
+                if row.stored_composite_stderr is not None
+                else None
+            ),
             quorum.get(row.agent_id, []),
         )
         for row in ledger_rows
@@ -2279,14 +2338,6 @@ async def leaderboard(
         efficiency_fold_active=efficiency_fold_active,
     )
     finalized_rows = rank_submissions(finalized_rows, scores=board_official_composites)
-    family_members_by_owner = (
-        await list_submission_family_members(
-            session,
-            bench_version=finalized_rows[0].bench_version,
-        )
-        if finalized_rows
-        else {}
-    )
     # The finalized board is already one row per owner (``list_eligible_ledger``
     # partitions on ``emission_owner``), so the provisional overlay has to
     # suppress and dedupe on that same owner. Keyed on the hotkey it showed an
@@ -2314,12 +2365,6 @@ async def leaderboard(
             for row in owner_rows
         ],
     )
-    finalized_owner_roots = {
-        row.agent_id: root
-        for row, root in zip(
-            finalized_rows, owner_roots[: len(finalized_rows)], strict=True
-        )
-    }
     finalized_owners = set(owner_roots[: len(finalized_rows)])
     provisional_by_owner: dict[str, tuple[LedgerRow, int]] = {}
     for owner, candidate in zip(
@@ -2399,7 +2444,7 @@ async def leaderboard(
     agent_rows = (
         (
             await session.execute(
-                select(Agent.agent_id, Agent.name, Agent.version, Agent.status).where(
+                select(Agent.agent_id, Agent.name, Agent.version).where(
                     Agent.agent_id.in_([row.agent_id for row in rows])
                 )
             )
@@ -2408,18 +2453,8 @@ async def leaderboard(
         .all()
     )
     agent_metadata = {
-        agent_id: (name, version) for agent_id, name, version, _ in agent_rows
+        agent_id: (name, version) for agent_id, name, version in agent_rows
     }
-    artifact_releases = await _artifact_release_snapshot(
-        session,
-        statuses={agent_id: status for agent_id, _, _, status in agent_rows},
-        now=now,
-    )
-    histories = await list_miner_composite_history(
-        session,
-        [r.miner_hotkey for r in rows],
-        bench_versions={r.miner_hotkey: r.bench_version for r in rows},
-    )
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(
@@ -2435,7 +2470,6 @@ async def leaderboard(
                 i,
                 row,
                 *agent_metadata[row.agent_id],
-                histories.get(row.miner_hotkey),
                 finalized=True,
                 score_count=score_counts.get(row.agent_id, SCORING_QUORUM),
                 settled_composite=settled,
@@ -2461,12 +2495,8 @@ async def leaderboard(
                     else None
                 ),
                 fold_stderr=fold_stderrs.get(row.agent_id),
-                artifact_release=artifact_releases[row.agent_id],
-                submission_family=_public_submission_family(
-                    family_members_by_owner.get(
-                        finalized_owner_roots[row.agent_id],
-                        [],
-                    ),
+                submission_family=_public_leaderboard_family(
+                    row.family_members,
                     representative_agent_id=row.agent_id,
                 ),
                 official_composite=board_official_composites.get(
@@ -2516,7 +2546,6 @@ async def leaderboard(
                 len(entries) + 1,
                 row,
                 *agent_metadata[row.agent_id],
-                histories.get(row.miner_hotkey),
                 finalized=False,
                 score_count=count,
                 settled_composite=settled,
@@ -2533,7 +2562,6 @@ async def leaderboard(
                     else None
                 ),
                 fold_stderr=fold_stderrs.get(row.agent_id),
-                artifact_release=artifact_releases[row.agent_id],
                 average_run_cost_microusd=run_costs.get(
                     (row.agent_id, row.bench_version), (None, 0)
                 )[0],
@@ -4524,14 +4552,26 @@ async def agent_pipeline(
         ),
         [],
     )
-    submission_family = (
-        _public_submission_family(
-            agent_family_members,
-            representative_agent_id=agent_family_members[0].agent_id,
+    if agent_family_members:
+        family_agent_ids = {member.agent_id for member in agent_family_members}
+        official_representative_id = next(
+            (
+                ledger_row.agent_id
+                for ledger_row in await list_eligible_ledger(
+                    session,
+                    include_fingerprints=False,
+                    include_details=False,
+                )
+                if ledger_row.agent_id in family_agent_ids
+            ),
+            agent_family_members[0].agent_id,
         )
-        if agent_family_members
-        else None
-    )
+        submission_family = _public_submission_family(
+            agent_family_members,
+            representative_agent_id=official_representative_id,
+        )
+    else:
+        submission_family = None
     canonical_scores = [
         score for score in accepted_scores if score.bench_version == canonical_version
     ]
@@ -4695,6 +4735,12 @@ async def agent_pipeline(
                     final_composite=score.composite,
                     details=(score.details if isinstance(score.details, dict) else {}),
                 ),
+                calibration_brier=_safe_calibration(
+                    score.details if isinstance(score.details, dict) else {}
+                )[0],
+                calibration_n=_safe_calibration(
+                    score.details if isinstance(score.details, dict) else {}
+                )[1],
                 seed=str(score.seed),
                 run_size=agent.dataset_run_size,
                 bench_version=_score_bench_version(score),

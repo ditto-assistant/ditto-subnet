@@ -230,7 +230,7 @@ class TestLeaderboardBonusExposure:
         lean = _entry(payload, agents["lean"])
         assert lean["efficiency_bonus"] == 0.05
         assert lean["effective_composite"] == pytest.approx(0.80 * 1.05)
-        assert lean["efficiency_snapshot_id"] == status["snapshot_id"]
+        assert "efficiency_snapshot_id" not in lean
         assert lean["composite"] == 0.80  # base composite is never modified
 
         mid = _entry(payload, agents["mid"])
@@ -382,7 +382,7 @@ class TestLeaderboardBonusExposure:
             entry = _entry(payload, agent_id)
             assert entry["efficiency_bonus"] is None
             assert entry["effective_composite"] is None
-            assert entry["efficiency_snapshot_id"] is None
+            assert "efficiency_snapshot_id" not in entry
         # Inactive epochs assign no rows at all — activation later must be
         # able to freeze these agents at their first ACTIVE epoch.
         async with session_maker() as s:
@@ -469,7 +469,7 @@ class TestLeaderboardBonusExposure:
         for entry in payload["entries"]:
             assert entry["efficiency_bonus"] is None
             assert entry["effective_composite"] is None
-            assert entry["efficiency_snapshot_id"] is None
+            assert "efficiency_snapshot_id" not in entry
         async with session_maker() as s:
             assert (await s.scalars(select(EfficiencyCohortSnapshot))).all() == []
             assert (await s.scalars(select(EfficiencyBonus))).all() == []
@@ -510,7 +510,7 @@ class TestLeaderboardBonusExposure:
         # unapplied preview for an awarded bonus.
         assert lean["efficiency_bonus"] is None
         assert lean["effective_composite"] is None
-        assert lean["efficiency_snapshot_id"] is None
+        assert "efficiency_snapshot_id" not in lean
 
         # The whole point: nothing was persisted.
         async with session_maker() as s:

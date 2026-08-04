@@ -95,11 +95,25 @@ export interface CaseResult {
   notes?: string[] | null;
 }
 
+export interface LeaderboardFamilyMember {
+  agent_id: string;
+  agent_name: string;
+  agent_version?: number | null;
+  canonical_composite: number;
+}
+
+export interface LeaderboardFamily {
+  /** Only unranked children; the representative is the containing entry. */
+  members: LeaderboardFamilyMember[];
+}
+
 export interface LeaderboardEntry {
   miner_hotkey: string;
   agent_id?: string;
   agent_name?: string | null;
   agent_version?: number | null;
+  /** Minimal children for the expandable owner-family grouping. */
+  submission_family?: LeaderboardFamily | null;
   /** Mean settled platform-metered validator lease cost on this score's bench version. */
   average_run_cost_microusd?: number | null;
   /** Settled leases included in average_run_cost_microusd. */

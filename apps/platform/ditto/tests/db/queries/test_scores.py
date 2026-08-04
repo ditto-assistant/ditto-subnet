@@ -15,8 +15,11 @@ from ditto.db.models import (
     Agent,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    ConfirmationScore,
     EvaluationPayment,
 )
+from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
+from ditto.db.queries.score_ranking import official_composites
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
     list_eligible_ledger,
@@ -308,6 +311,159 @@ class TestListEligibleLedger:
         ledger = await list_eligible_ledger(session)
 
         assert [row.agent_id for row in ledger] == [best.agent_id]
+
+    async def test_official_score_can_replace_a_lucky_family_incumbent(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Family selection must use the score that ranks and pays the row.
+
+        The incumbent won its initial quorum but fell after continual retests.
+        A later generation whose canonical score is still lower should replace
+        it once that lower score is higher than the incumbent's official score.
+        Historical snapshots deliberately retain the canonical selection.
+        """
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        coldkey = "5ColdkeyOwner"
+        incumbent = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.990,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        challenger = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            coldkey=coldkey,
+            composite=0.985,
+            created_at=t0.replace(hour=13),
+            n=MIN_ELIGIBLE_CASES,
+        )
+
+        for agent, score in ((incumbent, 0.990), (challenger, 0.985)):
+            await _upsert(
+                session,
+                agent.agent_id,
+                validator_hotkey=_VALIDATOR + "-2",
+                composite=score,
+            )
+            await _upsert(
+                session,
+                agent.agent_id,
+                validator_hotkey=_VALIDATOR + "-3",
+                composite=score,
+            )
+        async with session.begin():
+            session.add(
+                ConfirmationScore(
+                    agent_id=incumbent.agent_id,
+                    validator_hotkey=_VALIDATOR,
+                    bench_version=_BENCH_VERSION,
+                    seed=99,
+                    composite=0.846,
+                    run_id="confirmation-99",
+                )
+            )
+
+        async def _continual_active(*_: object, **__: object) -> bool:
+            return True
+
+        monkeypatch.setattr(
+            "ditto.db.queries.score_ranking.continual_mean_is_active",
+            _continual_active,
+        )
+
+        official = await list_eligible_ledger(session)
+        historical = await list_eligible_ledger(session, owner_score="canonical")
+
+        assert [row.agent_id for row in official] == [challenger.agent_id]
+        assert official[0].official_composite == pytest.approx(0.985)
+        assert [row.agent_id for row in historical] == [incumbent.agent_id]
+
+    async def test_sql_official_scores_match_python_fold(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The SQL aggregate must stay byte-for-byte aligned with consensus."""
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        agent = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey="5ColdkeyA",
+            composite=0.90,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        for suffix, score in (("-2", 0.80), ("-3", 1.00)):
+            await _upsert(
+                session,
+                agent.agent_id,
+                validator_hotkey=_VALIDATOR + suffix,
+                composite=score,
+            )
+        canonical_only = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            coldkey="5ColdkeyB",
+            composite=0.55,
+            created_at=t0.replace(hour=13),
+            n=MIN_ELIGIBLE_CASES,
+        )
+        for suffix, score in (("-2", 0.45), ("-3", 0.65)):
+            await _upsert(
+                session,
+                canonical_only.agent_id,
+                validator_hotkey=_VALIDATOR + "-fallback" + suffix,
+                composite=score,
+            )
+        async with session.begin():
+            session.add_all(
+                [
+                    ConfirmationScore(
+                        agent_id=agent.agent_id,
+                        validator_hotkey=f"{_VALIDATOR}-c{suffix}",
+                        bench_version=_BENCH_VERSION,
+                        seed=seed,
+                        composite=score,
+                        run_id=f"confirmation-{seed}-{suffix}",
+                    )
+                    for seed, values in ((100, (0.70, 0.90)), (101, (0.60, 0.80, 1.00)))
+                    for suffix, score in enumerate(values, start=1)
+                ]
+            )
+
+        async def _continual_active(*_: object, **__: object) -> bool:
+            return True
+
+        monkeypatch.setattr(
+            "ditto.db.queries.score_ranking.continual_mean_is_active",
+            _continual_active,
+        )
+        rows = await list_eligible_ledger(
+            session, include_details=False, include_fingerprints=False
+        )
+        quorum = await quorum_composites(
+            session,
+            [row.agent_id for row in rows],
+            bench_versions=dict.fromkeys(
+                [row.agent_id for row in rows], _BENCH_VERSION
+            ),
+        )
+        confirmations = await confirmation_composites_by_seed(
+            session,
+            agent_ids=[agent.agent_id],
+            bench_version=_BENCH_VERSION,
+        )
+        expected = official_composites(
+            rows,
+            quorum=quorum,
+            completed_waves=confirmations,
+            continual_mean_active=True,
+        )
+
+        actual = {row.agent_id: row.official_composite for row in rows}
+        assert actual == pytest.approx(expected)
+        assert actual[canonical_only.agent_id] == pytest.approx(0.55)
 
     async def test_different_coldkeys_keep_separate_positions(
         self, session: AsyncSession

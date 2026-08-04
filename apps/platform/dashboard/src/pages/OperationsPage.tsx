@@ -7,7 +7,7 @@
 // papered over). Validator display names arrive on a separate feed and are
 // optional untrusted decoration: reset on every refetch, rendered as inert
 // text, never a substitute for the hotkey identity.
-import { For, createEffect, createMemo, createSignal } from "solid-js";
+import { For, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { FleetLedger, FleetRow, RetiredFleetRow } from "../components/operations/FleetTable";
@@ -32,9 +32,10 @@ import type {
 } from "../components/operations/fleet";
 import type { PipelineEntryExt } from "../components/operations/pipeline";
 import { EmptyRow } from "../components/ui/States";
+import { operationsResource } from "../data/operations";
 import { useEndpoint } from "../data/useEndpoint";
 import type { ResourceState } from "../data/useEndpoint";
-import { OPS_REFRESH_MS, REFRESH_MS } from "../lib/config";
+import { REFRESH_MS } from "../lib/config";
 import { relTime } from "../lib/format";
 import { entityRoute } from "../stores/routeStore";
 import type { FleetReport, OperationsPayload, ValidatorNamesPayload } from "../types/fleet";
@@ -73,10 +74,13 @@ interface FleetView {
   generatedAt: string | null;
 }
 
-export function OperationsPage(): JSX.Element {
-  const operations = useEndpoint<OperationsPayload>("/public/operations", {
-    pollMs: OPS_REFRESH_MS,
-  });
+export function OperationsPage(
+  props: {
+    operations?: ResourceState<OperationsPayload>;
+  } = {},
+): JSX.Element {
+  const operations = props.operations ?? operationsResource();
+  if (!props.operations) onMount(() => operations.refresh());
   const validatorNames = useEndpoint<ValidatorNamesPayload>("/public/validator-names", {
     pollMs: REFRESH_MS,
   });

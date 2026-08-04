@@ -14,22 +14,17 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.validator import ValidatorHeartbeatRequest
+from ditto.api_server.endpoints.validator import _validated_heartbeat_work
 from ditto.db import create_db_engine, create_session_maker
 from ditto.db.models import Agent, ValidatorHeartbeat, ValidatorTicket
-from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.heartbeats import upsert_validator_heartbeat
-from ditto.db.queries.tickets import get_open_ticket
 
 pytestmark = pytest.mark.integration
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-# The era these leases are for. Nothing here is about a benchmark version --
-# these tests are about lock order and savepoints -- but a ticket can no longer
-# fall back to the model default of 2: the ``validator_tickets`` floor trigger
-# refuses to create a lease beneath MIN_SCOREABLE_BENCH_VERSION, so the version
-# has to be said out loud, and the one worth saying is the live one.
-_BENCH_VERSION = 7
 # Arbitrary but module-private; advisory-lock keys share one global namespace.
 _MODULE_LOCK_KEY = 0x_D177_0001
 
@@ -129,15 +124,16 @@ async def test_concurrent_first_heartbeat_uses_on_conflict_loser_path(
     assert row is not None and row.reported_at == second_at
 
 
-async def test_progress_waiting_behind_score_lock_rechecks_consumed_ticket(
+async def test_capacity_progress_does_not_wait_behind_ticket_accounting_lock(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """A score that wins the Agent lock prevents late progress resurrection.
+    """Inference accounting cannot delay the validator-wide progress snapshot.
 
-    This exercises the same Agent-then-ticket lock order used by both endpoints.
-    The delayed progress transaction cannot inspect the ticket until the scoring
-    transaction commits it as spent, then its mandatory in-transaction recheck
-    returns no open ticket and it never writes a heartbeat.
+    Every proxied inference request briefly locks its ticket while reserving or
+    finalizing budget.  A chat-heavy benchmark may therefore keep this row busy
+    nearly continuously.  Heartbeat validation is observational and must retain
+    the live slot without joining that queue; only its optional first-report
+    stamp may lock, and that write skips a busy row and retries next heartbeat.
     """
     now = datetime.now(UTC)
     deadline = now + timedelta(minutes=30)
@@ -147,7 +143,7 @@ async def test_progress_waiting_behind_score_lock_rechecks_consumed_ticket(
             Agent(
                 agent_id=agent_id,
                 miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
-                name="concurrency-agent",
+                name="busy-inference-agent",
                 sha256="ab" * 32,
                 size_bytes=524288,
                 status=AgentStatus.EVALUATING,
@@ -161,160 +157,74 @@ async def test_progress_waiting_behind_score_lock_rechecks_consumed_ticket(
                 status=TicketStatus.ISSUED,
                 issued_at=now,
                 deadline=deadline,
-                bench_version=_BENCH_VERSION,
+                bench_version=8,
+                slot_id="slot-0",
             )
         )
 
-    progress_started = asyncio.Event()
+    capacity = BenchmarkCapacity.model_validate(
+        {
+            "configured_slots": 1,
+            "healthy_slots": ["slot-0"],
+            "admission": "accepting",
+            "active": [
+                {
+                    "slot_id": "slot-0",
+                    "agent_id": str(agent_id),
+                    "bench_version": 8,
+                    "progress": None,
+                }
+            ],
+        }
+    )
+    heartbeat = ValidatorHeartbeatRequest.model_construct(
+        validator_hotkey=_HOTKEY,
+        software_version="0.44.1",
+        protocol_version=18,
+        code_digest="ab" * 32,
+        state="running_benchmark",
+        active_agent_id=agent_id,
+        system_metrics=None,
+        benchmark_progress=None,
+        capabilities=None,
+        stack=None,
+        stack_health=None,
+        benchmark_capacity=capacity,
+        timestamp=int(now.timestamp()),
+        signature="cd" * 64,
+    )
 
-    async def delayed_progress() -> bool:
+    async def validate_while_busy():
         async with session_maker() as session, session.begin():
-            progress_started.set()
-            agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
-            assert agent is not None
-            ticket = await get_open_ticket(
+            return await _validated_heartbeat_work(
                 session,
-                agent_id=agent_id,
                 validator_hotkey=_HOTKEY,
+                request_body=heartbeat,
                 now=now,
-                deadline=deadline,
-                bench_version=_BENCH_VERSION,
-                for_update=True,
             )
-            if agent.status != AgentStatus.EVALUATING or ticket is None:
-                return False
-            await upsert_validator_heartbeat(
-                session,
-                validator_hotkey=_HOTKEY,
-                software_version="1.2.3",
-                protocol_version=4,
-                code_digest="ab" * 32,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                system_metrics=None,
-                benchmark_progress={
-                    "stage": "running_benchmark",
-                    "completed": 1,
-                    "total": 114,
-                    "ticket_deadline": deadline.isoformat(),
-                },
-                reported_at=now,
-                seen_at=now,
-                signature="cd" * 64,
-            )
-            return True
 
-    async with session_maker() as score_session:
-        score_transaction = await score_session.begin()
-        agent = await get_agent_by_id(score_session, agent_id=agent_id, for_update=True)
-        assert agent is not None
-        ticket = await get_open_ticket(
-            score_session,
-            agent_id=agent_id,
-            validator_hotkey=_HOTKEY,
-            now=now,
-            deadline=deadline,
-            bench_version=_BENCH_VERSION,
-            for_update=True,
+    async with session_maker() as accounting_session:
+        transaction = await accounting_session.begin()
+        locked = await accounting_session.scalar(
+            select(ValidatorTicket)
+            .where(
+                ValidatorTicket.agent_id == agent_id,
+                ValidatorTicket.bench_version == 8,
+                ValidatorTicket.validator_hotkey == _HOTKEY,
+            )
+            .with_for_update()
         )
-        assert ticket is not None
+        assert locked is not None
 
-        progress_task = asyncio.create_task(delayed_progress())
-        await progress_started.wait()
-        await asyncio.sleep(0.05)
-        assert not progress_task.done(), "progress should wait behind the Agent lock"
+        work = await asyncio.wait_for(validate_while_busy(), timeout=1)
+        assert work.benchmark_capacity is not None
+        assert [slot.agent_id for slot in work.benchmark_capacity.active] == [agent_id]
+        assert locked.first_reported_at is None
+        await transaction.rollback()
 
-        ticket.status = TicketStatus.SCORED
-        await score_session.flush()
-        await score_transaction.commit()
-
-    assert await asyncio.wait_for(progress_task, timeout=2) is False
+    # The skipped stamp is best-effort, not lost.  Once accounting releases the
+    # row, the next heartbeat records that this lease has testified.
+    await validate_while_busy()
     async with session_maker() as session:
-        heartbeat = await session.get(ValidatorHeartbeat, _HOTKEY)
-        spent_ticket = await session.get(
-            ValidatorTicket, (agent_id, _BENCH_VERSION, _HOTKEY)
-        )
-    assert heartbeat is None
-    assert spent_ticket is not None and spent_ticket.status == TicketStatus.SCORED
-
-
-async def test_savepoint_rollback_frees_work_locks_and_keeps_the_liveness_write(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """The savepoint the heartbeat ingest wraps its work payload in is safe.
-
-    The payload half row-locks agents and tickets ``FOR UPDATE``; the liveness
-    half writes ``seen_at``. Splitting them with ``begin_nested()`` is only
-    correct if a rollback to that savepoint (a) leaves the outer transaction
-    usable, so liveness still commits, and (b) does not strand the row locks the
-    payload took, which would leave a failing validator blocking scorers for the
-    rest of the request. Postgres, not SQLite, is the authority on both.
-    """
-    now = datetime.now(UTC)
-    deadline = now + timedelta(minutes=30)
-    agent_id = uuid4()
-    async with session_maker() as session, session.begin():
-        session.add(
-            Agent(
-                agent_id=agent_id,
-                miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
-                name="savepoint-agent",
-                sha256="ab" * 32,
-                size_bytes=524288,
-                status=AgentStatus.EVALUATING,
-                created_at=now,
-            )
-        )
-        session.add(
-            ValidatorTicket(
-                agent_id=agent_id,
-                validator_hotkey=_HOTKEY,
-                status=TicketStatus.ISSUED,
-                issued_at=now,
-                deadline=deadline,
-                bench_version=_BENCH_VERSION,
-            )
-        )
-
-    async with session_maker() as ingest_session:
-        transaction = await ingest_session.begin()
-        with pytest.raises(KeyError):
-            async with ingest_session.begin_nested():
-                agent = await get_agent_by_id(
-                    ingest_session, agent_id=agent_id, for_update=True
-                )
-                assert agent is not None
-                ticket = await get_open_ticket(
-                    ingest_session,
-                    agent_id=agent_id,
-                    validator_hotkey=_HOTKEY,
-                    now=now,
-                    deadline=deadline,
-                    bench_version=_BENCH_VERSION,
-                    for_update=True,
-                )
-                assert ticket is not None
-                # Stands in for any payload-validation failure past the locks.
-                raise KeyError("generating_dataset")
-
-        # (b) A scorer must be able to take the same rows right now, while the
-        # heartbeat transaction is still open. NOWAIT turns a stranded lock into
-        # an immediate error instead of a hang.
-        async with session_maker() as scorer_session, scorer_session.begin():
-            contended = await scorer_session.scalar(
-                select(Agent)
-                .where(Agent.agent_id == agent_id)
-                .with_for_update(nowait=True)
-            )
-            assert contended is not None
-
-        # (a) The outer transaction is not poisoned: liveness still commits.
-        row, accepted = await _upsert_idle(ingest_session, reported_at=now)
-        assert accepted is True
-        await transaction.commit()
-
-    async with session_maker() as session:
-        stored = await session.get(ValidatorHeartbeat, _HOTKEY)
-    assert stored is not None
-    assert stored.reported_at == now
-    assert stored.seen_at == now
+        ticket = await session.get(ValidatorTicket, (agent_id, 8, _HOTKEY))
+    assert ticket is not None and ticket.first_reported_at is not None

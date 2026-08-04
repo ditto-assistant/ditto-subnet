@@ -237,6 +237,11 @@ def _run_update(
             "DITTO_TAOSTATS_SECRET_PROJECT",
             "DITTO_TAOSTATS_VALIDATOR_NAMES_URL",
             "DITTO_UPLOAD_PAYMENT_ADDRESS",
+            "SUBTENSOR_ARCHIVE_RPC_API_KEY",
+            "SUBTENSOR_ARCHIVE_RPC_AUTH_MODE",
+            "SUBTENSOR_ARCHIVE_RPC_SECRET_ID",
+            "SUBTENSOR_ARCHIVE_RPC_SECRET_PROJECT",
+            "SUBTENSOR_ARCHIVE_RPC_URL",
         }
     }
     env.update(deploy_env_vars or {})
@@ -316,6 +321,49 @@ def test_update_keeps_existing_enrichment_when_secret_is_unavailable(
     assert deploy_env == initial_deploy_env
     assert deploy_mode == 0o600
     assert "Taostats key unavailable" in result.stderr
+
+
+def test_update_loads_optional_archive_key_without_logging_value(
+    tmp_path: Path,
+) -> None:
+    api_key = "archive-test:key-must-stay-secret"
+    result, base_env, deploy_env, deploy_mode = _run_update(
+        tmp_path,
+        gcloud_source=(
+            'case "$*" in\n'
+            "  *platform-subtensor-archive-rpc-api-key*) "
+            f'printf "%s\\n" "{api_key}" ;;\n'
+            "  *) exit 1 ;;\n"
+            "esac\n"
+        ),
+        deploy_env_vars={
+            "SUBTENSOR_ARCHIVE_RPC_URL": "wss://paid.example/archive",
+            "SUBTENSOR_ARCHIVE_RPC_AUTH_MODE": "query",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert base_env == "BASE_SETTING=kept\n"
+    assert deploy_mode == 0o600
+    assert f"SUBTENSOR_ARCHIVE_RPC_API_KEY={api_key}" in deploy_env
+    assert "SUBTENSOR_ARCHIVE_RPC_URL=wss://paid.example/archive" in deploy_env
+    assert "SUBTENSOR_ARCHIVE_RPC_AUTH_MODE=query" in deploy_env
+    assert api_key not in result.stdout
+    assert api_key not in result.stderr
+
+
+def test_update_missing_archive_secret_keeps_free_fallback_unconfigured(
+    tmp_path: Path,
+) -> None:
+    result, _base_env, deploy_env, _deploy_mode = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "SUBTENSOR_ARCHIVE_RPC_API_KEY=" not in deploy_env
+    assert "SUBTENSOR_ARCHIVE_RPC_URL=" not in deploy_env
+    assert "free archive fallback remains enabled" in result.stderr
 
 
 def test_update_migrates_legacy_deploy_values_before_ansible_rewrites_base(

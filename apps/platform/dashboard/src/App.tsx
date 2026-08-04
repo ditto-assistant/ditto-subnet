@@ -28,6 +28,8 @@ import {
   refreshAllEndpoints,
   useEndpoint,
 } from "./data/useEndpoint";
+import { operationsResource } from "./data/operations";
+import { invalidateSharedOperations } from "./data/operations-cache";
 import type { ResourceState } from "./data/useEndpoint";
 import { OPS_REFRESH_MS, REFRESH_MS } from "./lib/config";
 import { relTime } from "./lib/format";
@@ -36,12 +38,7 @@ import { benchmarkDisplayVersion, leaderboardBenchState } from "./lib/bench-stat
 import { isFinalized, isOlderRun, rankEntries, rolloutSettledView } from "./lib/scoring";
 import { currentPage, initRouteListeners, syncFromLocation } from "./stores/routeStore";
 import type { BenchConfigPayload, GlossaryPayload, TimelinePayload } from "./types/bench";
-import type {
-  FleetReport,
-  HealthPayload,
-  OperationsPayload,
-  ValidatorNamesPayload,
-} from "./types/fleet";
+import type { FleetReport, HealthPayload, ValidatorNamesPayload } from "./types/fleet";
 import type {
   ChainWeightsSnapshot,
   LeaderboardEntry,
@@ -80,7 +77,7 @@ export default function App(): JSX.Element {
   const weights = useEndpoint<ChainWeightsSnapshot>("/public/weights");
   const rollout = useEndpoint<RolloutState>("/public/bench/rollout");
   const health = useEndpoint<HealthPayload>("/public/health");
-  const operations = useEndpoint<OperationsPayload>("/public/operations");
+  const operations = operationsResource();
   const validatorNames = useEndpoint<ValidatorNamesPayload>("/public/validator-names");
   const screeners = useEndpoint<FleetReport>("/public/screeners");
   const timeline = useEndpoint<TimelinePayload>("/public/bench/timeline");
@@ -101,14 +98,16 @@ export default function App(): JSX.Element {
     // The operations trio backs the search corpus and the bench badge; keep
     // it fresh on its page and keep retrying after a failure so the corpus
     // completes (the monolith's wantOps rule).
+    if (manual) invalidateSharedOperations();
+    // One tab-local resource owns this feed. The broker underneath elects a
+    // single same-origin network caller and fans the snapshot out to peers.
+    operations.refresh();
     if (
       manual ||
       currentPage() === "operations" ||
-      Boolean(operations.error()) ||
       Boolean(validatorNames.error()) ||
       Boolean(screeners.error())
     ) {
-      operations.refresh();
       validatorNames.refresh();
       screeners.refresh();
     }
@@ -138,7 +137,10 @@ export default function App(): JSX.Element {
   // and module-scope stores own, and every section is stale by now — the same
   // seed-everything shape the monolith's close-hydrate had (load() with
   // bootComplete still false).
-  hydrateOnAgentCardClose(refreshAllEndpoints);
+  hydrateOnAgentCardClose(() => {
+    operations.refresh();
+    refreshAllEndpoints();
+  });
 
   onMount(() => {
     // Background tabs skip network refreshes entirely and catch up once on
@@ -337,13 +339,13 @@ export default function App(): JSX.Element {
             <UnavailableBanner show={status().mode === "error"} />
             <Switch>
               <Match when={currentPage() === "overview"}>
-                <OverviewPage />
+                <OverviewPage operations={operations} />
               </Match>
               <Match when={currentPage() === "leaderboard"}>
                 <LeaderboardPage />
               </Match>
               <Match when={currentPage() === "operations"}>
-                <OperationsPage />
+                <OperationsPage operations={operations} />
               </Match>
               <Match when={currentPage() === "submissions"}>
                 <SubmissionsPage />

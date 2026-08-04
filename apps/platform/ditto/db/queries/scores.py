@@ -16,10 +16,20 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from statistics import median
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, case, func, literal, null, or_, select
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    case,
+    func,
+    literal,
+    null,
+    or_,
+    select,
+    union,
+)
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm.util import AliasedClass
 
@@ -28,6 +38,7 @@ from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
     BenchmarkRolloutMember,
+    ConfirmationScore,
     EvaluationPayment,
     OwnerAttestation,
     Score,
@@ -74,6 +85,16 @@ def _is_ranked() -> ColumnElement[bool]:
     which is exactly what the fold refuses to pay. Keep the two in lockstep.
     """
     return and_(Score.n >= MIN_ELIGIBLE_CASES, Score.composite > 0.0)
+
+
+@dataclass(frozen=True)
+class LedgerFamilyMember:
+    """Minimal identity and score needed to render one grouped board child."""
+
+    agent_id: UUID
+    agent_name: str
+    agent_version: int | None
+    canonical_composite: float
 
 
 @dataclass(frozen=True)
@@ -156,6 +177,18 @@ class LedgerRow:
     per-case breakdown. The public leaderboard exposes a **safe subset** (never
     ``per_case``, which carries the answer key); validator-gated endpoints may
     read it whole. ``None`` for rows scored before details were persisted."""
+    official_composite: float | None = None
+    """Continual-retest score used to choose the owner's representative.
+
+    Computed in PostgreSQL before owner-family reduction. Historical reads and
+    eras where continual aggregation is inactive carry the canonical median.
+    This scalar is safe for list/ranking consumers; it never requires loading
+    the score ``details`` JSON.
+    """
+    stored_composite_stderr: float | None = None
+    """Small ranking scalar projected from score details after winner selection."""
+    family_members: tuple[LedgerFamilyMember, ...] = ()
+    """Compact owner-family rows, populated only for leaderboard list reads."""
 
 
 @dataclass(frozen=True)
@@ -398,12 +431,9 @@ def emission_owner_key(
     the queue-rank preview came to disagree with the allocator about owners.
     Callers must join/outerjoin ``payment`` to ``agent`` themselves.
     """
-    return case(
-        (
-            payment.miner_coldkey.is_not(None),
-            literal("coldkey:") + payment.miner_coldkey,
-        ),
-        else_=literal("hotkey:") + agent.miner_hotkey,
+    return func.coalesce(
+        literal("coldkey:") + payment.miner_coldkey,
+        literal("hotkey:") + agent.miner_hotkey,
     )
 
 
@@ -1012,9 +1042,18 @@ async def list_eligible_ledger(
     *,
     include_fingerprints: bool = True,
     include_details: bool = True,
+    include_family_members: bool = False,
     bench_version: int | None = None,
+    owner_score: Literal["official", "canonical"] = "official",
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
+
+    ``owner_score="official"`` (the default) chooses each owner's representative
+    with the same continual score used for current ranks and validator weights.
+    ``"canonical"`` is reserved for historical snapshots, where the original
+    three-validator median is the score that era published.  Keeping this
+    choice inside the shared ledger prevents the board, retest scheduler and
+    validator fold from selecting different generations for one owner.
 
     ``include_fingerprints=False`` selects NULL for the anti-copy sketch
     columns (fingerprints + code embedding, several hundred KB per row) —
@@ -1027,6 +1066,12 @@ async def list_eligible_ledger(
     with NULL. Queue-floor, cleanup, and efficiency-cohort consumers need only
     scalar ranking fields; avoiding the per-case blob keeps those frequently
     polled reads from detoasting and transferring audit payloads they discard.
+
+    ``include_family_members=True`` reuses the already-computed recursive owner
+    roots to attach only each member's id, display name/version, and canonical
+    score. It deliberately does not load score details, fingerprints, payment
+    metadata, artifacts, or histories; the public board uses it solely for its
+    compact expandable grouping rows.
 
     The persistent ledger the validator folds into KOTH+ATH weights (via
     ``GET /scoring/scores``). "Eligible" = agents in ``scored`` — this excludes
@@ -1046,8 +1091,9 @@ async def list_eligible_ledger(
        signature still verifies against the exposed composite. An agent with a
        single score is its own median, so pre-quorum agents degrade cleanly.
     2. join to ``agents`` filtered to ``scored``.
-    3. a ``ROW_NUMBER`` window keeps each payment-time coldkey's single best
-       agent, even when that owner submitted through multiple hotkeys or names.
+    3. after the canonical rows are materialized, rank them by the requested
+       owner score and keep each attested payment owner root's first agent.
+       This also dedupes one owner across linked hotkeys and names.
 
     Two senses of "eligible" apply. *Pool* eligibility = ``status == scored``
     (excludes ``ath_pending_review`` holds and ``banned`` agents). *Ranking*
@@ -1087,24 +1133,17 @@ async def list_eligible_ledger(
         if bench_version is not None
         else tuple({canonical_version, desired_version} - {None})
     )
-    details_column = (
-        Score.details.label("details") if include_details else null().label("details")
-    )
+    # Keep the ranking relation scalar-only. Large score JSON and moderation
+    # fingerprints are joined only after PostgreSQL has selected one winner per
+    # attested owner component.
     agent_best = (
         select(
             Score.agent_id.label("agent_id"),
             Score.bench_version.label("bench_version"),
             Score.composite.label("composite"),
-            Score.tool_mean.label("tool_mean"),
-            Score.memory_mean.label("memory_mean"),
-            Score.seed.label("seed"),
-            Score.run_id.label("run_id"),
-            Score.median_ms.label("median_ms"),
             Score.n.label("n"),
             _is_ranked().label("eligible"),
-            details_column,
             Score.validator_hotkey.label("validator_hotkey"),
-            Score.signature.label("signature"),
             # Row count in the agent's pool, so the median position is (cnt+1)/2.
             func.count(Score.agent_id)
             .over(partition_by=(Score.agent_id, Score.bench_version))
@@ -1124,45 +1163,18 @@ async def list_eligible_ledger(
         .where(Score.bench_version.in_(candidate_versions))
         .subquery()
     )
-    sketch_columns: tuple[ColumnElement[Any], ...]
-    if include_fingerprints:
-        sketch_columns = (
-            Agent.content_fingerprint.label("content_fingerprint"),
-            Agent.structural_fingerprint.label("structural_fingerprint"),
-            Agent.prompt_fingerprint.label("prompt_fingerprint"),
-            Agent.code_embedding.label("code_embedding"),
-        )
-    else:
-        sketch_columns = (
-            null().label("content_fingerprint"),
-            null().label("structural_fingerprint"),
-            null().label("prompt_fingerprint"),
-            null().label("code_embedding"),
-        )
     per_agent = (
         select(
             Agent.agent_id.label("agent_id"),
             Agent.miner_hotkey.label("miner_hotkey"),
             EvaluationPayment.miner_coldkey.label("miner_coldkey"),
             _emission_owner_key().label("emission_owner"),
-            Agent.sha256.label("sha256"),
-            Agent.size_bytes.label("size_bytes"),
-            *sketch_columns,
-            Agent.normalized_source_hash.label("normalized_source_hash"),
-            Agent.code_embed_model.label("code_embed_model"),
             Agent.created_at.label("first_seen"),
             Agent.status.label("status"),
             agent_best.c.composite,
-            agent_best.c.tool_mean,
-            agent_best.c.memory_mean,
-            agent_best.c.seed,
-            agent_best.c.run_id,
-            agent_best.c.median_ms,
             agent_best.c.n,
             agent_best.c.eligible,
-            agent_best.c.details,
             agent_best.c.validator_hotkey,
-            agent_best.c.signature,
             agent_best.c.bench_version,
             agent_best.c.cnt,
         )
@@ -1261,92 +1273,420 @@ async def list_eligible_ledger(
         # exactly the desired-version medians.
         selected_version_stmt = selected_version_stmt.where(authority_filter)
     selected_version = selected_version_stmt.subquery()
+    # PostgreSQL otherwise inlines this relation separately into the quorum and
+    # confirmation aggregates. Production EXPLAIN showed that multiplying the
+    # median/version window by every candidate (1.29M buffer hits for 322
+    # agents). This is the small scalar boundary both aggregates share.
     authoritative = (
-        select(selected_version).where(selected_version.c.version_rn == 1).subquery()
+        select(selected_version)
+        .where(selected_version.c.version_rn == 1)
+        .cte("authoritative")
+        .prefix_with("MATERIALIZED")
     )
-    rn = (
-        func.row_number()
-        .over(
-            partition_by=authoritative.c.emission_owner,
-            # Eligible-first so a miner is represented by their best full-benchmark
-            # agent, not an inflated smoke run; composite breaks ties within a tier.
-            order_by=score_order_terms(
-                eligible=authoritative.c.eligible,
-                composite=authoritative.c.composite,
-                first_seen=authoritative.c.first_seen,
-                agent_id=authoritative.c.agent_id,
+    selection_score: ColumnElement[Any] = authoritative.c.composite
+    official_joins: tuple[Any, ...] = ()
+    if owner_score == "official":
+        from ditto.db.queries.score_ranking import continual_mean_is_active
+
+        continual_active = await continual_mean_is_active(
+            session,
+            bench_version=bench_version,
+            active_version=canonical_version,
+        )
+        if continual_active:
+            quorum = (
+                select(
+                    Score.agent_id.label("agent_id"),
+                    Score.bench_version.label("bench_version"),
+                    func.count().label("quorum_count"),
+                    func.sum(Score.composite).label("quorum_sum"),
+                )
+                .join(
+                    authoritative,
+                    and_(
+                        authoritative.c.agent_id == Score.agent_id,
+                        authoritative.c.bench_version == Score.bench_version,
+                    ),
+                )
+                .group_by(Score.agent_id, Score.bench_version)
+                .having(func.count() == SCORING_QUORUM)
+                .cte("quorum_aggregates")
+                .prefix_with("MATERIALIZED")
+            )
+            confirmation_ranked = (
+                select(
+                    ConfirmationScore.agent_id.label("agent_id"),
+                    ConfirmationScore.bench_version.label("bench_version"),
+                    ConfirmationScore.seed.label("seed"),
+                    ConfirmationScore.composite.label("composite"),
+                    func.count()
+                    .over(
+                        partition_by=(
+                            ConfirmationScore.agent_id,
+                            ConfirmationScore.bench_version,
+                            ConfirmationScore.seed,
+                        )
+                    )
+                    .label("sample_count"),
+                    func.row_number()
+                    .over(
+                        partition_by=(
+                            ConfirmationScore.agent_id,
+                            ConfirmationScore.bench_version,
+                            ConfirmationScore.seed,
+                        ),
+                        order_by=(
+                            ConfirmationScore.composite.asc(),
+                            ConfirmationScore.validator_hotkey.asc(),
+                        ),
+                    )
+                    .label("sample_rank"),
+                )
+                .join(
+                    authoritative,
+                    and_(
+                        authoritative.c.agent_id == ConfirmationScore.agent_id,
+                        authoritative.c.bench_version
+                        == ConfirmationScore.bench_version,
+                    ),
+                )
+                .subquery()
+            )
+            # ``statistics.median`` averages the two middle values for an even
+            # validator count. Select the one or two middle rows, then AVG.
+            confirmation_medians = (
+                select(
+                    confirmation_ranked.c.agent_id,
+                    confirmation_ranked.c.bench_version,
+                    confirmation_ranked.c.seed,
+                    func.avg(confirmation_ranked.c.composite).label("seed_median"),
+                )
+                .where(
+                    or_(
+                        confirmation_ranked.c.sample_rank * 2
+                        == confirmation_ranked.c.sample_count,
+                        confirmation_ranked.c.sample_rank * 2
+                        == confirmation_ranked.c.sample_count + 1,
+                        confirmation_ranked.c.sample_rank * 2
+                        == confirmation_ranked.c.sample_count + 2,
+                    )
+                )
+                .group_by(
+                    confirmation_ranked.c.agent_id,
+                    confirmation_ranked.c.bench_version,
+                    confirmation_ranked.c.seed,
+                )
+                .subquery()
+            )
+            confirmation = (
+                select(
+                    confirmation_medians.c.agent_id,
+                    confirmation_medians.c.bench_version,
+                    func.count().label("confirmation_count"),
+                    func.sum(confirmation_medians.c.seed_median).label(
+                        "confirmation_sum"
+                    ),
+                )
+                .group_by(
+                    confirmation_medians.c.agent_id,
+                    confirmation_medians.c.bench_version,
+                )
+                .cte("confirmation_aggregates")
+                .prefix_with("MATERIALIZED")
+            )
+            official_joins = (quorum, confirmation)
+            selection_score = func.coalesce(
+                (quorum.c.quorum_sum + confirmation.c.confirmation_sum)
+                / (quorum.c.quorum_count + confirmation.c.confirmation_count),
+                authoritative.c.composite,
+            )
+
+    candidates_stmt = select(
+        authoritative,
+        (literal("hotkey:") + authoritative.c.miner_hotkey).label("hotkey_node"),
+        selection_score.label("official_score"),
+    )
+    if official_joins:
+        quorum, confirmation = official_joins
+        candidates_stmt = candidates_stmt.outerjoin(
+            quorum,
+            and_(
+                quorum.c.agent_id == authoritative.c.agent_id,
+                quorum.c.bench_version == authoritative.c.bench_version,
+            ),
+        ).outerjoin(
+            confirmation,
+            and_(
+                confirmation.c.agent_id == authoritative.c.agent_id,
+                confirmation.c.bench_version == authoritative.c.bench_version,
             ),
         )
-        .label("rn")
+    candidates = candidates_stmt.cte("ledger_candidates")
+
+    # Resolve the exact same ownership graph as
+    # ``attested_emission_owner_roots`` inside PostgreSQL. The graph contains
+    # candidate hotkey→payment-owner edges, active signed hotkey attestations,
+    # and payment-owner closure for every actively linked hotkey.
+    from ditto.api_server.attestation import expected_netuid
+
+    linked_hotkeys = union(
+        select(OwnerAttestation.hotkey_lo.label("hotkey")).where(
+            OwnerAttestation.netuid == expected_netuid(),
+            OwnerAttestation.revoked_at.is_(None),
+        ),
+        select(OwnerAttestation.hotkey_hi.label("hotkey")).where(
+            OwnerAttestation.netuid == expected_netuid(),
+            OwnerAttestation.revoked_at.is_(None),
+        ),
+    ).cte("linked_hotkeys")
+    payment_edges = (
+        select(
+            (literal("hotkey:") + EvaluationPayment.miner_hotkey).label("left_node"),
+            (literal("coldkey:") + EvaluationPayment.miner_coldkey).label("right_node"),
+        )
+        .where(
+            EvaluationPayment.miner_coldkey.is_not(None),
+            EvaluationPayment.miner_hotkey.in_(select(linked_hotkeys.c.hotkey)),
+        )
+        .subquery()
     )
-    ranked = select(authoritative, rn).subquery()
+    attestation_edges = select(
+        (literal("hotkey:") + OwnerAttestation.hotkey_lo).label("left_node"),
+        (literal("hotkey:") + OwnerAttestation.hotkey_hi).label("right_node"),
+    ).where(
+        OwnerAttestation.netuid == expected_netuid(),
+        OwnerAttestation.revoked_at.is_(None),
+    )
+    owner_edges = union(
+        select(
+            candidates.c.hotkey_node.label("left_node"),
+            candidates.c.emission_owner.label("right_node"),
+        ),
+        select(
+            candidates.c.emission_owner.label("left_node"),
+            candidates.c.hotkey_node.label("right_node"),
+        ),
+        attestation_edges,
+        select(
+            (literal("hotkey:") + OwnerAttestation.hotkey_hi).label("left_node"),
+            (literal("hotkey:") + OwnerAttestation.hotkey_lo).label("right_node"),
+        ).where(
+            OwnerAttestation.netuid == expected_netuid(),
+            OwnerAttestation.revoked_at.is_(None),
+        ),
+        select(payment_edges.c.left_node, payment_edges.c.right_node),
+        select(
+            payment_edges.c.right_node.label("left_node"),
+            payment_edges.c.left_node.label("right_node"),
+        ),
+    ).cte("owner_edges")
+    owner_walk = select(
+        candidates.c.hotkey_node.label("start_node"),
+        candidates.c.hotkey_node.label("node"),
+    ).cte("owner_walk", recursive=True)
+    owner_walk = owner_walk.union(
+        select(owner_walk.c.start_node, owner_edges.c.right_node).join(
+            owner_edges, owner_edges.c.left_node == owner_walk.c.node
+        )
+    )
+    owner_roots = (
+        select(
+            owner_walk.c.start_node,
+            func.min(owner_walk.c.node).label("owner_root"),
+        )
+        .group_by(owner_walk.c.start_node)
+        .cte("owner_roots")
+    )
+    rooted = (
+        select(candidates, owner_roots.c.owner_root)
+        .join(
+            owner_roots,
+            owner_roots.c.start_node == candidates.c.hotkey_node,
+        )
+        .cte("rooted_candidates")
+    )
+    owner_ranked = select(
+        rooted,
+        func.row_number()
+        .over(
+            partition_by=rooted.c.owner_root,
+            order_by=score_order_terms(
+                eligible=rooted.c.eligible,
+                composite=rooted.c.official_score,
+                first_seen=rooted.c.first_seen,
+                agent_id=rooted.c.agent_id,
+            ),
+        )
+        .label("owner_rank"),
+    ).cte("owner_ranked")
+    winners = (
+        select(owner_ranked).where(owner_ranked.c.owner_rank == 1).cte("ledger_winners")
+    )
+
+    details_column = (
+        Score.details.label("details") if include_details else null().label("details")
+    )
+    sketch_columns: tuple[ColumnElement[Any], ...]
+    if include_fingerprints:
+        sketch_columns = (
+            Agent.content_fingerprint.label("content_fingerprint"),
+            Agent.structural_fingerprint.label("structural_fingerprint"),
+            Agent.prompt_fingerprint.label("prompt_fingerprint"),
+            Agent.code_embedding.label("code_embedding"),
+            Agent.normalized_source_hash.label("normalized_source_hash"),
+            Agent.code_embed_model.label("code_embed_model"),
+        )
+    else:
+        sketch_columns = (
+            null().label("content_fingerprint"),
+            null().label("structural_fingerprint"),
+            null().label("prompt_fingerprint"),
+            null().label("code_embedding"),
+            null().label("normalized_source_hash"),
+            null().label("code_embed_model"),
+        )
+    family_agent = Agent.__table__.alias("family_agent")
+    family_columns: tuple[ColumnElement[Any], ...]
+    if include_family_members:
+        family_columns = (
+            rooted.c.agent_id.label("family_agent_id"),
+            family_agent.c.name.label("family_agent_name"),
+            family_agent.c.version.label("family_agent_version"),
+            rooted.c.composite.label("family_canonical_composite"),
+        )
+    else:
+        family_columns = (
+            null().label("family_agent_id"),
+            null().label("family_agent_name"),
+            null().label("family_agent_version"),
+            null().label("family_canonical_composite"),
+        )
     stmt = (
-        select(ranked)
-        .where(ranked.c.rn == 1)
-        # Eligible (ranked) entries first, then provisional ones; the public rank
-        # and the validator fold both read this order. This is the raw-composite
-        # cut: it is the pool the continual mean is computed OVER, so it must not
-        # itself be ordered by the continual mean. Callers that publish a
-        # standing re-rank with ``rank_submissions(..., scores=official)``.
-        .order_by(
+        select(
+            winners.c.owner_root,
+            winners.c.official_score,
+            Agent.agent_id,
+            Agent.miner_hotkey,
+            EvaluationPayment.miner_coldkey,
+            Agent.sha256,
+            Agent.size_bytes,
+            *sketch_columns,
+            Agent.created_at.label("first_seen"),
+            Agent.status,
+            Score.composite,
+            Score.tool_mean,
+            Score.memory_mean,
+            Score.seed,
+            Score.run_id,
+            Score.median_ms,
+            Score.n,
+            winners.c.eligible,
+            Score.details["composite_stderr"]
+            .as_float()
+            .label("stored_composite_stderr"),
+            details_column,
+            Score.validator_hotkey,
+            Score.signature,
+            Score.bench_version,
+        )
+        .join(Agent, Agent.agent_id == winners.c.agent_id)
+        .join(
+            Score,
+            and_(
+                Score.agent_id == winners.c.agent_id,
+                Score.bench_version == winners.c.bench_version,
+                Score.validator_hotkey == winners.c.validator_hotkey,
+            ),
+        )
+        .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
+    )
+    if include_family_members:
+        # Extract the winner's JSON-backed stderr and join its agent/payment
+        # metadata exactly once. Joining the family first made PostgreSQL
+        # repeat those projections for every child in the owner component.
+        winner_projection = stmt.cte("ledger_winner_rows").prefix_with("MATERIALIZED")
+        winner_order = score_order_terms(
+            eligible=winner_projection.c.eligible,
+            composite=winner_projection.c.official_score,
+            first_seen=winner_projection.c.first_seen,
+            agent_id=winner_projection.c.agent_id,
+        )
+        stmt = (
+            select(winner_projection, *family_columns)
+            .join(rooted, rooted.c.owner_root == winner_projection.c.owner_root)
+            .join(family_agent, family_agent.c.agent_id == rooted.c.agent_id)
+            .order_by(
+                *winner_order,
+                rooted.c.composite.desc(),
+                rooted.c.first_seen,
+                rooted.c.agent_id,
+            )
+        )
+    else:
+        stmt = stmt.add_columns(*family_columns).order_by(
             *score_order_terms(
-                eligible=ranked.c.eligible,
-                composite=ranked.c.composite,
-                first_seen=ranked.c.first_seen,
-                agent_id=ranked.c.agent_id,
+                eligible=winners.c.eligible,
+                composite=winners.c.official_score,
+                first_seen=winners.c.first_seen,
+                agent_id=winners.c.agent_id,
             )
         )
-    )
-    result = await session.execute(stmt)
-    ledger = [
-        LedgerRow(
-            miner_hotkey=row.miner_hotkey,
-            agent_id=row.agent_id,
-            composite=row.composite,
-            tool_mean=row.tool_mean,
-            memory_mean=row.memory_mean,
-            first_seen=row.first_seen,
-            sha256=row.sha256,
-            size_bytes=row.size_bytes,
-            run_id=row.run_id,
-            seed=row.seed,
-            validator_hotkey=row.validator_hotkey,
-            signature=row.signature,
-            status=AgentStatus(row.status),
-            miner_coldkey=row.miner_coldkey,
-            bench_version=row.bench_version,
-            content_fingerprint=row.content_fingerprint,
-            structural_fingerprint=row.structural_fingerprint,
-            normalized_source_hash=row.normalized_source_hash,
-            prompt_fingerprint=row.prompt_fingerprint,
-            code_embedding=row.code_embedding,
-            code_embed_model=row.code_embed_model,
-            median_ms=row.median_ms,
-            n=row.n,
-            eligible=bool(row.eligible),
-            details=row.details,
-        )
-        for row in result
-    ]
-    roots = await attested_emission_owner_roots(
-        session,
-        [
-            (
-                row.miner_hotkey,
-                emission_owner(
-                    miner_hotkey=row.miner_hotkey,
-                    miner_coldkey=row.miner_coldkey,
-                ),
+
+    result = list((await session.execute(stmt)).all())
+    grouped: dict[UUID, list[Any]] = defaultdict(list)
+    winner_ids: list[UUID] = []
+    for row in result:
+        if row.agent_id not in grouped:
+            winner_ids.append(row.agent_id)
+        grouped[row.agent_id].append(row)
+
+    ledger: list[LedgerRow] = []
+    for winner_id in winner_ids:
+        group_rows = grouped[winner_id]
+        row = group_rows[0]
+        family_members = tuple(
+            LedgerFamilyMember(
+                agent_id=member.family_agent_id,
+                agent_name=member.family_agent_name,
+                agent_version=member.family_agent_version,
+                canonical_composite=float(member.family_canonical_composite),
             )
-            for row in ledger
-        ],
-    )
-    # ``stmt`` is already in canonical score order. Keeping the first row per
-    # proven owner therefore selects that owner's best eligible submission.
-    best_by_owner: dict[str, LedgerRow] = {}
-    for root, row in zip(roots, ledger, strict=True):
-        best_by_owner.setdefault(root, row)
-    return list(best_by_owner.values())
+            for member in group_rows
+            if member.family_agent_id is not None
+        )
+        ledger.append(
+            LedgerRow(
+                miner_hotkey=row.miner_hotkey,
+                agent_id=row.agent_id,
+                composite=row.composite,
+                tool_mean=row.tool_mean,
+                memory_mean=row.memory_mean,
+                first_seen=row.first_seen,
+                sha256=row.sha256,
+                size_bytes=row.size_bytes,
+                run_id=row.run_id,
+                seed=row.seed,
+                validator_hotkey=row.validator_hotkey,
+                signature=row.signature,
+                status=AgentStatus(row.status),
+                miner_coldkey=row.miner_coldkey,
+                bench_version=row.bench_version,
+                content_fingerprint=row.content_fingerprint,
+                structural_fingerprint=row.structural_fingerprint,
+                normalized_source_hash=row.normalized_source_hash,
+                prompt_fingerprint=row.prompt_fingerprint,
+                code_embedding=row.code_embedding,
+                code_embed_model=row.code_embed_model,
+                median_ms=row.median_ms,
+                n=row.n,
+                eligible=bool(row.eligible),
+                details=row.details,
+                official_composite=float(row.official_score),
+                stored_composite_stderr=row.stored_composite_stderr,
+                family_members=family_members,
+            )
+        )
+    return ledger
 
 
 async def quorum_composites(

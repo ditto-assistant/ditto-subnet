@@ -70,7 +70,7 @@ class ChainConfig:
     """
 
     archive_rpc_url: str | None = None
-    """Optional configured archive WebSocket URL tried after public archives.
+    """Optional configured archive WebSocket URL tried before public archives.
 
     Pylon already selects an archive node for its block-number APIs.  Ditto's
     payment verifier also performs three block-hash storage reads directly via
@@ -85,7 +85,8 @@ class ChainConfig:
     """How ``archive_rpc_api_key`` is attached to the configured endpoint."""
 
     public_archive_rpc_urls: tuple[str, ...] = ()
-    """Credential-free archive endpoints tried before the configured provider."""
+    """Credential-free fallbacks used when the configured provider is absent
+    or fails."""
 
     archive_rpc_timeout_seconds: float = 10.0
     """Maximum connection-plus-query time allowed for each archive provider."""

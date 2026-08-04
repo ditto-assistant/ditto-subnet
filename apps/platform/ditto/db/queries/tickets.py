@@ -1049,6 +1049,7 @@ async def get_live_slot_ticket(
     slot_id: str,
     now: datetime,
     for_update: bool = False,
+    skip_locked: bool = False,
 ) -> ValidatorTicket | None:
     """Return the live lease occupying one validator slot, by identity alone.
 
@@ -1071,8 +1072,10 @@ async def get_live_slot_ticket(
         ValidatorTicket.slot_id == slot_id,
         ValidatorTicket.status == TicketStatus.ISSUED,
     )
+    if skip_locked and not for_update:
+        raise ValueError("skip_locked requires for_update")
     if for_update:
-        statement = statement.with_for_update()
+        statement = statement.with_for_update(skip_locked=skip_locked)
     ticket = await session.scalar(statement)
     if ticket is None or _as_utc(ticket.deadline) <= now:
         return None

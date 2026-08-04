@@ -149,34 +149,32 @@ describe("overview board disclosure ban (row 3)", () => {
 });
 
 // ── Row 1 (overview/leaderboard slice): test_includes_submission_pipeline ──
-// The mega-spec's board half: family-ranked leaderboard (one rank per
-// payment-owner family), registration strictness, emission-eligibility rank
+// The mega-spec's board half: family-ranked leaderboard (one lightweight rank
+// per payment-owner family), registration strictness, emission-eligibility rank
 // medals, provisional "P" ranks + quorum badges, the emissions strip as a
 // polite live region, chain observation, and the version pills with the
 // historical bench_version fetch. Pipeline/drawer literals live with the
 // submissions/operations/reviews ports.
 describe("overview leaderboard block (row 1 slice)", () => {
-  it("ranks one representative per payment-owner family and expands other submissions", async () => {
+  it("ranks one representative and expands its minimal family children", async () => {
     renderOverview();
     await waitForBoard();
     // The family rule is stated on the table itself.
     expect(el("board").getAttribute("aria-label")).toBe(
       "Subnet 118 leaderboard: one ranked representative per payment-owner submission family",
     );
-    const toggle = document.querySelector(".family-toggle") as HTMLElement;
-    expect(toggle).toBeTruthy();
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    const key = toggle.getAttribute("data-family-toggle") as string;
-    expect(toggle).toHaveAttribute("aria-controls", "family-" + key);
-    const children = document.querySelectorAll('tr.family-child[data-family-parent="' + key + '"]');
-    expect(children.length).toBeGreaterThan(0);
-    children.forEach((row) => expect(row).toHaveAttribute("hidden"));
+    const toggle = document.querySelector(".family-toggle") as HTMLButtonElement;
+    const familyParentId = toggle.dataset.familyToggle as string;
+    const child = document.querySelector(
+      `tr[data-family-parent="${familyParentId}"]`,
+    ) as HTMLTableRowElement;
+    expect(child.hidden).toBe(true);
     fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    children.forEach((row) => expect(row).not.toHaveAttribute("hidden"));
-    expect((children[0] as HTMLElement).textContent).toContain(
-      "Scored · not independently ranked · represented by",
-    );
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(child.hidden).toBe(false);
+    expect(child.querySelector(".family-member-name")).toBeTruthy();
+    expect(child.querySelector(".family-member-score")).toBeTruthy();
+    expect(document.querySelectorAll("#rows tr[data-i]")).toHaveLength(ranked.length);
   });
 
   it("medals the top three ranks only while emission-eligible (e.emission_eligible === true)", async () => {

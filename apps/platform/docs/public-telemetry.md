@@ -103,7 +103,9 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   (`aggregate_method == 'canonical_median'`); once any agent has completed
   continual cohort waves the two orderings diverge, and `official_composite` is
   the one that ranks the board and drives the weight fold. Ties break on
-  `first_seen`, then `agent_id`. Provisional (pre-quorum) rows are ranked among
+  `first_seen`, then `agent_id`. The same official score selects the
+  representative inside each `submission_family`; historical views use the
+  canonical median. Provisional (pre-quorum) rows are ranked among
   themselves and always trail the finalized board.
   Different names and hotkeys under one coldkey compete for one position; the
   best eligible generation wins and its hotkey remains the weight destination.
