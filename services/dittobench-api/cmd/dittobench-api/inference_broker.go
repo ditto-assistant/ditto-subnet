@@ -146,6 +146,10 @@ type brokerSession struct {
 	// and wire value, so which runs FAIL is unchanged and only who is CHARGED
 	// moves. See relayFinalizeFailure for the tie-break.
 	grantAgentDeclines uint64
+	// terminalAgentFailureNotified makes the first typed agent-attributable
+	// allowance decline end the benchmark exactly once. Once the platform says
+	// the grant is spent, every later case can only receive the same refusal.
+	terminalAgentFailureNotified bool
 	// agentRequestRejections counts pre-reservation 4xx (a 400 the platform's
 	// schema refused, a 403 on a model, an oversized body) -- the platform
 	// rejecting the harness's request without ever reserving capacity. These
@@ -201,6 +205,29 @@ type inferenceBroker struct {
 	retry                brokerRetryConfig
 	sleep                func(context.Context, time.Duration) error
 	relayWait            func(string, bool)
+	terminalAgentFailure func(string)
+}
+
+// notifyTerminalAgentFailure ends a run after its first typed allowance
+// decline. The platform has already refused the reservation, so no provider was
+// contacted for that request and no later request can recover on this grant.
+// Keeping the callback outside the session lock lets the server cancel the run
+// and tear the session down without a lock inversion.
+func (b *inferenceBroker) notifyTerminalAgentFailure(session *brokerSession) {
+	if b.terminalAgentFailure == nil {
+		return
+	}
+	session.mu.Lock()
+	if session.terminalAgentFailureNotified {
+		session.mu.Unlock()
+		return
+	}
+	session.terminalAgentFailureNotified = true
+	runID := session.boundRunID
+	session.mu.Unlock()
+	if runID != "" {
+		b.terminalAgentFailure(runID)
+	}
 }
 
 func (b *inferenceBroker) beginRelayWait(session *brokerSession) func() {
@@ -1029,7 +1056,7 @@ func (b *inferenceBroker) claimRun(id, runID string, identity brokerTicketIdenti
 	// Ollama container this host runs, so they keep the single-slot lane they
 	// have always had; leaving embeddingConcurrency at zero is that lane.
 	if benchVersion >= 7 {
-		session.embeddingConcurrency = v7EmbeddingSessionConcurrency
+		session.embeddingConcurrency = v8EmbeddingSessionConcurrency
 	}
 	return true
 }
@@ -1048,6 +1075,27 @@ func (b *inferenceBroker) bindSource(id, runID, sourceIP string) bool {
 		return false
 	}
 	session.expectedSourceIP = sourceIP
+	return true
+}
+
+// replaceBoundSource atomically moves one ticket-bound run to a replacement
+// sandbox after the old container has been stopped. It is intentionally a CAS:
+// only the same run and exact prior source may replace the binding, so the
+// compatibility restart cannot widen the ticket to two live containers.
+func (b *inferenceBroker) replaceBoundSource(id, runID, oldSourceIP, newSourceIP string) bool {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil || net.ParseIP(oldSourceIP) == nil || net.ParseIP(newSourceIP) == nil {
+		return false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.boundRunID != runID || session.expectedSourceIP != oldSourceIP ||
+		(session.bearer == "" && session.legacyGateway == "") || !session.expiresAt.After(time.Now()) {
+		return false
+	}
+	session.expectedSourceIP = newSourceIP
 	return true
 }
 
@@ -1403,6 +1451,7 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 			// to be discovered here first -- which is exactly how a platform
 			// eviction came to be reported as "1 upstream failure".
 			var denied platformGrantDenied
+			agentDecline := false
 			session.mu.Lock()
 			var saturated platformEmbeddingAtCapacity
 			if embeddingRequestCanceled(requestContext) {
@@ -1419,6 +1468,7 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 				attribution := "platform fault: the lease is gone"
 				if declineIsAgentFault(denied.code) {
 					session.grantAgentDeclines++
+					agentDecline = true
 					attribution = "AGENT fault: the harness spent its own allowance"
 				}
 				log.Printf(
@@ -1438,6 +1488,9 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 				session.failures++
 			}
 			session.mu.Unlock()
+			if agentDecline {
+				b.notifyTerminalAgentFailure(session)
+			}
 		}
 		writeError(w, http.StatusBadGateway, "embedding service unavailable")
 		return
@@ -1593,9 +1646,7 @@ func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session 
 		return embeddingResponse{}, err
 	}
 	session.mu.Lock()
-	if (session.benchVersion != protocol.BenchVersionV7 &&
-		session.benchVersion != protocol.BenchVersionV8) ||
-		!session.activeLocked(time.Now()) {
+	if session.benchVersion != protocol.BenchVersionV8 || !session.activeLocked(time.Now()) {
 		session.mu.Unlock()
 		return embeddingResponse{}, fmt.Errorf("embedding session unavailable")
 	}
@@ -1974,13 +2025,18 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 		session.providerLatency += totalLatency
 		declineCode := platformDeclineCode(responseBody)
 		attribution := "platform fault: the lease is gone"
+		agentDecline := false
 		if declineIsAgentFault(declineCode) {
 			session.grantAgentDeclines++
+			agentDecline = true
 			attribution = "AGENT fault: the harness spent its own allowance"
 		}
 		denials, agentDenials := session.grantDenials, session.grantAgentDeclines
 		runID, deadline := session.boundRunID, session.ticketDeadline
 		session.mu.Unlock()
+		if agentDecline {
+			b.notifyTerminalAgentFailure(session)
+		}
 		// The code, when the platform sends one, is the difference between "the
 		// validator lost this lease" and "the agent spent its allowance" -- two
 		// findings that call for opposite follow-up, and which until now were
@@ -2060,7 +2116,7 @@ func (b *inferenceBroker) trustedProbe(ctx context.Context, id string) error {
 	session.mu.Lock()
 	benchVersion := session.benchVersion
 	session.mu.Unlock()
-	if benchVersion == 7 {
+	if benchVersion == protocol.BenchVersionV8 {
 		embedding, err := b.forwardPlatformEmbedding(ctx, session, []string{"validator embedding preflight"})
 		if err != nil {
 			return fmt.Errorf("ticket embedding probe failed: %w", err)

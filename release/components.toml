@@ -15,6 +15,10 @@ ignored_paths = [
   "README*",
   "docs/**",
   "ditto/tests/**",
+  "services/dittobench-api/docs/**",
+  "services/dittobench-api/*.md",
+  "services/dittobench-api/.gitignore",
+  "services/dittobench-api/LICENSE",
   "tests/**",
 ]
 
@@ -64,11 +68,16 @@ paths = [
 [components.dittobench_api]
 description = "DittoBench scorer and hosted API"
 paths = [
-  "services/dittobench-api/Dockerfile",
+  "services/dittobench-api/Dockerfile*",
+  "services/dittobench-api/calibration/**",
   "services/dittobench-api/cmd/**",
+  "services/dittobench-api/compat/**",
   "services/dittobench-api/go.mod",
   "services/dittobench-api/go.sum",
+  "services/dittobench-api/integrations/**",
   "services/dittobench-api/internal/**",
+  "services/dittobench-api/scripts/**",
+  "services/dittobench-api/skills-lock.json",
 ]
 
 [components.validator_stack]

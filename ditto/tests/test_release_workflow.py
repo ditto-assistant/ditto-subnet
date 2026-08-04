@@ -88,10 +88,13 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
         build["steps"], "Build and publish the retired relay compatibility index"
     )
 
-    assert "model-relay-source" in source["run"]
+    assert "SHA256SUMS" in source["run"]
     assert "relay_compat_revision" in source["run"]
-    assert relay["with"]["context"] == "${{ runner.temp }}/model-relay-source"
-    assert relay["with"]["file"] == ("${{ runner.temp }}/model-relay-source/Dockerfile")
+    assert "dittobench-api.git" not in source["run"]
+    assert relay["with"]["context"] == "${{ env.MODEL_RELAY_COMPAT_DIR }}"
+    assert relay["with"]["file"] == (
+        "${{ env.MODEL_RELAY_COMPAT_DIR }}/Dockerfile"
+    )
     assert (
         "org.opencontainers.image.revision="
         "${{ steps.dittobench-source.outputs.revision }}" in relay["with"]["labels"]

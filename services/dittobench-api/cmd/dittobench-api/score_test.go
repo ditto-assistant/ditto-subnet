@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,7 @@ import (
 )
 
 // newScoreTestServer returns a server that skips the rate limiter (allowPrivate)
-// so the precondition branches of handleScore are reached directly. The
+// so the precondition branches of handleVersionedScore are reached directly. The
 // preconditions all return before submitRunSize, so no store/sandbox is needed.
 func newScoreTestServer() *server {
 	return &server{allowPrivate: true}
@@ -35,6 +36,37 @@ func TestValidateBenchVersionResultRejectsContradictions(t *testing.T) {
 	}
 }
 
+func TestCatalogEndpointUsesOnlyV8Surface(t *testing.T) {
+	rr := httptest.NewRecorder()
+	(&server{}).handleCatalog(rr, httptest.NewRequest(http.MethodGet, "/v1/catalog", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var tools []protocol.ToolDefinition
+	if err := json.Unmarshal(rr.Body.Bytes(), &tools); err != nil {
+		t.Fatal(err)
+	}
+	names := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		names[tool.Name] = true
+	}
+	for _, retired := range []string{
+		"execute_agent_workflow", "get_agent_job_status", "create_automation",
+		"list_automations", "create_recipe", "apply_recipe",
+	} {
+		if names[retired] {
+			t.Fatalf("retired tool %q is still advertised", retired)
+		}
+	}
+	for _, current := range []string{
+		"create_workflow", "list_workflows", "list_schedules", "run_workflow",
+	} {
+		if !names[current] {
+			t.Fatalf("v8 tool %q is missing", current)
+		}
+	}
+}
+
 // TestHandleScorePreconditions pins the canonical validator path's required
 // fields: a pinned seed, the platform dataset_sha256, a run_size, and exactly one
 // harness source. Each missing/invalid field is a distinct 400.
@@ -45,18 +77,18 @@ func TestHandleScorePreconditions(t *testing.T) {
 		name, body, wantSubstr string
 	}{
 		{"bad json", `{`, "invalid or oversized JSON body"},
-		{"missing seed", `{"bench_version":7,"inference_session_id":"test","run_size":"full","dataset_sha256":"` + datasetSHA + `","harness_url":"http://h"}`, "seed is required"},
-		{"missing hash", `{"bench_version":7,"inference_session_id":"test","seed":42,"run_size":"full","harness_url":"http://h"}`, "dataset_sha256 is required"},
-		{"malformed hash", `{"bench_version":7,"inference_session_id":"test","seed":42,"run_size":"full","dataset_sha256":"abc","harness_url":"http://h"}`, "64 lowercase hex"},
-		{"missing run_size", `{"bench_version":7,"inference_session_id":"test","seed":42,"dataset_sha256":"` + datasetSHA + `","harness_url":"http://h"}`, "run_size is required"},
-		{"no source", `{"bench_version":7,"inference_session_id":"test","seed":42,"run_size":"full","dataset_sha256":"` + datasetSHA + `"}`, "exactly one of"},
-		{"two sources", `{"bench_version":7,"inference_session_id":"test","seed":42,"run_size":"full","dataset_sha256":"` + datasetSHA + `","harness_url":"http://h","git_url":"http://g"}`, "exactly one of"},
+		{"missing seed", `{"bench_version":8,"inference_session_id":"test","run_size":"full","dataset_sha256":"` + datasetSHA + `","harness_url":"http://h"}`, "seed is required"},
+		{"missing hash", `{"bench_version":8,"inference_session_id":"test","seed":42,"run_size":"full","harness_url":"http://h"}`, "dataset_sha256 is required"},
+		{"malformed hash", `{"bench_version":8,"inference_session_id":"test","seed":42,"run_size":"full","dataset_sha256":"abc","harness_url":"http://h"}`, "64 lowercase hex"},
+		{"missing run_size", `{"bench_version":8,"inference_session_id":"test","seed":42,"dataset_sha256":"` + datasetSHA + `","harness_url":"http://h"}`, "run_size is required"},
+		{"no source", `{"bench_version":8,"inference_session_id":"test","seed":42,"run_size":"full","dataset_sha256":"` + datasetSHA + `"}`, "exactly one of"},
+		{"two sources", `{"bench_version":8,"inference_session_id":"test","seed":42,"run_size":"full","dataset_sha256":"` + datasetSHA + `","harness_url":"http://h","git_url":"http://g"}`, "exactly one of"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/v1/score", strings.NewReader(c.body))
-			s.handleScore(rr, req)
+			req := httptest.NewRequest(http.MethodPost, "/v2/score", strings.NewReader(c.body))
+			s.handleVersionedScore(rr, req)
 			if rr.Code != http.StatusBadRequest {
 				t.Fatalf("expected 400, got %d (body %s)", rr.Code, rr.Body.String())
 			}
@@ -118,21 +150,6 @@ func TestRetiredBenchmarkVersionsAreRejected(t *testing.T) {
 	}
 }
 
-func TestBenchmarkV7IntrinsicallyRequiresTicketInference(t *testing.T) {
-	s := newScoreTestServer()
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/v2/score",
-		strings.NewReader(`{"bench_version":7}`),
-	)
-	s.handleVersionedScore(rr, req)
-	if rr.Code != http.StatusServiceUnavailable ||
-		!strings.Contains(rr.Body.String(), "ticket inference session is required") {
-		t.Fatalf("expected intrinsic v7 ticket inference 503, got %d %s", rr.Code, rr.Body.String())
-	}
-}
-
 func TestBenchmarkV8IntrinsicallyRequiresTicketInference(t *testing.T) {
 	s := newScoreTestServer()
 	rr := httptest.NewRecorder()
@@ -143,17 +160,15 @@ func TestBenchmarkV8IntrinsicallyRequiresTicketInference(t *testing.T) {
 	}
 }
 
-func TestRequestedBenchVersionSupportsOnlyV7AndV8(t *testing.T) {
-	if got, msg := requestedBenchVersion(0, false); got != 7 || msg != "" {
-		t.Fatalf("omitted practice version must select v7, got (%d, %q)", got, msg)
+func TestRequestedBenchVersionSupportsOnlyV8(t *testing.T) {
+	if got, msg := requestedBenchVersion(0); got != 0 || !strings.Contains(msg, "required") {
+		t.Fatalf("omitted version accepted: (%d, %q)", got, msg)
 	}
-	for _, version := range []int{7, 8} {
-		if got, msg := requestedBenchVersion(version, true); got != version || msg != "" {
-			t.Fatalf("explicit v%d rejected: (%d, %q)", version, got, msg)
-		}
+	if got, msg := requestedBenchVersion(8); got != 8 || msg != "" {
+		t.Fatalf("explicit v8 rejected: (%d, %q)", got, msg)
 	}
-	for version := 2; version <= 6; version++ {
-		if got, msg := requestedBenchVersion(version, true); got != 0 || !strings.Contains(msg, "unsupported") {
+	for version := 2; version <= 7; version++ {
+		if got, msg := requestedBenchVersion(version); got != 0 || !strings.Contains(msg, "unsupported") {
 			t.Fatalf("retired v%d accepted: (%d, %q)", version, got, msg)
 		}
 	}

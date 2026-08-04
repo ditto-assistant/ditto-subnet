@@ -31,7 +31,6 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("GET /v1/sample", s.handleSample)
 	mux.HandleFunc("GET /v1/catalog", s.handleCatalog)
 	mux.HandleFunc("POST /v1/submit", s.handleSubmit)
-	mux.HandleFunc("POST /v1/score", s.handleScore)
 	mux.HandleFunc("POST /v2/score", s.handleVersionedScore)
 	mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 	mux.HandleFunc("GET /v1/runs/{id}/transcript", s.handleGetTranscript)
@@ -53,7 +52,6 @@ var controlPlaneRoutes = []string{
 	"GET /v1/sample",
 	"GET /v1/catalog",
 	"POST /v1/submit",
-	"POST /v1/score",
 	"POST /v2/score",
 	"GET /v1/runs/{id}",
 	"GET /v1/runs/{id}/transcript",

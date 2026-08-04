@@ -3,8 +3,6 @@ package main
 import (
 	"errors"
 	"testing"
-
-	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 func TestValidateScreenedImage(t *testing.T) {
@@ -55,28 +53,16 @@ func TestValidateScreenedImageAccess(t *testing.T) {
 		t.Fatalf("validator sandbox rejected screened image: %s", msg)
 	}
 	if msg := validateScreenedImageAccess(submitRequest{}, false); msg != "" {
-		t.Fatalf("legacy source-build request rejected: %s", msg)
+		t.Fatalf("request without a screened-image bypass rejected: %s", msg)
 	}
 }
 
 func TestValidateBenchmarkImageContract(t *testing.T) {
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: 3, TarballURL: "https://example.com/source.tgz"}); msg == "" {
-		t.Fatal("benchmark v3 allowed an untrusted source build")
+	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: 8, TarballURL: "https://example.com/source.tgz"}); msg == "" {
+		t.Fatal("benchmark v8 allowed an untrusted source build")
 	}
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: 3, ScreenedImageURL: "https://example.com/image.tar"}); msg != "" {
-		t.Fatalf("benchmark v3 screened image rejected: %s", msg)
-	}
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: 2, TarballURL: "https://example.com/source.tgz"}); msg != "" {
-		t.Fatalf("benchmark v2 source build rejected: %s", msg)
-	}
-	// v4 is the current production contract: it must be gated exactly like v3, not
-	// exempted by a single-version check. A v4 lease with no image previously fell
-	// through to a validator-side docker build (the "Building harness" regression).
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: protocol.BenchVersionV4, TarballURL: "https://example.com/source.tgz"}); msg == "" {
-		t.Fatal("benchmark v4 allowed an untrusted source build")
-	}
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: protocol.BenchVersionV4, ScreenedImageURL: "https://example.com/image.tar"}); msg != "" {
-		t.Fatalf("benchmark v4 screened image rejected: %s", msg)
+	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: 8, ScreenedImageURL: "https://example.com/image.tar"}); msg != "" {
+		t.Fatalf("benchmark v8 screened image rejected: %s", msg)
 	}
 }
 
@@ -91,6 +77,17 @@ func TestSandboxStartInfraFailure(t *testing.T) {
 	}
 	if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "sandbox_network_unavailable" {
 		t.Fatalf("unexpected infra classification: %+v", failure)
+	}
+	// The scorer creates dittobench-sub tags itself. If one disappears before a
+	// compatibility restart, that is likewise validator infrastructure and must
+	// never consume the miner's retry budget as a scoring error.
+	imageErr := errors.New("docker run failed: Unable to find image 'dittobench-sub:agent-image-123' locally; pull access denied for dittobench-sub")
+	failure = sandboxStartInfraFailure(imageErr)
+	if failure == nil {
+		t.Fatal("missing request-scoped image was not classified as infrastructure")
+	}
+	if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "sandbox_image_unavailable" {
+		t.Fatalf("unexpected missing-image classification: %+v", failure)
 	}
 	// An ordinary harness crash stays a submission failure (nil classifier).
 	if got := sandboxStartInfraFailure(errors.New("exit status 1: panic in harness")); got != nil {

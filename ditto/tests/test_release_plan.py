@@ -66,6 +66,22 @@ def test_dittobench_change_propagates_to_stack(components, ignored_paths) -> Non
     }
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "services/dittobench-api/Dockerfile.egress-proxy",
+        "services/dittobench-api/integrations/longmemeval/longmemeval_adapter.py",
+        "services/dittobench-api/scripts/calibrate.sh",
+        "services/dittobench-api/calibration/token-efficiency-v5/contract.json",
+    ],
+)
+def test_all_dittobench_surfaces_release(components, ignored_paths, path: str) -> None:
+    assert selected(components, ignored_paths, path) == {
+        "dittobench_api",
+        "validator_stack",
+    }
+
+
 def test_shared_contract_change_releases_both_surfaces(
     components, ignored_paths
 ) -> None:

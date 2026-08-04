@@ -70,7 +70,7 @@ func TestV7EmbeddingBrokerSubstitutesAnyRequestedModel(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
 		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.160", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.160", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -159,7 +159,7 @@ func TestEmbeddingBrokerLogsModelSubstitution(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
 		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.162", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.162", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -222,7 +222,7 @@ func TestShippedHarnessEmbedModelIsUnaffected(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
 		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.163", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.163", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}

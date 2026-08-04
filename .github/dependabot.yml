@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /services/dittobench-api
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /services/dittobench-api
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /services/dittobench-api/integrations/hermes
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /services/dittobench-api/integrations/openclaw
+    schedule:
+      interval: weekly

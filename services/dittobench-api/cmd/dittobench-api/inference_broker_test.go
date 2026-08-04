@@ -179,6 +179,34 @@ func embeddingBrokerSession(t *testing.T, broker *inferenceBroker, source string
 	return id, runID
 }
 
+func TestBrokerReplacesBoundSourceOnceByCompareAndSwap(t *testing.T) {
+	broker := newInferenceBroker(1)
+	id, runID := embeddingBrokerSession(t, broker, "192.0.2.50")
+
+	if !broker.replaceBoundSource(id, runID, "192.0.2.50", "192.0.2.51") {
+		t.Fatal("same-run compatibility source replacement was rejected")
+	}
+	if broker.replaceBoundSource(id, runID, "192.0.2.50", "192.0.2.52") {
+		t.Fatal("stale source replaced the current binding")
+	}
+	if broker.replaceBoundSource(id, uuid.NewString(), "192.0.2.51", "192.0.2.52") {
+		t.Fatal("another run replaced the source binding")
+	}
+	if broker.replaceBoundSource(id, runID, "192.0.2.51", "not-an-ip") {
+		t.Fatal("invalid replacement source was accepted")
+	}
+
+	broker.mu.RLock()
+	session := broker.sessions[id]
+	broker.mu.RUnlock()
+	session.mu.Lock()
+	got := session.expectedSourceIP
+	session.mu.Unlock()
+	if got != "192.0.2.51" {
+		t.Fatalf("bound source = %q, want replacement", got)
+	}
+}
+
 func admittedEmbeddingBrokerSession(t *testing.T, broker *inferenceBroker, source string) (string, string) {
 	t.Helper()
 	id, runID := embeddingBrokerSession(t, broker, source)
@@ -296,7 +324,7 @@ func TestV7EmbeddingBrokerUsesSignedLockedPlatformRoute(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.70", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.70", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -350,7 +378,7 @@ func TestV7EmbeddingBrokerCountsPlatformFailureAsInfrastructure(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.71", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.71", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -1027,7 +1055,7 @@ func TestInferenceBrokerTrustedProbeUsesControlPlaneSession(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "amazon-bedrock", profile, llm.V7HarnessModel)
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.30", protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.30", protocol.BenchVersionV8)
 
 	if err := broker.trustedProbe(context.Background(), prepared["session_id"]); err != nil {
 		t.Fatalf("trusted probe: %v", err)
@@ -1072,7 +1100,7 @@ func TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly(t *testing.T) 
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV8)
 	start, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
@@ -1127,7 +1155,7 @@ func TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly(t *testing.T) 
 	if execution.Requests != 1 || execution.GrantDenials != 0 {
 		t.Fatalf("retry must not inflate requests or denials: %+v", execution)
 	}
-	if err := requireCompleteV7Usage(protocol.BenchVersionV7, usage, relayExecutionSummary{}); err == nil {
+	if err := requireCompleteV7Usage(protocol.BenchVersionV8, usage, relayExecutionSummary{}); err == nil {
 		t.Fatal("v7 accepted a run with a provider infrastructure failure")
 	}
 }
@@ -1150,7 +1178,7 @@ func TestV7InferenceBrokerWaitsForRelayThenResumes(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.33", protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.33", protocol.BenchVersionV8)
 	start, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
@@ -1194,7 +1222,7 @@ func TestInferenceBrokerRejectsExhaustedTransientFailures(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.32", protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.32", protocol.BenchVersionV8)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
 	request.RemoteAddr = "192.0.2.32:4321"
@@ -1238,7 +1266,7 @@ func TestInferenceBrokerServesTheTicketModelNotTheRequestedOne(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "amazon-bedrock", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.40", protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.40", protocol.BenchVersionV8)
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions",
 		bytes.NewBufferString(`{"model":"qwen/qwen3-32b","temperature":0}`))
 	request.RemoteAddr = "192.0.2.40:4321"
@@ -1269,7 +1297,7 @@ func TestInferenceBrokerRejectsUnparseableRequestBody(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.41", protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.41", protocol.BenchVersionV8)
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions",
 		bytes.NewBufferString(`["not","an","object"]`))
 	request.RemoteAddr = "192.0.2.41:4321"
@@ -1303,14 +1331,14 @@ func TestInferenceBrokerClaimsTicketIdentityOnceAndRejectsSiblingRemoval(t *test
 
 	wrongIdentity := identity
 	wrongIdentity.AgentID = "00000000-0000-0000-0000-000000000003"
-	if broker.claimRun(prepared["session_id"], uuid.NewString(), wrongIdentity, protocol.BenchVersionV7) {
+	if broker.claimRun(prepared["session_id"], uuid.NewString(), wrongIdentity, protocol.BenchVersionV8) {
 		t.Fatal("session accepted a run for a sibling ticket identity")
 	}
 	ownerRunID := uuid.NewString()
-	if !broker.claimRun(prepared["session_id"], ownerRunID, identity, protocol.BenchVersionV7) {
+	if !broker.claimRun(prepared["session_id"], ownerRunID, identity, protocol.BenchVersionV8) {
 		t.Fatal("session rejected its ticket identity")
 	}
-	if broker.claimRun(prepared["session_id"], uuid.NewString(), identity, protocol.BenchVersionV7) {
+	if broker.claimRun(prepared["session_id"], uuid.NewString(), identity, protocol.BenchVersionV8) {
 		t.Fatal("session accepted a second run claim")
 	}
 	if broker.bindSource(prepared["session_id"], uuid.NewString(), "192.0.2.60") {
@@ -1497,7 +1525,7 @@ func TestV7BrokerServesBYOKShapedRequests(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.71", protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.71", protocol.BenchVersionV8)
 
 	// The BYOK suffix: an OpenAI/OpenRouter client appends /chat/completions to
 	// its configured base URL, which under the alias is ".../v1/inference".
@@ -1554,7 +1582,7 @@ func TestV7ChatSurvivesOneTransientProviderFault(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.90", protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.90", protocol.BenchVersionV8)
 	start, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
@@ -1628,7 +1656,7 @@ func TestRetriedRunReportsIdenticalObservedUsageToACleanRun(t *testing.T) {
 		proxyURL := configureBrokerUpstream(broker, upstream)
 		prepared := prepareBrokerSession(t, broker)
 		activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-		claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+		claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
 		start, err := broker.snapshot(prepared["session_id"])
 		if err != nil {
 			t.Fatal(err)
@@ -1711,7 +1739,7 @@ func TestV7EmbeddingSurvivesOneTransientPlatformFault(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.93", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.93", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -1766,7 +1794,7 @@ func TestV7EmbeddingIntegrityFaultIsNeverRetriedAndFailsClosed(t *testing.T) {
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.94", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.94", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -1821,7 +1849,7 @@ func TestPlatformGrantDenialIsNotCountedAsAnUpstreamProviderFault(t *testing.T) 
 			if lane == "embedding" {
 				sourceIP = "192.0.2.96"
 			}
-			runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+			runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
 			start, err := broker.snapshot(prepared["session_id"])
 			if err != nil {
 				t.Fatal(err)
@@ -1951,7 +1979,7 @@ func TestChatCapacityDeclineIsWaitedOutRatherThanKillingTheRun(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
 	sourceIP := "192.0.2.97"
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
 	request.RemoteAddr = sourceIP + ":4321"
@@ -1998,7 +2026,7 @@ func TestChatCapacityWaitingIsBounded(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
 	sourceIP := "192.0.2.98"
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
 	request.RemoteAddr = sourceIP + ":4321"

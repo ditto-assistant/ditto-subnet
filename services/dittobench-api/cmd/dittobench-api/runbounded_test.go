@@ -7,54 +7,16 @@ import (
 	"testing"
 )
 
-// This test previously asserted that v7 cases run strictly one at a time. That
-// contract existed only because the hosted embedding lane admitted one request
-// per ticket, so parallel cases would have manufactured 429s. The lane is no
-// longer one wide, so the contract it encoded is gone and the test now pins the
-// replacement: v7 runs its cases in parallel, and the historical versions keep
-// the concurrency they were calibrated at.
-func TestCaseConcurrencyForVersionParallelisesV7AndLeavesHistoryAlone(t *testing.T) {
-	originalCase, originalV7 := caseConcurrency, v7CaseConcurrency
-	caseConcurrency, v7CaseConcurrency = 4, 4
-	t.Cleanup(func() { caseConcurrency, v7CaseConcurrency = originalCase, originalV7 })
-
-	for _, version := range []int{2, 3, 4, 5, 6} {
-		if got := caseConcurrencyForVersion(version); got != 4 {
-			t.Fatalf("v%d case concurrency = %d, want 4 (unchanged)", version, got)
-		}
+func TestV8DefaultsShipParallel(t *testing.T) {
+	if activeCaseConcurrency() < 2 {
+		t.Fatalf("default v8 case concurrency = %d, want > 1", activeCaseConcurrency())
 	}
-	if got := caseConcurrencyForVersion(7); got != 4 {
-		t.Fatalf("v7 case concurrency = %d, want 4", got)
-	}
-
-	// The two are independently tunable: throttling v7 must not disturb the
-	// frozen historical concurrency, and vice versa.
-	v7CaseConcurrency = 1
-	if got := caseConcurrencyForVersion(7); got != 1 {
-		t.Fatalf("throttled v7 case concurrency = %d, want 1", got)
-	}
-	if got := caseConcurrencyForVersion(6); got != 4 {
-		t.Fatalf("v6 case concurrency = %d after throttling v7, want 4", got)
-	}
-}
-
-// The shipped default is the improvement, not an opt-in. A change that made
-// DITTOBENCH_V7_CASE_CONCURRENCY default back to 1 would leave every other
-// layer widened and deliver nothing, which is precisely the shape of a no-op
-// this work exists to avoid.
-func TestV7DefaultsShipParallel(t *testing.T) {
-	if v7CaseConcurrency < 2 {
-		t.Fatalf("default v7 case concurrency = %d, want > 1", v7CaseConcurrency)
-	}
-	if v7EmbeddingSessionConcurrency < 2 {
+	if v8EmbeddingSessionConcurrency < 2 {
 		t.Fatalf(
-			"default v7 embedding session concurrency = %d, want > 1",
-			v7EmbeddingSessionConcurrency,
+			"default v8 embedding session concurrency = %d, want > 1",
+			v8EmbeddingSessionConcurrency,
 		)
 	}
-	// The local Ollama lane must stay pinned: "we will never run v6 again" is an
-	// operational intention, not a code guarantee, and the v2-v6 paths still
-	// exist to be exercised.
 	if maxConcurrentMemoryPhases != 1 {
 		t.Fatalf("local memory-phase concurrency = %d, want 1", maxConcurrentMemoryPhases)
 	}
