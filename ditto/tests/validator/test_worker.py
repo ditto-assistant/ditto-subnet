@@ -64,7 +64,6 @@ from ditto.validator.resource_gate import (
 )
 from ditto.validator.stack_health import fallback_stack_health
 from ditto.validator.weights import (
-    DEFAULT_BENCH_VERSION,
     apply_miner_emission_cap,
     compute_weights,
 )
@@ -326,6 +325,9 @@ def _job(
         seed=12345,
         dataset_sha256=dataset_sha256,
         run_size="full",
+        bench_version=8,
+        minimum_screening_policy_version=9,
+        requires_screened_image=True,
     )
 
 
@@ -342,7 +344,23 @@ def _report(run_id: str, composite: float) -> ScoreReport:
         per_case=[],
         structural_fingerprint=None,
         details=None,
+        bench_version=8,
     )
+
+
+def _confirmation_pins(
+    agent_id: UUID, *, count: int = 3
+) -> list[ConfirmationDatasetPin]:
+    return [
+        ConfirmationDatasetPin(
+            seed=seed,
+            dataset_sha256=hashlib.sha256(str(seed).encode()).hexdigest(),
+            run_size="full",
+        )
+        for seed in worker_mod.confirmation_seeds(
+            [str(agent_id)], version=8, count=count
+        )
+    ]
 
 
 def _config() -> MagicMock:
@@ -363,6 +381,7 @@ def _config() -> MagicMock:
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
     cfg.queue_limit = 16
+    cfg.dittobench_mock = True
     return cfg
 
 
@@ -397,6 +416,8 @@ def _platform_with_ledger(
             screened_image_ref=(
                 "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
             ),
+            bench_version=8,
+            screening_policy_version=9,
         )
     )
     platform.submit_score = AsyncMock(
@@ -414,7 +435,7 @@ class TestTop5ConfirmationLane:
     async def test_idle_slots_catch_up_distinct_members_concurrently(self) -> None:
         entries = [
             _entry(f"5Miner{index}" + "x" * 40, 0.90 - index * 0.01).model_copy(
-                update={"bench_version": 1}
+                update={"bench_version": 8}
             )
             for index in range(3)
         ]
@@ -433,7 +454,8 @@ class TestTop5ConfirmationLane:
             ).model_copy(
                 update={
                     "agent_id": member_agent_id,
-                    "bench_version": 1,
+                    "bench_version": 8,
+                    "confirmation_datasets": _confirmation_pins(member_agent_id),
                     "deadline": datetime.now(UTC) + timedelta(hours=3),
                 }
             )
@@ -463,7 +485,7 @@ class TestTop5ConfirmationLane:
             await asyncio.wait_for(all_started.wait(), timeout=1)
             active -= 1
             return _report(str(seed), 0.8).model_copy(
-                update={"seed": seed, "bench_version": 1}
+                update={"seed": seed, "bench_version": 8}
             )
 
         worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
@@ -477,14 +499,15 @@ class TestTop5ConfirmationLane:
 
     async def test_appends_multi_seed_receipt_without_replacing_score(self) -> None:
         entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
-            update={"bench_version": 1}
+            update={"bench_version": 8}
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
         platform.request_top5_confirmation_job = AsyncMock(
             return_value=_job(entry.miner_hotkey).model_copy(
                 update={
                     "agent_id": entry.agent_id,
-                    "bench_version": 1,
+                    "bench_version": 8,
+                    "confirmation_datasets": _confirmation_pins(entry.agent_id),
                     "deadline": datetime.now(UTC) + timedelta(hours=3),
                 }
             )
@@ -501,7 +524,7 @@ class TestTop5ConfirmationLane:
             _agent_id: UUID, _sha256: str, *, seed: int, **_: object
         ) -> ScoreReport:
             return _report(str(seed), 0.8).model_copy(
-                update={"seed": seed, "bench_version": 1}
+                update={"seed": seed, "bench_version": 8}
             )
 
         worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
@@ -513,11 +536,11 @@ class TestTop5ConfirmationLane:
         assert len(report.confirmation_seeds) == 3
         assert report.confirmation_composites == [0.8, 0.8, 0.8]
 
-    async def test_v7_confirmation_reuses_one_ticket_bound_inference_session(
+    async def test_v8_confirmation_reuses_one_ticket_bound_inference_session(
         self,
     ) -> None:
         entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
-            update={"bench_version": 7}
+            update={"bench_version": 8}
         )
         deadline = datetime.now(UTC) + timedelta(hours=3)
         grant_id = uuid4()
@@ -535,7 +558,7 @@ class TestTop5ConfirmationLane:
         job = _job(entry.miner_hotkey, deadline=deadline).model_copy(
             update={
                 "agent_id": entry.agent_id,
-                "bench_version": 7,
+                "bench_version": 8,
                 "inference": offer,
                 "confirmation_datasets": [
                     ConfirmationDatasetPin(
@@ -544,9 +567,7 @@ class TestTop5ConfirmationLane:
                         run_size="full",
                     )
                     for seed in worker_mod.confirmation_seeds(
-                        [str(entry.agent_id)],
-                        version=7,
-                        count=1,
+                        [str(entry.agent_id)], version=8, count=1
                     )
                 ],
             }
@@ -562,7 +583,7 @@ class TestTop5ConfirmationLane:
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
-        worker._current_bench_version = 7
+        worker._current_bench_version = 8
         broker = InferenceBrokerSession(
             session_id="top5-session",
             activation_secret="activation",
@@ -586,7 +607,7 @@ class TestTop5ConfirmationLane:
             assert kwargs["run_size"] == "full"
             assert kwargs["progress_callback"] == worker._on_dittobench_progress
             return _report(str(seed), 0.8).model_copy(
-                update={"seed": seed, "bench_version": 7}
+                update={"seed": seed, "bench_version": 8}
             )
 
         worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
@@ -597,14 +618,14 @@ class TestTop5ConfirmationLane:
         dittobench.cancel_inference_session.assert_awaited_once_with("top5-session")
         platform.submit_top5_confirmation_score.assert_awaited_once()
 
-    async def test_v7_rejects_unpinned_confirmation_lease_before_scoring(
+    async def test_v8_rejects_unpinned_confirmation_lease_before_scoring(
         self,
     ) -> None:
         entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
-            update={"bench_version": 7}
+            update={"bench_version": 8}
         )
         job = _job(entry.miner_hotkey).model_copy(
-            update={"agent_id": entry.agent_id, "bench_version": 7}
+            update={"agent_id": entry.agent_id, "bench_version": 8}
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
         platform.request_top5_confirmation_job = AsyncMock(return_value=job)
@@ -615,7 +636,7 @@ class TestTop5ConfirmationLane:
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
-        worker._current_bench_version = 7
+        worker._current_bench_version = 8
         worker._evaluate = AsyncMock()  # type: ignore[method-assign]
 
         await worker._run_top5_confirmation_lane()
@@ -652,12 +673,13 @@ class TestTop5ConfirmationLaneSlotBinding:
 
     async def test_progress_lands_on_the_leased_slot_not_slot_zero(self) -> None:
         entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
-            update={"bench_version": 1}
+            update={"bench_version": 8}
         )
         job = _job(entry.miner_hotkey, slot_id="slot-1").model_copy(
             update={
                 "agent_id": entry.agent_id,
-                "bench_version": 1,
+                "bench_version": 8,
+                "confirmation_datasets": _confirmation_pins(entry.agent_id),
                 "deadline": datetime.now(UTC) + timedelta(hours=3),
             }
         )
@@ -686,7 +708,7 @@ class TestTop5ConfirmationLaneSlotBinding:
                 for slot_id, slot in worker._slots.items()
             )
             return _report(str(seed), 0.8).model_copy(
-                update={"seed": seed, "bench_version": 1}
+                update={"seed": seed, "bench_version": 8}
             )
 
         worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
@@ -722,10 +744,10 @@ class TestTop5ConfirmationLaneSlotBinding:
         # the lane and abort the sweep; hand the lease back like the canonical
         # path does on a slot mismatch.
         entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
-            update={"bench_version": 1}
+            update={"bench_version": 8}
         )
         job = _job(entry.miner_hotkey, slot_id="slot-3").model_copy(
-            update={"agent_id": entry.agent_id, "bench_version": 1}
+            update={"agent_id": entry.agent_id, "bench_version": 8}
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
         platform.request_top5_confirmation_job = AsyncMock(return_value=job)
@@ -1319,7 +1341,7 @@ class TestRunOnce:
         # The continual lane may inspect the ledger, but the platform claim is
         # still the authorization boundary; a declined claim does no work.
         platform.get_ledger.assert_awaited_once()
-        platform.request_top5_confirmation_job.assert_awaited_once()
+        platform.request_top5_confirmation_job.assert_not_awaited()
         confirm_and_submit.assert_not_awaited()
 
     async def test_canonical_queue_work_then_uses_spare_capacity_for_retests(
@@ -1344,7 +1366,7 @@ class TestRunOnce:
         assert outcome.queue_depth == 1
         platform.submit_score.assert_awaited_once()
         platform.get_ledger.assert_awaited_once()
-        platform.request_top5_confirmation_job.assert_awaited_once()
+        platform.request_top5_confirmation_job.assert_not_awaited()
 
     async def test_scores_queue_and_sets_weights_from_ledger(self) -> None:
         job = _job("5MinerA" + "x" * 41)
@@ -2219,7 +2241,7 @@ class TestRunOnce:
         self,
     ) -> None:
         config = _config()
-        config.inference_proxy_required = True
+        config.dittobench_mock = False
         worker = ValidatorWorker(
             config=config,
             platform=_platform_with_ledger(jobs=[], ledger=[]),
@@ -2230,119 +2252,12 @@ class TestRunOnce:
 
         with pytest.raises(
             ValidatorInfrastructureError,
-            match="legacy benchmark ticket remained",
+            match="benchmark v8 requires platform inference",
         ):
             await worker._score_job(_job("5MinerA" + "x" * 41))
 
-    async def test_v7_ticket_inference_is_required_without_operator_flag(self) -> None:
-        config = _config()
-        config.inference_proxy_required = False
-        worker = ValidatorWorker(
-            config=config,
-            platform=_platform_with_ledger(jobs=[], ledger=[]),
-            dittobench=MagicMock(),
-            chain=MagicMock(),
-            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
-        )
-        job = _job("5MinerA" + "x" * 41).model_copy(
-            update={
-                "bench_version": 7,
-                "minimum_screening_policy_version": 9,
-                "requires_screened_image": True,
-            }
-        )
-
-        with pytest.raises(
-            ValidatorInfrastructureError,
-            match="benchmark v7 requires platform inference",
-        ):
-            await worker._score_job(job)
-
-    async def test_v6_ignores_additive_inference_offer_during_transition(
-        self,
-    ) -> None:
-        config = _config()
-        config.inference_proxy_required = False
-        platform = _platform_with_ledger(jobs=[], ledger=[])
-        dittobench = MagicMock()
-        worker = ValidatorWorker(
-            config=config,
-            platform=platform,
-            dittobench=dittobench,
-            chain=MagicMock(),
-            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
-        )
-        worker._evaluate_and_submit = AsyncMock(  # type: ignore[method-assign]
-            return_value=_report("run", 0.9)
-        )
-        offer = InferenceGrantOffer(
-            grant_id=uuid4(),
-            exchange_url="https://platform.example/exchange",
-            proxy_url="https://platform.example/inference",
-            allowed_models=["qwen/qwen3-32b"],
-            request_budget=500,
-            token_budget=1_000_000,
-            expires_at=datetime.now(UTC) + timedelta(minutes=30),
-        )
-        job = _job("5MinerA" + "x" * 41).model_copy(
-            update={
-                "bench_version": 6,
-                "minimum_screening_policy_version": 9,
-                "requires_screened_image": True,
-                "inference": offer,
-            }
-        )
-
-        await worker._score_job(job)
-
-        dittobench.prepare_inference_session.assert_not_called()
-        platform.exchange_inference_grant.assert_not_called()
-        score_call = worker._evaluate_and_submit.await_args
-        assert score_call is not None
-        assert score_call.kwargs["inference_session_id"] is None
-
-    async def test_v6_ticket_deadline_is_not_forwarded_as_inference_identity(
-        self,
-    ) -> None:
-        deadline = datetime.now(UTC) + timedelta(hours=1)
-        job = _job("5MinerA" + "x" * 41, deadline=deadline).model_copy(
-            update={
-                "bench_version": 6,
-                "minimum_screening_policy_version": 9,
-                "requires_screened_image": True,
-            }
-        )
-        platform = _platform_with_ledger(jobs=[], ledger=[])
-        artifact = platform.get_artifact.return_value.model_copy(
-            update={
-                "agent_id": job.agent_id,
-                "bench_version": 6,
-                "screening_policy_version": 9,
-            }
-        )
-        platform.get_artifact = AsyncMock(return_value=artifact)
-        dittobench = MagicMock()
-        dittobench.prepare_inference_session = AsyncMock()
-        dittobench.score_tarball = AsyncMock(
-            return_value=_report("run-v6", 0.9).model_copy(update={"bench_version": 6})
-        )
-        worker = ValidatorWorker(
-            config=_config(),
-            platform=platform,
-            dittobench=dittobench,
-            chain=MagicMock(),
-            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
-        )
-
-        await worker._score_job(job)
-
-        score = dittobench.score_tarball.await_args.kwargs
-        assert score["inference_session_id"] is None
-        assert score["inference_ticket_deadline"] is None
-        dittobench.prepare_inference_session.assert_not_awaited()
-
     @pytest.mark.parametrize("missing_identity", ["ticket", "exchange"])
-    async def test_v7_rejects_legacy_inference_route_identity(
+    async def test_v8_rejects_incomplete_inference_route_identity(
         self, missing_identity: str
     ) -> None:
         deadline = datetime.now(UTC) + timedelta(hours=1)
@@ -2397,15 +2312,16 @@ class TestRunOnce:
         dittobench.cancel_inference_session = AsyncMock()
         dittobench.activate_inference_session = AsyncMock()
         worker = ValidatorWorker(
-            config=_config(),
+            config=(_live_config := _config()),
             platform=platform,
             dittobench=dittobench,
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
+        _live_config.dittobench_mock = False
         job = _job("5MinerA" + "x" * 41, deadline=deadline).model_copy(
             update={
-                "bench_version": 7,
+                "bench_version": 8,
                 "minimum_screening_policy_version": 9,
                 "requires_screened_image": True,
                 "inference": inference,
@@ -2417,7 +2333,7 @@ class TestRunOnce:
         dittobench.activate_inference_session.assert_not_awaited()
         dittobench.cancel_inference_session.assert_awaited_once_with("session")
 
-    async def test_v7_binds_ticket_identity_through_activation_and_score(self) -> None:
+    async def test_v8_binds_ticket_identity_through_activation_and_score(self) -> None:
         deadline = datetime.now(UTC) + timedelta(hours=1)
         grant_id = uuid4()
         profile_revision = "openrouter-amazon-bedrock-gpt-oss-20b-v1"
@@ -2438,7 +2354,7 @@ class TestRunOnce:
             deadline=deadline,
         ).model_copy(
             update={
-                "bench_version": 7,
+                "bench_version": 8,
                 "minimum_screening_policy_version": 9,
                 "requires_screened_image": True,
                 "inference": inference,
@@ -2460,7 +2376,7 @@ class TestRunOnce:
         artifact = platform.get_artifact.return_value.model_copy(
             update={
                 "agent_id": job.agent_id,
-                "bench_version": 7,
+                "bench_version": 8,
                 "screening_policy_version": 9,
             }
         )
@@ -2468,7 +2384,7 @@ class TestRunOnce:
         dittobench = MagicMock()
         dittobench.prepare_inference_session = AsyncMock(
             return_value=InferenceBrokerSession(
-                session_id="session-v7",
+                session_id="session-v8",
                 activation_secret="activation",
                 broker_public_key="a" * 43,
             )
@@ -2476,15 +2392,16 @@ class TestRunOnce:
         dittobench.activate_inference_session = AsyncMock()
         dittobench.cancel_inference_session = AsyncMock()
         dittobench.score_tarball = AsyncMock(
-            return_value=_report("run-v7", 0.9).model_copy(update={"bench_version": 7})
+            return_value=_report("run-v8", 0.9).model_copy(update={"bench_version": 8})
         )
         worker = ValidatorWorker(
-            config=_config(),
+            config=(_live_config := _config()),
             platform=platform,
             dittobench=dittobench,
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
+        _live_config.dittobench_mock = False
 
         await worker._score_job(job)
 
@@ -2494,12 +2411,12 @@ class TestRunOnce:
         assert activation["slot_id"] == "slot-3"
         assert activation["ticket_deadline"] == deadline
         score = dittobench.score_tarball.await_args.kwargs
-        assert score["inference_session_id"] == "session-v7"
+        assert score["inference_session_id"] == "session-v8"
         assert score["inference_grant_id"] == grant_id
         assert score["inference_agent_id"] == job.agent_id
         assert score["inference_slot_id"] == "slot-3"
         assert score["inference_ticket_deadline"] == deadline
-        dittobench.cancel_inference_session.assert_awaited_once_with("session-v7")
+        dittobench.cancel_inference_session.assert_awaited_once_with("session-v8")
 
     async def test_run_token_from_scorer_rides_every_progress_heartbeat(self) -> None:
         job = _job("5MinerA" + "x" * 41)
@@ -2867,6 +2784,10 @@ class TestRunOnce:
             uuid4(),
             "ab" * 32,
             "5MinerA" + "x" * 41,
+            seed=12345,
+            dataset_sha256="cd" * 32,
+            run_size="full",
+            bench_version=8,
             ticket_deadline=ticket_deadline,
         )
 
@@ -2953,7 +2874,7 @@ class TestRunOnce:
         assert not worker._background_heartbeat_tasks
         assert worker._last_progress_heartbeat_monotonic is not None
 
-    async def test_unticketed_rescore_has_no_agent_or_progress(self) -> None:
+    async def test_unticketed_rescore_is_rejected(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
         dittobench = MagicMock(
             score_tarball=AsyncMock(return_value=_report("rescore", 0.8))
@@ -2966,13 +2887,9 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        await worker._evaluate(uuid4(), "ab" * 32, seed=7)
-
-        running = platform.submit_heartbeat.await_args_list[0].args[0]
-        assert running.state == "running_benchmark"
-        assert running.active_agent_id is None
-        assert running.benchmark_progress is None
-        assert dittobench.score_tarball.await_args.kwargs["progress_callback"] is None
+        with pytest.raises(PlatformError, match="only v8 is active"):
+            await worker._evaluate(uuid4(), "ab" * 32, seed=7)
+        dittobench.score_tarball.assert_not_awaited()
 
     async def test_forwards_tarball_sha_to_scorer(self) -> None:
         # The registered digest must be forwarded so dittobench re-verifies the
@@ -3012,10 +2929,10 @@ class TestRunOnce:
             "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
         )
 
-    @pytest.mark.parametrize("bench_version", [3, 4, 5, 6])
-    async def test_v3_plus_ticket_artifact_scorer_and_signature_are_version_bound(
-        self, bench_version: int
+    async def test_v8_ticket_artifact_scorer_and_signature_are_version_bound(
+        self,
     ) -> None:
+        bench_version = 8
         job = _job("5MinerA" + "x" * 41).model_copy(
             update={
                 "bench_version": bench_version,
@@ -3038,7 +2955,7 @@ class TestRunOnce:
             }
         )
         platform.get_artifact = AsyncMock(return_value=artifact)
-        report = _report("run-v3", 0.9).model_copy(
+        report = _report("run-v8", 0.9).model_copy(
             update={"bench_version": bench_version}
         )
         dittobench = MagicMock(
@@ -3070,7 +2987,7 @@ class TestRunOnce:
     async def test_ticket_artifact_benchmark_version_mismatch_is_terminal(self) -> None:
         job = _job("5MinerA" + "x" * 41).model_copy(
             update={
-                "bench_version": 3,
+                "bench_version": 8,
                 "minimum_screening_policy_version": 9,
                 "requires_screened_image": True,
             }
@@ -3137,6 +3054,15 @@ class TestRunOnce:
             sha256=second.sha256,
             download_url="https://signed.example/second.tar.gz?sig=1",
             expires_at=datetime.now(UTC),
+            bench_version=8,
+            screening_policy_version=9,
+            screened_image_url="https://signed.example/image.tar",
+            screened_image_sha256="12" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "34" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
         )
         platform.get_artifact = AsyncMock(
             side_effect=[PlatformError("artifact response was invalid"), valid_artifact]
@@ -4044,9 +3970,9 @@ class TestConfirmAndSubmit:
             seed = kw["seed"]
             return self._seeded_report(seed, composites[seed]).model_copy(
                 update={
-                    "bench_version": 3,
+                    "bench_version": 8,
                     "details": {
-                        "bench_version": 3,
+                        "bench_version": 8,
                         "transcript_sha256": hashlib.sha256(
                             transcripts[seed]
                         ).hexdigest(),
@@ -4059,7 +3985,7 @@ class TestConfirmAndSubmit:
         dittobench.take_transcript = MagicMock(
             side_effect=lambda run_id: transcripts[int(run_id.removeprefix("run-"))]
         )
-        dittobench.last_details = {"bench_version": 3}
+        dittobench.last_details = {"bench_version": 8}
         platform = _platform_with_ledger(jobs=[], ledger=[])
         platform.submit_transcript = AsyncMock()
         platform.get_artifact = AsyncMock(
@@ -4068,7 +3994,7 @@ class TestConfirmAndSubmit:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
-                bench_version=3,
+                bench_version=8,
                 screening_policy_version=9,
                 screened_image_url="https://signed.example/image.tar",
                 screened_image_sha256="12" * 32,
@@ -4080,7 +4006,7 @@ class TestConfirmAndSubmit:
             )
         )
         w = await self._worker(dittobench, platform)
-        w._current_bench_version = 3
+        w._current_bench_version = 8
 
         out = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -4116,7 +4042,7 @@ class TestConfirmAndSubmit:
         async def _score(**kw: Any) -> ScoreReport:
             if kw["seed"] == 20:
                 return self._seeded_report(20, 0.75).model_copy(
-                    update={"bench_version": 7, "details": {"bench_version": 7}}
+                    update={"bench_version": 8, "details": {"bench_version": 8}}
                 )
             raise worker_mod.DittobenchError("boom")
 
@@ -4130,7 +4056,7 @@ class TestConfirmAndSubmit:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
-                bench_version=7,
+                bench_version=8,
                 screening_policy_version=9,
                 screened_image_url="https://signed.example/image.tar",
                 screened_image_sha256="12" * 32,
@@ -4142,7 +4068,7 @@ class TestConfirmAndSubmit:
             )
         )
         w = await self._worker(dittobench, platform)
-        w._current_bench_version = 7
+        w._current_bench_version = 8
 
         report = await w._confirm_and_submit(
             agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
@@ -4339,8 +4265,10 @@ class TestContestedDethroneConfirmation:
 
     async def test_in_band_contest_confirms_both_on_common_seeds(self) -> None:
         # Deficit 0.005 sits inside the flat band (koth_margin 1% of 0.80).
-        champ = _entry("5A" + "a" * 44, 0.80)
-        chall = _entry("5B" + "b" * 44, 0.795, first_seen=_T0 + timedelta(minutes=1))
+        champ = _entry("5A" + "a" * 44, 0.80).model_copy(update={"bench_version": 8})
+        chall = _entry(
+            "5B" + "b" * 44, 0.795, first_seen=_T0 + timedelta(minutes=1)
+        ).model_copy(update={"bench_version": 8})
 
         async def _score(**kw: Any) -> ScoreReport:
             return self._seeded_report(kw["seed"], 0.8)
@@ -4355,7 +4283,15 @@ class TestContestedDethroneConfirmation:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
-                bench_version=DEFAULT_BENCH_VERSION,
+                bench_version=8,
+                screening_policy_version=9,
+                screened_image_url="https://signed.example/image.tar",
+                screened_image_sha256="12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "34" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
             )
         )
         w = self._worker(dittobench, platform)
@@ -4387,16 +4323,17 @@ class TestContestedDethroneConfirmation:
         from ditto.validator.crn import confirmation_seeds
 
         champ_id = _entry("5A" + "a" * 44, 0.80).agent_id
-        seeds = confirmation_seeds(
-            [str(champ_id)], version=DEFAULT_BENCH_VERSION, count=3
-        )
+        seeds = confirmation_seeds([str(champ_id)], version=8, count=3)
         champ = _entry("5A" + "a" * 44, 0.80, agent_id=champ_id).model_copy(
             update={
+                "bench_version": 8,
                 "confirmation_seeds": seeds,
                 "confirmation_composites": [0.80, 0.80, 0.80],
             }
         )
-        entrant = _entry("5C" + "c" * 44, 0.795, first_seen=_T0 + timedelta(minutes=2))
+        entrant = _entry(
+            "5C" + "c" * 44, 0.795, first_seen=_T0 + timedelta(minutes=2)
+        ).model_copy(update={"bench_version": 8})
 
         async def _score(**kw: Any) -> ScoreReport:
             return self._seeded_report(kw["seed"], 0.79)
@@ -4411,7 +4348,15 @@ class TestContestedDethroneConfirmation:
                 sha256="ab" * 32,
                 download_url="https://signed.example/x.tar.gz",
                 expires_at=datetime.now(UTC),
-                bench_version=DEFAULT_BENCH_VERSION,
+                bench_version=8,
+                screening_policy_version=9,
+                screened_image_url="https://signed.example/image.tar",
+                screened_image_sha256="12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "34" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
             )
         )
         w = self._worker(dittobench, platform)

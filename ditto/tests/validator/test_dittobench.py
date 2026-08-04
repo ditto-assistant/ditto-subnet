@@ -29,7 +29,6 @@ from ditto.validator.dittobench import (
     DittobenchClient,
     DittobenchProgressSnapshot,
     InferenceBrokerSession,
-    _parse_v7_calibration,
     _sandbox_infrastructure_failure_code,
     safe_progress_snapshot,
 )
@@ -221,23 +220,20 @@ def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
         (200, _REVISION, [2, 3, 4, 5, 6], "unreachable", ()),
         (200, _REVISION, [5], "unreachable", ()),
         (200, _REVISION, [6], "unreachable", ()),
-        # v7 stays dark unless the scorer also supplies its reviewed manifest
-        # digest and exact provider/profile/model route identities.
         (200, _REVISION, [2, 3, 4, 5, 6, 7], "unreachable", ()),
-        # V8 is an understood, backroom-gated capability; v7 still needs its
-        # exact calibration identity before it can be advertised.
+        # A scorer that still advertises retired contracts is rejected.
         (
             200,
             _REVISION,
             [2, 3, 4, 5, 6, 7, 8],
-            "fresh_verified",
-            (8,),
+            "unreachable",
+            (),
         ),
         # Unknown historical/gap versions remain malformed.
         (200, _REVISION, [1, 2, 3, 4, 5, 6], "unreachable", ()),
         (200, _REVISION, [8], "fresh_verified", (8,)),
         (200, "cd" * 20, [8], "identity_mismatch", ()),
-        (404, _REVISION, [2, 3], "legacy_v2", ()),
+        (404, _REVISION, [2, 3], "unreachable", ()),
         (503, _REVISION, [2, 3], "unreachable", ()),
     ],
 )
@@ -280,7 +276,7 @@ async def test_future_scorer_version_preserves_negotiated_run_capacity() -> None
             json={
                 "software_version": "0.22.0",
                 "source_revision": _REVISION,
-                "supported_bench_versions": [2, 3, 4, 5, 6, 7, 8],
+                "supported_bench_versions": [8, 9],
                 "full_run_capacity": 2,
             },
         )
@@ -299,31 +295,13 @@ async def test_future_scorer_version_preserves_negotiated_run_capacity() -> None
     assert client.full_run_capacity == 2
 
 
-# Verbatim `/v1/capabilities` body from the released v0.29.4 scorer image
-# (ghcr.io/ditto-assistant/dittobench-api-sandbox@sha256:194e92de42f5…), built
-# from dittobench-api ecfac4cf. Copied exactly: the whole outage was a shape
-# drift between this document and the validator's reader, so a hand-written
-# approximation of it would not have caught the bug and will not catch the next
-# one.
+# Current v8-only scorer capability shape.
 _LIVE_CAPABILITIES: dict[str, Any] = {
     "software_version": "0.29.4",
     "source_revision": "ecfac4cf15fbf46a5965677eaf0a9393d0f06cd8",
-    "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+    "supported_bench_versions": [8],
     "full_run_capacity": 1,
     "memory_phase_capacity": 1,
-    "v7_calibration": {
-        "manifest_sha256": (
-            "b8c11eff829c4c85b4b1af4f95135e4b5c26da01c8b88f72f726dca26d03d9a7"
-        ),
-        "supported_routes": [
-            {
-                "provider": "openrouter",
-                "profile_revision": "openrouter-route-a471cd87ae7df5b9-v1",
-                "model": "openai/gpt-oss-20b",
-            }
-        ],
-        "provenance": "reviewed-measured",
-    },
     "source_revision_origin": "binary",
     "source_revision_mismatch": False,
     "software_version_origin": "binary",
@@ -331,15 +309,7 @@ _LIVE_CAPABILITIES: dict[str, Any] = {
 
 
 @pytest.mark.asyncio
-async def test_live_released_scorer_advertises_v7() -> None:
-    """The launch blocker, reproduced from the exact payload the fleet serves.
-
-    Both managed validators ran precisely this scorer — correct digest, correct
-    revision, binary-stamped — and still advertised only [2,3,4,5,6] while
-    reporting ``fresh_verified`` and ``healthy``. The reader copied the whole
-    ``v7_calibration`` object into a signed model that forbids extras, so the
-    scorer's descriptive ``provenance`` key silently disabled v7 fleet-wide.
-    """
+async def test_live_released_scorer_advertises_only_v8() -> None:
 
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_LIVE_CAPABILITIES)
@@ -356,66 +326,13 @@ async def test_live_released_scorer_advertises_v7() -> None:
         observed = await client.scorer_benchmark_capability(_stack(revision))
 
     assert observed.status == "fresh_verified"
-    assert observed.supported_bench_versions == (7,)
-    assert observed.v7_calibration is not None
-    assert observed.v7_calibration.manifest_sha256 == (
-        "b8c11eff829c4c85b4b1af4f95135e4b5c26da01c8b88f72f726dca26d03d9a7"
-    )
+    assert observed.supported_bench_versions == (8,)
+    assert observed.v7_calibration is None
     assert client.scorer_identity_fault is None
 
 
-def test_descriptive_calibration_metadata_never_disables_v7() -> None:
-    """Only the signed identity is read; the rest is the scorer's business.
-
-    The scorer's capability document is a superset of the identity the
-    validator signs. A field it adds to describe itself must not be able to
-    take the whole fleet off the active benchmark.
-    """
-    live = _LIVE_CAPABILITIES["v7_calibration"]
-    parsed = _parse_v7_calibration(live)
-    assert parsed is not None
-    assert parsed.manifest_sha256 == live["manifest_sha256"]
-
-    # A future descriptive key, and a future descriptive key on a route, must
-    # both be ignored rather than fail the whole advertisement.
-    widened = {
-        **live,
-        "measured_at": "2026-07-25T01:32:00Z",
-        "supported_routes": [
-            {**live["supported_routes"][0], "measured_tokens_per_second": 42}
-        ],
-    }
-    assert _parse_v7_calibration(widened) == parsed
-
-
-@pytest.mark.parametrize(
-    "broken",
-    [
-        pytest.param({"supported_routes": []}, id="no-routes"),
-        pytest.param({"manifest_sha256": "not-a-digest"}, id="bad-manifest"),
-        pytest.param({"manifest_sha256": None}, id="missing-manifest"),
-        pytest.param(
-            {"supported_routes": [{"provider": "openrouter"}]}, id="partial-route"
-        ),
-        pytest.param({"supported_routes": ["openrouter"]}, id="route-not-an-object"),
-    ],
-)
-def test_incomplete_calibration_identity_still_fails_closed(
-    broken: dict[str, Any],
-) -> None:
-    """Projection must not become permissiveness.
-
-    Every field the validator signs is still required, and still required to be
-    well formed; only fields it does not sign are ignored.
-    """
-    assert _parse_v7_calibration(
-        {**_LIVE_CAPABILITIES["v7_calibration"], **broken}
-    ) is (None)
-
-
 @pytest.mark.asyncio
-async def test_unreadable_calibration_is_reported_not_silently_dropped() -> None:
-    """Dropping v7 is correct; dropping it quietly is what hid this for hours."""
+async def test_retired_calibration_metadata_is_ignored() -> None:
 
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -437,10 +354,9 @@ async def test_unreadable_calibration_is_reported_not_silently_dropped() -> None
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         observed = await client.scorer_benchmark_capability(_stack(revision))
 
-    assert observed.status == "unreachable"
-    assert observed.supported_bench_versions == ()
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (8,)
     assert observed.v7_calibration is None
-    assert client._v7_calibration_rejected is True
 
 
 # --- Scorer liveness probe (heartbeat protocol v15) -------------------------
@@ -476,11 +392,8 @@ async def _observe(
 async def test_a_sidecar_that_404s_is_not_mistaken_for_an_old_scorer() -> None:
     """The TAO.com outage.
 
-    Its dittobench-api answered 404 on ``/v1/capabilities``, which is also
-    exactly what a genuine pre-capabilities scorer answers. The validator
-    reported ``legacy_v2`` with every identity field null and kept taking
-    leases. The status still fails closed the same way; what is new is that the
-    heartbeat now carries what the request actually did.
+    Its dittobench-api answered 404 on ``/v1/capabilities``. The validator must
+    report the scorer as unreachable and carry the exact request evidence.
     """
 
     def handler(_: httpx.Request) -> httpx.Response:
@@ -488,7 +401,7 @@ async def test_a_sidecar_that_404s_is_not_mistaken_for_an_old_scorer() -> None:
 
     observed = await _observe(handler, times=3)
 
-    assert observed.status == "legacy_v2"
+    assert observed.status == "unreachable"
     assert observed.probe is not None
     assert observed.probe.outcome == "http_error"
     assert observed.probe.http_status == 404
@@ -564,14 +477,7 @@ async def test_an_answer_this_validator_cannot_use_says_why(
 
 @pytest.mark.asyncio
 async def test_an_extra_descriptive_field_still_reads_as_fully_served() -> None:
-    """The regression that would have caught the v7 outage.
-
-    The live scorer's capability document carries a ``provenance`` key the
-    validator does not sign. Reading around it is the fix that landed in #248;
-    this pins the reporting half. An unknown field must not narrow the
-    advertisement, and it must not make the probe look like anything other than
-    a clean, fully readable answer.
-    """
+    """Unknown descriptive fields must not narrow the v8 advertisement."""
 
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -579,18 +485,14 @@ async def test_an_extra_descriptive_field_still_reads_as_fully_served() -> None:
             json={
                 **_LIVE_CAPABILITIES,
                 "measured_at": "2026-07-25T01:32:00Z",
-                "v7_calibration": {
-                    **cast(dict, _LIVE_CAPABILITIES["v7_calibration"]),
-                    "provenance": "reviewed-measured",
-                    "measured_tokens_per_second": 42,
-                },
+                "provenance": "reviewed-measured",
             },
         )
 
     observed = await _observe(handler)
 
     assert observed.status == "fresh_verified"
-    assert observed.supported_bench_versions == (7,)
+    assert observed.supported_bench_versions == (8,)
     assert observed.probe is not None
     assert observed.probe.outcome == "served"
     assert observed.probe.reason is None
@@ -599,13 +501,7 @@ async def test_an_extra_descriptive_field_still_reads_as_fully_served() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_narrowed_advertisement_never_reads_as_a_clean_success() -> None:
-    """The other half of the v7 outage: green status, missing capability.
-
-    Every other signal stayed healthy while v7 quietly vanished fleet-wide.
-    Now the same heartbeat reports that the reply was only partly readable, and
-    names the part.
-    """
+async def test_retired_metadata_does_not_narrow_v8_advertisement() -> None:
 
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -618,15 +514,11 @@ async def test_a_narrowed_advertisement_never_reads_as_a_clean_success() -> None
 
     observed = await _observe(handler)
 
-    assert observed.status == "unreachable"
-    assert observed.supported_bench_versions == ()
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (8,)
     assert observed.probe is not None
-    assert observed.probe.outcome == "unreadable"
-    assert observed.probe.reason == "calibration_unreadable"
-    # It answered, but it has never served a document this validator could read
-    # whole, so it must not claim to have.
-    assert observed.probe.last_served_at is None
-    assert observed.probe.consecutive_failures == 1
+    assert observed.probe.outcome == "served"
+    assert observed.probe.reason is None
 
 
 @pytest.mark.asyncio
@@ -678,7 +570,7 @@ async def test_mock_mode_reports_that_it_observed_nothing() -> None:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         observed = await client.scorer_benchmark_capability(_stack())
 
-    assert observed.status == "legacy_v2"
+    assert observed.status == "unreachable"
     assert observed.probe is not None
     assert observed.probe.outcome == "not_probed"
     assert observed.probe.http_status is None
@@ -687,7 +579,7 @@ async def test_mock_mode_reports_that_it_observed_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_v7_capability_propagates_exact_calibration_identity() -> None:
+async def test_v7_calibration_is_not_propagated_into_active_capability() -> None:
     routes = [
         {
             "provider": "wandb",
@@ -707,7 +599,7 @@ async def test_v7_capability_propagates_exact_calibration_identity() -> None:
             json={
                 "software_version": "1.2.3",
                 "source_revision": _REVISION,
-                "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+                "supported_bench_versions": [8],
                 "full_run_capacity": 2,
                 "v7_calibration": {
                     "manifest_sha256": "12" * 32,
@@ -725,13 +617,8 @@ async def test_v7_capability_propagates_exact_calibration_identity() -> None:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         observed = await client.scorer_benchmark_capability(_stack())
 
-    assert observed.supported_bench_versions == (7,)
-    assert observed.v7_calibration is not None
-    assert observed.v7_calibration.manifest_sha256 == "12" * 32
-    assert [route.provider for route in observed.v7_calibration.supported_routes] == [
-        "amazon-bedrock",
-        "wandb",
-    ]
+    assert observed.supported_bench_versions == (8,)
+    assert observed.v7_calibration is None
 
 
 _V7_CALIBRATION = {
@@ -752,7 +639,7 @@ _STAMPED = {
     "source_revision": _REVISION,
     "source_revision_origin": "binary",
     "source_revision_mismatch": False,
-    "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+    "supported_bench_versions": [8],
     "v7_calibration": _V7_CALIBRATION,
 }
 
@@ -787,7 +674,7 @@ async def test_environment_asserted_revision_from_a_stamping_pin_is_stale() -> N
         {
             "software_version": "0.29.3",
             "source_revision": _REVISION,
-            "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+            "supported_bench_versions": [8],
             "v7_calibration": _V7_CALIBRATION,
         }
     )
@@ -827,8 +714,8 @@ async def test_binary_derived_revision_matching_the_pin_is_verified() -> None:
         observed = await client.scorer_benchmark_capability(_stack())
 
     assert observed.status == "fresh_verified"
-    assert observed.supported_bench_versions == (7,)
-    assert observed.v7_calibration is not None
+    assert observed.supported_bench_versions == (8,)
+    assert observed.v7_calibration is None
     assert client.scorer_identity_fault is None
     assert client.full_run_capacity == 2
 
@@ -845,7 +732,7 @@ async def test_a_pin_that_cannot_stamp_keeps_the_previous_behaviour() -> None:
         {
             "software_version": "0.29.3",
             "source_revision": _REVISION,
-            "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+            "supported_bench_versions": [8],
             "v7_calibration": _V7_CALIBRATION,
         },
         require_binary_provenance=False,
@@ -854,7 +741,7 @@ async def test_a_pin_that_cannot_stamp_keeps_the_previous_behaviour() -> None:
         observed = await client.scorer_benchmark_capability(_stack())
 
     assert observed.status == "fresh_verified"
-    assert observed.supported_bench_versions == (7,)
+    assert observed.supported_bench_versions == (8,)
     assert client.scorer_identity_fault is None
 
 
@@ -893,7 +780,7 @@ async def test_recovered_scorer_clears_the_reported_fault() -> None:
         {
             "software_version": "0.29.3",
             "source_revision": _REVISION,
-            "supported_bench_versions": [2, 3, 4, 5, 6, 7],
+            "supported_bench_versions": [8],
             "v7_calibration": _V7_CALIBRATION,
         }
     )
@@ -914,7 +801,7 @@ async def test_recovered_scorer_clears_the_reported_fault() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [7, 8])
+@pytest.mark.parametrize("bench_version", [8])
 async def test_current_versions_use_versioned_route_and_bind_request(
     bench_version: int,
 ) -> None:
@@ -980,7 +867,7 @@ async def test_submit_admission_failure_is_validator_infrastructure(
         ):
             await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
                 tarball_url="https://example.test/agent.tgz",
-                bench_version=7,
+                bench_version=8,
                 dataset_sha256="12" * 32,
                 screened_image_url="https://example.test/image.tar",
                 screened_image_sha256="34" * 32,
@@ -1065,7 +952,7 @@ async def test_submit_does_not_forward_model_provider_credentials() -> None:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         run_id = await client._submit(
             tarball_url="https://example.test/agent.tgz",
-            bench_version=7,
+            bench_version=8,
             dataset_sha256="12" * 32,
             screened_image_url="https://example.test/image.tar",
             screened_image_sha256="34" * 32,
@@ -1088,7 +975,7 @@ async def test_submit_does_not_forward_model_provider_credentials() -> None:
             "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
         ),
         "dataset_sha256": "12" * 32,
-        "bench_version": 7,
+        "bench_version": 8,
     }
 
 
@@ -1114,7 +1001,7 @@ async def test_v7_submit_echoes_exact_ticket_inference_identity() -> None:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         await client._submit(
             tarball_url="https://example.test/agent.tgz",
-            bench_version=7,
+            bench_version=8,
             seed=1,
             dataset_sha256="12" * 32,
             screened_image_url="https://example.test/image.tar",
@@ -1150,7 +1037,7 @@ async def test_v7_submit_rejects_incomplete_ticket_inference_identity() -> None:
         with pytest.raises(DittobenchError, match="identity must be complete"):
             await client._submit(
                 tarball_url="https://example.test/agent.tgz",
-                bench_version=7,
+                bench_version=8,
                 dataset_sha256="12" * 32,
                 screened_image_url="https://example.test/image.tar",
                 screened_image_sha256="34" * 32,
@@ -1180,7 +1067,7 @@ async def test_submit_forwards_verified_screened_image_contract() -> None:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         await client._submit(
             tarball_url="https://example.test/agent.tgz",
-            bench_version=7,
+            bench_version=8,
             tarball_sha256="ab" * 32,
             dataset_sha256="56" * 32,
             screened_image_url="https://example.test/image.tar",
@@ -1219,7 +1106,7 @@ async def test_submit_rejects_partial_screened_image_contract_before_request() -
         with pytest.raises(DittobenchError, match="must be complete"):
             await client._submit(
                 tarball_url="https://example.test/agent.tgz",
-                bench_version=7,
+                bench_version=8,
                 screened_image_url="https://example.test/image.tar",
             )
 
@@ -1245,7 +1132,7 @@ async def test_submit_rejects_empty_screened_image_identity(empty_field: str) ->
         with pytest.raises(DittobenchError, match="cannot be empty"):
             await client._submit(
                 tarball_url="https://example.test/agent.tgz",
-                bench_version=7,
+                bench_version=8,
                 screened_image_url=(
                     "" if empty_field == "url" else "https://example.test/image.tar"
                 ),
@@ -1282,7 +1169,7 @@ async def test_timeout_cancels_background_run() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         with pytest.raises(DittobenchError, match="did not finish"):
-            await client._poll("run-1", expected_bench_version=7)
+            await client._poll("run-1", expected_bench_version=8)
 
     assert methods == ["GET", "DELETE"]
 
@@ -1302,13 +1189,13 @@ async def test_timeout_tolerates_older_scorer_without_cancel_route() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
         with pytest.raises(DittobenchError, match="did not finish"):
-            await client._poll("run-1", expected_bench_version=7)
+            await client._poll("run-1", expected_bench_version=8)
 
 
 def _done_job() -> dict[str, object]:
     return {
         "status": "done",
-        "bench_version": 7,
+        "bench_version": 8,
         "run_id": "private-run-id",
         "seed": 42,
         "error": "private error body",
@@ -1323,7 +1210,7 @@ def _done_job() -> dict[str, object]:
             "n": 114,
             "generated_at": "2026-07-14T12:00:00Z",
             "per_case": [],
-            "details": {"bench_version": 7},
+            "details": {"bench_version": 8},
         },
     }
 
@@ -1339,7 +1226,7 @@ def _poll_config() -> SimpleNamespace:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("expected", "job_version", "report_version"),
-    [(7, 8, 7), (7, 7, 8), (8, 7, 8), (8, 8, 7)],
+    [(8, 7, 8), (8, 8, 7)],
 )
 async def test_current_poll_rejects_job_or_report_version_mismatch(
     expected: int, job_version: int, report_version: int
@@ -1359,7 +1246,7 @@ async def test_current_poll_rejects_job_or_report_version_mismatch(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [7, 8])
+@pytest.mark.parametrize("bench_version", [8])
 async def test_current_poll_returns_version_bound_report(bench_version: int) -> None:
     payload = _done_job()
     payload["bench_version"] = bench_version
@@ -1408,7 +1295,7 @@ async def test_v2_poll_requires_explicit_matching_versions(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(cast(Any, _poll_config()), http)
         with pytest.raises(DittobenchError, match="benchmark version mismatch"):
-            await client._poll("run-v2", expected_bench_version=7)
+            await client._poll("run-v2", expected_bench_version=8)
 
 
 @pytest.mark.asyncio
@@ -1432,7 +1319,7 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(ValidatorInfrastructureError, match="embedding"):
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-                "run-1", expected_bench_version=7
+                "run-1", expected_bench_version=8
             )
 
 
@@ -1478,7 +1365,7 @@ async def test_sandbox_resource_failure_is_retryable_infrastructure(
         expected_message = "memory allowance" if code == "sandbox_oom" else code
         with pytest.raises(expected_error, match=expected_message) as caught:
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-                "run-1", expected_bench_version=7
+                "run-1", expected_bench_version=8
             )
     assert private_marker not in str(caught.value)
     # The scorer's own classifier survives the raise. All five codes collapse
@@ -1510,7 +1397,7 @@ async def test_relay_recovery_exhaustion_reaches_failure_detail() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(ValidatorInfrastructureError) as caught:
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-                "run-1", expected_bench_version=7
+                "run-1", expected_bench_version=8
             )
     assert caught.value.code == ("model_relay_unavailable:provider_recovery_exhausted")
     assert failure_detail(caught.value) == caught.value.code
@@ -1672,7 +1559,7 @@ async def test_agent_attributable_inference_failures_stay_the_agents(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(DittobenchError) as raised:
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-                "run-1", expected_bench_version=7
+                "run-1", expected_bench_version=8
             )
         assert not isinstance(raised.value, ValidatorInfrastructureError)
 
@@ -1728,7 +1615,7 @@ async def test_unknown_sandbox_failure_code_is_not_retryable() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(DittobenchError, match="miner runtime exited"):
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-                "run-1", expected_bench_version=7
+                "run-1", expected_bench_version=8
             )
 
 
@@ -1777,7 +1664,7 @@ async def test_screened_image_verification_failure_stays_the_agents(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(DittobenchError):
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-                "run-1", expected_bench_version=7
+                "run-1", expected_bench_version=8
             )
 
 
@@ -1793,7 +1680,7 @@ async def test_poll_callback_receives_only_allowlisted_snapshot() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         report = await DittobenchClient(cast(Any, _poll_config()), http)._poll(
-            "private-run-id", progress_callback=progress, expected_bench_version=7
+            "private-run-id", progress_callback=progress, expected_bench_version=8
         )
 
     assert report.n == 114
@@ -1839,7 +1726,7 @@ async def test_progress_callback_failure_cannot_abort_completed_report() -> None
         report = await DittobenchClient(cast(Any, _poll_config()), http)._poll(
             "private-run-id",
             progress_callback=broken_callback,
-            expected_bench_version=7,
+            expected_bench_version=8,
         )
 
     assert report.run_id == "private-run-id"
@@ -1874,7 +1761,7 @@ async def test_poll_fetches_transcript_and_binds_digest() -> None:
         transport=_transcript_handler(declared, _TRANSCRIPT)
     ) as http:
         client = DittobenchClient(cast(Any, _poll_config()), http)
-        report = await client._poll("private-run-id", expected_bench_version=7)
+        report = await client._poll("private-run-id", expected_bench_version=8)
 
     assert isinstance(report.details, dict)
     assert report.details["transcript_sha256"] == declared
@@ -1890,7 +1777,7 @@ async def test_poll_drops_transcript_on_digest_mismatch() -> None:
         transport=_transcript_handler("ab" * 32, _TRANSCRIPT)
     ) as http:
         client = DittobenchClient(cast(Any, _poll_config()), http)
-        report = await client._poll("private-run-id", expected_bench_version=7)
+        report = await client._poll("private-run-id", expected_bench_version=8)
 
     # The score itself never depends on the artifact: the run still parses, but
     # no unverified digest is bound into the report.
@@ -1907,7 +1794,7 @@ async def test_poll_without_transcript_keeps_legacy_shape() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(cast(Any, _poll_config()), http)
-        report = await client._poll("private-run-id", expected_bench_version=7)
+        report = await client._poll("private-run-id", expected_bench_version=8)
 
-    assert report.details == {"bench_version": 7}
+    assert report.details == {"bench_version": 8}
     assert client.last_transcript is None

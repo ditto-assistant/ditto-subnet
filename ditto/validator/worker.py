@@ -129,6 +129,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_ACTIVE_BENCH_VERSION = 8
+
 _DRAIN_HEARTBEAT_SECONDS = 5.0
 _BOOTSTRAP_SELF_RESUME_SECONDS = 30.0
 
@@ -335,7 +337,7 @@ class _SweepOutcome:
 class _SlotState:
     slot_id: str
     active_agent_id: UUID | None = None
-    bench_version: int = DEFAULT_BENCH_VERSION
+    bench_version: int = _ACTIVE_BENCH_VERSION
     ticket_deadline: datetime | None = None
     run_token: str | None = None
     progress: BenchmarkProgress | None = None
@@ -416,7 +418,7 @@ class ValidatorWorker:
         # entries scored below this are stale and re-evaluated before the fold.
         # Starts at the baseline so a just-booted validator that has not scored
         # anything yet never mistakes the whole ledger for stale.
-        self._current_bench_version = DEFAULT_BENCH_VERSION
+        self._current_bench_version = _ACTIVE_BENCH_VERSION
         self._last_heartbeat_timestamp = 0
         self._heartbeat_clock = heartbeat_clock or _new_heartbeat_clock()
         self._pending_heartbeat_state: ValidatorRuntimeState | None = None
@@ -1114,7 +1116,7 @@ class ValidatorWorker:
             # validator observed nothing" stays distinguishable from "this
             # validator is too old to observe anything".
             scorer_benchmarks = ScorerBenchmarkCapability(
-                status="legacy_v2",
+                status="unreachable",
                 supported_bench_versions=(),
                 probe=ScorerLivenessProbe(outcome="not_probed", observed_at=timestamp),
             )
@@ -1470,7 +1472,7 @@ class ValidatorWorker:
         self._benchmark_progress = None
         self._last_progress_heartbeat_monotonic = None
         self._last_progress_bucket = None
-        self._slot_state().bench_version = DEFAULT_BENCH_VERSION
+        self._slot_state().bench_version = _ACTIVE_BENCH_VERSION
 
     async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.
@@ -1752,11 +1754,18 @@ class ValidatorWorker:
                 received_seeds = tuple(
                     dataset.seed for dataset in job.confirmation_datasets
                 )
-                if (
-                    job.bench_version is not None
-                    and job.bench_version >= 3
-                    and not received_seeds
-                ):
+                if job.bench_version != _ACTIVE_BENCH_VERSION:
+                    logger.warning(
+                        "top-five confirmation received unsupported benchmark "
+                        "version agent=%s version=%r",
+                        entry.agent_id,
+                        job.bench_version,
+                    )
+                    await self._report_ticket_failed(
+                        job, "infrastructure", "unsupported_bench_version"
+                    )
+                    continue
+                if not received_seeds:
                     logger.warning(
                         "top-five confirmation dataset contract missing pins "
                         "agent=%s local_plan=%s",
@@ -1778,18 +1787,7 @@ class ValidatorWorker:
                         job, "infrastructure", "confirmation_dataset_pins_duplicated"
                     )
                     continue
-                datasets = (
-                    job.confirmation_datasets
-                    if job.confirmation_datasets
-                    else [
-                        ConfirmationDatasetPin(
-                            seed=seed,
-                            dataset_sha256="0" * 64,
-                            run_size="full",
-                        )
-                        for seed in expected_seeds
-                    ]
-                )
+                datasets = job.confirmation_datasets
                 # Set before the claim, not after: ``_begin_active_ticket``
                 # occupies the slot as its first act, so a failure part-way
                 # through must still leave the slot clearable below.
@@ -1911,16 +1909,8 @@ class ValidatorWorker:
                         agent_id,
                         expected_sha256,
                         seed=dataset.seed,
-                        dataset_sha256=(
-                            dataset.dataset_sha256
-                            if bench_version is not None and bench_version >= 3
-                            else None
-                        ),
-                        run_size=(
-                            dataset.run_size
-                            if bench_version is not None and bench_version >= 3
-                            else None
-                        ),
+                        dataset_sha256=dataset.dataset_sha256,
+                        run_size=dataset.run_size,
                         bench_version=bench_version,
                         progress_callback=self._on_dittobench_progress,
                         inference_session_id=inference_session_id,
@@ -2380,19 +2370,13 @@ class ValidatorWorker:
     async def _activate_ticket_inference(
         self, job: JobResponse
     ) -> InferenceBrokerSession | None:
-        """Exchange and bind inference for one v7 ticket.
-
-        Legacy tickets must drain before fleet-wide enforcement. They never
-        switch to the mutable platform route because doing so would change the
-        frozen v6 provider and no-think semantics mid-lease.
-        """
+        """Exchange and bind inference for an active v8 ticket."""
         bench_version = job.bench_version or DEFAULT_BENCH_VERSION
-        if bench_version < 7:
-            if getattr(self._config, "inference_proxy_required", False) is True:
-                raise ValidatorInfrastructureError(
-                    "legacy benchmark ticket remained after platform inference "
-                    "enforcement; drain or expire it before cutover"
-                )
+        if bench_version != _ACTIVE_BENCH_VERSION:
+            raise ValidatorInfrastructureError(
+                f"unsupported benchmark version {bench_version!r}; only v8 is active"
+            )
+        if self._config.dittobench_mock:
             return None
         if job.inference is None:
             raise ValidatorInfrastructureError(
@@ -2544,13 +2528,14 @@ class ValidatorWorker:
         than lend the ticket a signature. Tickets without a block hash
         (pre-derivation agents) proceed as before.
         """
-        if (
-            job.bench_version is not None
-            and job.bench_version >= 3
-            and (
-                job.minimum_screening_policy_version != 9
-                or job.requires_screened_image is not True
+        if job.bench_version != _ACTIVE_BENCH_VERSION:
+            raise PlatformError(
+                f"unsupported benchmark version {job.bench_version!r}; "
+                "only v8 is active"
             )
+        if (
+            job.minimum_screening_policy_version != 9
+            or job.requires_screened_image is not True
         ):
             raise PlatformError(
                 f"benchmark v{job.bench_version} ticket did not declare its "
@@ -2637,10 +2622,8 @@ class ValidatorWorker:
     ) -> ScoreReport:
         """Run one re-score while managing its benchmark heartbeat.
 
-        ``seed`` pins the dataset seed. ``dataset_sha256`` (from the ticket)
-        selects the canonical /v1/score path, where the engine regenerates that
-        exact dataset and fails on a hash mismatch (tamper-evidence). Historical
-        unticketed sweeps may pass a common ``seed`` (CRN) without a dataset hash.
+        ``seed`` and ``dataset_sha256`` pin the v8 dataset. The scorer regenerates
+        that exact dataset and fails on a hash mismatch (tamper-evidence).
         """
         await self._report_heartbeat("running_benchmark")
         heartbeat_stop = asyncio.Event()
@@ -2686,6 +2669,10 @@ class ValidatorWorker:
         ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
+        if bench_version != _ACTIVE_BENCH_VERSION:
+            raise PlatformError(
+                f"unsupported benchmark version {bench_version!r}; only v8 is active"
+            )
         artifact = await self._platform.get_artifact(agent_id)
         # The caller and the artifact response both carry the registered digest; a
         # mismatch means the platform is inconsistent about which blob this agent
@@ -2703,13 +2690,9 @@ class ValidatorWorker:
                 f"ticket={bench_version!r} artifact={artifact.bench_version!r}"
             )
         if (
-            bench_version is not None
-            and bench_version >= 3
-            and (
-                artifact.screening_policy_version is None
-                or artifact.screening_policy_version < 9
-                or artifact.screened_image_url is None
-            )
+            artifact.screening_policy_version is None
+            or artifact.screening_policy_version < 9
+            or artifact.screened_image_url is None
         ):
             raise PlatformError(
                 f"benchmark v{bench_version} artifact for agent {agent_id} is "
@@ -2735,17 +2718,6 @@ class ValidatorWorker:
             inference_ticket_deadline=inference_ticket_deadline,
             ticket_deadline=ticket_deadline,
         )
-        details = report.details
-        bench_version = (
-            details.get("bench_version") if isinstance(details, dict) else None
-        )
-        # Learn the scorer's current bench_version so the re-score sweep knows
-        # which ledger entries are stale.
-        if (
-            isinstance(bench_version, int)
-            and bench_version > self._current_bench_version
-        ):
-            self._current_bench_version = bench_version
         return report
 
     async def _submit_report(
@@ -2772,7 +2744,7 @@ class ValidatorWorker:
             )
         # Offline reproducibility: a transcript digest in the report details is
         # bound into the signature, so the artifact published below cannot be
-        # swapped after the fact. Reports without one keep the legacy payload.
+        # swapped after the fact.
         transcript_sha256 = (
             report.details.get("transcript_sha256")
             if isinstance(report.details, dict)

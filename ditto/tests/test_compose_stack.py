@@ -153,11 +153,11 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     assert "--dport 11435 -j ACCEPT" not in entrypoint
 
 
-def test_sandbox_egress_policy_installs_before_rootless_dockerd_starts() -> None:
+def test_sandbox_egress_policy_installs_before_dockerd_starts() -> None:
     entrypoint = SANDBOX_ENTRYPOINT_PATH.read_text()
 
-    policy_install = 'iptables -I OUTPUT 1 -m owner --uid-owner "$executor_uid"'
-    daemon_start = "exec su-exec rootless env"
+    policy_install = "iptables -I DOCKER-USER 1 -i ditto-sandbox0"
+    daemon_start = "exec dockerd-entrypoint.sh"
     assert policy_install in entrypoint
     assert daemon_start in entrypoint
     assert entrypoint.index(policy_install) < entrypoint.index(daemon_start)

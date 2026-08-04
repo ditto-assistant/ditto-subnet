@@ -1,7 +1,7 @@
 """Async client for the hosted dittobench-api scoring engine.
 
-Drives the run_size pipeline over HTTP: ``POST /v1/submit`` with the platform's
-presigned ``tarball_url`` (mode B), then polls
+Drives the v8 run-size pipeline over HTTP: ``POST /v2/score`` with the platform's
+presigned ``tarball_url`` and pinned dataset, then polls
 ``GET /v1/runs/{id}`` until the job is ``done`` and parses the ``ScoreReport``.
 
 The returned report is the platform :class:`ScoreReport` shape (the dittobench
@@ -31,12 +31,10 @@ from ditto.api_models.benchmark_progress import (
 )
 from ditto.api_models.validator import ScoreReport
 from ditto.api_models.validator_capabilities import (
-    InferenceCalibrationRoute,
     ScorerBenchmarkCapability,
     ScorerLivenessProbe,
     ScorerProbeOutcome,
     ScorerProbeReason,
-    V7InferenceCalibration,
     ValidatorStackIdentity,
 )
 from ditto.validator.config import LEASE_REPORT_MARGIN_SECONDS, run_budget_seconds
@@ -75,14 +73,9 @@ _STABLE_COUNT_STATUSES = {"running", "waiting_for_relay", "scoring", "done"}
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 
-# Benchmark versions this validator knows how to drive. The allowlist is
-# fail-closed: an advertisement or ticket naming anything outside it is refused
-# rather than scored blind. Versions >= 3 share one scorer contract (/v2/score,
-# pinned dataset, policy-9 screened image), so version-specific behaviour is
-# expressed as ``>= _SCREENED_IMAGE_BENCH_VERSION`` rather than per-version arms.
-_SUPPORTED_BENCH_VERSIONS = (7, 8)
-_RETIRED_BENCH_VERSIONS = frozenset(range(2, 7))
-_SCREENED_IMAGE_BENCH_VERSION = 3
+# The active validator drives v8 only. Earlier contracts remain readable in
+# historical ledger data, but are never negotiated or submitted for scoring.
+_SUPPORTED_BENCH_VERSIONS = (8,)
 
 
 # Scorer identity faults. Both stop benchmark advertisement and both
@@ -101,64 +94,6 @@ _SCORER_IMAGE_STALE = "scorer_image_stale"
 # running binary. Any other value — including its absence on an older scorer —
 # means the revision is only asserted by the process environment.
 _ORIGIN_BINARY = "binary"
-
-# The exact per-route identity the validator signs. The scorer may describe a
-# route with more than this; anything outside these three fields is not part of
-# the identity and must never decide whether v7 is advertised.
-_ROUTE_IDENTITY_FIELDS = ("provider", "profile_revision", "model")
-
-
-def _parse_v7_calibration(payload: object) -> V7InferenceCalibration | None:
-    """Read the scorer's exact reviewed manifest identity, or fail closed.
-
-    Only the fields the validator actually signs are read, and they are read by
-    name. The scorer's capability document is a *superset* of the signed
-    identity: it also carries descriptive metadata — ``provenance`` today — that
-    has no field in the heartbeat model, and that model forbids extras because
-    its bytes are signed.
-
-    Copying the whole object into it therefore meant that any new descriptive
-    key silently disabled v7 for the entire fleet. That is exactly what
-    happened: the scorer began reporting ``"provenance": "reviewed-measured"``
-    alongside a perfectly valid manifest, this returned ``None``, v7 was
-    stripped from the advertisement, and the validator still reported the scorer
-    ``fresh_verified`` and ``healthy`` because every identity field matched.
-
-    Projection keeps the binding exact — an unparseable or incomplete identity
-    still fails closed — while leaving the scorer free to describe itself.
-    """
-    if not isinstance(payload, dict):
-        return None
-    raw_routes = payload.get("supported_routes")
-    if not isinstance(raw_routes, list) or not raw_routes:
-        return None
-    if not all(isinstance(route, dict) for route in raw_routes):
-        return None
-    try:
-        routes = tuple(
-            sorted(
-                (
-                    InferenceCalibrationRoute.model_validate(
-                        {field: route.get(field) for field in _ROUTE_IDENTITY_FIELDS}
-                    )
-                    for route in raw_routes
-                ),
-                key=lambda route: (
-                    route.provider,
-                    route.profile_revision,
-                    route.model,
-                ),
-            )
-        )
-        return V7InferenceCalibration.model_validate(
-            {
-                "manifest_sha256": payload.get("manifest_sha256"),
-                "supported_routes": routes,
-            }
-        )
-    except ValueError:
-        return None
-
 
 _SANDBOX_INFRASTRUCTURE_CODES = {
     "sandbox_oom",
@@ -344,7 +279,6 @@ class DittobenchClient:
         self._transcripts: dict[str, bytes] = {}
         # Backward-compatible diagnostic view of the most recent run.
         self.last_transcript: bytes | None = None
-        # Legacy scorers omit this field and therefore remain safely capacity=1.
         self.full_run_capacity = (
             int(getattr(config, "benchmark_capacity", 1))
             if getattr(config, "dittobench_mock", False)
@@ -356,10 +290,6 @@ class DittobenchClient:
         # ``identity_mismatch`` scorer status.
         self.scorer_identity_fault: str | None = None
         self._scorer_identity_fault_logged: str | None = None
-        # Whether the scorer offered v7 but its calibration identity could not
-        # be read. Latched so the warning is one per transition, not one per
-        # heartbeat, and cleared as soon as a readable calibration arrives.
-        self._v7_calibration_rejected = False
         # Liveness evidence for the heartbeat: when the scorer last answered
         # with a capability document this validator could read whole, and how
         # many probes have failed to get one since. Process-local by design —
@@ -515,15 +445,12 @@ class DittobenchClient:
     async def _observe_scorer_benchmark_capability(
         self, stack: ValidatorStackIdentity
     ) -> ScorerBenchmarkCapability:
-        """Observe scorer support and bind post-v2 claims to signed stack identity.
+        """Observe v8 scorer support and bind it to signed stack identity.
 
-        Legacy 404s, malformed replies, timeouts, and source mismatches advertise
-        no work. A mixed-version scorer may still report retired v2-v6 support;
-        recognize those values as transition input but never advertise or schedule
-        them. Report only the v7/v8 intersection this validator knows how to drive
-        so a forward-compatible rollout stays healthy without claiming unsupported
-        work. Unknown versions at or below this validator's current maximum remain
-        malformed and fail closed.
+        Missing routes, malformed replies, timeouts, source mismatches, and
+        pre-v8 capability claims advertise no work. Forward-version claims may
+        accompany v8, but this validator advertises only the v8 contract it can
+        drive.
 
         The revision the scorer reports is only trustworthy when it is a
         property of the running binary. ``source_revision_origin`` says which it
@@ -534,15 +461,14 @@ class DittobenchClient:
         scorer that cannot advertise the version its pinned revision is known to
         support is not running that revision. Either way the result is a
         *reported* mismatch, never a crash: the validator keeps heartbeating,
-        drops to v2, and shows up degraded instead of silently scoring on an old
-        scorer.
+        advertises no work and shows up degraded instead of scoring blind.
         """
         observed_at = int(time.time())
         if self._config.dittobench_mock:
             # Local plumbing mode performs no observation. Reporting one would
             # be an invention, so it reports that none was made.
             return ScorerBenchmarkCapability(
-                status="legacy_v2",
+                status="unreachable",
                 supported_bench_versions=(),
                 probe=self._record_scorer_probe("not_probed", observed_at=observed_at),
             )
@@ -569,12 +495,8 @@ class DittobenchClient:
                 ),
             )
         if response.status_code == 404:
-            # A genuine pre-capabilities scorer answers exactly this way, and so
-            # does a sidecar that never mounted the route. The status stays
-            # legacy_v2 -- fail closed either way -- but the probe now carries
-            # the evidence that tells the two apart.
             return ScorerBenchmarkCapability(
-                status="legacy_v2",
+                status="unreachable",
                 supported_bench_versions=(),
                 probe=self._record_scorer_probe(
                     "http_error", observed_at=observed_at, http_status=404
@@ -641,10 +563,7 @@ class DittobenchClient:
             )
         advertised_versions = tuple(sorted(set(versions)))
         if any(
-            version not in _SUPPORTED_BENCH_VERSIONS
-            and version not in _RETIRED_BENCH_VERSIONS
-            and version <= _SUPPORTED_BENCH_VERSIONS[-1]
-            for version in advertised_versions
+            version < _SUPPORTED_BENCH_VERSIONS[0] for version in advertised_versions
         ):
             return ScorerBenchmarkCapability(
                 status="unreachable",
@@ -672,36 +591,6 @@ class DittobenchClient:
                     reason="unsupported_bench_version",
                 ),
             )
-        # Set when the reply was readable but this validator had to narrow it.
-        # The advertisement below then reports less than the scorer offered, and
-        # the probe says so instead of reading as a clean success.
-        narrowed: ScorerProbeReason | None = None
-        v7_calibration = _parse_v7_calibration(payload.get("v7_calibration"))
-        if 7 in observed_versions and v7_calibration is None:
-            # Dropping v7 is the correct fail-closed action, but doing it
-            # quietly is how a whole fleet stopped advertising the active bench
-            # while every other signal stayed green. Say so, once per
-            # transition, and name the keys we actually saw.
-            self._log_v7_calibration_rejected(payload.get("v7_calibration"))
-            narrowed = "calibration_unreadable"
-            observed_versions = tuple(
-                version for version in observed_versions if version != 7
-            )
-            if not observed_versions:
-                return ScorerBenchmarkCapability(
-                    status="unreachable",
-                    supported_bench_versions=(),
-                    probe=self._record_scorer_probe(
-                        "unreadable",
-                        observed_at=observed_at,
-                        http_status=200,
-                        reason="calibration_unreadable",
-                    ),
-                )
-        elif 7 not in observed_versions:
-            v7_calibration = None
-        else:
-            self._v7_calibration_rejected = False
         expected_revision = stack.components.dittobench_api.source_revision
         fault = self._scorer_identity_fault(
             payload,
@@ -746,12 +635,10 @@ class DittobenchClient:
                 observed_at=observed_at,
                 software_version=software_version,
                 source_revision=source_revision,
-                v7_calibration=v7_calibration,
                 probe=self._record_scorer_probe(
-                    "served_degraded" if narrowed else "served",
+                    "served",
                     observed_at=observed_at,
                     http_status=200,
-                    reason=narrowed,
                 ),
             )
         except ValueError:
@@ -768,26 +655,6 @@ class DittobenchClient:
                     reason="malformed_capabilities",
                 ),
             )
-
-    def _log_v7_calibration_rejected(self, calibration: object) -> None:
-        """Report that the scorer offered v7 but its identity was unreadable.
-
-        Only field *names* are logged. The values are public identity, but the
-        names are what an operator needs to see a shape drift between the
-        scorer and this validator, which is the failure this exists to catch.
-        """
-        if self._v7_calibration_rejected:
-            return
-        self._v7_calibration_rejected = True
-        keys = sorted(calibration) if isinstance(calibration, dict) else None
-        logger.error(
-            "scorer advertises benchmark v7 but its calibration identity could "
-            "not be read; v7 will NOT be advertised (calibration fields=%s, "
-            "expected exactly manifest_sha256 + supported_routes with "
-            "provider/profile_revision/model). This validator cannot take v7 "
-            "work until the shapes agree.",
-            keys,
-        )
 
     def _scorer_identity_fault(
         self,
@@ -898,21 +765,20 @@ class DittobenchClient:
 
         ``ticket_deadline`` is the lease this run is being scored under. It
         bounds the poll independently of ``inference_ticket_deadline``, which
-        only exists for v7 and only travels to the inference broker: every
-        benchmark version has a lease to respect, so the abort must not depend
-        on whether a broker session was involved.
+        travels to the inference broker. The scoring lease is independent, so
+        the abort must not depend on whether a broker session was established.
 
         ``tarball_sha256`` (the digest the platform registered at upload) is
         forwarded so the scorer re-verifies the fetched bytes against it and
         pins the Docker build tag to the content hash.
 
         ``seed`` pins the dataset seed. ``dataset_sha256`` selects the CANONICAL
-        validator path: when set, this posts to dittobench-api **/v1/score** with
+        validator path: this posts to dittobench-api **/v2/score** with
         the platform-pinned ``seed`` + ``dataset_sha256`` (+ ``run_size``), so the
         engine regenerates that exact dataset and FAILS the run on a hash mismatch
         (tamper-evidence — every k=3 validator provably scored the platform's
-        dataset). Without ``dataset_sha256`` it uses /v1/submit (practice /
-        version-bump re-score, fresh-or-CRN seed).
+        dataset). The deprecated unversioned scoring and implicit practice
+        routes are not used.
         """
         if bench_version is None or bench_version not in _SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
@@ -1018,7 +884,7 @@ class DittobenchClient:
                     "screened_image_ref": screened_image_ref,
                 }
             )
-        elif bench_version >= _SCREENED_IMAGE_BENCH_VERSION:
+        else:
             raise DittobenchError(
                 f"benchmark v{bench_version} requires a verified screened image"
             )
@@ -1047,7 +913,7 @@ class DittobenchClient:
                         ),
                     }
                 )
-            elif bench_version >= 7:
+            else:
                 raise DittobenchError(
                     f"benchmark v{bench_version} requires ticket inference identity"
                 )
@@ -1055,21 +921,13 @@ class DittobenchClient:
             raise DittobenchError(
                 "ticket inference identity requires an inference session"
             )
-        # Canonical validator path: pin the dataset so the engine fails on a
-        # regenerated-hash mismatch. Otherwise the practice/re-score path.
-        if bench_version >= _SCREENED_IMAGE_BENCH_VERSION:
-            if not dataset_sha256:
-                raise DittobenchError(
-                    f"benchmark v{bench_version} requires a pinned dataset"
-                )
-            body["dataset_sha256"] = dataset_sha256
-            body["bench_version"] = bench_version
-            endpoint = "/v2/score"
-        elif dataset_sha256:
-            body["dataset_sha256"] = dataset_sha256
-            endpoint = "/v1/score"
-        else:
-            endpoint = "/v1/submit"
+        if not dataset_sha256:
+            raise DittobenchError(
+                f"benchmark v{bench_version} requires a pinned dataset"
+            )
+        body["dataset_sha256"] = dataset_sha256
+        body["bench_version"] = bench_version
+        endpoint = "/v2/score"
         url = f"{self._config.dittobench_api_url}{endpoint}"
         try:
             resp = await self._client.post(url, json=body)
@@ -1195,18 +1053,9 @@ class DittobenchClient:
                         else {}
                     )
                     parsed = self._parse_report(data)
-                    # The score-signature domain is version-generic: signing.py
-                    # appends ``:{bench_version}`` whenever the report carries
-                    # one. Stamp the ACTUAL scored version so v4 (and any later
-                    # bump) signs its own domain rather than v3's. v2 leaves the
-                    # field unset, keeping those reports byte-compatible with
-                    # old platforms/scorers.
-                    return (
-                        parsed.model_copy(
-                            update={"bench_version": expected_bench_version}
-                        )
-                        if expected_bench_version >= _SCREENED_IMAGE_BENCH_VERSION
-                        else parsed
+                    # Stamp the actual active contract into the signing domain.
+                    return parsed.model_copy(
+                        update={"bench_version": expected_bench_version}
                     )
                 if status == _FAILED:
                     error = str(data.get("error", "unknown"))
