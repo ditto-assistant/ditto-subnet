@@ -1,0 +1,37 @@
+[Unit]
+Description=Ditto River background-job worker
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User={{ river_worker_user }}
+Group={{ river_worker_group }}
+WorkingDirectory={{ river_worker_slot_dir }}
+ExecStart={{ river_worker_bin }} --metrics-port {{ river_worker_metrics_port }} --drain-timeout {{ river_worker_drain_timeout }} --max-kg-workers {{ river_worker_max_kg_workers }} --max-embed-workers {{ river_worker_max_embed_workers }}
+Restart=always
+RestartSec=5
+EnvironmentFile={{ river_worker_env_file }}
+Environment=METRICS_PORT={{ river_worker_metrics_port }}
+StandardOutput=append:{{ river_worker_logs_dir }}/{{ river_worker_unit }}.log
+StandardError=append:{{ river_worker_logs_dir }}/{{ river_worker_unit }}.log
+
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ river_worker_slot_dir }} {{ river_worker_logs_dir }}
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+
+# River drains in-flight jobs on SIGTERM (up to --drain-timeout); give it buffer.
+TimeoutStopSec={{ river_worker_timeout_stop_sec }}
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

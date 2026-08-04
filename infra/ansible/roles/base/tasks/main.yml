@@ -1,0 +1,58 @@
+---
+# Idempotent base configuration for a dittobox. Ported from:
+#   backend/scripts/dittobox/install-packages.sh
+#   backend/scripts/dittobox/bootstrap.sh
+#
+# Each block here matches a section of those scripts.
+
+- name: Include packages tasks
+  ansible.builtin.import_tasks: packages.yml
+  tags: [base, packages]
+
+- name: Include users + sudo tasks
+  ansible.builtin.import_tasks: users.yml
+  tags: [base, users]
+
+- name: Include filesystem layout tasks
+  ansible.builtin.import_tasks: filesystem.yml
+  tags: [base, fs]
+
+- name: Include ssh hardening tasks
+  ansible.builtin.import_tasks: ssh.yml
+  tags: [base, ssh]
+
+- name: Include firewall (ufw) tasks
+  ansible.builtin.import_tasks: ufw.yml
+  tags: [base, ufw]
+
+- name: Include fail2ban tasks
+  ansible.builtin.import_tasks: fail2ban.yml
+  tags: [base, fail2ban]
+
+- name: Include journald rotation tasks
+  ansible.builtin.import_tasks: journald.yml
+  tags: [base, journald]
+
+- name: Include Cloud Ops Agent tasks
+  ansible.builtin.import_tasks: ops_agent.yml
+  when: base_install_ops_agent | bool
+  tags: [base, ops_agent, logging]
+
+- name: Include unattended-upgrades tasks
+  ansible.builtin.import_tasks: unattended_upgrades.yml
+  tags: [base, security_updates]
+
+- name: Include Go install tasks
+  ansible.builtin.import_tasks: go.yml
+  when: base_install_go | default(true)
+  tags: [base, go]
+
+- name: Include uv install tasks
+  ansible.builtin.import_tasks: uv.yml
+  when: base_install_uv | default(true)
+  tags: [base, uv]
+
+- name: Include Caddy install tasks (config managed by role 'caddy')
+  ansible.builtin.import_tasks: caddy_install.yml
+  when: base_install_caddy | default(true)
+  tags: [base, caddy]

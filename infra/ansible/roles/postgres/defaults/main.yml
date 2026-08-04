@@ -1,0 +1,73 @@
+---
+# Logical app role; password is generated/stored on the box, NOT in the repo.
+postgres_app_user: ditto
+
+# Must postgres_app_password be supplied externally (normally from
+# $DITTO_PG_PASSWORD via group_vars)? false = the Hetzner dittobox behaviour,
+# where the box-generated random password below is the correct answer.
+#
+# The GCP VMs set this true (group_vars/role_postgres.yml,
+# role_platform_postgres.yml): there the password MUST equal the one Terraform
+# baked into the Cloud Run connection-URI secrets / the platform-db-password
+# Secret Manager entry. Generating a box-local random one there is silently
+# wrong in exactly the way the 2026-07-23 .env placeholder incident was — the
+# converge succeeds and the breakage surfaces later, as auth failures nobody can
+# explain because no one holds the generated password.
+postgres_app_password_required: false
+
+# Databases. Each is created idempotently with the standard extension set.
+postgres_databases:
+  - ditto_prod
+  - ditto_staging
+  - ditto_staging_2
+  - ditto_staging_3
+  - ditto_staging_4
+  - ditto_staging_5
+  - ditto_staging_6
+  - ditto_staging_7
+  - ditto_staging_8
+
+postgres_extensions:
+  - { name: vector,             schema: public }
+  - { name: pg_stat_statements, schema: extensions }
+  - { name: uuid-ossp,          schema: extensions }
+  - { name: pgcrypto,           schema: extensions }
+
+# Tuning for 64 GB RAM + NVMe. shared_buffers / effective_cache_size match the
+# values measured live on ditto-prod-1 (2026-06-17): the box runs 20GB / 60GB,
+# not the original 16GB / 48GB — bumped here so a converge is a no-op against live.
+postgres_tuning:
+  listen_addresses: "'localhost'"
+  shared_buffers: "20GB"
+  effective_cache_size: "60GB"
+  work_mem: "16MB"
+  maintenance_work_mem: "2GB"
+  wal_buffers: "64MB"
+  huge_pages: "try"
+  wal_level: "replica"
+  max_wal_senders: 3
+  wal_keep_size: "2GB"
+  max_wal_size: "4GB"
+  min_wal_size: "1GB"
+  checkpoint_timeout: "15min"
+  checkpoint_completion_target: 0.9
+  random_page_cost: 1.1
+  effective_io_concurrency: 200
+  seq_page_cost: 1.0
+  max_parallel_workers: 8
+  max_parallel_workers_per_gather: 4
+  max_parallel_maintenance_workers: 4
+  max_connections: 200
+  autovacuum_vacuum_scale_factor: 0.05
+  autovacuum_analyze_scale_factor: 0.025
+  autovacuum_vacuum_cost_delay: "2ms"
+  log_min_duration_statement: 500
+  log_checkpoints: "on"
+  log_lock_waits: "on"
+  log_temp_files: 0
+  log_directory: "'/opt/ditto/logs/postgresql'"
+  logging_collector: "on"
+  log_filename: "'postgresql-%Y-%m-%d.log'"
+  log_rotation_age: "1d"
+  log_rotation_size: "100MB"
+  shared_preload_libraries: "'pg_stat_statements'"

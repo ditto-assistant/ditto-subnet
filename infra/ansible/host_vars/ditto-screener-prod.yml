@@ -1,0 +1,32 @@
+---
+# Per-VM config for the dedicated prod screener. inventory_hostname = the GCE
+# instance name (ditto-screener-prod). This host runs ONLY the screener; it is
+# the platform-operated pre-benchmark gate for mainnet SN118.
+
+screener_env: prod
+
+# The worker calls the prod platform API over HTTP and drains its queue.
+screener_platform_api_url: "https://platform-api.heyditto.ai"
+
+# Mainnet (finney), netuid 118.
+screener_netuid: 118
+
+# The screener's PUBLIC SS58 hotkey (safe to commit; the signing mnemonic is the
+# screener-hotkey-mnemonic-prod Secret Manager value, read at converge time).
+# Freshly minted for the screener (the screener only signs verdicts, never
+# weights). It must be registered on finney netuid 118 with a validator_permit
+# before the prod platform accepts its verdicts; until then the unit runs but
+# verdicts are rejected.
+screener_hotkey: "5G6fGXnXFYdLM3ZyAm9whUbCY4ziQzcbMiTEqZB5c9KekTtR"
+
+# Prod tracks the release branch (main), not dev. The bearer-token auth the
+# platform requires is deployed from the ditto-subnet main branch.
+screener_branch: main
+
+# Secret Manager project + secret ids. The mnemonic secret is prod-specific (a
+# different hotkey than dev). The API
+# token is the shared bearer the prod platform requires on /screener/* (same
+# value configured on ditto-platform-prod); no on-chain permit is needed.
+screener_gcp_project: "ditto-app-dev"
+screener_mnemonic_secret: "screener-hotkey-mnemonic-prod"
+screener_api_token_secret: "screener-api-token-prod"

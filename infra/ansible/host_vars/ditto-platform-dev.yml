@@ -1,0 +1,17 @@
+---
+# Per-VM config for the dev app VM. inventory_hostname = the GCE instance name.
+platform_env: dev
+platform_branch: dev
+platform_domain: platform-api-dev.heyditto.ai
+
+# Origin minted into v7 inference grant proxy_urls. Unchanged from the previous
+# https://{{ platform_domain }} derivation — dev keeps its own host. Must stay
+# byte-identical to DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL on any validator
+# pointed at dev. No trailing slash.
+platform_inference_public_base_url: https://platform-api-dev.heyditto.ai
+platform_db_name: ditto_platform_dev
+platform_bucket: ditto-platform-agents-dev
+
+# Per-env Secret Manager secret ids (shared ones are in the platform_app role).
+# Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
+secret_pylon_token: platform-dev-pylon-open-access-token

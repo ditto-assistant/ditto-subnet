@@ -1,0 +1,23 @@
+---
+- name: Ensure /etc/systemd/journald.conf.d exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure journald retention
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/ditto.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by infra/ansible/roles/base. Edits here are wiped on next run.
+      [Journal]
+      SystemMaxUse=2G
+      SystemMaxFileSize=500M
+      MaxRetentionSec=30day
+      Compress=yes
+  notify: restart journald

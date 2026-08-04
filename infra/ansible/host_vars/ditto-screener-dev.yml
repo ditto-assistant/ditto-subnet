@@ -1,0 +1,26 @@
+---
+# Per-VM config for the dedicated dev screener. inventory_hostname = the GCE
+# instance name (ditto-screener-dev). This host runs ONLY the screener; it is the
+# platform-operated pre-benchmark gate, moved off the validator VM onto its own
+# isolated box (it builds language-neutral untrusted harness images).
+
+screener_env: dev
+
+# The worker calls the deployed dev platform API over HTTP and drains its queue.
+screener_platform_api_url: "https://platform-api-dev.heyditto.ai"
+
+# Dev localnet, netuid 3 (matches the dev validator's chain + permit set).
+screener_netuid: 3
+
+# The screener's PUBLIC SS58 hotkey (safe to commit; the signing mnemonic is the
+# validator-hotkey-mnemonic Secret Manager value, read at converge time). Reuses
+# the validator hotkey: it holds the permit on netuid 3, and the screener only
+# signs verdicts (never weights), so sharing is safe. The unit stays
+# installed-but-stopped until this is set.
+screener_hotkey: "5EexQS8UxChmkZ6vGeacAkwcf3TARR1Go5rd684Mf69dwgTY"
+
+# Secret Manager project + signing secret id. These are
+# the role defaults, restated for clarity; the VM's attached SA (run_sa) reads
+# them via gcloud at converge time.
+screener_gcp_project: "ditto-app-dev"
+screener_mnemonic_secret: "validator-hotkey-mnemonic"

@@ -1,0 +1,33 @@
+# Managed by Ansible (screener_capacity_controller role).
+[Unit]
+Description=Ditto Targon-first trusted image builder
+After=network-online.target ditto-screener-capacity.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ screener_capacity_owner }}
+Group={{ screener_capacity_group }}
+WorkingDirectory={{ screener_capacity_service_dir }}
+Environment=CLOUDSDK_CONFIG={{ screener_capacity_state_dir }}/gcloud
+ExecStart={{ screener_capacity_venv }}/bin/python -m screener_capacity.builder \
+  --platform-url {{ screener_capacity_platform_url }} \
+  --platform-token-file {{ screener_capacity_config_dir }}/platform-controller-token \
+  --environment {{ screener_capacity_environment }} \
+  --targon-api-key-file {{ screener_capacity_config_dir }}/targon-api-key \
+  --targon-resource {{ screener_capacity_builder_targon_resource }} \
+  --kaniko-image {{ screener_capacity_builder_kaniko_image }} \
+  --registry-service-account {{ screener_capacity_builder_registry_service_account }} \
+  --build-timeout-seconds {{ screener_capacity_builder_timeout_seconds }} \
+  --interval-seconds {{ screener_capacity_builder_interval_seconds }}
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ screener_capacity_state_dir }} /run/lock
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

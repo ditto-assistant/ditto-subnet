@@ -1,0 +1,45 @@
+[Unit]
+Description=Ditto SN118 screener worker (queue -> build gate -> verdict)
+Documentation=https://github.com/ditto-assistant/ditto-subnet/tree/main/workers/screener
+After=network-online.target {{ screener_executor_unit }}.service
+Wants=network-online.target
+Requires={{ screener_executor_unit }}.service
+
+[Service]
+Type=simple
+User={{ screener_user }}
+Group={{ screener_group }}
+SupplementaryGroups={{ screener_executor_group }}
+WorkingDirectory={{ screener_source_dir }}
+EnvironmentFile={{ screener_env_file }}
+Environment=HOME={{ screener_root }}
+ExecStart={{ screener_venv }}/bin/ditto-screener
+Restart=always
+RestartSec=15
+KillMode=mixed
+TimeoutStopSec=35min
+StandardOutput=append:{{ screener_logs_dir }}/{{ screener_unit }}.log
+StandardError=append:{{ screener_logs_dir }}/{{ screener_unit }}.log
+LimitNOFILE=65536
+
+# The worker can control only the empty ditto-builder rootless daemon identity.
+# Its own platform/signing credentials stay outside that identity.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ screener_state_dir }} {{ screener_logs_dir }} {{ screener_root }}/.bittensor
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+DevicePolicy=closed
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

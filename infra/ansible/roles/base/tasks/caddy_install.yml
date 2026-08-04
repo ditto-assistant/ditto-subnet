@@ -1,0 +1,32 @@
+---
+# Just installs the Caddy binary + apt source. Caddyfile is owned by the
+# 'caddy' role.
+- name: Add Caddy apt key
+  ansible.builtin.get_url:
+    url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+    dest: /tmp/caddy-stable-gpg.key
+    mode: "0644"
+
+- name: Convert key to keyring format
+  ansible.builtin.shell: |
+    set -euo pipefail
+    gpg --dearmor --batch --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg /tmp/caddy-stable-gpg.key
+  args:
+    creates: /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
+- name: Install Caddy apt sources
+  ansible.builtin.get_url:
+    url: https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt
+    dest: /etc/apt/sources.list.d/caddy-stable.list
+    mode: "0644"
+  register: caddy_sources
+
+- name: apt update (after adding Caddy source)
+  ansible.builtin.apt:
+    update_cache: true
+  when: caddy_sources.changed
+
+- name: Install caddy
+  ansible.builtin.apt:
+    name: caddy
+    state: present

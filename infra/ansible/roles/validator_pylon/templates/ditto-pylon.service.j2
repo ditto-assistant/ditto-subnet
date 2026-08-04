@@ -1,0 +1,26 @@
+[Unit]
+Description=Pylon identity sidecar for the SN118 validator write path (put_weights)
+Documentation=https://github.com/ditto-assistant/ditto-subnet/blob/dev/docs/ROAD-TO-PRODUCTION.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Managed container: clear any stale instance, then run in the foreground so
+# systemd owns its lifecycle. Loopback-published only; the wallet is mounted
+# read-only (Pylon signs, never writes it).
+ExecStartPre=-/usr/bin/docker rm -f {{ validator_pylon_container }}
+ExecStart=/usr/bin/docker run --rm \
+  --name {{ validator_pylon_container }} \
+  --platform linux/amd64 \
+  --env-file {{ ditto_secrets | default('/opt/ditto/secrets') }}/ditto-pylon.env \
+  -v {{ validator_pylon_wallet_dir }}:/root/.bittensor/wallets:ro \
+  -p 127.0.0.1:{{ validator_pylon_host_port }}:8000 \
+  {{ validator_pylon_image }}
+ExecStop=-/usr/bin/docker rm -f {{ validator_pylon_container }}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

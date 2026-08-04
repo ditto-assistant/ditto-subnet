@@ -1,0 +1,19 @@
+---
+# Uniquely named (not the shared "reload systemd") to avoid colliding with the
+# validator/dittobench handlers in the same play.
+- name: reload systemd (screener)
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart screener executor
+  ansible.builtin.systemd:
+    name: "{{ screener_executor_unit }}"
+    state: restarted
+
+- name: restart ditto-screener
+  ansible.builtin.systemd:
+    name: "{{ screener_unit }}"
+    state: restarted
+  when:
+    - screener_hotkey | length > 0
+    - screener_entrypoint.stat.exists | default(false)

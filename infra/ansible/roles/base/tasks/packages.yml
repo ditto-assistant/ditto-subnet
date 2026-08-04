@@ -1,0 +1,18 @@
+---
+- name: apt update
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install system packages
+  ansible.builtin.apt:
+    name: "{{ base_system_packages }}"
+    state: present
+
+- name: Install Postgres meta-packages
+  ansible.builtin.apt:
+    name:
+      - postgresql
+      - postgresql-common
+    state: present
+  # Actual tuning + pgvector + DB creation is the `postgres` role's job.

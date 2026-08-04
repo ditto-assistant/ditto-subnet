@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+# Managed by Ansible (validator_pylon role) — do not edit by hand.
+# Writes the validator hotkey wallet from the mnemonic so the co-located Pylon
+# sidecar can load it and sign set_weights. Deterministic from the mnemonic;
+# the Ansible task guards it with `creates`, so it runs once. Targets the
+# bittensor the worker venv installs (10.x). Secrets come from the environment
+# and are NEVER placed on argv or logged.
+import os
+import sys
+
+import bittensor as bt
+
+mnemonic = os.environ["VALIDATOR_MNEMONIC"].strip()
+path = os.environ["BT_WALLET_PATH"]
+name = os.environ["BT_WALLET_NAME"]
+hotkey = os.environ["BT_HOTKEY_NAME"]
+
+# bittensor exposes Wallet (10.x) / wallet (older) — accept either.
+Wallet = getattr(bt, "Wallet", None) or getattr(bt, "wallet")
+w = Wallet(name=name, hotkey=hotkey, path=path)
+
+# Regenerate the signing hotkey from the mnemonic (unencrypted, VM-local file).
+w.regenerate_hotkey(mnemonic=mnemonic, use_password=False, overwrite=True)
+
+# A coldkeypub stand-in keeps the wallet dir well-formed; the coldkey is NOT
+# needed to sign set_weights, so we derive the pub from the hotkey ss58.
+try:
+    w.regenerate_coldkeypub(ss58_address=w.hotkey.ss58_address, overwrite=True)
+except Exception as e:  # non-fatal: signing only needs the hotkey
+    print(f"coldkeypub stand-in skipped: {e}", file=sys.stderr)
+
+print(f"wallet materialized: {w.hotkey.ss58_address}")

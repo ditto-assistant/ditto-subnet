@@ -1,0 +1,15 @@
+---
+- name: Check for /usr/local/bin/uv
+  ansible.builtin.stat:
+    path: /usr/local/bin/uv
+  register: uv_stat
+
+- name: Install uv (latest)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    cp "$HOME/.local/bin/uv" /usr/local/bin/uv
+    chmod 755 /usr/local/bin/uv
+  args:
+    creates: /usr/local/bin/uv
+  when: not uv_stat.stat.exists

@@ -1,0 +1,25 @@
+[Unit]
+Description=DittoBench frozen v6 model relay
+Documentation=https://github.com/ditto-assistant/dittobench-api
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ dittobench_user }}
+Group={{ dittobench_group }}
+EnvironmentFile={{ dittobench_relay_env_file }}
+ExecStart={{ dittobench_relay_bin }}
+Restart=always
+RestartSec=5
+StandardOutput=append:{{ dittobench_logs_dir }}/{{ dittobench_relay_unit }}.log
+StandardError=append:{{ dittobench_logs_dir }}/{{ dittobench_relay_unit }}.log
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

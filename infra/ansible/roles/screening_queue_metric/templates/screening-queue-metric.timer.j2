@@ -1,0 +1,11 @@
+# Managed by Ansible (screening_queue_metric role) — do not edit by hand.
+[Unit]
+Description=Publish SN118 screening queue depth every {{ screening_queue_metric_interval_sec }}s
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec={{ screening_queue_metric_interval_sec }}
+AccuracySec=10
+
+[Install]
+WantedBy=timers.target

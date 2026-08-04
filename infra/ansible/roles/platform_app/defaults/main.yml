@@ -1,0 +1,204 @@
+---
+# Defaults for the platform_app role — the ditto-platform (SN118 API) app host.
+# The app runs as a host process under pm2/uv (scripts/ecosystem.config.js) with
+# Pylon as a Docker sidecar (docker-compose `pylon` service). Per-VM values
+# (platform_env, platform_branch, platform_domain, platform_db_name,
+# platform_bucket, per-env secret ids) come from host_vars; shared TF-output
+# values (platform_pg_host, platform_storage_access_key) from
+# group_vars/role_platform_app.yml.
+
+# --- Preflight manifest: REQUIRED vs legitimately OPTIONAL -------------------
+# Which env-sourced values must be real before anything is rendered, and which
+# are genuinely opt-in. Reified here so the distinction is a deliberate,
+# reviewable decision instead of an accident of which Jinja `default(…)` someone
+# happened to type in group_vars. Consumed by tasks/preflight.yml.
+#
+# Add a row here whenever a new `lookup('env', …)` value joins
+# group_vars/role_platform_app.yml. If nobody remembers to, the postflight
+# env_render_guard still catches any TODO_ placeholder that reaches the file —
+# this list only buys the earlier, better-worded failure.
+platform_required_env_values:
+  - var: platform_pg_host
+    env: PLATFORM_PG_HOST
+    tf_output: pg_internal_ip
+    renders: POSTGRES_HOST
+    impact: >-
+      the app cannot resolve or reach Postgres: the API dies at its next restart
+      (asyncpg socket.gaierror) and every Alembic migration fails.
+  - var: platform_storage_access_key
+    env: PLATFORM_STORAGE_ACCESS_KEY
+    tf_output: storage_hmac_access_id
+    renders: STORAGE_ACCESS_KEY
+    impact: >-
+      every agent-tarball upload, download and presign against GCS fails to
+      authenticate.
+
+# OPTIONAL by documented design — "empty = disabled, opt-in". These must NOT
+# hard-fail a converge (dev hosts legitimately run without them), but an empty
+# value silently turns a feature off, so preflight warns loudly about each one.
+platform_optional_env_values:
+  - var: platform_embedder_url
+    env: PLATFORM_EMBEDDER_URL
+    tf_output: embedder_url
+    renders: CODE_EMBEDDER_URL
+    disabled: >-
+      no code embeddings are computed — the anti-copy semantic tier is off and
+      agents.code_embedding stays null.
+  - var: platform_datapipeline_url
+    env: PLATFORM_DATAPIPELINE_URL
+    tf_output: datapipeline_url
+    renders: DATA_PIPELINE_URL
+    disabled: >-
+      no per-submission dataset is pinned — scores carry no on-chain seed
+      provenance and no reproduction command (v7 requires dataset pinning).
+
+platform_checkout_root: /opt/ditto-subnet
+platform_root: "{{ platform_checkout_root }}/apps/platform"
+platform_repo_url: "git@github.com:ditto-assistant/ditto-subnet.git"
+platform_owner: "{{ deploy_user | default('deploy') }}"
+platform_group: "{{ deploy_group | default('ditto') }}"
+
+# App listen port (Caddy reverse-proxies the public 443 -> here).
+#
+# This ALSO renders API_PORT into /opt/ditto-platform/.env, which
+# scripts/update.sh greps to build `ditto-api`'s post-deploy health URL. Do not
+# repurpose it for the relay pool below — moving it would silently point the
+# deploy verifier at the wrong process.
+platform_api_port: 8000
+
+# --- Inference relay pool (Caddy upstreams for /api/v1/inference/*) ----------
+# Local ports of the DITTO_ROLE=relay pm2 processes created by
+# ditto-platform#444. Must mirror RELAY_PORTS in that repo's
+# scripts/ecosystem.config.js (and the DITTO_RELAY_PORTS default in its
+# scripts/update.sh) — those define which ports the relays actually bind.
+#
+# EMPTY LIST MEANS NO RELAY. The Caddyfile then renders a single bare
+# `reverse_proxy localhost:{{ platform_api_port }}`, byte-identical to the
+# pre-relay file. That is both the default for any host that has not stood the
+# relays up (dev runs single-process) and the durable rollback target: set this
+# back to [] and re-converge.
+platform_inference_relay_ports: []
+
+# Additional public hostnames served by the same Caddy vhost. Keep aliases in
+# host_vars so each environment explicitly owns its certificate/SNI surface.
+platform_alias_domains: []
+
+# Postgres connection (host/db come from group_vars + host_vars).
+platform_pg_port: 5432
+platform_pg_user: ditto
+
+# SQLAlchemy pool bounds. The old 2/10 default starved under concurrent miner
+# uploads (each holds a session across the tarball read + fingerprinting) and
+# caused the 2026-07-16 prod outage; 5/30 matches the live hotfix. Postgres
+# max_connections is 100 on the shared pg VM, so dev+prod at 30 each still
+# leave headroom.
+platform_pg_pool_min_size: 5
+platform_pg_pool_max_size: 30
+
+# GCS S3-interop object storage. The access key is the HMAC access id
+# (group_vars); the secret comes from Secret Manager at render time.
+platform_storage_endpoint: "https://storage.googleapis.com"
+platform_storage_region: auto
+
+# Subnet / pricing config (mirrors .env.example defaults).
+platform_netuid: 118
+platform_subtensor_network: finney
+platform_upload_fee_usd: 5
+platform_upload_fee_buffer: 1.4
+
+# --- Code-embedding (anti-copy semantic tier) ---
+# The embedder runs as a scale-to-zero Cloud Run service (see infra/terraform/stacks/gcp-platform/
+# embedder.tf). DISABLED unless platform_embedder_url is set (the Terraform
+# embedder_url output, threaded via group_vars from $PLATFORM_EMBEDDER_URL): with
+# it empty the platform embeds nothing (null column, no behavior change). The model
+# must match the baked image (docker/embedder MODEL_ID); leave dim "" for
+# jina-v2-base-code (native 768 width; Qwen3 would use 256 MRL).
+platform_embedder_model: jinaai/jina-embeddings-v2-base-code
+platform_embedder_auth: gcp_id_token
+platform_embedder_timeout_seconds: 30
+platform_embedder_dim: ""
+
+# --- Per-submission dataset generation (on-chain seed provenance) ---
+# The generate service runs as a scale-to-zero Cloud Run service (see
+# infra/terraform/stacks/gcp-platform/datapipeline.tf). DISABLED unless platform_datapipeline_url
+# is set (the Terraform datapipeline_url output, threaded via group_vars from
+# $PLATFORM_DATAPIPELINE_URL): with it empty the platform pins no dataset
+# (pre-k3 behavior, no provenance shown). When set, a generation failure blocks
+# the agent's promotion rather than pinning a null dataset, so only enable it
+# with the service deployed and invokable by the platform SA. run_size must
+# match what validators score (the worker runs full).
+platform_datapipeline_auth: gcp_id_token
+platform_datapipeline_run_size: full
+platform_datapipeline_timeout_seconds: 60
+
+# ACME contact for Caddy's managed cert.
+platform_caddy_email: peyton@omniaura.ai
+
+# Shared Secret Manager secret ids (per-env ones are set in host_vars).
+secret_db_password: platform-db-password
+secret_hmac_secret: platform-storage-hmac-secret
+secret_github_deploy_key: platform-github-deploy-key
+# Shared with trusted internal operator tools. The value already exists in
+# Secret Manager; Terraform only grants this VM's runtime identity read access.
+secret_admin_api_token: ADMIN_API_PASSWORD
+# Separate bearer used only by the provider-mutating capacity controller.
+secret_screener_controller_api_token: ""
+
+# Platform-owned inference stays dark until the coordinated rollout enables it.
+platform_inference_proxy_enabled: false
+platform_inference_proxy_required: false
+secret_platform_openrouter_key: validator-openrouter-key
+platform_inference_allowed_models: qwen/qwen3-32b,openai/gpt-oss-20b
+platform_inference_provider: nebius
+# Initial v7 mode: one reviewed logical route, OpenRouter speed sorting, and
+# healthy fallback. The DB-backed per-provider optimizer remains dark.
+platform_inference_routing_mode: aggregate_throughput
+platform_inference_discovery_interval_seconds: 300
+platform_inference_route_speed_weight: 0.65
+platform_inference_route_cost_weight: 0.25
+platform_inference_route_exploration_weight: 0.10
+platform_inference_route_ewma_alpha: 0.20
+platform_inference_route_min_tool_accuracy: 0.55
+platform_inference_route_min_composite: 0.15
+platform_inference_route_min_calibration_samples: 60
+platform_inference_route_exploration_tickets: 3
+platform_inference_route_max_error_rate: 0.25
+platform_inference_route_max_timeout_rate: 0.15
+platform_inference_route_cooldown_seconds: 30
+platform_inference_request_budget: 1024
+platform_inference_token_budget: 4000000
+platform_inference_ticket_concurrency: 8
+platform_inference_validator_concurrency: 24
+platform_inference_global_concurrency: 72
+platform_inference_ticket_rpm: 240
+platform_inference_validator_rpm: 960
+platform_inference_global_rpm: 2880
+# Exact SHA-256 of dittobench-api's reviewed aggregate v7 calibration manifest
+# (sha256 over the raw embedded internal/efficiency/baselines_v7.json bytes, as
+# reported by efficiency.V7CalibrationReadiness). Route admission still fails
+# closed if the binary reports a different digest or logical route identity.
+#
+# CHANGED by dittobench-api#98: the v7 manifest was re-derived (new baseline
+# ids, new starter_kit_revision 62223b02, added allowance_*/raw_reference_*
+# fields and the hosted-embedding block), so the digest moved
+#   c95408f9…  (at #76 / 37c027c9)  ->  b8c11eff…  (at #98 / 001d3aa2)
+# The logical route identity is UNCHANGED
+# (openrouter / openrouter-route-a471cd87ae7df5b9-v1 / openai/gpt-oss-20b).
+#
+# ORDERING: this value must match the dittobench-api build the VALIDATOR FLEET
+# actually runs, which is pinned by DITTOBENCH_BUILD_CONTEXT in
+# ditto-subnet/docker-compose.yml — not by this repo. Do not converge platform
+# hosts with this value until ditto-subnet has repinned to a build containing
+# #98 and the fleet has updated, or route admission will 409 against the
+# still-running older binary.
+platform_inference_reviewed_calibration_manifest_sha256: "b8c11eff829c4c85b4b1af4f95135e4b5c26da01c8b88f72f726dca26d03d9a7"
+
+# Platform-operated screener auth (per-env in host_vars; both empty = the
+# /screener/* endpoints stay disabled and fail closed). platform_screener_hotkey
+# is the dedicated no-funds SS58 the platform allowlists; secret_screener_api_token
+# is the Secret Manager id of the shared bearer token.
+platform_screener_hotkey: ""
+secret_screener_api_token: ""
+
+# Docker apt repo (Debian).
+platform_docker_apt_arch: amd64

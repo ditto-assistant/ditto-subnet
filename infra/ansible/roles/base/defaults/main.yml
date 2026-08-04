@@ -1,0 +1,54 @@
+---
+# Which optional runtimes/services base installs. Default true (the dittobox
+# needs all three); platform VMs disable what they don't use (see their group_vars).
+base_install_go: true
+base_install_uv: true
+base_install_caddy: true
+
+# Cloud Ops Agent (logs + host metrics -> Cloud Logging / Monitoring).
+# Default OFF: enabling it starts shipping logs and changes billing, so it is
+# opt-in per group rather than a silent change on the next converge. Set
+# base_install_ops_agent: true in the group_vars for the hosts you want, and
+# grant roles/logging.logWriter (+ roles/monitoring.metricWriter) to their SA.
+base_install_ops_agent: false
+
+# Versions of language runtimes pinned on the dittobox.
+base_go_version: "1.26.0"
+base_go_linux_amd64_sha256: "aac1b08a0fb0c4e0a7c1555beb7b59180b05dfc5a3d62e40e9de90cd42f88235"
+
+# Packages installed on every dittobox.
+# Ported from backend/scripts/dittobox/install-packages.sh.
+base_system_packages:
+  - curl
+  - wget
+  - git
+  - unzip
+  - build-essential
+  - ca-certificates
+  - ffmpeg
+  - ufw
+  - fail2ban
+  - htop
+  - rsync
+  - jq
+  - zstd
+  - sqlite3
+  - unattended-upgrades
+  - python3
+  - python3-venv
+  - python3-dev
+  - debian-keyring
+  - debian-archive-keyring
+  - apt-transport-https
+
+# Team members get sudo on the box. Single source of truth — see also
+# group_vars/all.yml.
+base_team_members: "{{ team_members | default(['peyton', 'omar', 'nick', 'nickanderson']) }}"
+
+# SSH hardening (matches scripts/dittobox/bootstrap.sh sshd_config.d/ditto.conf).
+base_ssh_allow_users: "{{ base_team_members + ['deploy'] }}"
+
+# fail2ban tuning (matches scripts/dittobox/bootstrap.sh).
+base_fail2ban_bantime: "30m"
+base_fail2ban_findtime: "10m"
+base_fail2ban_maxretry: 3

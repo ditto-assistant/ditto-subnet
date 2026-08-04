@@ -1,0 +1,98 @@
+---
+# E1 Pylon identity (write) sidecar. No-op unless validator_pylon_identity_enabled
+# (group_vars/role_validator.yml). Ordered after validator_worker so the venv
+# (bittensor) exists for wallet materialization. See docs/validator-deploy.md.
+
+- name: Pylon identity sidecar disabled (using the SDK weight path)
+  ansible.builtin.debug:
+    msg: "validator_pylon_identity_enabled is false; the worker signs set_weights via the bittensor SDK."
+  when: not (validator_pylon_identity_enabled | default(false))
+
+- name: Provision the Pylon identity sidecar
+  when: validator_pylon_identity_enabled | default(false)
+  block:
+    - name: Read the hotkey mnemonic from Secret Manager
+      ansible.builtin.command: "gcloud secrets versions access latest --secret={{ validator_pylon_mnemonic_secret }} --project={{ validator_pylon_gcp_project }}"
+      register: validator_pylon_mnemonic
+      changed_when: false
+      no_log: true
+
+    - name: Read the Pylon identity (write) token
+      ansible.builtin.command: "gcloud secrets versions access latest --secret={{ validator_pylon_identity_token_secret }} --project={{ validator_pylon_gcp_project }}"
+      register: validator_pylon_identity_token_read
+      changed_when: false
+      no_log: true
+
+    - name: Read the Pylon open-access (read) token
+      ansible.builtin.command: "gcloud secrets versions access latest --secret={{ validator_pylon_open_access_token_secret }} --project={{ validator_pylon_gcp_project }}"
+      register: validator_pylon_open_access_token_read
+      changed_when: false
+      no_log: true
+
+    - name: Ensure the wallet dir exists (mounted RO into Pylon)
+      ansible.builtin.file:
+        path: "{{ validator_pylon_wallet_dir }}/{{ validator_pylon_wallet_name }}/hotkeys"
+        state: directory
+        owner: "{{ validator_pylon_user }}"
+        group: "{{ validator_pylon_group }}"
+        mode: "0700"
+
+    - name: Install the wallet-materialization helper
+      ansible.builtin.template:
+        src: materialize_wallet.py.j2
+        dest: "{{ validator_pylon_wallet_dir }}/materialize_wallet.py"
+        owner: "{{ validator_pylon_user }}"
+        group: "{{ validator_pylon_group }}"
+        mode: "0700"
+
+    # Deterministic from the mnemonic; `creates` makes it a one-time write. The
+    # mnemonic is passed via env, never argv/logs.
+    - name: Materialize the hotkey wallet from the mnemonic (once)
+      ansible.builtin.command:
+        cmd: "{{ validator_pylon_venv }}/bin/python {{ validator_pylon_wallet_dir }}/materialize_wallet.py"
+        creates: "{{ validator_pylon_wallet_dir }}/{{ validator_pylon_wallet_name }}/hotkeys/{{ validator_pylon_hotkey_name }}"
+      become_user: "{{ validator_pylon_user }}"
+      environment:
+        VALIDATOR_MNEMONIC: "{{ validator_pylon_mnemonic.stdout }}"
+        BT_WALLET_PATH: "{{ validator_pylon_wallet_dir }}"
+        BT_WALLET_NAME: "{{ validator_pylon_wallet_name }}"
+        BT_HOTKEY_NAME: "{{ validator_pylon_hotkey_name }}"
+      no_log: true
+
+    - name: Render the Pylon sidecar env file
+      ansible.builtin.template:
+        src: ditto-pylon.env.j2
+        dest: "{{ ditto_secrets | default('/opt/ditto/secrets') }}/ditto-pylon.env"
+        owner: "{{ validator_pylon_user }}"
+        group: "{{ validator_pylon_group }}"
+        mode: "0640"
+      vars:
+        pylon_identity_token: "{{ validator_pylon_identity_token_read.stdout }}"
+        pylon_open_access_token: "{{ validator_pylon_open_access_token_read.stdout }}"
+      no_log: true
+      notify: restart ditto-pylon
+
+    - name: Guard the rendered Pylon env file against unresolved placeholders
+      ansible.builtin.include_role:
+        name: env_render_guard
+      vars:
+        env_render_guard_path: "{{ ditto_secrets | default('/opt/ditto/secrets') }}/ditto-pylon.env"
+        env_render_guard_label: "ditto-pylon.env on {{ inventory_hostname }}"
+
+    - name: Install the Pylon sidecar unit
+      ansible.builtin.template:
+        src: ditto-pylon.service.j2
+        dest: /etc/systemd/system/ditto-pylon.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart ditto-pylon
+
+    - name: Enable + start the Pylon sidecar
+      ansible.builtin.systemd:
+        name: ditto-pylon
+        enabled: true
+        state: started
+        daemon_reload: true

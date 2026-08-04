@@ -1,0 +1,72 @@
+---
+# The SN118 validator worker (ditto-subnet `python -m ditto.validator`). A
+# standalone, stateless daemon: it pulls the evaluation queue from the platform
+# over HTTP, hands each agent to the co-located dittobench-api for scoring, and
+# sets weights on chain. No DB. Runs as its own systemd unit (weight-setting
+# must be a singleton per hotkey), modeled on the river_worker role.
+
+validator_user: "{{ deploy_user | default('deploy') }}"
+validator_group: "{{ deploy_group | default('ditto') }}"
+
+validator_root: /opt/ditto/validator # ditto-subnet checkout
+validator_repo: "ditto-assistant/ditto-subnet"
+# Immutable merged-main v0.25.2 pin. Includes #223's bounded admission retry
+# after sandbox OOM/resource rejection in addition to the v7 ticket, seed,
+# compatibility, and KOTH contracts in the prior pin.
+validator_branch: b9bbe73e31bec7a3a8fa48d308a10db8adc28bf8
+validator_venv: /opt/ditto/validator/src/.venv
+validator_env_file: /opt/ditto/validator/validator.env
+validator_logs_dir: "{{ ditto_logs | default('/opt/ditto/logs') }}"
+validator_secrets_dir: "{{ ditto_secrets | default('/opt/ditto/secrets') }}"
+validator_unit: ditto-validator
+
+# --- Worker config (rendered into validator.env; see ditto/validator/config.py) ---
+# The worker calls the platform over HTTP even though it is co-located, exactly
+# as any external validator would.
+validator_platform_api_url: "https://platform-api-dev.heyditto.ai"
+validator_dittobench_api_url: "http://127.0.0.1:8080"
+
+# Real scoring (false) vs a canned ScoreReport for plumbing tests (true).
+validator_dittobench_mock: false
+validator_run_size: full
+
+# Localnet weight path: sign Subtensor.set_weights with the local hotkey (Pylon
+# identity-write is not stood up on the dev chain). Set false on finney to use
+# the Pylon identity path (then PYLON_IDENTITY_* become required).
+validator_use_sdk_weights: true
+
+validator_netuid: 118
+validator_subtensor_network: finney # override to the dev localnet ws:// in host_vars
+validator_hotkey: "" # public SS58 — set in host_vars; empty = don't start the unit
+
+validator_epoch_seconds: 3600
+validator_queue_limit: 50
+validator_benchmark_capacity: 1
+validator_platform_inference_enforced: false
+
+# --- Secrets (Secret Manager ids; values populated out-of-band; see runbook) ---
+# The signing key. Prefer a wallet, but a hotkey mnemonic is simplest on a VM.
+validator_mnemonic_secret: validator-hotkey-mnemonic
+# Bounded transition only: legacy validators keep their existing provider path
+# until ticket inference is explicitly enforced after a drained canary rollout.
+# A GitHub token with read on the private ditto-subnet repo (the SAME token the
+# dittobench role uses; one secret, reused).
+validator_gh_token_secret: validator-gh-token
+validator_gh_token_file: "{{ validator_secrets_dir }}/validator-gh-token"
+
+# --- Public telemetry (opt-in; ditto/validator/telemetry.py) ---
+# Off by default. When enabled, the worker syncs the `telemetry` extra (wandb)
+# and publishes AGGREGATE-only sweep stats (leaderboard, per-category means,
+# weight vector) to a wandb project. Never logs the answer key, tarballs, or any
+# secret. Flip on per-host in host_vars.
+validator_wandb_enabled: false
+validator_wandb_mode: online # online | offline | disabled
+validator_wandb_project: ditto-sn118
+validator_wandb_entity: heyditto
+# Secret Manager id holding the wandb API key (populated out-of-band; see runbook).
+validator_wandb_secret: validator-wandb-key
+
+# uv install location (used if uv isn't already on PATH from the base role).
+validator_uv_bin: /usr/local/bin/uv
+
+validator_gcp_project: "{{ gcp_project | default('ditto-app-dev') }}"

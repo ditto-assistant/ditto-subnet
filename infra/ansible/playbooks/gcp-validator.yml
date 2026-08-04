@@ -1,0 +1,26 @@
+---
+# Converge the SN118 validator VM (label role=validator → group role_validator).
+# Installs the base hardening + Go/Docker (via the dittobench role), builds and
+# runs the co-located dittobench-api scoring engine, then installs the stateless
+# validator worker (ditto-subnet `python -m ditto.validator`).
+#
+# Per-VM config (chain endpoint, netuid, hotkey, platform URL) lives in
+# host_vars/ditto-validator-<env>.yml; shared connection/config in
+# group_vars/role_validator.yml. Secrets are read from Secret Manager at
+# converge time via the VM's attached SA — populate them first (see
+# docs/validator-deploy.md).
+#
+#   GCP_OSLOGIN_USER=… \
+#     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-validator.yml
+- name: Converge the SN118 validator VM
+  hosts: role_validator
+  become: true
+  gather_facts: true
+  roles:
+    - base
+    - dittobench
+    - validator_worker
+    # E1: Pylon identity (write) sidecar. No-op unless
+    # validator_pylon_identity_enabled (testnet/finney). After validator_worker
+    # so the worker venv (bittensor) exists to materialize the hotkey wallet.
+    - validator_pylon

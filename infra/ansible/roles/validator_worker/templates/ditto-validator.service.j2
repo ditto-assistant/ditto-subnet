@@ -1,0 +1,42 @@
+[Unit]
+Description=Ditto SN118 validator worker (queue -> dittobench -> weights)
+Documentation=https://github.com/ditto-assistant/ditto-subnet
+After=network-online.target dittobench-api.service
+Wants=network-online.target
+# Scoring flows through the co-located dittobench-api; start after it.
+After=dittobench-api.service
+
+[Service]
+Type=simple
+User={{ validator_user }}
+Group={{ validator_group }}
+WorkingDirectory={{ validator_root }}/src
+EnvironmentFile={{ validator_env_file }}
+# bittensor's settings.py does `~/.bittensor/wallets`.mkdir() at import time.
+# With ProtectHome=true the real home (/home/{{ validator_user }}) is masked, so
+# point HOME at validator_root (writable via ReadWritePaths). The worker signs
+# from the mnemonic (SDK weights), so no on-disk wallet is actually used — this
+# just satisfies the unconditional import-time mkdir.
+Environment=HOME={{ validator_root }}
+ExecStart={{ validator_venv }}/bin/python -m ditto.validator
+Restart=always
+RestartSec=15
+StandardOutput=append:{{ validator_logs_dir }}/{{ validator_unit }}.log
+StandardError=append:{{ validator_logs_dir }}/{{ validator_unit }}.log
+
+LimitNOFILE=65536
+
+# The worker only makes HTTP calls + signs weights (no Docker, no local build),
+# so it can be strictly sandboxed — unlike dittobench-api.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ validator_root }} {{ validator_logs_dir }}
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

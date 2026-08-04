@@ -1,0 +1,28 @@
+---
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart dittobench-api
+  ansible.builtin.systemd:
+    name: "{{ dittobench_unit }}"
+    state: restarted
+  when: dittobench_bin_stat.stat.exists | default(false)
+
+- name: restart dittobench-model-relay
+  ansible.builtin.systemd:
+    name: "{{ dittobench_relay_unit }}"
+    state: restarted
+  when: dittobench_relay_enabled | default(false) | bool
+
+- name: restart ditto-egress-proxy
+  ansible.builtin.systemd:
+    name: ditto-egress-proxy
+    state: restarted
+  when: dittobench_sandbox_egress_enabled | default(false)
+
+- name: reload ditto-sandbox-firewall
+  ansible.builtin.systemd:
+    name: ditto-sandbox-firewall
+    state: restarted
+  when: dittobench_sandbox_egress_enabled | default(false)

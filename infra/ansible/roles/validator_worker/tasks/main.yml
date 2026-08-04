@@ -1,0 +1,218 @@
+---
+# Provision the SN118 validator worker: clone ditto-subnet, build its uv venv
+# (bittensor + pylon client + httpx), render the env from Secret Manager, and
+# install a systemd unit. The unit is started only once a hotkey is configured.
+#
+# gcloud + git + the docker group are ensured by the dittobench role, which runs
+# before this one in the gcp-validator playbook.
+
+- name: Validate bounded benchmark capacity
+  ansible.builtin.assert:
+    that:
+      - validator_benchmark_capacity | int >= 1
+      - validator_benchmark_capacity | int <= 8
+      - validator_benchmark_capacity | int == dittobench_max_concurrent_runs | default(validator_benchmark_capacity) | int
+    fail_msg: Validator and DittoBench capacities must match within 1..8
+
+- name: Ensure validator + logs + secrets dirs
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ validator_user }}"
+    group: "{{ validator_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ validator_root }}", mode: "0755" }
+    - { path: "{{ validator_logs_dir }}", mode: "0750" }
+    - { path: "{{ validator_secrets_dir }}", mode: "0750" }
+
+# --- uv (the worker runs in a uv-managed venv) ---
+- name: Check for uv
+  ansible.builtin.command: "{{ validator_uv_bin }} --version"
+  register: validator_uv_check
+  changed_when: false
+  failed_when: false
+
+- name: Install uv if missing
+  when: validator_uv_check.rc != 0
+  block:
+    - name: Download uv installer
+      ansible.builtin.get_url:
+        url: https://astral.sh/uv/install.sh
+        dest: /tmp/uv-install.sh
+        mode: "0755"
+    - name: Install uv to /usr/local/bin
+      ansible.builtin.command: /tmp/uv-install.sh
+      environment:
+        UV_INSTALL_DIR: /usr/local/bin
+      changed_when: true
+
+# --- GitHub token: clone the private ditto-subnet repo over HTTPS ---
+- name: Read the validator GitHub token from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ validator_gh_token_secret }} --project={{ validator_gcp_project }}"
+  register: validator_gh_token
+  changed_when: false
+  no_log: true
+
+- name: Write the validator GitHub token file
+  ansible.builtin.copy:
+    content: "{{ validator_gh_token.stdout }}"
+    dest: "{{ validator_gh_token_file }}"
+    owner: "{{ validator_user }}"
+    group: "{{ validator_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Install non-persisting Git credential helper
+  ansible.builtin.copy:
+    dest: /usr/local/bin/ditto-git-askpass
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      case "$1" in
+        *Username*) printf '%s\n' x-access-token ;;
+        *Password*) cat "$DITTO_GIT_TOKEN_FILE" ;;
+        *) exit 1 ;;
+      esac
+
+- name: Require an immutable ditto-subnet revision
+  ansible.builtin.assert:
+    that: validator_branch is match('^[0-9a-f]{40}$')
+    fail_msg: validator_branch must be a full reviewed commit SHA
+
+- name: Clone/update ditto-subnet at the pinned branch
+  ansible.builtin.git:
+    repo: "https://github.com/{{ validator_repo }}.git"
+    dest: "{{ validator_root }}/src"
+    version: "{{ validator_branch }}"
+    force: true
+  become_user: "{{ validator_user }}"
+  environment:
+    GIT_ASKPASS: /usr/local/bin/ditto-git-askpass
+    GIT_TERMINAL_PROMPT: "0"
+    DITTO_GIT_TOKEN_FILE: "{{ validator_gh_token_file }}"
+  register: validator_clone
+
+- name: Read deployed ditto-subnet revision
+  ansible.builtin.command: git rev-parse HEAD
+  args:
+    chdir: "{{ validator_root }}/src"
+  become_user: "{{ validator_user }}"
+  register: validator_deployed_revision
+  changed_when: false
+
+- name: Verify deployed ditto-subnet revision
+  ansible.builtin.assert:
+    that: validator_deployed_revision.stdout == validator_branch
+    fail_msg: ditto-subnet checkout does not match the reviewed revision
+
+- name: Build/sync the worker venv (uv sync; +telemetry extra when enabled)
+  ansible.builtin.command:
+    cmd: "{{ validator_uv_bin }} sync --frozen{{ ' --extra telemetry' if validator_wandb_enabled else '' }}"
+    chdir: "{{ validator_root }}/src"
+  become_user: "{{ validator_user }}"
+  environment:
+    UV_PROJECT_ENVIRONMENT: "{{ validator_venv }}"
+  register: validator_uv_sync
+  # Run every converge (not just on clone change) so toggling the telemetry extra
+  # takes effect on an existing checkout. uv is idempotent; report changed +
+  # restart only when it actually adds/removes a package.
+  changed_when: >-
+    ('Installed' in validator_uv_sync.stderr)
+    or ('Uninstalled' in validator_uv_sync.stderr)
+    or ('Prepared' in validator_uv_sync.stderr)
+  notify: restart ditto-validator
+
+# --- Secrets for the env file ---
+- name: Read validator signing mnemonic from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ validator_mnemonic_secret }} --project={{ validator_gcp_project }}"
+  register: validator_mnemonic_read
+  changed_when: false
+  no_log: true
+
+- name: Read wandb API key from Secret Manager (when telemetry enabled)
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ validator_wandb_secret }} --project={{ validator_gcp_project }}"
+  register: validator_wandb_read
+  changed_when: false
+  no_log: true
+  when: validator_wandb_enabled
+
+- name: Read Pylon identity (write) token (when the Pylon weight path is enabled)
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ validator_pylon_identity_token_secret }} --project={{ validator_gcp_project }}"
+  register: validator_pylon_identity_read
+  changed_when: false
+  no_log: true
+  when: validator_pylon_identity_enabled | default(false)
+
+- name: Read Pylon open-access (read) token (when the Pylon weight path is enabled)
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ validator_pylon_open_access_token_secret }} --project={{ validator_gcp_project }}"
+  register: validator_pylon_open_access_read
+  changed_when: false
+  no_log: true
+  when: validator_pylon_identity_enabled | default(false)
+
+- name: Render worker env file
+  ansible.builtin.template:
+    src: validator.env.j2
+    dest: "{{ validator_env_file }}"
+    owner: "{{ validator_user }}"
+    group: "{{ validator_group }}"
+    mode: "0640"
+  vars:
+    validator_mnemonic: "{{ validator_mnemonic_read.stdout }}"
+    validator_wandb_api_key: "{{ validator_wandb_read.stdout | default('') }}"
+    validator_pylon_identity_token: "{{ validator_pylon_identity_read.stdout | default('') }}"
+    validator_pylon_open_access_token: "{{ validator_pylon_open_access_read.stdout | default('') }}"
+  no_log: true
+  notify: restart ditto-validator
+
+- name: Guard the rendered worker env file against unresolved placeholders
+  ansible.builtin.include_role:
+    name: env_render_guard
+  vars:
+    env_render_guard_path: "{{ validator_env_file }}"
+    env_render_guard_label: "{{ validator_env_file }} on {{ inventory_hostname }}"
+
+# --- systemd unit ---
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: ditto-validator.service.j2
+    dest: "/etc/systemd/system/{{ validator_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart ditto-validator
+
+- name: Stat the venv python
+  ansible.builtin.stat:
+    path: "{{ validator_venv }}/bin/python"
+  register: validator_venv_python
+
+- name: Enable the worker unit
+  ansible.builtin.systemd:
+    name: "{{ validator_unit }}"
+    enabled: true
+    daemon_reload: true
+
+# The worker fails fast without a signing key / hotkey, so only start it once a
+# hotkey is configured (host_vars) AND the venv exists. Until then it's installed
+# + enabled but not running — flip it on with the runbook's final step.
+- name: Start the validator worker (only when configured)
+  ansible.builtin.systemd:
+    name: "{{ validator_unit }}"
+    state: started
+  when:
+    - validator_hotkey | length > 0
+    - validator_venv_python.stat.exists
+
+- name: Note when the worker is intentionally not started
+  ansible.builtin.debug:
+    msg: >-
+      ditto-validator installed + enabled but NOT started: set validator_hotkey
+      in host_vars and populate the {{ validator_mnemonic_secret }} secret, then
+      re-run this play (or `systemctl start {{ validator_unit }}`).
+  when: validator_hotkey | length == 0

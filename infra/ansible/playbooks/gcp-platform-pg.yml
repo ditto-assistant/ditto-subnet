@@ -1,0 +1,29 @@
+---
+# Converge the dedicated ditto-platform Postgres VM (infra/terraform/stacks/gcp-platform →
+# ditto-pg-platform). Creates ditto_platform_dev + ditto_platform_prod with the
+# standard extension set and db-staging tuning.
+#
+# Unlike gcp-pg.yml (the backend VM) this runs NO PgBouncer and NO River worker —
+# the platform app talks to Postgres directly over asyncpg.
+#
+#   DITTO_PG_PASSWORD=… GCP_OSLOGIN_USER=… \
+#     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-platform-pg.yml
+- name: Converge ditto-platform Postgres VM
+  hosts: role_platform_postgres
+  become: true
+  gather_facts: true
+  pre_tasks:
+    # The `ditto` role password MUST equal the platform-db-password secret the
+    # app reads, or every app->DB connection fails. Hard-fail rather than let the
+    # postgres role silently generate a random box password (empty fallback).
+    - name: Require DITTO_PG_PASSWORD (must equal the platform-db-password secret)
+      ansible.builtin.assert:
+        that: lookup('env', 'DITTO_PG_PASSWORD') | length > 0
+        fail_msg: >-
+          Set DITTO_PG_PASSWORD to the platform-db-password secret value:
+          export DITTO_PG_PASSWORD=$(gcloud secrets versions access latest
+          --secret=platform-db-password --project=ditto-app-dev)
+      run_once: true
+  roles:
+    - base
+    - postgres

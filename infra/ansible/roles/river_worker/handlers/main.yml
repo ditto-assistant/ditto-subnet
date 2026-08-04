@@ -1,0 +1,10 @@
+---
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart ditto-worker
+  ansible.builtin.systemd:
+    name: "{{ river_worker_unit }}"
+    state: restarted
+  when: river_worker_bin_stat.stat.exists | default(false)

@@ -1,0 +1,68 @@
+---
+# Converge the dedicated SN118 screener VM (infra/terraform/stacks/gcp-platform → ditto-screener-dev,
+# label role=screener → group role_screener). Installs base hardening + uv, the
+# dedicated rootless Docker executor, then the stateless ditto-screener worker.
+# Submitted Dockerfiles may use any implementation language.
+#
+# Unlike the validator VM, this host runs ONLY the screener: no dittobench-api
+# scoring engine, no validator worker. It posts signed pass/fail verdicts, never
+# weights, so it needs no Pylon and no on-chain write path.
+#
+# Per-VM config (platform URL, netuid, hotkey) lives in
+# host_vars/ditto-screener-<env>.yml; the mnemonic and API token are read from
+# Secret Manager at converge time via the VM's attached SA. No repository or
+# provider credential is made available to submission builds.
+#
+#   GCP_OSLOGIN_USER=… \
+#     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-screener.yml
+- name: Converge the SN118 screener VM
+  hosts: role_screener
+  become: true
+  gather_facts: true
+
+  # base first (creates the deploy user + uv + hardening), then the CLI/rootless
+  # prerequisites, then the screener role provisions its separate executor user.
+  roles:
+    - base
+
+  tasks:
+    # Docker engine + git for the build gate. Mirrors the dittobench role's
+    # Docker setup (that role is validator-only and also builds the scoring
+    # engine, which the screener does not need), kept minimal here.
+    - name: Add Docker apt key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /usr/share/keyrings/docker.asc
+        mode: "0644"
+      tags: [docker]
+
+    # apt_repository is deprecated (removed in ansible-core 2.25). The
+    # deb822_repository migration is deferred — see ../roles/README.md
+    # "Deferred: apt_repository -> deb822_repository".
+    - name: Add Docker apt repo
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts['distribution_release'] }} stable"
+        filename: docker
+        state: present
+      tags: [docker]
+
+    - name: Install Docker CLI, rootless executor prerequisites, and git
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - docker-ce-rootless-extras
+          - containerd.io
+          - uidmap
+          - slirp4netns
+          - fuse-overlayfs
+          - dbus-user-session
+          - iptables
+          - git
+        state: present
+        update_cache: true
+      tags: [docker]
+
+    - name: Provision the screener worker
+      ansible.builtin.include_role:
+        name: screener_worker

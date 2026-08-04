@@ -1,0 +1,158 @@
+name: Infrastructure plan or apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Create a private plan or apply an exact existing plan
+        required: true
+        type: choice
+        options: [plan, apply]
+      root:
+        description: Terraform state root
+        required: true
+        type: choice
+        options: [gcp-platform, cloudflare-dittobench]
+      plan_sha:
+        description: Exact main commit used by the plan (required for apply)
+        required: false
+        type: string
+      plan_run_id:
+        description: Plan workflow run id (required for apply)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-${{ inputs.root }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  PLAN_BUCKET: ditto-app-dev-tfstate
+
+jobs:
+  plan:
+    if: inputs.operation == 'plan'
+    runs-on: ubuntu-latest
+    environment: infra-plan
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_TF_PLAN_SA }}
+
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+
+      - name: Select exact root
+        id: root
+        run: |
+          case '${{ inputs.root }}' in
+            gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
+            cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
+            *) exit 2 ;;
+          esac
+          echo "path=$root" >> "$GITHUB_OUTPUT"
+
+      - name: Initialize
+        run: terraform -chdir=${{ steps.root.outputs.path }} init
+
+      - name: Create exact private plan
+        env:
+          TF_VAR_db_password: ${{ secrets.PLATFORM_DB_PASSWORD }}
+          TF_VAR_pylon_open_access_token: ${{ secrets.PLATFORM_PYLON_OPEN_ACCESS_TOKEN_JSON }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_zone_id: ${{ inputs.root == 'gcp-platform' && vars.CLOUDFLARE_HEYDITTO_ZONE_ID || vars.CLOUDFLARE_DITTOBENCH_ZONE_ID }}
+        run: terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan
+
+      - name: Seal plan in private GCS
+        id: seal
+        run: |
+          sha=$(git rev-parse HEAD)
+          plan=${{ steps.root.outputs.path }}/tfplan
+          checksum=$(sha256sum "$plan" | awk '{print $1}')
+          prefix="gs://${PLAN_BUCKET}/ci-plans/${{ inputs.root }}/${sha}/${GITHUB_RUN_ID}"
+          gcloud storage cp "$plan" "${prefix}.tfplan"
+          printf '%s  tfplan\n' "$checksum" | gcloud storage cp - "${prefix}.sha256"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Plan handoff
+        run: |
+          echo "Plan SHA: ${{ steps.seal.outputs.sha }}"
+          echo "Plan run id: ${GITHUB_RUN_ID}"
+          echo "Plan checksum: ${{ steps.seal.outputs.checksum }}"
+
+  apply:
+    if: inputs.operation == 'apply'
+    runs-on: ubuntu-latest
+    environment: infra-apply
+    steps:
+      - name: Validate immutable plan identity
+        run: |
+          [[ '${{ inputs.plan_sha }}' =~ ^[0-9a-f]{40}$ ]]
+          [[ '${{ inputs.plan_run_id }}' =~ ^[0-9]+$ ]]
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.plan_sha }}
+          fetch-depth: 0
+
+      - name: Require plan commit to remain current main
+        run: |
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_TF_APPLY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+
+      - name: Select exact root
+        id: root
+        run: |
+          case '${{ inputs.root }}' in
+            gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
+            cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
+            *) exit 2 ;;
+          esac
+          echo "path=$root" >> "$GITHUB_OUTPUT"
+
+      - name: Initialize
+        run: terraform -chdir=${{ steps.root.outputs.path }} init
+
+      - name: Fetch and verify exact private plan
+        run: |
+          prefix="gs://${PLAN_BUCKET}/ci-plans/${{ inputs.root }}/${{ inputs.plan_sha }}/${{ inputs.plan_run_id }}"
+          gcloud storage cp "${prefix}.tfplan" "${{ steps.root.outputs.path }}/tfplan"
+          gcloud storage cp "${prefix}.sha256" "${{ steps.root.outputs.path }}/tfplan.sha256"
+          cd "${{ steps.root.outputs.path }}"
+          sha256sum -c tfplan.sha256
+
+      - name: Apply the reviewed binary plan
+        env:
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: terraform -chdir=${{ steps.root.outputs.path }} apply tfplan
+
+      - name: Remove consumed private plan
+        if: success()
+        run: |
+          prefix="gs://${PLAN_BUCKET}/ci-plans/${{ inputs.root }}/${{ inputs.plan_sha }}/${{ inputs.plan_run_id }}"
+          gcloud storage rm "${prefix}.tfplan" "${prefix}.sha256"

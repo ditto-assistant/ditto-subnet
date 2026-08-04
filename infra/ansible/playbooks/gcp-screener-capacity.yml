@@ -1,0 +1,13 @@
+---
+# Converge the isolated federated screener capacity controller. It owns provider
+# mutations but executes no submissions and holds no long-lived GCP key.
+#
+#   GCP_OSLOGIN_USER=... ansible-playbook -i infra/ansible/inventory/gcp.yml \
+#     infra/ansible/playbooks/gcp-screener-capacity.yml
+- name: Converge the screener capacity controller
+  hosts: role_screener_capacity
+  become: true
+  gather_facts: true
+  roles:
+    - base
+    - screener_capacity_controller

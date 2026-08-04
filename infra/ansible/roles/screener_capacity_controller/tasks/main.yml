@@ -1,0 +1,150 @@
+---
+- name: Assert required capacity-controller configuration
+  ansible.builtin.assert:
+    that:
+      - screener_capacity_gcp_bootstrap_service_account | length > 0
+      - screener_capacity_source_review_secret_resource | length > 0
+      - screener_capacity_builder_registry_service_account | length > 0
+      - screener_capacity_builder_kaniko_image | length > 0
+      - screener_capacity_global_cap | int > 0
+    fail_msg: "capacity controller bootstrap identity and source-review resource are required"
+
+- name: Verify gcloud is available for ADC and Secret Manager
+  ansible.builtin.command: gcloud --version
+  changed_when: false
+
+- name: Ensure controller directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ screener_capacity_checkout }}", owner: "{{ screener_capacity_owner }}", group: "{{ screener_capacity_group }}", mode: "0755" }
+    - { path: "{{ screener_capacity_state_dir }}", owner: "{{ screener_capacity_owner }}", group: "{{ screener_capacity_group }}", mode: "0700" }
+    - { path: "{{ screener_capacity_state_dir }}/gcloud", owner: "{{ screener_capacity_owner }}", group: "{{ screener_capacity_group }}", mode: "0700" }
+    - { path: "{{ screener_capacity_config_dir }}", owner: "{{ screener_capacity_owner }}", group: "{{ screener_capacity_group }}", mode: "0700" }
+
+- name: Clone or update the subnet monorepo
+  ansible.builtin.git:
+    repo: "{{ screener_capacity_repo_url }}"
+    dest: "{{ screener_capacity_checkout }}"
+    version: "{{ screener_capacity_branch }}"
+    force: true
+  become_user: "{{ screener_capacity_owner }}"
+  register: screener_capacity_clone
+
+- name: Check for uv
+  ansible.builtin.command: /usr/local/bin/uv --version
+  changed_when: false
+  failed_when: false
+  register: screener_capacity_uv
+
+- name: Install uv when absent
+  when: screener_capacity_uv.rc != 0
+  block:
+    - name: Download the pinned-path uv installer
+      ansible.builtin.get_url:
+        url: https://astral.sh/uv/install.sh
+        dest: /tmp/uv-install-screener-capacity.sh
+        mode: "0755"
+    - name: Install uv
+      ansible.builtin.command: /tmp/uv-install-screener-capacity.sh
+      environment:
+        UV_INSTALL_DIR: /usr/local/bin
+      changed_when: true
+
+- name: Sync the capacity-controller environment
+  ansible.builtin.command:
+    cmd: /usr/local/bin/uv sync --frozen
+    chdir: "{{ screener_capacity_service_dir }}"
+  become_user: "{{ screener_capacity_owner }}"
+  environment:
+    UV_PROJECT_ENVIRONMENT: "{{ screener_capacity_venv }}"
+  changed_when: screener_capacity_clone.changed
+  notify:
+    - restart screener capacity controller
+    - restart trusted image builder
+
+- name: Read provider and controller credentials through the attached identity
+  ansible.builtin.command: >-
+    gcloud secrets versions access latest
+    --secret={{ item.secret }} --project={{ screener_capacity_gce_project }}
+  loop:
+    - { name: targon-api-key, secret: "{{ screener_capacity_targon_api_key_secret }}" }
+    - { name: platform-controller-token, secret: "{{ screener_capacity_platform_token_secret }}" }
+  loop_control:
+    label: "{{ item.name }}"
+  register: screener_capacity_secret_reads
+  changed_when: false
+  no_log: true
+
+- name: Write credentials as mode-0600 files
+  ansible.builtin.copy:
+    content: "{{ item.stdout }}\n"
+    dest: "{{ screener_capacity_config_dir }}/{{ item.item.name }}"
+    owner: "{{ screener_capacity_owner }}"
+    group: "{{ screener_capacity_group }}"
+    mode: "0600"
+  loop: "{{ screener_capacity_secret_reads.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+  notify:
+    - restart screener capacity controller
+    - restart trusted image builder
+
+- name: Write the expiring hostile-runtime capability attestation
+  ansible.builtin.template:
+    src: targon-capability.json.j2
+    dest: "{{ screener_capacity_config_dir }}/targon-capability.json"
+    owner: "{{ screener_capacity_owner }}"
+    group: "{{ screener_capacity_group }}"
+    mode: "0600"
+  notify: restart screener capacity controller
+
+- name: Write non-secret federated worker settings
+  ansible.builtin.copy:
+    content: "{{ screener_capacity_worker_env | to_json }}\n"
+    dest: "{{ screener_capacity_config_dir }}/worker-env.json"
+    owner: "{{ screener_capacity_owner }}"
+    group: "{{ screener_capacity_group }}"
+    mode: "0600"
+  notify: restart screener capacity controller
+
+- name: Install capacity-controller systemd unit
+  ansible.builtin.template:
+    src: ditto-screener-capacity.service.j2
+    dest: "/etc/systemd/system/{{ screener_capacity_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd for screener capacity
+    - restart screener capacity controller
+
+- name: Install trusted-image builder systemd unit
+  ansible.builtin.template:
+    src: ditto-image-builder.service.j2
+    dest: "/etc/systemd/system/{{ screener_capacity_builder_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd for screener capacity
+    - restart trusted image builder
+
+- name: Enable and start the capacity controller
+  ansible.builtin.systemd:
+    name: "{{ screener_capacity_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Enable and start the trusted image builder
+  ansible.builtin.systemd:
+    name: "{{ screener_capacity_builder_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,72 @@
+---
+# Fail-fast preflight for the platform_app role. Runs BEFORE any template is
+# rendered, so a mis-invoked converge stops without touching
+# /opt/ditto-platform/.env at all.
+#
+# WHY (2026-07-23, prod): this play was run against ditto-platform-prod with
+# only GCP_OSLOGIN_USER exported — the sole variable the playbook header
+# documented. Every PLATFORM_* value in group_vars/role_platform_app.yml fell
+# back to its `default(…)`, the converge reported `ok=54 changed=2 failed=0`,
+# and .env was rewritten with POSTGRES_HOST=TODO_TF_OUTPUT_pg_internal_ip,
+# STORAGE_ACCESS_KEY=TODO_TF_OUTPUT_storage_hmac_access_id and no
+# DATA_PIPELINE_URL. Prod only survived because the running process still held
+# its old environment in memory; the next restart would have taken the API down.
+#
+# The required/optional split is deliberate and lives in defaults/main.yml:
+#   REQUIRED  -> platform_required_env_values  (hard fail)
+#   OPTIONAL  -> platform_optional_env_values  ("empty = disabled" by design;
+#                                               warn loudly, never fail)
+
+- name: Preflight — require the Terraform-derived values that must never be placeholders
+  vars:
+    platform_preflight_value: "{{ lookup('vars', item.var, default='') | string }}"
+  ansible.builtin.assert:
+    that:
+      - platform_preflight_value | length > 0
+      - "'TODO_' not in platform_preflight_value"
+    fail_msg: |
+      {{ item.env }} is not set, so {{ item.var }} fell back to its placeholder
+      default and would render {{ item.renders }}={{ platform_preflight_value or '<empty>' }}
+      into {{ platform_root }}/.env on {{ inventory_hostname }}.
+
+      Consequence if this were written: {{ item.impact }}
+      It would NOT fail now — the running app keeps its old in-memory
+      environment, so the damage only surfaces at the next restart or reboot.
+
+      Fix — export every value this play needs, from Terraform outputs:
+        source infra/ansible/scripts/platform-app-env.sh
+      or just this one:
+        export {{ item.env }}="$(terraform -chdir=infra/terraform/stacks/gcp-platform output -raw {{ item.tf_output }})"
+      then re-run the playbook.
+    quiet: true
+  loop: "{{ platform_required_env_values }}"
+  loop_control:
+    label: "{{ item.var }} ({{ item.env }})"
+
+- name: Preflight — warn about optional integrations that will render DISABLED
+  vars:
+    platform_preflight_value: "{{ lookup('vars', item.var, default='') | string }}"
+  ansible.builtin.debug:
+    msg: |
+      *** WARNING: {{ item.env }} is empty — {{ item.renders }} will be OMITTED
+      *** from {{ platform_root }}/.env, so {{ item.disabled }}
+      ***
+      *** This is a supported configuration (empty = disabled, opt-in), so the
+      *** converge continues. If you did not mean to turn this off:
+      ***   export {{ item.env }}="$(terraform -chdir=infra/terraform/stacks/gcp-platform output -raw {{ item.tf_output }})"
+      *** and re-run before restarting the app.
+  when: lookup('vars', item.var, default='') | string | length == 0
+  loop: "{{ platform_optional_env_values }}"
+  loop_control:
+    label: "{{ item.var }} ({{ item.env }})"
+
+# Restated after the render (tasks/main.yml) so a disabled feature is not buried
+# under 50 ok= lines — which is exactly how silently-disabled dataset pinning
+# went unnoticed on 2026-07-23.
+- name: Preflight — record which optional integrations will render DISABLED
+  ansible.builtin.set_fact:
+    platform_disabled_integrations: "{{ platform_disabled_integrations | default([]) + [item.renders] }}"
+  when: lookup('vars', item.var, default='') | string | length == 0
+  loop: "{{ platform_optional_env_values }}"
+  loop_control:
+    label: "{{ item.renders }}"

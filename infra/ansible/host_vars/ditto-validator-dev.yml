@@ -1,0 +1,51 @@
+---
+# Per-VM config for the dev validator. inventory_hostname = the GCE instance name
+# (ditto-validator-dev). Chain values track the dev localnet described in
+# ditto-subnet/docs/STATE-OF-THE-SUBNET.md.
+
+validator_env: dev
+
+# The worker calls the deployed dev platform API over HTTP.
+validator_platform_api_url: "https://platform-api-dev.heyditto.ai"
+
+# Dev localnet (node-subtensor at this ws endpoint), netuid 3.
+validator_subtensor_network: "ws://68.183.141.180:80"
+validator_netuid: 3
+
+# Weight path: rehearse the PRODUCTION Pylon identity (put_weights) path on the
+# dev localnet rather than the SDK fallback, so the co-located Pylon sidecar
+# (validator_pylon role) is exercised end-to-end before finney. Pylon signs
+# set_weights from the mounted hotkey (materialized from validator-hotkey-mnemonic)
+# against this same netuid/ws. Revert to the SDK path by setting
+# validator_use_sdk_weights: true + validator_pylon_identity_enabled: false.
+validator_use_sdk_weights: false
+validator_pylon_identity_enabled: true
+
+# Real scoring through the co-located dittobench-api (set true for a pure
+# plumbing test with no OpenRouter key / no Docker build).
+validator_dittobench_mock: false
+validator_run_size: full
+
+# C-ISO: confine untrusted miner containers to the allowlisting egress proxy +
+# DOCKER-USER firewall (dittobench role). Enabled on dev to exercise the
+# enforcement before finney. See infra docs/validator-deploy.md and
+# dittobench-api docs/sandbox-egress-hardening.md.
+dittobench_sandbox_egress_enabled: true
+
+# The validator's PUBLIC SS58 hotkey (safe to commit; the signing mnemonic is a
+# Secret Manager value). Must match the loaded keypair. Empty until registered
+# on netuid 3 with a permit + stake — the worker unit stays installed-but-stopped
+# until this is set (see docs/validator-deploy.md).
+validator_hotkey: "5EexQS8UxChmkZ6vGeacAkwcf3TARR1Go5rd684Mf69dwgTY"
+
+# Publish opt-in aggregate telemetry to wandb (heyditto/ditto-sn118). The API key
+# is the `validator-wandb-key` Secret Manager value; the dashboard's "full
+# telemetry" link resolves once DITTO_DASHBOARD_WANDB_URL is set on the platform.
+validator_wandb_enabled: true
+
+# Screener moved to its own dedicated VM (ditto-screener-dev, role=screener; see
+# host_vars/ditto-screener-dev.yml + playbooks/gcp-screener.yml). Left empty here
+# so the co-located unit stays stopped and we never run two screeners on the same
+# hotkey against the same queue. Re-set to "{{ validator_hotkey }}" only to fall
+# back to co-locating on the validator VM.
+screener_hotkey: ""

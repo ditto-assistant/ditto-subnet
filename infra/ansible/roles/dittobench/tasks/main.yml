@@ -1,0 +1,328 @@
+---
+- name: Validate bounded DittoBench run capacity
+  ansible.builtin.assert:
+    that:
+      - dittobench_max_concurrent_runs | int >= 1
+      - dittobench_max_concurrent_runs | int <= 8
+      - dittobench_max_concurrent_runs | int == validator_benchmark_capacity | default(dittobench_max_concurrent_runs) | int
+    fail_msg: DittoBench and validator capacities must match within 1..8
+
+# Provision the DittoBench scoring engine on the validator VM: Docker engine, a
+# pinned Go toolchain, a git checkout + `go build` of dittobench-api, the gh
+# token (for building miner harnesses that depend on the private ditto-harness),
+# the rendered env, and a systemd unit. The service is loopback-only and is
+# driven exclusively by the co-located validator worker.
+
+# --- gcloud (read secrets via the VM's attached SA / ADC) ---
+- name: Ensure gcloud is available
+  ansible.builtin.command: gcloud --version
+  register: dittobench_gcloud_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Google Cloud CLI if missing
+  when: dittobench_gcloud_check.rc != 0
+  block:
+    - name: Add Google Cloud apt key
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/cloud.google.gpg
+        mode: "0644"
+    # apt_repository is deprecated (removed in ansible-core 2.25). The
+    # deb822_repository migration is deferred — see roles/README.md
+    # "Deferred: apt_repository -> deb822_repository".
+    - name: Add Google Cloud apt repo
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main"
+        filename: google-cloud-sdk
+        state: present
+    - name: Install google-cloud-cli
+      ansible.builtin.apt:
+        name: google-cloud-cli
+        state: present
+        update_cache: true
+
+# --- Docker engine + compose plugin (dittobench shells out to `docker`) ---
+- name: Add Docker apt key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /usr/share/keyrings/docker.asc
+    mode: "0644"
+
+# apt_repository is deprecated (removed in ansible-core 2.25). The
+# deb822_repository migration is deferred — see roles/README.md
+# "Deferred: apt_repository -> deb822_repository".
+- name: Add Docker apt repo
+  ansible.builtin.apt_repository:
+    repo: "deb [arch={{ dittobench_docker_apt_arch }} signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts['distribution_release'] }} stable"
+    filename: docker
+    state: present
+
+- name: Install Docker engine + git
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - git
+    state: present
+    update_cache: true
+
+- name: Ensure Docker is enabled and running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Add the service user to the docker group
+  ansible.builtin.user:
+    name: "{{ dittobench_user }}"
+    groups: docker
+    append: true
+
+# --- Directories ---
+- name: Ensure dittobench + logs + secrets dirs
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ dittobench_user }}"
+    group: "{{ dittobench_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ dittobench_root }}", mode: "0755" }
+    - { path: "{{ dittobench_logs_dir }}", mode: "0750" }
+    - { path: "{{ dittobench_secrets_dir }}", mode: "0750" }
+
+# --- Pinned Go toolchain (the binary is pure Go; build it on the VM) ---
+- name: Check installed Go version
+  ansible.builtin.command: "{{ dittobench_go_root }}/bin/go version"
+  register: dittobench_go_check
+  changed_when: false
+  failed_when: false
+
+- name: Install pinned Go toolchain
+  when: dittobench_go_version not in (dittobench_go_check.stdout | default(''))
+  block:
+    - name: Require the checksum-pinned Go architecture
+      ansible.builtin.assert:
+        that: dittobench_docker_apt_arch == 'amd64'
+        fail_msg: Add and select a reviewed Go checksum before changing architecture
+    - name: Download Go tarball
+      ansible.builtin.get_url:
+        url: "https://go.dev/dl/go{{ dittobench_go_version }}.linux-{{ dittobench_docker_apt_arch }}.tar.gz"
+        dest: "/tmp/go{{ dittobench_go_version }}.tar.gz"
+        checksum: "sha256:{{ dittobench_go_linux_amd64_sha256 }}"
+        mode: "0644"
+    - name: Remove any previous Go install
+      ansible.builtin.file:
+        path: "{{ dittobench_go_root }}"
+        state: absent
+    - name: Extract Go to /usr/local
+      ansible.builtin.unarchive:
+        src: "/tmp/go{{ dittobench_go_version }}.tar.gz"
+        dest: /usr/local
+        remote_src: true
+
+# --- GitHub token: clone the private repo over HTTPS + BuildKit gh_token ---
+- name: Read the validator GitHub token from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ dittobench_gh_token_secret }} --project={{ dittobench_gcp_project }}"
+  register: dittobench_gh_token
+  changed_when: false
+  no_log: true
+
+- name: Write the BuildKit gh_token secret file
+  ansible.builtin.copy:
+    content: "{{ dittobench_gh_token.stdout }}"
+    dest: "{{ dittobench_gh_token_file }}"
+    owner: "{{ dittobench_user }}"
+    group: "{{ dittobench_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Install non-persisting Git credential helper
+  ansible.builtin.copy:
+    dest: /usr/local/bin/ditto-git-askpass
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      case "$1" in
+        *Username*) printf '%s\n' x-access-token ;;
+        *Password*) cat "$DITTO_GIT_TOKEN_FILE" ;;
+        *) exit 1 ;;
+      esac
+
+# --- Clone + build dittobench-api ---
+- name: Require an immutable dittobench-api revision
+  ansible.builtin.assert:
+    that: dittobench_branch is match('^[0-9a-f]{40}$')
+    fail_msg: dittobench_branch must be a full reviewed commit SHA
+
+- name: Clone/update dittobench-api at the pinned branch
+  ansible.builtin.git:
+    repo: "https://github.com/{{ dittobench_repo }}.git"
+    dest: "{{ dittobench_root }}/src"
+    version: "{{ dittobench_branch }}"
+    force: true
+  become_user: "{{ dittobench_user }}"
+  environment:
+    GIT_ASKPASS: /usr/local/bin/ditto-git-askpass
+    GIT_TERMINAL_PROMPT: "0"
+    DITTO_GIT_TOKEN_FILE: "{{ dittobench_gh_token_file }}"
+  register: dittobench_clone
+
+- name: Read deployed dittobench-api revision
+  ansible.builtin.command: git rev-parse HEAD
+  args:
+    chdir: "{{ dittobench_root }}/src"
+  become_user: "{{ dittobench_user }}"
+  register: dittobench_deployed_revision
+  changed_when: false
+
+- name: Verify deployed dittobench-api revision
+  ansible.builtin.assert:
+    that: dittobench_deployed_revision.stdout == dittobench_branch
+    fail_msg: dittobench-api checkout does not match the reviewed revision
+
+- name: Stat the binary before building
+  ansible.builtin.stat:
+    path: "{{ dittobench_bin }}"
+  register: dittobench_bin_pre
+
+- name: Stat the frozen v6 relay binary before building
+  ansible.builtin.stat:
+    path: "{{ dittobench_relay_bin }}"
+  register: dittobench_relay_bin_pre
+
+- name: Build the dittobench-api binary
+  ansible.builtin.command:
+    cmd: "{{ dittobench_go_root }}/bin/go build -o {{ dittobench_bin }} ./cmd/dittobench-api"
+    chdir: "{{ dittobench_root }}/src"
+  become_user: "{{ dittobench_user }}"
+  environment:
+    GOCACHE: "{{ dittobench_root }}/.gocache"
+    GOPATH: "{{ dittobench_root }}/.gopath"
+  when: dittobench_clone.changed or not dittobench_bin_pre.stat.exists
+  register: dittobench_build
+  changed_when: true
+  notify: restart dittobench-api
+
+- name: Build the frozen v6 model relay
+  ansible.builtin.command:
+    cmd: "{{ dittobench_go_root }}/bin/go build -o {{ dittobench_relay_bin }} ./cmd/model-relay"
+    chdir: "{{ dittobench_root }}/src"
+  become_user: "{{ dittobench_user }}"
+  environment:
+    GOCACHE: "{{ dittobench_root }}/.gocache"
+    GOPATH: "{{ dittobench_root }}/.gopath"
+  when:
+    - dittobench_relay_enabled | bool
+    - dittobench_clone.changed or not dittobench_relay_bin_pre.stat.exists
+  register: dittobench_relay_build
+  changed_when: true
+  notify: restart dittobench-model-relay
+
+- name: Read frozen v6 relay OpenRouter key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ dittobench_openrouter_secret }} --project={{ dittobench_gcp_project }}"
+  register: dittobench_relay_openrouter_read
+  changed_when: false
+  no_log: true
+  when: dittobench_relay_enabled | bool
+
+- name: Render frozen v6 relay environment
+  ansible.builtin.template:
+    src: model-relay.env.j2
+    dest: "{{ dittobench_relay_env_file }}"
+    owner: "{{ dittobench_user }}"
+    group: "{{ dittobench_group }}"
+    mode: "0640"
+  vars:
+    dittobench_relay_openrouter_key: "{{ dittobench_relay_openrouter_read.stdout }}"
+  no_log: true
+  when: dittobench_relay_enabled | bool
+  notify: restart dittobench-model-relay
+
+- name: Guard the rendered relay env file against unresolved placeholders
+  ansible.builtin.include_role:
+    name: env_render_guard
+  vars:
+    env_render_guard_path: "{{ dittobench_relay_env_file }}"
+    env_render_guard_label: "{{ dittobench_relay_env_file }} on {{ inventory_hostname }}"
+  when: dittobench_relay_enabled | bool
+
+- name: Install frozen v6 relay systemd unit
+  ansible.builtin.template:
+    src: dittobench-model-relay.service.j2
+    dest: "/etc/systemd/system/{{ dittobench_relay_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart dittobench-model-relay
+
+- name: Enable frozen v6 relay during transition
+  ansible.builtin.systemd:
+    name: "{{ dittobench_relay_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: dittobench_relay_enabled | bool
+
+- name: Disable frozen v6 relay after enforcement
+  ansible.builtin.systemd:
+    name: "{{ dittobench_relay_unit }}"
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  when: not (dittobench_relay_enabled | bool)
+
+# --- Env + unit ---
+- name: Render dittobench env file
+  ansible.builtin.template:
+    src: dittobench.env.j2
+    dest: "{{ dittobench_env_file }}"
+    owner: "{{ dittobench_user }}"
+    group: "{{ dittobench_group }}"
+    mode: "0640"
+  notify: restart dittobench-api
+
+- name: Guard the rendered dittobench env file against unresolved placeholders
+  ansible.builtin.include_role:
+    name: env_render_guard
+  vars:
+    env_render_guard_path: "{{ dittobench_env_file }}"
+    env_render_guard_label: "{{ dittobench_env_file }} on {{ inventory_hostname }}"
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: dittobench-api.service.j2
+    dest: "/etc/systemd/system/{{ dittobench_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart dittobench-api
+
+- name: Stat the built binary
+  ansible.builtin.stat:
+    path: "{{ dittobench_bin }}"
+  register: dittobench_bin_stat
+
+- name: Enable + start dittobench-api (once the binary exists)
+  ansible.builtin.systemd:
+    name: "{{ dittobench_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: dittobench_bin_stat.stat.exists
+
+# --- C-ISO: untrusted-sandbox egress enforcement (opt-in) ---
+# Included last so the dittobench-api checkout (Dockerfile.egress-proxy) and
+# `dittobench_clone` are available to build the proxy image.
+- name: Provision sandbox egress isolation
+  ansible.builtin.include_tasks: egress.yml
+  when: dittobench_sandbox_egress_enabled | default(false)

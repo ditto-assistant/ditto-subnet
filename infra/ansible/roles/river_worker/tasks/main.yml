@@ -1,0 +1,71 @@
+---
+# The River background-job worker, co-located with Postgres (River is
+# Postgres-backed, so the worker lives next to the DB). systemd single-slot,
+# long TimeoutStopSec for the 30-min drain — Cloud Run can't host this.
+#
+# The worker BINARY is shipped by CI (same model as the Hetzner box); this role
+# installs the unit + env file and starts the service only once a binary exists.
+
+- name: Ensure worker slot + logs dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ river_worker_user }}"
+    group: "{{ river_worker_group }}"
+    mode: "0750"
+  loop:
+    - "{{ river_worker_slot_dir }}"
+    - "{{ river_worker_logs_dir }}"
+
+- name: Read the Postgres app-role password
+  ansible.builtin.slurp:
+    src: "{{ river_worker_secrets_dir }}/postgres-{{ postgres_app_user }}.password"
+  register: river_worker_pg_pw
+  no_log: true
+
+- name: Render worker env file
+  ansible.builtin.template:
+    src: worker.env.j2
+    dest: "{{ river_worker_env_file }}"
+    owner: "{{ river_worker_user }}"
+    group: "{{ river_worker_group }}"
+    mode: "0640"
+  vars:
+    worker_pg_password: "{{ river_worker_pg_pw.content | b64decode | trim }}"
+  no_log: true
+  notify: restart ditto-worker
+
+- name: Guard the rendered worker env file against unresolved placeholders
+  ansible.builtin.include_role:
+    name: env_render_guard
+  vars:
+    env_render_guard_path: "{{ river_worker_env_file }}"
+    env_render_guard_label: "{{ river_worker_env_file }} on {{ inventory_hostname }}"
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: ditto-worker.service.j2
+    dest: "/etc/systemd/system/{{ river_worker_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart ditto-worker
+
+- name: Enable the worker unit (daemon-reload)
+  ansible.builtin.systemd:
+    name: "{{ river_worker_unit }}"
+    enabled: true
+    daemon_reload: true
+
+- name: Check whether the worker binary has been shipped
+  ansible.builtin.stat:
+    path: "{{ river_worker_bin }}"
+  register: river_worker_bin_stat
+
+- name: Start the worker (only once CI has shipped the binary)
+  ansible.builtin.systemd:
+    name: "{{ river_worker_unit }}"
+    state: started
+  when: river_worker_bin_stat.stat.exists

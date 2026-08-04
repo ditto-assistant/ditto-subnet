@@ -1,0 +1,18 @@
+# Managed by Ansible (screening_queue_metric role) — do not edit by hand.
+[Unit]
+Description=Publish SN118 screening queue depth to Cloud Monitoring
+Documentation=https://github.com/ditto-assistant/infra
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{ screening_queue_metric_script }}
+# The API may be briefly down during deploys; the next timer tick retries.
+SuccessExitStatus=0
+User=nobody
+Group=nogroup
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true

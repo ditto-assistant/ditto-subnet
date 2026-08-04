@@ -1,0 +1,204 @@
+---
+# Idempotent Postgres setup. Ported from
+# backend/scripts/dittobox/setup-postgres.sh.
+
+- name: Install psycopg2 (for community.postgresql modules)
+  ansible.builtin.apt:
+    name: python3-psycopg2
+    state: present
+
+- name: Discover installed Postgres major version
+  ansible.builtin.shell: |
+    set -euo pipefail
+    psql --version | grep -oE '[0-9]+' | head -1
+  register: pg_version_cmd
+  changed_when: false
+  check_mode: false
+
+- name: Set Postgres version facts
+  ansible.builtin.set_fact:
+    pg_version: "{{ pg_version_cmd.stdout }}"
+    pg_conf_path: "/etc/postgresql/{{ pg_version_cmd.stdout }}/main/postgresql.conf"
+    pg_hba_path: "/etc/postgresql/{{ pg_version_cmd.stdout }}/main/pg_hba.conf"
+
+- name: Install pgvector
+  ansible.builtin.apt:
+    name: "postgresql-{{ pg_version }}-pgvector"
+    state: present
+
+- name: Ensure /opt/ditto/logs/postgresql is owned by postgres
+  ansible.builtin.file:
+    path: /opt/ditto/logs/postgresql
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0755"
+
+- name: Render tuning drop-in (idempotent — Ansible-managed block)
+  ansible.builtin.blockinfile:
+    path: "{{ pg_conf_path }}"
+    create: false
+    marker: "# {mark} ANSIBLE Dittobox Tuning"
+    block: |
+      {% for k, v in postgres_tuning.items() %}
+      {{ k }} = {{ v }}
+      {% endfor %}
+  notify: restart postgresql
+
+- name: Render pg_hba.conf
+  ansible.builtin.copy:
+    dest: "{{ pg_hba_path }}"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+    content: |
+      # Managed by infra/ansible/roles/postgres. Edits here are wiped on next run.
+      # TYPE  DATABASE  USER       ADDRESS        METHOD
+
+      # Local connections
+      local   all       postgres                  peer
+      local   all       {{ postgres_app_user }}                     scram-sha-256
+
+      # Localhost (backend, pipelines)
+      host    all       {{ postgres_app_user }}      127.0.0.1/32   scram-sha-256
+      host    all       {{ postgres_app_user }}      ::1/128        scram-sha-256
+
+      # Extra host rules (e.g. GCP VPC subnet so Cloud Run's DIRECT URI can
+      # reach Postgres). Supplied via postgres_hba_hosts; empty on Hetzner.
+      {% for h in postgres_hba_hosts | default([]) %}
+      host    {{ h.database | default('all') }}    {{ h.user | default(postgres_app_user) }}    {{ h.address }}    {{ h.method | default('scram-sha-256') }}
+      {% endfor %}
+  notify: restart postgresql
+
+- name: Ensure secrets file directory
+  ansible.builtin.file:
+    path: "{{ ditto_secrets }}"
+    state: directory
+    owner: "{{ deploy_user | default('deploy') }}"
+    group: "{{ deploy_group | default('ditto') }}"
+    mode: "0750"
+
+# Random password is generated on the box exactly once and persisted under
+# /opt/ditto/secrets/. Subsequent runs read it from the same file — we never
+# rotate from Ansible (would invalidate every env file at once).
+- name: Stat existing ditto Postgres password
+  ansible.builtin.stat:
+    path: "{{ ditto_secrets }}/postgres-{{ postgres_app_user }}.password"
+  register: pg_pw_file
+
+# GCP: the password is provided externally (postgres_app_password) so it matches
+# the Cloud Run connection-URI secrets Terraform builds. Hetzner leaves it unset
+# and falls back to the box-generated password below.
+#
+# Where the external password is REQUIRED (postgres_app_password_required — the
+# GCP VMs), fail before the box invents a password nobody else holds. Scoped to
+# hosts with no password yet: a day-2 converge without $DITTO_PG_PASSWORD
+# changes nothing and must keep working, so that case only warns (next task).
+- name: Assert an external Postgres password was supplied where one is required
+  ansible.builtin.assert:
+    that: postgres_app_password | default('') | length > 0
+    fail_msg: >-
+      DITTO_PG_PASSWORD is not set, so postgres_app_password is empty and this
+      role would generate a random box-local password for the '{{ postgres_app_user }}'
+      role. On this host the password must MATCH the one already distributed to
+      clients (Terraform's Cloud Run connection-URI secrets / the
+      platform-db-password Secret Manager entry), so a generated one authenticates
+      nobody. Export it and re-run, e.g.
+      `export DITTO_PG_PASSWORD=$(gcloud secrets versions access latest
+      --secret=platform-db-password --project=ditto-app-dev)`.
+    quiet: true
+  when:
+    - postgres_app_password_required | bool
+    - not pg_pw_file.stat.exists
+
+- name: Warn that the existing Postgres password is being left as-is
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: DITTO_PG_PASSWORD is not set, so the '{{ postgres_app_user }}'
+      password already on this host is left untouched. That is safe (this role
+      never rotates), but if you meant to set or change it, export
+      DITTO_PG_PASSWORD and re-run.
+  when:
+    - postgres_app_password_required | bool
+    - postgres_app_password | default('') | length == 0
+    - pg_pw_file.stat.exists
+
+- name: Write externally-provided Postgres password
+  ansible.builtin.copy:
+    dest: "{{ ditto_secrets }}/postgres-{{ postgres_app_user }}.password"
+    content: "{{ postgres_app_password }}"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  no_log: true
+  when: postgres_app_password | default('') | length > 0
+
+- name: Generate ditto Postgres password (first-time only)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    install -m 0640 -o postgres -g postgres /dev/null "{{ ditto_secrets }}/postgres-{{ postgres_app_user }}.password"
+    openssl rand -base64 24 | tr -d '/+=' | head -c 32 > "{{ ditto_secrets }}/postgres-{{ postgres_app_user }}.password"
+  args:
+    creates: "{{ ditto_secrets }}/postgres-{{ postgres_app_user }}.password"
+  when:
+    - not pg_pw_file.stat.exists
+    - postgres_app_password | default('') | length == 0
+
+- name: Read ditto Postgres password
+  ansible.builtin.slurp:
+    src: "{{ ditto_secrets }}/postgres-{{ postgres_app_user }}.password"
+  register: pg_pw_slurp
+  no_log: true
+
+- name: Ensure 'ditto' role exists with password
+  community.postgresql.postgresql_user:
+    name: "{{ postgres_app_user }}"
+    password: "{{ pg_pw_slurp.content | b64decode }}"
+    state: present
+  become_user: postgres
+  no_log: true
+
+- name: Ensure databases exist
+  community.postgresql.postgresql_db:
+    name: "{{ item }}"
+    owner: "{{ postgres_app_user }}"
+    state: present
+  become_user: postgres
+  loop: "{{ postgres_databases }}"
+
+- name: Ensure extensions schema exists
+  community.postgresql.postgresql_schema:
+    db: "{{ item }}"
+    name: extensions
+    owner: postgres
+    state: present
+  become_user: postgres
+  loop: "{{ postgres_databases }}"
+
+- name: Ensure extensions exist
+  community.postgresql.postgresql_ext:
+    db: "{{ item.0 }}"
+    name: "{{ item.1.name }}"
+    schema: "{{ item.1.schema }}"
+    state: present
+  become_user: postgres
+  loop: "{{ postgres_databases | product(postgres_extensions) | list }}"
+  loop_control:
+    label: "{{ item.0 }} :: {{ item.1.name }}"
+
+- name: Grant USAGE on extensions schema to ditto
+  community.postgresql.postgresql_privs:
+    db: "{{ item }}"
+    type: schema
+    objs: extensions
+    privs: USAGE
+    roles: "{{ postgres_app_user }}"
+    state: present
+  become_user: postgres
+  loop: "{{ postgres_databases }}"
+
+- name: Ensure postgresql service is enabled + running
+  ansible.builtin.systemd:
+    name: postgresql
+    enabled: true
+    state: started

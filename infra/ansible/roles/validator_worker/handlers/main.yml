@@ -1,0 +1,12 @@
+---
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart ditto-validator
+  ansible.builtin.systemd:
+    name: "{{ validator_unit }}"
+    state: restarted
+  when:
+    - validator_hotkey | length > 0
+    - validator_venv_python.stat.exists | default(false)

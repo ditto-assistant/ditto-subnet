@@ -1,0 +1,30 @@
+---
+# Publish the SN118 screening backlog as a Cloud Monitoring custom metric —
+# the autoscaling signal for the prod screener fleet (see
+# infra/terraform/stacks/gcp-platform/screener-fleet.tf and docs/screener-scaling.md).
+#
+# A systemd timer on the platform app VM polls the app's OWN public activity
+# endpoint on localhost (no auth, no Cloudflare hop) and writes
+# custom.googleapis.com/ditto/screener/queue_depth with an env label. The
+# depth = waiting_screening + screening: in-flight work is included so the
+# autoscaler doesn't shrink the fleet under instances that are mid-build.
+#
+# OFF by default; enabled per-host (host_vars/ditto-platform-prod.yml). The VM's
+# runtime SA needs roles/monitoring.metricWriter (granted by screener-fleet.tf,
+# gated on enable_screener_fleet).
+
+screening_queue_metric_enabled: false
+
+# Where the local API listens (Caddy proxies 443 -> this; we skip Caddy).
+screening_queue_metric_api_port: "{{ platform_api_port | default(8000) }}"
+
+# Metric identity. The env label must match the autoscaler's metric filter.
+screening_queue_metric_type: custom.googleapis.com/ditto/screener/queue_depth
+screening_queue_metric_env: "{{ platform_env }}"
+
+# Publish cadence. 60s matches the autoscaler's resolution needs; the activity
+# endpoint is a cheap local read at this rate.
+screening_queue_metric_interval_sec: 60
+
+screening_queue_metric_script: /usr/local/bin/publish-screening-queue-depth
+screening_queue_metric_unit: screening-queue-metric

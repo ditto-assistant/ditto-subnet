@@ -1,0 +1,94 @@
+---
+# Applies to the dedicated ditto-platform Postgres VM (label role=platform-postgres
+# → group role_platform_postgres). Kept separate from role_postgres (the backend
+# migration's VM) so the two never share database lists or tuning.
+
+# --- GCP placement ---
+gcp_project: ditto-app-dev
+gcp_region: us-central1
+gcp_zone: us-central1-a
+
+# --- Connection over IAP (the VM has no public IP) ---
+# Set GCP_OSLOGIN_USER to your OS Login username, e.g. nick_anderson_omniaura_ai
+# (run `gcloud compute os-login describe-profile` to find it).
+ansible_user: "{{ lookup('env', 'GCP_OSLOGIN_USER') | default('', true) }}"
+# accept-new: trust the host key on first connect to a freshly-created VM (no
+# known_hosts entry yet) without disabling verification on later connects.
+ansible_ssh_common_args: >-
+  -o StrictHostKeyChecking=accept-new
+  -o ProxyCommand="gcloud compute start-iap-tunnel {{ inventory_hostname }} 22
+  --listen-on-stdin --zone={{ gcp_zone }} --project={{ gcp_project }}
+  --verbosity=warning"
+
+# --- base role: this VM serves Postgres only — no Caddy, no Go, no uv ---
+base_install_caddy: false
+base_install_go: false
+base_install_uv: false
+
+# OS Login + IAM is the SSH gate here, and the connecting OS Login username is
+# not in base_ssh_allow_users — so DON'T emit sshd AllowUsers (it would lock out
+# the OS Login user Ansible itself connects as, mid-converge).
+base_ssh_set_allow_users: false
+
+# UFW default-denies; allow the app VMs to reach Postgres on the private subnet.
+base_ufw_extra_rules:
+  - { port: "5432", src: "10.30.0.0/24", comment: "Postgres from platform subnet" }
+
+# Postgres app-role password — MUST equal TF_VAR_db_password used by
+# infra/terraform/stacks/gcp-platform (which stores it in the platform-db-password secret the app
+# VMs read). Provide via env.
+#
+# postgres_app_password_required stops the box-generated fallback from silently
+# taking over on a host that has no password yet (playbooks/gcp-platform-pg.yml
+# also asserts the env var up front; this is the role-level backstop for anyone
+# who reaches the role by another route).
+postgres_app_password: "{{ lookup('env', 'DITTO_PG_PASSWORD') | default('', true) }}"
+postgres_app_password_required: true
+
+# --- Postgres: one VM, one database per deploy env ---
+postgres_databases:
+  - ditto_platform_dev
+  - ditto_platform_prod
+
+# Allow the platform subnet so the app VMs reach Postgres on :5432 (asyncpg —
+# the platform has no PgBouncer). Subnet-only via the network module's firewall.
+postgres_hba_hosts:
+  - { database: all, user: ditto, address: 10.30.0.0/24, method: scram-sha-256 }
+
+# Tuning for db-staging (e2-standard-2, 2 vCPU / 8 GB). Replaces the role default
+# wholesale (Ansible does not deep-merge dicts). The platform's working set is
+# small; this is comfortably sized.
+postgres_tuning:
+  listen_addresses: "'*'" # private interface for the app VMs; firewall-restricted
+  shared_buffers: "2GB"
+  effective_cache_size: "6GB"
+  work_mem: "8MB"
+  maintenance_work_mem: "512MB"
+  wal_buffers: "16MB"
+  huge_pages: "try"
+  wal_level: "replica"
+  max_wal_senders: 3
+  wal_keep_size: "1GB"
+  max_wal_size: "4GB"
+  min_wal_size: "1GB"
+  checkpoint_timeout: "15min"
+  checkpoint_completion_target: 0.9
+  random_page_cost: 1.1
+  effective_io_concurrency: 200
+  max_parallel_workers: 2
+  max_parallel_workers_per_gather: 1
+  max_parallel_maintenance_workers: 1
+  max_connections: 100
+  autovacuum_vacuum_scale_factor: 0.05
+  autovacuum_analyze_scale_factor: 0.025
+  autovacuum_vacuum_cost_delay: "2ms"
+  log_min_duration_statement: 500
+  log_checkpoints: "on"
+  log_lock_waits: "on"
+  log_temp_files: 0
+  log_directory: "'/opt/ditto/logs/postgresql'"
+  logging_collector: "on"
+  log_filename: "'postgresql-%Y-%m-%d.log'"
+  log_rotation_age: "1d"
+  log_rotation_size: "100MB"
+  shared_preload_libraries: "'pg_stat_statements'"

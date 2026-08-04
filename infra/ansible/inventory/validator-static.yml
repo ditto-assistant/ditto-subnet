@@ -1,0 +1,19 @@
+---
+# Static fallback inventory for the dev validator VM.
+#
+# The dynamic gcp_compute inventory needs google-auth ADC, which breaks when the
+# ADC session requires interactive reauth (gcloud can silent-reauth, google-auth
+# cannot). Discovery is the ONLY thing that needs it — the IAP tunnel + OS Login
+# SSH work regardless. This file hardcodes the single known host so a converge
+# can proceed without ADC discovery. inventory_hostname must stay the GCE
+# instance name (the IAP ProxyCommand tunnels by name); ansible_host mirrors the
+# private IP the dynamic inventory composed.
+all:
+  children:
+    role_validator:
+      hosts:
+        ditto-validator-dev:
+          ansible_host: 10.30.0.5
+    env_dev:
+      hosts:
+        ditto-validator-dev: {}

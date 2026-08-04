@@ -1,0 +1,12 @@
+---
+collections:
+  - name: hetzner.hcloud
+    version: "4.3.0"
+  - name: community.general
+    version: "10.7.9"
+  - name: community.postgresql
+    version: "3.14.3"
+  - name: ansible.posix
+    version: "1.6.2"
+  - name: google.cloud
+    version: "1.13.0"

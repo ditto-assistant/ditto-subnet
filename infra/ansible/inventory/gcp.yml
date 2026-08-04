@@ -1,0 +1,40 @@
+---
+# Dynamic inventory from GCP Compute, filtered to managed=terraform.
+# Requires application-default credentials (gcloud auth application-default login,
+# or a service account via GOOGLE_APPLICATION_CREDENTIALS).
+#
+# The Postgres VM has NO public IP, so Ansible connects over IAP (the network
+# module's firewall allows IAP SSH on 22). Connection details — the IAP
+# ProxyCommand and OS Login user — live in group_vars/role_postgres.yml.
+#
+# Usage:
+#   ansible-inventory -i infra/ansible/inventory/gcp.yml --graph
+#   ansible-playbook  -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-pg.yml
+
+plugin: google.cloud.gcp_compute
+projects:
+  - ditto-app-dev
+zones:
+  - us-central1-a
+auth_kind: application
+
+# Group by the terraform labels set in modules/compute/gcp (env, role).
+keyed_groups:
+  - key: labels.env
+    prefix: env
+    separator: "_"
+  - key: labels.role
+    prefix: role
+    separator: "_"
+
+# Only manage instances Terraform created.
+filters:
+  - labels.managed = terraform
+
+# inventory_hostname = instance name (the IAP tunnel addresses by name).
+hostnames:
+  - name
+
+# Record the private IP for reference; reachability is via the IAP ProxyCommand.
+compose:
+  ansible_host: networkInterfaces[0].networkIP
