@@ -16,4 +16,5 @@ def test_core_e2e_uses_the_monorepo_starter_kit() -> None:
     assert smoke["env"]["DITTO_STARTER_KIT_DIR"] == (
         "${{ github.workspace }}/miners/dittobench-starter-kit"
     )
+    assert (ROOT / "miners/dittobench-starter-kit/Cargo.toml").is_file()
     assert 'test -f "$DITTO_STARTER_KIT_DIR/Cargo.toml"' in smoke["run"]

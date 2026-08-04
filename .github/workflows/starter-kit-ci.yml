@@ -1,6 +1,7 @@
 name: Starter kit CI
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - miners/dittobench-starter-kit/**

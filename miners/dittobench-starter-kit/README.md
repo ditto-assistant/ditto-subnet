@@ -173,7 +173,7 @@ when you build.
 
 ```bash
 # 1. Pick a chat model for LOCAL practice. Default provider is OpenRouter and
-#    the default model is openai/gpt-oss-20b, matching benchmark v7. Canonical
+#    the default model is openai/gpt-oss-20b, matching benchmark v8. Canonical
 #    scoring overrides local model settings and serves the same locked model
 #    through ticket-scoped platform inference.
 export OPENROUTER_API_KEY=sk-or-...
@@ -202,7 +202,7 @@ cargo run -- serve --port 8080
 ```
 
 Local Ollama uses the canonical `gpt-oss:20b` chat model and `embeddinggemma`
-embedder and requires no provider credential. Scored V7 runs continue to use
+embedder and requires no provider credential. Scored v8 runs use
 the validator-injected, ticket-scoped platform inference and hosted embedding
 routes; Ollama is not a scored fallback.
 
@@ -212,7 +212,7 @@ routes; Ollama is not a scored fallback.
 
 The interactive playground is a chat UI wired to a production-Ditto agent:
 the v2 system prompt + persona + tool-use policy, the model set by
-`DITTOBENCH_MODEL` (`.env.example` ships `openai/gpt-oss-20b`, the v7 scored model; set
+`DITTOBENCH_MODEL` (`.env.example` ships `openai/gpt-oss-20b`, the v8 scored model; set
 `google/gemini-3.1-flash-lite` to mirror prod Ditto's model), the full tool
 catalog, and real memory retrieval + cross-encoder rerank over the seed user. Action tools
 (search_web, create_image, agent jobs, settings, …) return fake-but-plausible
@@ -237,7 +237,7 @@ below.
 
 - `evaluate` (local, fixed): scores your submission against the same inputs every run: the static seed user, the same bundled LongMemEval questions, and a fixed-seed tool set. Inputs are reproducible and model output is still stochastic.
 - `practice` (local, rotating): re-rolls prompts per run, but from a small fixed template pool (10 memory facts). It varies wording, not substance, and never exercises the seeding tiers/waves.
-- Hosted validator: generates a fresh random dataset per submission, like the on-chain SN118 validator, and is the only pre-chain rehearsal of Tier B/C seeding and the real question mix. Drive it from the playground's Submit tab (below). Until the platform publishes a ticketed v7 practice path, hosted submissions stay on the active legacy benchmark contract; a `harness_url` submission uses that harness's local model configuration.
+- Hosted validator: generates a fresh random v8 dataset per submission, like the on-chain SN118 validator, and is the only pre-chain rehearsal of the staged seeding waves and real question mix. Drive it from the playground's Submit tab (below). A `harness_url` practice submission uses that harness's local model configuration; scored submissions use the ticket-bound platform routes.
 
 Use `evaluate` to develop.
 
@@ -250,15 +250,14 @@ The hosted validator is available. The playground's Submit tab drives it:
 2. Set `DITTOBENCH_HARNESS_URL` in `.env` to the public URL.
   [.env.example](.env.example) ships the official `DITTOBENCH_API_URL`.
 3. `cargo run -- playground` → open the Submit tab and pick a run size.
-  Canonical v7 scoring uses locked GPT-OSS-20B inference supplied through the
+  Canonical v8 scoring uses locked GPT-OSS-20B inference supplied through the
   platform's ticket-scoped route. The playground does not send a provider key.
   The local target continues to use only the model configuration of your
   already-running harness.
 
 The active submission target is the uploaded tarball. Hosted `harness_url`
-practice can drive any already-running implementation. Older local tooling may
-still expose a git-source build target, but production V7/V8 validators never
-build miner repositories and never provide a GitHub credential to a build.
+practice can drive any already-running implementation. Production v8 validators
+never build miner repositories and never provide a GitHub credential to a build.
 
 `seed-user` and `mem-eval` need only Ollama (`embeddinggemma`). No chat model
 or API key is required. `mem-eval` runs the full
@@ -432,11 +431,10 @@ Important security boundaries:
 - A source directory is mutable and cannot be pinned by this script. Prefer the
   exact reviewed tarball plus `--submission-sha256` for reproducible tests.
 
-### DittoBench versioned scoring
+### DittoBench v8 scoring
 
-One scorer binary serves benchmark versions 7 and 8. A validator chooses the
-version assigned by the platform; this kit's additive wire protocol handles
-both without any benchmark-specific probe handler. Every submission gets a
+The starter harness and active validators serve benchmark version 8 only.
+Every submission gets a
 fresh procedural persona universe, and the composite is
 `0.5 × tool + 0.5 × memory`. The wire contract lives in
 [PROTOCOL.md](PROTOCOL.md); the public scorer owns the versioned dataset and
@@ -469,9 +467,9 @@ are retrieval, the prompt, and tools:
    each `RunRequest` is an input you can extend or replace; layer on a tool-use
    policy and abstention rules so the agent picks the right tool (and *no* tool
    when it shouldn't).
-3. Tools: the baseline registers the per-case tool catalog as stub tools so
-  the agent can *select* the right one (what the validator scores). Add real
-   host `Tool` implementations (`WireTool` → your own) to execute tools.
+3. Tools: the baseline registers the per-case tool catalog and executes each
+   non-memory call through the validator-provided endpoint. The returned value
+   is fed back to the model and the validator grades the observed trajectory.
 
 The stock harness allows 24 model turns so composed tasks can include retries,
 dependent calls, and useful exploration. This is a starter implementation
@@ -543,7 +541,7 @@ On the bundled seed user this lifts retrieval from hit@10 0.90 → 0.96 vs the
 Vertex-trained weights. The cross-encoder rerank is embedder-independent (it
 scores raw text), so it is identical to production.
 
-DittoBench v7 keeps this exact 768-dimensional `OllamaEmbedder` interface, but
+DittoBench v8 keeps this exact 768-dimensional `OllamaEmbedder` interface, but
 the trusted validator gateway serves it with the reviewed OpenRouter profile
 `dittobench-v7-openrouter-pplx-embed-v1-0.6b-768-v1`
 (`perplexity/pplx-embed-v1-0.6b`, Perplexity only, no fallback). The harness
@@ -551,11 +549,9 @@ does not receive an OpenRouter key and cannot select a sibling model or
 provider. Local practice and historical benchmark versions continue to use
 `embeddinggemma`.
 
-The existing MLP weights are intentionally unchanged for v7. A paired replay
-found the embedding swap operationally negligible, so rollout freezes the
-current MLP plus hosted embedding profile as one reviewed contract and
-recalibrates the 60-run v7 token manifest around that combination. A future
-model or dimension change requires a new profile and calibration.
+The v8 efficiency contract intentionally retains this embedding profile (whose
+immutable revision name includes `v7`) and the existing MLP weights. A model or
+dimension change requires a new profile and calibration.
 
 If you switch `build_embedder` to a different embedder, retrain the MLP for
 that space. The production training pipeline is not distributed, but the
@@ -657,9 +653,8 @@ produces a container serving that protocol on :8080.
 > Status: the hosted practice validator, on-chain submission path (`ditto upload`,
 > eval fee, scoring, weights), and the [SN118 leaderboard](https://platform-api.heyditto.ai/)
 > are live today.
-> Benchmark v7 preserves the v6 question and scoring contract and changes the
-> locked inference model to `openai/gpt-oss-20b`. Activation remains governed
-> by the platform's announced epoch and validator-readiness gates.
+> Benchmark v8 is the only active scoring contract. It uses locked
+> `openai/gpt-oss-20b` inference and validator-observed tool execution.
 
 1. Registration. You need a hotkey registered on subnet netuid 118
 (`btcli subnet register --netuid 118`) and TAO for the registration cost plus
@@ -684,7 +679,7 @@ tarball. You do not keep a server running. A screener builds your `Dockerfile`
 once; the scorer loads that exact image, starts it, and injects runtime model configuration
 for a trusted local broker plus a fresh `DITTOBENCH_DB` path. No validator or
 provider credential is placed in the harness container. The broker supplies
-only ticket-scoped v7 inference and locks `DITTOBENCH_MODEL` to GPT-OSS-20B.
+only ticket-scoped v8 inference and locks `DITTOBENCH_MODEL` to GPT-OSS-20B.
 The Docker host gateway is mapped so the default `OLLAMA_BASE_URL` resolves to
 the scoring host's Ollama, which serves the reference `embeddinggemma`
 embedder. If you use a different local embedder, bundle it in your image. The
@@ -713,13 +708,8 @@ approach the ceiling; a near-miss is settled by re-scoring both agents on shared
 seeds rather than dataset luck. Weights are recomputed from the public score
 ledger on every validator sweep.
 
-7. bench_version. Only the platform's **activated** version drives rank and
-emissions. A version bump first re-scores a frozen top-five cohort in shadow;
-the old version stays canonical until every cohort member reaches the required
-three-validator quorum. You do not need to resubmit or re-pay, though your
-standing can change when the new version activates. During a gradual validator
-rollout, two v3-capable validators can leave every cohort member visibly at
-2/3 without mixing v2 and v3 scores or changing emissions.
+7. bench_version. Version 8 is activated and is the only version accepted by
+this starter harness. Every `/run` request must include `"bench_version": 8`.
 
 8. Lifecycle. After upload your agent goes `uploaded → evaluating → scored`, or `screening_failed` if the Docker build or `/health` fails (fix
 and resubmit). Scores land on the public score ledger and the
@@ -732,9 +722,7 @@ embedded injection payload, surfacing another user's value, or naming a
 distractor value zeroes the case, and those events land in the run's public
 details. Malformed responses, timeouts, and build failures score 0. Observed tool
 execution (the validator runs your tool calls against its own mock endpoint)
-caps unverified self-reported tool calls at 0.5 in practice and v2; v3's scored
-path requires observed execution and assigns 0 to an unobserved observable
-case. Beyond
+is mandatory on scored v8 tool cases; an unobserved observable case scores 0. Beyond
 per-case grading, the composite carries bounded integrity multipliers: a per-run
 canary nonce (bounded penalty for an honest miss, hard cap for leaking the
 decoy), a metamorphic-consistency factor over invariance families, and the

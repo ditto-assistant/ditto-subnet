@@ -66,6 +66,43 @@ pub(super) struct SubmitReq {
     target: String,
 }
 
+fn supports_git_subdir(capabilities: &Value) -> bool {
+    capabilities
+        .get("features")
+        .and_then(Value::as_array)
+        .is_some_and(|features| features.iter().any(|feature| feature == "git_subdir"))
+}
+
+async fn require_git_subdir_capability(state: &AppState) -> Result<(), String> {
+    let url = format!(
+        "{}/v1/capabilities",
+        state.submit.api_url.trim_end_matches('/')
+    );
+    let response = state
+        .http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|err| format!("check hosted API capabilities at {url}: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "hosted API capability check returned {}; wait for the API cutover or set DITTOBENCH_API_URL to a compatible deployment",
+            response.status()
+        ));
+    }
+    let capabilities: Value = response
+        .json()
+        .await
+        .map_err(|err| format!("decode hosted API capabilities: {err}"))?;
+    if !supports_git_subdir(&capabilities) {
+        return Err(
+            "hosted API does not advertise git_subdir; refusing to build the monorepo root"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// `POST /api/submit`: forward a submission to `<DITTOBENCH_API_URL>/v1/submit`
 /// and return the api's `{run_id, poll}` to the browser. The backend makes the
 /// call so the browser avoids CORS. The `target` selects the local running
@@ -79,21 +116,31 @@ pub(super) async fn submit_start_handler(
         _ => "small".to_string(),
     };
     let url = format!("{}/v1/submit", state.submit.api_url.trim_end_matches('/'));
-    // This public practice endpoint intentionally omits bench_version and
-    // remains on its active legacy contract. Canonical v7 requires a
-    // platform-issued ticket/session and is never inferred from UI copy or a
-    // repository default. The playground never forwards provider credentials.
+    if req.target == "crate" {
+        if let Err(error) = require_git_subdir_capability(&state).await {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": error})),
+            )
+                .into_response();
+        }
+    }
+    // Practice explicitly selects the active v8 dataset and scoring contract.
+    // The submitted harness still uses its own local model configuration; the
+    // canonical scored path supplies ticket-bound inference separately.
     let body = if req.target == "crate" {
         json!({
             "git_url": state.submit.git_url,
             "git_ref": state.submit.git_ref,
             "git_subdir": state.submit.git_subdir,
             "run_size": run_size,
+            "bench_version": crate::protocol::ACTIVE_BENCH_VERSION,
         })
     } else {
         json!({
             "harness_url": state.submit.harness_url,
             "run_size": run_size,
+            "bench_version": crate::protocol::ACTIVE_BENCH_VERSION,
         })
     };
     match state.http.post(&url).json(&body).send().await {
@@ -103,6 +150,21 @@ pub(super) async fn submit_start_handler(
             Json(json!({"error": format!("submit to {url}: {err}")})),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supports_git_subdir;
+    use serde_json::json;
+
+    #[test]
+    fn git_subdir_requires_an_explicit_live_capability() {
+        assert!(supports_git_subdir(&json!({"features": ["git_subdir"]})));
+        assert!(!supports_git_subdir(&json!({"features": []})));
+        assert!(!supports_git_subdir(&json!({
+            "supported_bench_versions": [8]
+        })));
     }
 }
 

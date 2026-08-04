@@ -222,10 +222,10 @@ mod hosted_practice_copy_tests {
     use super::INDEX_HTML;
 
     #[test]
-    fn hosted_practice_banner_does_not_claim_v7_before_ticketed_practice_exists() {
-        assert!(INDEX_HTML.contains("Hosted practice (active legacy benchmark)."));
-        assert!(INDEX_HTML.contains("does not request benchmark v7"));
-        assert!(!INDEX_HTML.contains("Hosted v7 practice"));
+    fn hosted_practice_banner_names_the_active_v8_contract() {
+        assert!(INDEX_HTML.contains("Hosted v8 practice."));
+        assert!(INDEX_HTML.contains("active v8 dataset and scoring contract"));
+        assert!(!INDEX_HTML.contains("active legacy benchmark"));
     }
 }
 

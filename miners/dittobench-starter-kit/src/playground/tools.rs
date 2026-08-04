@@ -34,8 +34,8 @@ fn fake_response(name: &str, args: &Value) -> Value {
             .unwrap_or("")
             .to_string()
     };
-    // The catalog schemas declare SINGULAR string params (`query`, `url`);
-    // accept a plural array form too for robustness against creative models.
+    // The v8 catalog uses plural arrays for batched search and link reads; keep
+    // accepting the singular form in the playground for creative model output.
     let list = |singular: &str, plural: &str| -> Vec<String> {
         if let Some(one) = args.get(singular).and_then(Value::as_str) {
             return vec![one.to_string()];
@@ -102,23 +102,37 @@ fn fake_response(name: &str, args: &Value) -> Value {
                 "note": "FAKE proposal — the user would click Apply to run it (playground)"
             }
         }),
-        "execute_agent_workflow" => json!({
+        "create_workflow" => json!({
             "workflow_approval_proposal": {
                 "status": "awaiting_approval", "agent": "Ditto Code",
-                "workflow": s("workflow"), "input": s("input"),
-                "planned_subagents": 3, "estimated_cost_multiplier": 3,
+                "name": s("name"), "steps": args.get("steps").cloned().unwrap_or_default(),
+                "schedule": s("schedule"),
                 "note": "FAKE workflow proposal (playground)"
             }
-        }),
-        "get_agent_job_status" => json!({
-            "job_id": s("job_id"), "status": "completed",
-            "output": "FAKE: job finished successfully (playground).", "cost_tokens": 8421
         }),
         "list_agent_jobs" => json!({
             "jobs": [
                 {"job_id": "job_fake_1", "status": "completed", "prompt": "build a scraper"},
                 {"job_id": "job_fake_2", "status": "running", "prompt": "refactor module"}
             ], "note": "FAKE job list (playground)"
+        }),
+        "list_workflows" => json!({
+            "workflows": [
+                {"recipe_id": "workflow_fake_1", "name": "Weekly research", "schedule": "0 9 * * 1"}
+            ], "note": "FAKE workflow list (playground)"
+        }),
+        "list_schedules" => json!({
+            "schedules": [
+                {"recipe_id": "workflow_fake_1", "schedule": "0 9 * * 1"}
+            ], "note": "FAKE schedule list (playground)"
+        }),
+        "run_workflow" => json!({
+            "workflow_run_proposal": {
+                "status": "awaiting_approval",
+                "recipe_id": s("recipe_id"),
+                "name": s("name"),
+                "note": "FAKE workflow run proposal (playground)"
+            }
         }),
         "file_feedback_for_team" => json!({
             "status": "filed", "ticket_id": "FB-FAKE-123",

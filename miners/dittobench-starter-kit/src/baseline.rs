@@ -363,12 +363,6 @@ fn inferred_abstain(final_text: &str) -> Option<bool> {
     (!non_grounded_refusal && !recovered).then_some(true)
 }
 
-fn typed_abstain_for_bench(bench_version: Option<u32>, final_text: &str) -> Option<bool> {
-    (bench_version.unwrap_or_default() >= 7)
-        .then(|| inferred_abstain(final_text))
-        .flatten()
-}
-
 fn normalize_decline_text(text: &str) -> String {
     let mut normalized = String::with_capacity(text.len());
     for character in text.chars() {
@@ -412,6 +406,26 @@ struct ToolExecCtx {
     hop: AtomicI32,
 }
 
+const MAX_OBSERVED_TOOL_ATTEMPTS: usize = 2;
+
+fn is_retryable_tool_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("retry")
+        || error.contains("transient")
+        || error.contains("temporary")
+        || error.contains("429")
+        || error.contains("502")
+        || error.contains("503")
+        || error.contains("504")
+}
+
+fn is_retryable_tool_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::BAD_GATEWAY
+        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+        || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+}
+
 /// A catalog tool built from a wire tool definition. It exposes the case's
 /// catalog tool to the model — so the agent can *select* it, which is what the
 /// validator scores. When a [`ToolExecCtx`] is attached (observed execution), `execute()`
@@ -447,49 +461,64 @@ impl Tool for WireTool {
     async fn execute(&self, args: Value) -> HarnessResult<Value> {
         // Observed execution: execute for real through the validator's mock endpoint.
         if let Some(ctx) = &self.exec {
-            let hop = ctx.hop.fetch_add(1, Ordering::SeqCst);
-            let body = protocol::ToolExecRequest {
-                case_id: ctx.case_id.clone(),
-                user_id: ctx.user_id.clone(),
-                name: self.def.name.clone(),
-                args,
-                hop,
-            };
-            match ctx.client.post(&ctx.endpoint).json(&body).send().await {
-                Ok(resp) => {
-                    // A non-2xx body is not a ToolExecResponse — surface the
-                    // status instead of a misleading decode error.
-                    let status = resp.status();
-                    if !status.is_success() {
-                        let body = resp.text().await.unwrap_or_default();
-                        return Ok(
-                            json!({ "error": format!("tool endpoint returned {status}: {body}") }),
-                        );
-                    }
-                    match resp.json::<protocol::ToolExecResponse>().await {
-                        Ok(r) if !r.result.is_empty() => return Ok(json!({ "result": r.result })),
-                        // The endpoint declined (a memory tool); surface it as a
-                        // tool error the model can react to.
-                        Ok(r) if !r.error.is_empty() => return Ok(json!({ "error": r.error })),
-                        // Both result and error empty: still say something useful.
-                        Ok(_) => {
+            for attempt in 0..MAX_OBSERVED_TOOL_ATTEMPTS {
+                let hop = ctx.hop.fetch_add(1, Ordering::SeqCst);
+                let body = protocol::ToolExecRequest {
+                    case_id: ctx.case_id.clone(),
+                    user_id: ctx.user_id.clone(),
+                    name: self.def.name.clone(),
+                    args: args.clone(),
+                    hop,
+                };
+                match ctx.client.post(&ctx.endpoint).json(&body).send().await {
+                    Ok(resp) => {
+                        let status = resp.status();
+                        if !status.is_success() {
+                            let response_body = resp.text().await.unwrap_or_default();
+                            if attempt + 1 < MAX_OBSERVED_TOOL_ATTEMPTS
+                                && is_retryable_tool_status(status)
+                            {
+                                continue;
+                            }
                             return Ok(json!({
                                 "error": format!(
-                                    "tool endpoint returned an empty result for {}",
-                                    self.def.name
+                                    "tool endpoint returned {status}: {response_body}"
                                 )
-                            }))
+                            }));
                         }
-                        Err(err) => {
-                            return Ok(json!({ "error": format!("decode tool result: {err}") }))
+                        match resp.json::<protocol::ToolExecResponse>().await {
+                            Ok(r) if !r.result.is_empty() => {
+                                return Ok(json!({ "result": r.result }));
+                            }
+                            Ok(r) if !r.error.is_empty() => {
+                                if attempt + 1 < MAX_OBSERVED_TOOL_ATTEMPTS
+                                    && is_retryable_tool_error(&r.error)
+                                {
+                                    continue;
+                                }
+                                return Ok(json!({ "error": r.error }));
+                            }
+                            Ok(_) => {
+                                return Ok(json!({
+                                    "error": format!(
+                                        "tool endpoint returned an empty result for {}",
+                                        self.def.name
+                                    )
+                                }));
+                            }
+                            Err(err) => {
+                                return Ok(
+                                    json!({ "error": format!("decode tool result: {err}") }),
+                                );
+                            }
                         }
                     }
-                }
-                // Endpoint unreachable: degrade to a stub so the case still runs.
-                Err(err) => {
-                    return Ok(json!({ "error": format!("tool endpoint unreachable: {err}") }))
+                    Err(err) => {
+                        return Ok(json!({ "error": format!("tool endpoint unreachable: {err}") }));
+                    }
                 }
             }
+            return Ok(json!({ "error": "tool endpoint retry budget exhausted" }));
         }
         Ok(json!({
             "status": "ok",
@@ -498,9 +527,136 @@ impl Tool for WireTool {
     }
 }
 
+#[cfg(test)]
+mod tool_exec_tests {
+    use super::*;
+    use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use std::sync::Mutex;
+
+    async fn transient_json_then_success(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> Json<protocol::ToolExecResponse> {
+        let attempt = {
+            let mut calls = calls.lock().expect("lock calls");
+            calls.push(call);
+            calls.len()
+        };
+        if attempt == 1 {
+            return Json(protocol::ToolExecResponse {
+                error: "transient upstream error (503); retry".to_string(),
+                ..Default::default()
+            });
+        }
+        Json(protocol::ToolExecResponse {
+            result: "Top result: the Veltrix index reached 4,218 points.".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn transient_status_then_success(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> (StatusCode, Json<protocol::ToolExecResponse>) {
+        let attempt = {
+            let mut calls = calls.lock().expect("lock calls");
+            calls.push(call);
+            calls.len()
+        };
+        if attempt == 1 {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(protocol::ToolExecResponse::default()),
+            );
+        }
+        (
+            StatusCode::OK,
+            Json(protocol::ToolExecResponse {
+                result: "Top result: the Veltrix index reached 4,218 points.".to_string(),
+                ..Default::default()
+            }),
+        )
+    }
+
+    async fn serve(app: Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test address");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+        (format!("http://{address}/tool"), task)
+    }
+
+    fn exec_context(endpoint: String) -> Arc<ToolExecCtx> {
+        Arc::new(ToolExecCtx {
+            client: reqwest::Client::new(),
+            endpoint,
+            case_id: "case-123".to_string(),
+            user_id: "scored-user".to_string(),
+            hop: AtomicI32::new(0),
+        })
+    }
+
+    fn wire_tool(exec: Arc<ToolExecCtx>) -> WireTool {
+        WireTool {
+            def: ToolDefinition {
+                name: "search_web".to_string(),
+                description: String::new(),
+                input_schema: json!({"type": "object"}),
+            },
+            exec: Some(exec),
+        }
+    }
+
+    async fn assert_transient_recovery(
+        app: Router,
+        calls: Arc<Mutex<Vec<protocol::ToolExecRequest>>>,
+    ) {
+        let (endpoint, task) = serve(app).await;
+        let result = wire_tool(exec_context(endpoint))
+            .execute(json!({"queries": ["Veltrix index"]}))
+            .await
+            .expect("execute tool");
+        task.abort();
+
+        assert_eq!(
+            result["result"],
+            "Top result: the Veltrix index reached 4,218 points."
+        );
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].hop, 0);
+        assert_eq!(calls[1].hop, 1);
+        assert_eq!(calls[0].args, calls[1].args);
+    }
+
+    #[tokio::test]
+    async fn retries_a_transient_tool_error_once() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(transient_json_then_success))
+            .with_state(Arc::clone(&calls));
+        assert_transient_recovery(app, calls).await;
+    }
+
+    #[tokio::test]
+    async fn retries_a_transient_http_status_once() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(transient_status_then_success))
+            .with_state(Arc::clone(&calls));
+        assert_transient_recovery(app, calls).await;
+    }
+}
+
 /// Default local DB path (overridable via `DITTOBENCH_DB`).
 pub const DEFAULT_DB_PATH: &str = "./dittobench.db";
-/// The benchmark v7 scored model and local OpenRouter default.
+/// The benchmark v8 scored model and local OpenRouter default.
 pub const DEFAULT_OPENROUTER_MODEL: &str = "openai/gpt-oss-20b";
 /// Ollama's canonical local chat model tag.
 pub const DEFAULT_OLLAMA_CHAT_MODEL: &str = "gpt-oss:20b";
@@ -525,7 +681,7 @@ pub const MEMORY_TOOL_NAMES: &[&str] = &[
 pub enum ModelProvider {
     /// OpenRouter; reads `OPENROUTER_API_KEY` from the environment.
     OpenRouter { model: String },
-    /// Ticket-scoped platform relay used by canonical benchmark v7 runs.
+    /// Ticket-scoped platform relay used by canonical benchmark v8 runs.
     Platform { base_url: String, model: String },
     /// Local Ollama server.
     Ollama { base_url: String, model: String },
@@ -549,9 +705,11 @@ impl ModelProvider {
                 model: env("DITTOBENCH_MODEL")
                     .unwrap_or_else(|| DEFAULT_OPENROUTER_MODEL.to_string()),
             },
-            // Validators used this selector before the ticket broker gained its
-            // neutral name. Keep it as a URL-only alias while submitted v7
-            // harnesses drain; it does not select Chutes or read a provider key.
+            // Canonical validators historically selected this generic
+            // OpenAI-compatible adapter name. Keep it as a URL-only alias of
+            // the ticket-scoped platform broker so old and current v8 images
+            // share one runtime contract. It does not select Chutes or read a
+            // provider credential.
             "chutes" => ModelProvider::Platform {
                 base_url: env("DITTOBENCH_INFERENCE_BASE_URL")
                     .or_else(|| env("CHUTES_BASE_URL"))
@@ -568,7 +726,7 @@ impl ModelProvider {
             _ => ModelProvider::OpenRouter {
                 // EXTENSION POINT: change this default model. It sets only LOCAL
                 // practice runs and defaults to the on-chain scored model.
-                // Benchmark v7 scoring locks inference to GPT-OSS-20B through
+                // Benchmark v8 scoring locks inference to GPT-OSS-20B through
                 // the platform relay and overrides whatever a submission sets.
                 model: env("DITTOBENCH_MODEL")
                     .unwrap_or_else(|| DEFAULT_OPENROUTER_MODEL.to_string()),
@@ -606,8 +764,7 @@ impl Baseline {
     /// Builds the baseline from environment configuration:
     ///   - `DITTOBENCH_DB` (db path, default `./dittobench.db`)
     ///   - `DITTOBENCH_PROVIDER` (`openrouter` [default] | `ollama`; the
-    ///     validator reserves `platform` for ticket-scoped scoring and may use
-    ///     the deprecated `chutes` spelling for the same local broker)
+    ///     validator reserves `platform` for ticket-scoped scoring)
     ///   - `DITTOBENCH_MODEL` (model id)
     ///   - `OPENROUTER_API_KEY` (required for OpenRouter)
     ///   - `OLLAMA_BASE_URL` (embedder + ollama chat base url)
@@ -814,6 +971,13 @@ impl Baseline {
     pub async fn run(&self, req: protocol::RunRequest) -> anyhow::Result<protocol::RunResponse> {
         let started = Instant::now();
 
+        anyhow::ensure!(
+            req.bench_version == protocol::ACTIVE_BENCH_VERSION,
+            "unsupported benchmark version {}; this harness serves v{} only",
+            req.bench_version,
+            protocol::ACTIVE_BENCH_VERSION,
+        );
+
         // Observed execution: the case may be scoped to a specific memory graph (multi-graph
         // isolation) — answer from that user's memory, defaulting to the kit user.
         let user_id = req
@@ -925,7 +1089,7 @@ impl Baseline {
 
         let final_text = result.result.text;
         Ok(protocol::RunResponse {
-            abstain: typed_abstain_for_bench(req.bench_version, &final_text),
+            abstain: inferred_abstain(&final_text),
             final_text,
             tool_calls,
             prompt_tokens,
@@ -963,11 +1127,11 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_chutes_selector_is_only_a_platform_broker_alias() {
+    fn chutes_selector_is_only_a_platform_broker_alias() {
         let values = std::collections::HashMap::from([
             (
                 "CHUTES_BASE_URL",
-                "http://host.docker.internal:11435/v1".to_string(),
+                "http://host.docker.internal:11436/v1/inference".to_string(),
             ),
             ("CHUTES_API_KEY", "must-not-be-read".to_string()),
             ("DITTOBENCH_MODEL", DEFAULT_OPENROUTER_MODEL.to_string()),
@@ -977,7 +1141,7 @@ mod tests {
             ModelProvider::from_provider_with("chutes", |name| values.get(name).cloned());
         match &provider {
             ModelProvider::Platform { base_url, model } => {
-                assert_eq!(base_url, "http://host.docker.internal:11435/v1");
+                assert_eq!(base_url, "http://host.docker.internal:11436/v1/inference");
                 assert_eq!(model, DEFAULT_OPENROUTER_MODEL);
             }
             other => panic!("expected platform broker alias, got {other:?}"),
@@ -1109,23 +1273,12 @@ mod tests {
     }
 
     #[test]
-    fn typed_abstention_is_strictly_v7_plus() {
+    fn v8_emits_typed_abstention() {
         for text in [
             "I couldn't find any information about that.",
             "I'm not aware of any mention of that in our conversation.",
         ] {
-            assert_eq!(typed_abstain_for_bench(None, text), None, "legacy: {text}");
-            assert_eq!(typed_abstain_for_bench(Some(6), text), None, "v6: {text}");
-            assert_eq!(
-                typed_abstain_for_bench(Some(7), text),
-                Some(true),
-                "v7: {text}"
-            );
-            assert_eq!(
-                typed_abstain_for_bench(Some(8), text),
-                Some(true),
-                "v8: {text}"
-            );
+            assert_eq!(inferred_abstain(text), Some(true), "v8: {text}");
         }
     }
 }

@@ -174,21 +174,21 @@ async fn load_haystack(
 /// sends a fresh haystack: conversation pairs, the subjects, and the
 /// subject↔pair links. `user_id` defaults to the kit [`USER_ID`].
 ///
-/// DittoBench v2 seeding tiers:
-/// - **Tier A** — pairs + subjects + links (prepared, as here historically).
-/// - **Tier B** — pairs only (`subjects: []`, `links: []`): the validator seeds
+/// DittoBench v8 seeding modes:
+/// - **Prepared** — pairs + subjects + links.
+/// - **Raw pairs** — pairs only (`subjects: []`, `links: []`): the validator seeds
 ///   raw conversation pairs and expects YOUR harness to build its own subject
 ///   index. `seed_from_request` runs the same `save_memory` path either way, so
-///   a harness that constructs subjects from pairs answers Tier-B questions a
+///   a harness that constructs subjects from pairs answers raw-pair questions a
 ///   prepared-subjects-only harness cannot — this is where miners can win.
-/// - **Tier C** — staged waves: `/seed` is called repeatedly, each carrying the
+/// - **Staged waves** — `/seed` is called repeatedly, each carrying the
 ///   next chunk with an incremented `wave`, interleaved with `/run`. Seeding is
 ///   an idempotent upsert, so accepting `wave` and merging is all that's needed.
 #[derive(Deserialize)]
 pub struct SeedRequest {
     #[serde(default)]
     pub user_id: Option<String>,
-    /// 0-based staged-seeding wave (Tier C). Advisory: seeding upserts, so a
+    /// 0-based staged-seeding wave. Advisory: seeding upserts, so a
     /// harness can ignore this and simply merge each call. `i32` to match the
     /// wire protocol's other counters (e.g. `ObservedToolCall::hop`).
     #[serde(default)]

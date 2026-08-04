@@ -51,6 +51,9 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 	if got.MemoryPhaseCapacity != maxConcurrentMemoryPhases {
 		t.Fatalf("memory-phase capacity = %d, want %d", got.MemoryPhaseCapacity, maxConcurrentMemoryPhases)
 	}
+	if len(got.Features) != 1 || got.Features[0] != "git_subdir" {
+		t.Fatalf("wrong feature set: %v", got.Features)
+	}
 	want := []int{}
 	if efficiency.ProductionReadyForVersion(8) {
 		want = append(want, 8)
@@ -209,7 +212,7 @@ func TestCapabilitiesExposeOnlyActiveReadiness(t *testing.T) {
 	}
 	for _, key := range []string{
 		"software_version", "source_revision", "supported_bench_versions",
-		"full_run_capacity", "memory_phase_capacity", "v8_readiness",
+		"features", "full_run_capacity", "memory_phase_capacity", "v8_readiness",
 	} {
 		if _, ok := raw[key]; !ok {
 			t.Fatalf("capabilities dropped the established key %q: %s", key, rr.Body.String())
@@ -223,6 +226,7 @@ func TestCapabilitiesExposeOnlyActiveReadiness(t *testing.T) {
 	}
 	known := map[string]bool{
 		"software_version": true, "source_revision": true, "supported_bench_versions": true,
+		"features":          true,
 		"full_run_capacity": true, "memory_phase_capacity": true, "v8_readiness": true,
 		"source_revision_origin": true, "source_revision_mismatch": true,
 		"software_version_origin": true,
