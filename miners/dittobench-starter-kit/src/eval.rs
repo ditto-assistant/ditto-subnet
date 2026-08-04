@@ -68,6 +68,7 @@ pub async fn run_suite(
             system_prompt: TOOL_CASE_SYSTEM_PROMPT.to_string(),
             user_input: c.prompt.clone(),
             tools: catalog.clone(),
+            bench_version: crate::protocol::ACTIVE_BENCH_VERSION,
             ..Default::default()
         };
         let (score, latency, detail, error) = match baseline.run(req).await {
@@ -118,6 +119,7 @@ pub async fn run_suite(
             system_prompt: MEMORY_CASE_SYSTEM_PROMPT.to_string(),
             user_input: mc.question.clone(),
             tools: catalog.clone(),
+            bench_version: crate::protocol::ACTIVE_BENCH_VERSION,
             ..Default::default()
         };
         let qtype = qtype_by_id.get(&mc.id).map(String::as_str).unwrap_or("");

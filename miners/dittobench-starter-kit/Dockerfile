@@ -39,7 +39,9 @@ RUN --mount=type=secret,id=gh_token \
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && printf 'dittobench:x:65532:65532:DittoBench runtime:/app:/usr/sbin/nologin\n' >> /etc/passwd \
+    && printf 'dittobench:x:65532:\n' >> /etc/group
 WORKDIR /app
 COPY --from=builder /app/target/release/dittobench-miner /usr/local/bin/dittobench-miner
 COPY --chown=65532:65532 fixtures ./fixtures
@@ -48,7 +50,7 @@ RUN chown 65532:65532 /app
 # Default DB lives in the working dir; mount a volume to persist it.
 ENV DITTOBENCH_DB=/app/dittobench.db
 EXPOSE 8080
-USER 65532:65532
+USER dittobench:dittobench
 
 ENTRYPOINT ["dittobench-miner"]
 CMD ["serve", "--port", "8080"]

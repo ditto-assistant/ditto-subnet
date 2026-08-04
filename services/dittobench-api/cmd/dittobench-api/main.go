@@ -327,6 +327,7 @@ type capabilitiesResponse struct {
 	SoftwareVersion        string                          `json:"software_version"`
 	SourceRevision         string                          `json:"source_revision"`
 	SupportedBenchVersions []int                           `json:"supported_bench_versions"`
+	Features               []string                        `json:"features"`
 	FullRunCapacity        int                             `json:"full_run_capacity"`
 	MemoryPhaseCapacity    int                             `json:"memory_phase_capacity"`
 	V8Readiness            efficiency.CalibrationReadiness `json:"v8_readiness"`
@@ -395,6 +396,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SoftwareVersion:        s.softwareVersion,
 		SourceRevision:         s.sourceRevision,
 		SupportedBenchVersions: s.runtimeSupportedBenchVersions(r.Context()),
+		Features:               []string{"git_subdir"},
 		FullRunCapacity:        maxConcurrentRuns,
 		MemoryPhaseCapacity:    maxConcurrentMemoryPhases,
 		V8Readiness:            efficiency.V8Readiness(),

@@ -19,6 +19,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The only benchmark contract this starter harness serves.
+pub const ACTIVE_BENCH_VERSION: u32 = 8;
+
 /// An expected tool in a dataset case (Go: `ToolSpec`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -99,16 +102,18 @@ pub struct RunRequest {
     pub user_input: String,
     #[serde(default)]
     pub tools: Vec<ToolDefWire>,
-    /// Additive v7+ execution contract selector.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bench_version: Option<u32>,
+    /// Required benchmark contract selector. The active starter harness accepts
+    /// only [`ACTIVE_BENCH_VERSION`].
+    #[serde(default)]
+    pub bench_version: u32,
     /// Optional observed-execution URL served by the validator. When present,
     /// a harness should EXECUTE each non-memory
     /// catalog tool call by POSTing a [`ToolExecRequest`] here and using the
     /// returned [`ToolExecResponse::result`], instead of stubbing it locally. The
     /// validator then observes the real trajectory (rather than trusting
     /// self-report) and can score whether the answer incorporates returned
-    /// content. Absent ⇒ pre-observed-execution behavior (stub tools locally).
+    /// content. Scored v8 tool cases always provide this endpoint; local
+    /// memory-only practice may omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_endpoint: Option<String>,
     /// Optional (observed execution): the memory graph this case must be answered from
@@ -240,23 +245,27 @@ mod tests {
                 description: "d".into(),
                 parameters: serde_json::json!({"type": "object"}),
             }],
+            bench_version: ACTIVE_BENCH_VERSION,
             ..Default::default()
         };
         let v = serde_json::to_value(&req).expect("serialize");
         let obj = v.as_object().expect("object");
-        for key in ["case_id", "system_prompt", "user_input", "tools"] {
+        for key in [
+            "case_id",
+            "system_prompt",
+            "user_input",
+            "tools",
+            "bench_version",
+        ] {
             assert!(obj.contains_key(key), "missing key {key}");
         }
-        // The optional observed-execution fields are omitted when absent (byte-compatible
-        // with an old validator that never sends them).
+        assert_eq!(obj["bench_version"], ACTIVE_BENCH_VERSION);
         assert!(!obj.contains_key("tool_endpoint"));
         assert!(!obj.contains_key("user_id"));
-        assert!(!obj.contains_key("bench_version"));
     }
 
     #[test]
-    fn phase_c_run_request_accepts_optional_fields() {
-        // An observed-execution RunRequest from the validator deserializes cleanly.
+    fn v8_run_request_accepts_observed_execution_fields() {
         let json = r#"{
             "case_id": "web_result_usage-1-0",
             "system_prompt": "be helpful",
@@ -272,7 +281,7 @@ mod tests {
             Some("http://host.docker.internal:49222/tool")
         );
         assert_eq!(req.user_id.as_deref(), Some("colleague"));
-        assert_eq!(req.bench_version, Some(8));
+        assert_eq!(req.bench_version, ACTIVE_BENCH_VERSION);
     }
 
     #[test]
@@ -317,11 +326,11 @@ mod tests {
         let json = serde_json::to_string(&resp).expect("serialize");
         let back: RunResponse = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(resp, back);
-        // Absent slots deserialize as None (additive-optional wire fields).
-        let legacy: RunResponse =
+        // The answer and abstention slots remain optional within v8.
+        let without_optional_slots: RunResponse =
             serde_json::from_str(r#"{"final_text":"x","tool_calls":[],"prompt_tokens":0,"output_tokens":0,"latency_ms":0}"#)
-                .expect("legacy deserialize");
-        assert_eq!(legacy.answer, None);
-        assert_eq!(legacy.abstain, None);
+                .expect("deserialize response without optional slots");
+        assert_eq!(without_optional_slots.answer, None);
+        assert_eq!(without_optional_slots.abstain, None);
     }
 }

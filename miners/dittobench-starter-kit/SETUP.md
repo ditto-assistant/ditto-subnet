@@ -33,7 +33,7 @@ via the playground's Submit tab; see §2.
   ```
 - An OpenRouter API key, for the chat model (free local Ollama also works; see below).
 
-Hosted DittoBench v7 scoring supplies both chat and embeddings through the
+Hosted DittoBench v8 scoring supplies both chat and embeddings through the
 validator's ticket-bound gateway. These local Ollama and OpenRouter-key steps
 remain the practice setup; scored containers receive neither provider key.
 
@@ -47,7 +47,7 @@ cd ditto-subnet/miners/dittobench-starter-kit
 
 cp .env.example .env
 #   edit .env, paste your key:   OPENROUTER_API_KEY=sk-or-v1-...
-#   (chat model defaults to openai/gpt-oss-20b, the benchmark v7 scored model;
+#   (chat model defaults to openai/gpt-oss-20b, the benchmark v8 scored model;
 #    canonical scoring serves it through ticket-scoped platform inference.
 #    Embeddings use Ollama.)
 
@@ -78,7 +78,7 @@ cargo run -- serve --port 8080   # expose GET /health, POST /run, POST /seed for
 ```ini
 OPENROUTER_API_KEY=sk-or-v1-...          # chat model key
 DITTOBENCH_PROVIDER=openrouter           # or `ollama` locally (free)
-DITTOBENCH_MODEL=openai/gpt-oss-20b      # benchmark v7 scored model
+DITTOBENCH_MODEL=openai/gpt-oss-20b      # benchmark v8 scored model
 OLLAMA_BASE_URL=http://localhost:11434   # embeddings (and ollama chat) endpoint
 DITTOBENCH_DB=./dittobench.db            # local Turso DB; keep the same path across seed-user + commands
 ```
@@ -119,3 +119,20 @@ against a fresh rotating dataset. Full steps: README, *Hosted practice*.
 - `mem-eval` reports `recall@k: 0.000`: run `seed-user` first, and confirm `ollama serve` + `ollama pull embeddinggemma`, and that `DITTOBENCH_DB` matches what you seeded.
 - `feature edition2024 is required`: update Rust (`rustup update`); the harness needs >= 1.85.
 - Playground reply is empty or over-calls a tool: if `DITTOBENCH_MODEL` is a lite model (e.g. `gemini-3.1-flash-lite`), set a stronger one in `.env`.
+
+### Existing Docker volumes after the non-root migration
+
+The maintained image runs as `dittobench` (UID/GID 65532). A volume created by
+an older root-running image may therefore reject SQLite writes. Back it up,
+stop the old container, and change the mounted data ownership once before
+starting the new image:
+
+```bash
+# Named volume example; replace dittobench-data with your volume name.
+docker run --rm --user 0 \
+  --mount type=volume,src=dittobench-data,dst=/app \
+  debian:trixie-slim chown -R 65532:65532 /app
+```
+
+For a bind mount, change ownership of the specific host data directory to
+`65532:65532` instead. Do not recursively change a parent or repository tree.

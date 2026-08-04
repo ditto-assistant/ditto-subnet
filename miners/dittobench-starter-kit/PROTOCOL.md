@@ -9,16 +9,16 @@ wire contract. The Rust definitions live in [`src/protocol.rs`](src/protocol.rs)
 Returns `200 {"status":"ok"}`.
 
 ### `POST /run`
-The validator POSTs one case at a time. Two optional fields
-(`tool_endpoint`, `user_id`) may be present for observed tool execution; see
-[Observed tool execution](#observed-tool-execution-additive-optional) below.
-The same additive wire shape serves benchmark versions 7 and 8. Version 8
-changes dataset difficulty, not the harness HTTP contract.
+The validator POSTs one v8 case at a time. `bench_version` is required and must
+be `8`. Scored tool cases include `tool_endpoint`; the harness must execute
+non-memory tools through it so the validator observes the trajectory. `user_id`
+selects the case's isolated memory graph.
 
 Request body, `RunRequest`:
 ```json
 {
   "case_id": "web_search-42-0001",
+  "bench_version": 8,
   "system_prompt": "You are Ditto...",
   "user_input": "What's the latest on quantum computing?",
   "tools": [
@@ -36,12 +36,11 @@ Response body, `RunResponse`:
   "output_tokens": 56,
   "latency_ms": 812,
   "answer": "quantum error correction",
-  "abstain": false,
-  "confidence": 0.85
+  "abstain": false
 }
 ```
 
-Three optional fields worth wiring (all additive, so omitting them never hurts):
+Two optional response fields are worth wiring:
 
 - `answer`: the bare value your `final_text` asserts (a name, a number, a
   comma-separated list). The deterministic grader matches the slot when
@@ -51,13 +50,6 @@ Three optional fields worth wiring (all additive, so omitting them never hurts):
   It is the primary decline signal; decline phrasing in `final_text` is the
   fallback. Abstaining on an answerable case scores 0, so gate it on
   retrieval actually coming up empty.
-- `confidence`: your harness's self-assessed probability in `[0, 1]` that
-  the answer is correct. The validator turns it into a Brier calibration
-  score (`mean((confidence - correct)^2)`, lower is better) published as an
-  unscored leaderboard column. Honest confidence minimizes it, always-1.0
-  does not, and it is never folded into the composite, so a harness that omits
-  it is unaffected. Reporting it well is free credibility on the public board.
-
 ### `POST /seed`
 Before asking memory questions the validator installs a fresh haystack.
 
@@ -73,20 +65,20 @@ Request body, `SeedRequest`:
 ```
 Respond `200 { "pairs": N, "subjects": N, "links": N }` (counts loaded).
 
-DittoBench v2/v3 seeding tiers (the memory side of the benchmark):
-- Tier A: `pairs`, `subjects`, and `links` are all provided (retrieval in isolation).
-- Tier B (raw-pairs): `subjects: []`, `links: []`, so only raw conversation
+DittoBench v8 memory seeding modes:
+- Prepared: `pairs`, `subjects`, and `links` are all provided (retrieval in isolation).
+- Raw-pairs: `subjects: []`, `links: []`, so only raw conversation
   pairs are seeded. Your harness must build its own subject index from the
   pairs to route subject-scoped questions. A harness that relies on prepared
   subjects scores materially lower here.
-- Tier C (staged): `/seed` is called repeatedly, each with an incremented
+- Staged: `/seed` is called repeatedly, each with an incremented
   `wave`, interleaved with `/run`. Seeding is an idempotent upsert: accept
   each wave and merge. Questions may target facts from any wave already seeded.
 
-## Observed tool execution (additive-optional)
+## Observed tool execution
 
-`RunRequest` may carry two optional fields. They are additive: an older
-validator never sends them, and both shapes serialize identically without them.
+Every scored v8 tool case carries `tool_endpoint`. Local memory-only practice
+may omit it.
 
 - `tool_endpoint`: a validator-served mock tool-execution URL. When present,
   the harness should execute each non-memory catalog tool call by POSTing
@@ -115,9 +107,7 @@ On result-usage cases the validator additionally grades whether the final
 answer incorporates the value the executed tool returned, reported per case as
 `CaseScore.result_usage` (0-1).
 
-A harness that ignores `tool_endpoint` still scores, but self-reported tool
-calls on served categories are capped at 0.5 in practice — and score 0 on the
-on-chain scored path, where observed execution is mandatory.
+A harness that ignores `tool_endpoint` scores 0 on the on-chain scored path.
 
 ## Dataset shapes (local practice)
 
@@ -153,24 +143,10 @@ in the response's `answer` slot (or `final_text` as fallback) by normalized
 bounded containment, with an exact number-token path for numeric answers.
 Abstaining on an answerable case scores 0.
 
-`composite = 0.5 * tool_mean + 0.5 * memory_mean` when both kinds are present
-(DittoBench v2, rebalanced from v1's `0.6 / 0.4` because memory is the core
-product value); otherwise it equals whichever mean exists.
-
-> The on-chain SN118 scorer serves both immutable contracts. v2 remains
-> reproducible byte-for-byte; v3 keeps this wire shape while hardening the
-> generated cases and scored-path policy. Both versions grade memory per
-> `answer_kind` (value, number, list, ordered list, duration, reversal,
-> persistence, decline) with distractor and forbidden-value zeroing, across
-> question types `single-session-recall`, `multi-session`, `temporal-reasoning`,
-> `knowledge-update`, `preference` / `preference-application`, `contradiction`,
-> and `abstention` (needle-absent, where the right answer is a grounded
-> decline). The memory cases come from a fresh procedural persona universe per
-> seed (no fixed corpus to memorize), and a `dataset_sha256` in the score
-> `details` pins the exact dataset. The hosted dataset rotates, so local and
-> on-chain scores differ. See the public scorer's
-> [v2/v3 comparison](https://github.com/ditto-assistant/dittobench-api/blob/main/docs/dittobench-v2-vs-v3.md)
-> for the version-specific anti-gaming and integrity rules.
+`composite = 0.5 * tool_mean + 0.5 * memory_mean` when both kinds are present;
+otherwise it equals whichever mean exists. This local scorer is only a practice
+approximation. The v8 on-chain scorer additionally applies the published
+integrity and efficiency factors below.
 
 ### On-chain tool grading and composite factors (differ from the local scorer)
 
