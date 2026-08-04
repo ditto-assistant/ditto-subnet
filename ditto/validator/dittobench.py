@@ -548,6 +548,7 @@ class DittobenchClient:
             or not isinstance(versions, list)
             or not versions
             or any(type(version) is not int for version in versions)
+            or any(version <= 0 for version in versions)
             or type(full_run_capacity) is not int
             or not 1 <= full_run_capacity <= 8
         ):
@@ -562,19 +563,12 @@ class DittobenchClient:
                 ),
             )
         advertised_versions = tuple(sorted(set(versions)))
-        if any(
-            version < _SUPPORTED_BENCH_VERSIONS[0] for version in advertised_versions
-        ):
-            return ScorerBenchmarkCapability(
-                status="unreachable",
-                supported_bench_versions=(),
-                probe=self._record_scorer_probe(
-                    "unreadable",
-                    observed_at=observed_at,
-                    http_status=200,
-                    reason="unsupported_bench_version",
-                ),
-            )
+        # Capability negotiation is an intersection, not an assertion that both
+        # processes advertise identical histories. During a rolling update an
+        # older scorer may still describe a retired contract alongside v8. The
+        # validator must ignore that extra metadata and expose only the v8
+        # contract it can actually execute; retired-only scorers still fail the
+        # empty-intersection check below.
         observed_versions = tuple(
             version
             for version in advertised_versions

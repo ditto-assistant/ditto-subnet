@@ -6,14 +6,14 @@
 # pin — must be this one anchor. A hardcoded copy that could drift from the
 # build context is exactly what let a cached scorer image assert a revision it
 # was not built from (see docs/VALIDATOR.md, "Stale scorer image").
-x-dittobench-revision: &dittobench-revision 25d98392d4d35e028fc23ab6a3ea2917b19ca1cf
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=25d98392d4d35e028fc23ab6a3ea2917b19ca1cf}
+x-dittobench-revision: &dittobench-revision d7f52703e896fc879089a345eba1a0568a18d076
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=d7f52703e896fc879089a345eba1a0568a18d076}
 x-dittobench-software-version: &dittobench-software-version ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
 # Shared secret for the validator -> scorer inference control plane
 # (POST/DELETE /v1/inference/session*). The scorer joins sandbox-docker's
 # network namespace while the validator stays on the Compose bridge, so a
 # control call arrives from a 172.x peer and NEVER on loopback: without this
-# token every v7 ticket dies at `prepare` with 401 "inference control plane
+# token every benchmark ticket dies at `prepare` with 401 "inference control plane
 # unavailable". One anchor feeds both sides so they can never drift apart.
 # The default keeps already-deployed validators working with no operator
 # action; the control plane is not miner-reachable (the sandbox INPUT chain
@@ -305,7 +305,7 @@ services:
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:25d98392d4d35e028fc23ab6a3ea2917b19ca1cf
+      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:d7f52703e896fc879089a345eba1a0568a18d076
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
       VALIDATOR_STACK_COMPONENT_PYLON: source:d36d1a28e761ff9d743bbcc83d091309c4d3599e
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}

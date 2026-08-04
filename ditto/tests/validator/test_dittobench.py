@@ -221,13 +221,14 @@ def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
         (200, _REVISION, [5], "unreachable", ()),
         (200, _REVISION, [6], "unreachable", ()),
         (200, _REVISION, [2, 3, 4, 5, 6, 7], "unreachable", ()),
-        # A scorer that still advertises retired contracts is rejected.
+        # Rolling upgrades negotiate the common v8 contract without reviving
+        # any retired scoring path.
         (
             200,
             _REVISION,
             [2, 3, 4, 5, 6, 7, 8],
-            "unreachable",
-            (),
+            "fresh_verified",
+            (8,),
         ),
         # Unknown historical/gap versions remain malformed.
         (200, _REVISION, [1, 2, 3, 4, 5, 6], "unreachable", ()),
@@ -266,6 +267,36 @@ async def test_secretless_scorer_capability_is_provenance_bound(
         )
     assert observed.status == expected_status
     assert observed.supported_bench_versions == expected_versions
+
+
+@pytest.mark.asyncio
+async def test_v044_rolling_upgrade_negotiates_v8_and_preserves_capacity() -> None:
+    """A pre-retirement scorer remains usable only through its v8 overlap."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.29.4",
+                "source_revision": _REVISION,
+                "supported_bench_versions": [7, 8],
+                "full_run_capacity": 6,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (8,)
+    assert observed.v7_calibration is None
+    assert client.full_run_capacity == 6
 
 
 @pytest.mark.asyncio
@@ -455,6 +486,11 @@ async def test_no_answer_at_all_says_which_kind_of_no_answer(
             json.dumps({**_LIVE_CAPABILITIES, "supported_bench_versions": [1, 2, 3]}),
             "unsupported_bench_version",
             id="unknown-version-in-range",
+        ),
+        pytest.param(
+            json.dumps({**_LIVE_CAPABILITIES, "supported_bench_versions": [0, 8]}),
+            "malformed_capabilities",
+            id="non-positive-version",
         ),
     ],
 )
