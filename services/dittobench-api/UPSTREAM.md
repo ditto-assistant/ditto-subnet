@@ -2,7 +2,7 @@
 
 This service was imported from
 [`ditto-assistant/dittobench-api`](https://github.com/ditto-assistant/dittobench-api)
-at commit `25d98392d4d35e028fc23ab6a3ea2917b19ca1cf`.
+at commit `f528cef3f00a1e70b557b0bbe715b19eaad84585`.
 
 The original repository retains the pre-monorepo history. New scorer and hosted
 API development belongs in this directory; the original repository is retained

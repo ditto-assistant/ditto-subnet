@@ -73,6 +73,36 @@ func TestCancelIfActiveMakesCancellationSticky(t *testing.T) {
 	}
 }
 
+func TestFailIfActiveKeepsClassifiedFailureSticky(t *testing.T) {
+	s := New()
+	s.Create("allowance", "run_size", StatusRunning, 1, 5)
+	failure := &Failure{
+		Kind:      "sandbox_failure",
+		Code:      "inference_allowance_exhausted",
+		Retryable: false,
+	}
+
+	job, found, transitioned := s.FailIfActive(
+		"allowance", "harness exhausted its inference allowance", failure,
+	)
+	if !found || !transitioned || job.Status != StatusFailed || job.Failure != failure {
+		t.Fatalf("failure transition = found %t transitioned %t job %+v", found, transitioned, job)
+	}
+
+	s.SetStage("allowance", StatusScoring, 5, 5)
+	s.AppendPartial("allowance", protocol.CaseScore{CaseID: "late"})
+	s.Fail("allowance", "late worker failure")
+	s.Finish("allowance", protocol.ScoreReport{RunID: "allowance", Composite: 1})
+
+	got, _ := s.Get("allowance")
+	if got.Status != StatusFailed || got.Error != "harness exhausted its inference allowance" || got.Failure != failure {
+		t.Fatalf("late writes replaced classified failure: %+v", got)
+	}
+	if got.Report != nil || len(got.Partial) != 0 {
+		t.Fatalf("late writes mutated terminal job: %+v", got)
+	}
+}
+
 func TestFailWithSanitizedInfrastructureClassification(t *testing.T) {
 	s := New()
 	s.Create("r-infra", "sandbox", StatusRunning, 1, 5)

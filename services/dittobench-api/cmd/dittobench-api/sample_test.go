@@ -68,17 +68,9 @@ func TestSampleIncludesAnswerKeys(t *testing.T) {
 
 // TestSampleShapeMatchesProfile checks the sample is a real full-profile dataset
 // (60 tool cases), so the community sees the real size, and it pins the
-// supported v7/v8 split at the API surface.
+// active v8 contract at the API surface.
 func TestSampleShapeMatchesProfile(t *testing.T) {
 	s := &server{}
-
-	_, v7 := getSample(t, s, "?run_size=full&bench_version=7")
-	if len(v7.ToolCases) == 0 {
-		t.Fatal("full v7 profile must include tool cases")
-	}
-	if got := userScopedCases(v7); got == 0 {
-		t.Fatal("full v7 profile must include user-scoped memory cases")
-	}
 
 	_, v8 := getSample(t, s, "?run_size=full&bench_version=8")
 	if len(v8.ToolCases) == 0 || userScopedCases(v8) == 0 {
@@ -121,6 +113,7 @@ func TestSampleRejectsBadInput(t *testing.T) {
 		{"bad run_size", "?run_size=huge", "run_size must be one of"},
 		{"index too high", "?sample=99", "sample must be between"},
 		{"negative index", "?sample=-1", "sample must be between"},
+		{"retired bench version", "?bench_version=7", "unsupported bench_version"},
 		{"unsupported bench version", "?bench_version=9", "unsupported bench_version"},
 		{"non-integer bench version", "?bench_version=latest", "bench_version must be an integer"},
 	}
@@ -146,20 +139,16 @@ func TestSampleDefaultsToSmall(t *testing.T) {
 	if len(art.ToolCases) != 6 {
 		t.Fatalf("small profile should have 6 tool cases, got %d", len(art.ToolCases))
 	}
-	if art.BenchVersion != 7 {
-		t.Fatalf("omitted practice version must select v7, got %d", art.BenchVersion)
+	if art.BenchVersion != 8 {
+		t.Fatalf("omitted practice version must select v8, got %d", art.BenchVersion)
 	}
 }
 
-func TestSampleCanDeliberatelySelectV8(t *testing.T) {
+func TestSampleCanExplicitlySelectV8(t *testing.T) {
 	s := &server{}
-	v7, art7 := getSample(t, s, "?run_size=small&sample=2&bench_version=7")
-	v8, art8 := getSample(t, s, "?run_size=small&sample=2&bench_version=8")
-	if art7.BenchVersion != 7 || art8.BenchVersion != 8 {
-		t.Fatalf("wrong versions: v7=%d v8=%d", art7.BenchVersion, art8.BenchVersion)
-	}
-	if v7.Body.String() == v8.Body.String() {
-		t.Fatal("v7 and v8 sample paths produced identical bytes")
+	_, art := getSample(t, s, "?run_size=small&sample=2&bench_version=8")
+	if art.BenchVersion != 8 {
+		t.Fatalf("wrong version: %d", art.BenchVersion)
 	}
 }
 

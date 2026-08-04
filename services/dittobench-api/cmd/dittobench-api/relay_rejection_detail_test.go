@@ -129,7 +129,7 @@ func TestASchemaRejectionNamesTheFieldToTheHarness(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
 	sourceIP := "192.0.2.104"
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
 
 	body := `{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"hi"}],"reasoning":{"effort":"medium"}}`
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(body))
@@ -185,7 +185,7 @@ func TestAnUnparseableRejectionKeepsTheOldWording(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
 	sourceIP := "192.0.2.105"
-	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV7)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
 	request.RemoteAddr = sourceIP + ":4321"

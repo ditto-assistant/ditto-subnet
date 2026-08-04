@@ -60,7 +60,6 @@ func TestVersionCommandReportsBinaryProvenance(t *testing.T) {
 		"b45a2d07b2e421fec23859657bd63818c6dcbdf1",
 		"source_revision_mismatch:  true",
 		"1.4.0",
-		"v7_manifest_sha256",
 		"v8_manifest_sha256",
 		"WARNING",
 	} {
@@ -68,10 +67,9 @@ func TestVersionCommandReportsBinaryProvenance(t *testing.T) {
 			t.Fatalf("version output missing %q:\n%s", want, out)
 		}
 	}
-	// An operator must be able to read v7 readiness off an unstarted container.
-	readiness := efficiency.V7CalibrationReadiness()
+	readiness := efficiency.V8Readiness()
 	if readiness.ManifestSHA256 != "" && !strings.Contains(out, readiness.ManifestSHA256) {
-		t.Fatalf("version output must carry the v7 calibration manifest digest:\n%s", out)
+		t.Fatalf("version output must carry the v8 manifest digest:\n%s", out)
 	}
 }
 
@@ -116,21 +114,8 @@ func TestVersionCommandJSONMatchesAdvertisedCapabilities(t *testing.T) {
 				got.SupportedBenchVersions, live.SupportedBenchVersions)
 		}
 	}
-	if got.V7ManifestSHA256 != live.V7Calibration.ManifestSHA256 {
-		t.Fatalf("v7 manifest digest disagrees: %q vs %q",
-			got.V7ManifestSHA256, live.V7Calibration.ManifestSHA256)
-	}
 	if got.V8ManifestSHA256 != live.V8Readiness.ManifestSHA256 {
 		t.Fatalf("v8 manifest digest disagrees: %q vs %q", got.V8ManifestSHA256, live.V8Readiness.ManifestSHA256)
-	}
-	wantAdvertised := false
-	for _, version := range live.SupportedBenchVersions {
-		if version == protocol.BenchVersionV7 {
-			wantAdvertised = true
-		}
-	}
-	if got.V7Advertised != wantAdvertised {
-		t.Fatalf("v7_advertised = %v, want %v", got.V7Advertised, wantAdvertised)
 	}
 	wantV8Advertised := false
 	for _, version := range live.SupportedBenchVersions {

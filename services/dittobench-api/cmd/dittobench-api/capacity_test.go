@@ -18,6 +18,7 @@ type diagnosticSandbox struct {
 	logs           string
 	logsAfter      bool // true once Stop ran, proving Logs was NOT read before teardown
 	stopped        bool
+	stoppedHandle  *sandbox.Handle
 	v8IsolationErr error
 }
 
@@ -32,8 +33,9 @@ func (*diagnosticSandbox) Run(context.Context, string, map[string]string) (*sand
 	return nil, nil
 }
 func (*diagnosticSandbox) Release(context.Context, string) {}
-func (s *diagnosticSandbox) Stop(context.Context, *sandbox.Handle) {
+func (s *diagnosticSandbox) Stop(_ context.Context, handle *sandbox.Handle) {
 	s.stopped = true
+	s.stoppedHandle = handle
 }
 func (s *diagnosticSandbox) Diagnostics(context.Context, *sandbox.Handle) sandbox.RuntimeDiagnostics {
 	return s.diagnostics
@@ -94,6 +96,33 @@ func TestFinishSandboxRunClassifiesOOMBeforeStop(t *testing.T) {
 }
 
 func pointer[T any](value T) *T { return &value }
+
+func TestStopSandboxForRestartRetainsRequestImage(t *testing.T) {
+	backend := &diagnosticSandbox{}
+	s := &server{sandbox: backend}
+	handle := &sandbox.Handle{
+		ContainerID: "container-123",
+		ImageRef:    "dittobench-sub:screened-image-123",
+		NetworkName: "ditto-job-123",
+		SourceIP:    "172.30.0.2",
+	}
+
+	s.stopSandboxForRestart(handle)
+
+	if backend.stoppedHandle == nil {
+		t.Fatal("compatibility container was not stopped")
+	}
+	if backend.stoppedHandle.ImageRef != "" {
+		t.Fatalf("restart stop released request image %q", backend.stoppedHandle.ImageRef)
+	}
+	if backend.stoppedHandle.ContainerID != handle.ContainerID ||
+		backend.stoppedHandle.NetworkName != handle.NetworkName {
+		t.Fatalf("restart stop lost container resources: %+v", backend.stoppedHandle)
+	}
+	if handle.ImageRef != "dittobench-sub:screened-image-123" {
+		t.Fatalf("restart stop mutated original handle: %+v", handle)
+	}
+}
 
 // A run the scored path already classified as validator infrastructure must
 // keep that classification through the deferred sandbox teardown. Overwriting

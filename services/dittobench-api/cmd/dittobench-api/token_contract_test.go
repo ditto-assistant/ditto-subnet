@@ -82,11 +82,9 @@ func TestV7DispatchedByPlatformAdmitsAndScoresQualityOnly(t *testing.T) {
 		t.Fatalf("safe-prod v7 admission rejected a correct route without a baseline: %v", err)
 	}
 
-	// The platform selects the supported bench per run; v7 and gated v8 remain.
-	for _, v := range []int{protocol.BenchVersionV7, protocol.BenchVersionV8} {
-		if got, msg := requestedBenchVersion(v, true); got != v || msg != "" {
-			t.Fatalf("platform-dispatched bench_version %d rejected: (%d, %q)", v, got, msg)
-		}
+	// Only the active v8 contract is admitted by request routing.
+	if got, msg := requestedBenchVersion(protocol.BenchVersionV8); got != protocol.BenchVersionV8 || msg != "" {
+		t.Fatalf("platform-dispatched v8 rejected: (%d, %q)", got, msg)
 	}
 
 	// The scored v7 composite is quality-only: extreme usage never moves it.

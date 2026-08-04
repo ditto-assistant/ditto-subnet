@@ -3,20 +3,12 @@ name: DittoBench
 on:
   pull_request:
     paths:
-      - services/dittobench-api/Dockerfile
-      - services/dittobench-api/cmd/**
-      - services/dittobench-api/go.mod
-      - services/dittobench-api/go.sum
-      - services/dittobench-api/internal/**
+      - services/dittobench-api/**
       - .github/workflows/dittobench.yml
   push:
     branches: [main]
     paths:
-      - services/dittobench-api/Dockerfile
-      - services/dittobench-api/cmd/**
-      - services/dittobench-api/go.mod
-      - services/dittobench-api/go.sum
-      - services/dittobench-api/internal/**
+      - services/dittobench-api/**
       - .github/workflows/dittobench.yml
 
 concurrency:

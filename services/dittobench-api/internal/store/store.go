@@ -213,6 +213,28 @@ func (s *Store) FailWith(runID, msg string, failure *Failure) {
 	})
 }
 
+// FailIfActive atomically makes an internal terminal failure sticky while the
+// worker unwinds concurrent sandbox or relay calls. It is the classified
+// counterpart to CancelIfActive: late progress, transcript, scoring, or failure
+// writes must not replace the first terminal verdict.
+func (s *Store) FailIfActive(runID, msg string, failure *Failure) (Job, bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[runID]
+	if !ok {
+		return Job{}, false, false
+	}
+	if j.Status == StatusDone || j.Status == StatusFailed {
+		return *j, true, false
+	}
+	j.cancelled = true
+	j.Status = StatusFailed
+	j.Error = msg
+	j.Failure = failure
+	j.UpdatedAt = time.Now()
+	return *j, true, true
+}
+
 // SetTranscript attaches the canonical transcript artifact and its digest.
 func (s *Store) SetTranscript(runID, sha string, body []byte) {
 	s.Update(runID, func(j *Job) {
@@ -242,21 +264,7 @@ func (s *Store) Finish(runID string, report protocol.ScoreReport) {
 // the run or replacing the cancellation with an infrastructure classification.
 // A terminal run is returned unchanged, making repeated DELETEs idempotent.
 func (s *Store) CancelIfActive(runID, msg string) (Job, bool, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	j, ok := s.jobs[runID]
-	if !ok {
-		return Job{}, false, false
-	}
-	if j.Status == StatusDone || j.Status == StatusFailed {
-		return *j, true, false
-	}
-	j.cancelled = true
-	j.Status = StatusFailed
-	j.Error = msg
-	j.Failure = nil
-	j.UpdatedAt = time.Now()
-	return *j, true, true
+	return s.FailIfActive(runID, msg, nil)
 }
 
 // Get returns a copy of the job for id and whether it was found.

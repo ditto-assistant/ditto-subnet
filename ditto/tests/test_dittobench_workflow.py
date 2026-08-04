@@ -15,8 +15,7 @@ def test_dittobench_workflow_uses_monorepo_contexts_without_repinning() -> None:
     jobs = workflow["jobs"]
 
     assert "repin" not in text.lower()
-    assert "services/dittobench-api/cmd/**" in text
-    assert "services/dittobench-api/docs/**" not in text
+    assert "services/dittobench-api/**" in text
 
     for job_name in ("docker-build", "provenance", "deploy"):
         build = next(
@@ -39,3 +38,17 @@ def test_hosted_deploy_remains_push_only_and_commit_stamped() -> None:
     )
     assert "DITTOBENCH_SOURCE_SHA=${{ github.sha }}" in build["with"]["build-args"]
     assert "gcloud run deploy dittobench-api" in deploy_step["run"]
+
+
+def test_every_dittobench_surface_triggers_ci() -> None:
+    text = WORKFLOW_PATH.read_text()
+    for path in (
+        "services/dittobench-api/Dockerfile.egress-proxy",
+        "services/dittobench-api/integrations/longmemeval/longmemeval_adapter.py",
+        "services/dittobench-api/scripts/calibrate.sh",
+        "services/dittobench-api/calibration/token-efficiency-v5/contract.json",
+    ):
+        # A single service-wide filter intentionally covers all current and
+        # future API, research, integration, and image-build inputs.
+        assert path.startswith("services/dittobench-api/")
+        assert "services/dittobench-api/**" in text

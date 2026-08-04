@@ -99,16 +99,16 @@ func TestHostedV7EmbeddingsActuallyRunConcurrently(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	originalLane := v7EmbeddingSessionConcurrency
-	v7EmbeddingSessionConcurrency = want
-	t.Cleanup(func() { v7EmbeddingSessionConcurrency = originalLane })
+	originalLane := v8EmbeddingSessionConcurrency
+	v8EmbeddingSessionConcurrency = want
+	t.Cleanup(func() { v8EmbeddingSessionConcurrency = originalLane })
 
 	broker := newInferenceBroker(1)
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
 		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.150", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.150", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -155,16 +155,16 @@ func TestHostedV7EmbeddingLaneStillHasACeiling(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	originalLane := v7EmbeddingSessionConcurrency
-	v7EmbeddingSessionConcurrency = lane
-	t.Cleanup(func() { v7EmbeddingSessionConcurrency = originalLane })
+	originalLane := v8EmbeddingSessionConcurrency
+	v8EmbeddingSessionConcurrency = lane
+	t.Cleanup(func() { v8EmbeddingSessionConcurrency = originalLane })
 
 	broker := newInferenceBroker(1)
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
 		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.151", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.151", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -213,9 +213,9 @@ func TestLocalOllamaEmbeddingsStayStrictlySerialised(t *testing.T) {
 
 	// Widen the v7 knob as far as it goes. A local-path bound that moved with
 	// it would be the exact bug this test is here to catch.
-	originalLane := v7EmbeddingSessionConcurrency
-	v7EmbeddingSessionConcurrency = 32
-	t.Cleanup(func() { v7EmbeddingSessionConcurrency = originalLane })
+	originalLane := v8EmbeddingSessionConcurrency
+	v8EmbeddingSessionConcurrency = 32
+	t.Cleanup(func() { v8EmbeddingSessionConcurrency = originalLane })
 
 	broker := newInferenceBroker(4)
 	broker.embeddingURL = upstream.URL + embeddingAPIPath
@@ -265,7 +265,7 @@ func TestPlatformCapacityBackpressureIsWaitedOutNotCountedAsAFault(t *testing.T)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
 		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.153", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.153", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -331,7 +331,7 @@ func TestPlatformFiveHundredThreeWithoutRetryAfterIsStillAFault(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
 		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
-	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.154", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.154", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
@@ -381,9 +381,9 @@ func TestEndEmbeddingPhaseRevokesEveryInFlightCall(t *testing.T) {
 	defer upstream.Close()
 	defer close(release)
 
-	originalLane := v7EmbeddingSessionConcurrency
-	v7EmbeddingSessionConcurrency = inFlight
-	t.Cleanup(func() { v7EmbeddingSessionConcurrency = originalLane })
+	originalLane := v8EmbeddingSessionConcurrency
+	v8EmbeddingSessionConcurrency = inFlight
+	t.Cleanup(func() { v8EmbeddingSessionConcurrency = originalLane })
 
 	broker := newInferenceBroker(1)
 	proxyURL := configureBrokerUpstream(broker, upstream)
@@ -391,7 +391,7 @@ func TestEndEmbeddingPhaseRevokesEveryInFlightCall(t *testing.T) {
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
 		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
 	sessionID := prepared["session_id"]
-	runID := claimAndBindBrokerSession(t, broker, sessionID, "192.0.2.155", protocol.BenchVersionV7)
+	runID := claimAndBindBrokerSession(t, broker, sessionID, "192.0.2.155", protocol.BenchVersionV8)
 	if !broker.beginEmbeddingPhase(sessionID, runID) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
