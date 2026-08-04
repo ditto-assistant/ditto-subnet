@@ -5,6 +5,9 @@ from pathlib import Path
 
 WORKFLOWS = Path(__file__).parents[2] / ".github/workflows"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+PRIVILEGED_TRIGGER = re.compile(
+    r"^\s*(pull_request_target|workflow_run|issue_comment|repository_dispatch)\s*:"
+)
 
 
 def test_remote_actions_are_pinned_to_full_commit_shas() -> None:
@@ -29,4 +32,12 @@ def test_uv_sync_is_locked_in_workflows() -> None:
                 continue
             assert "--locked" in line or "--frozen" in line, (
                 f"{workflow.name}:{line_number} runs uv sync without a lock guard"
+            )
+
+
+def test_untrusted_workflows_do_not_use_privileged_triggers() -> None:
+    for workflow in WORKFLOWS.glob("*.yml"):
+        for line_number, line in enumerate(workflow.read_text().splitlines(), start=1):
+            assert not PRIVILEGED_TRIGGER.match(line.split("#", 1)[0]), (
+                f"{workflow.name}:{line_number} uses a privileged trigger"
             )

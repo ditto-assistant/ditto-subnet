@@ -1857,12 +1857,17 @@ def _public_submission_family(
     members: list[Any],
     *,
     representative_agent_id: UUID,
+    selection_rule: Literal[
+        "best_official_score_per_payment_owner",
+        "best_canonical_score_per_payment_owner",
+    ] = "best_official_score_per_payment_owner",
 ) -> PublicSubmissionFamily | None:
     """Project a payment-owner family without exposing its coldkey."""
     if not members:
         return None
     return PublicSubmissionFamily(
         member_count=len(members),
+        selection_rule=selection_rule,
         members=[
             PublicSubmissionFamilyMember(
                 agent_id=member.agent_id,
@@ -2161,6 +2166,7 @@ async def leaderboard(
         session,
         include_fingerprints=False,
         bench_version=bench_version,
+        owner_score="canonical" if bench_version is not None else "official",
     )
     selected_versions = {row.agent_id: row.bench_version for row in ledger_rows}
     registration = await _current_registration(request)
@@ -2468,6 +2474,11 @@ async def leaderboard(
                         [],
                     ),
                     representative_agent_id=row.agent_id,
+                    selection_rule=(
+                        "best_canonical_score_per_payment_owner"
+                        if bench_version is not None
+                        else "best_official_score_per_payment_owner"
+                    ),
                 ),
                 official_composite=board_official_composites.get(
                     row.agent_id, row.composite
@@ -4524,14 +4535,26 @@ async def agent_pipeline(
         ),
         [],
     )
-    submission_family = (
-        _public_submission_family(
-            agent_family_members,
-            representative_agent_id=agent_family_members[0].agent_id,
+    if agent_family_members:
+        family_agent_ids = {member.agent_id for member in agent_family_members}
+        official_representative_id = next(
+            (
+                ledger_row.agent_id
+                for ledger_row in await list_eligible_ledger(
+                    session,
+                    include_fingerprints=False,
+                    include_details=False,
+                )
+                if ledger_row.agent_id in family_agent_ids
+            ),
+            agent_family_members[0].agent_id,
         )
-        if agent_family_members
-        else None
-    )
+        submission_family = _public_submission_family(
+            agent_family_members,
+            representative_agent_id=official_representative_id,
+        )
+    else:
+        submission_family = None
     canonical_scores = [
         score for score in accepted_scores if score.bench_version == canonical_version
     ]

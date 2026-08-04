@@ -2497,6 +2497,21 @@ async def test_v8_requires_an_isolated_executor_but_v7_remains_compatible(
     assert heartbeat_supports_version(heartbeat, now=now, version=8) is supports_v8
 
 
+async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
+    """The v0.44 capability shape can receive v8 work without v7 metadata."""
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    heartbeat = _heartbeat("v8-only", now, versions=[7, 8], protocol_version=18)
+    capabilities = heartbeat.capabilities
+    assert capabilities is not None
+    scorer = capabilities["scorer_benchmarks"]
+    scorer["supported_bench_versions"] = [8]
+    scorer.pop("v7_calibration")
+
+    assert heartbeat_supports_version(heartbeat, now=now, version=8)
+    assert not heartbeat_supports_version(heartbeat, now=now, version=7)
+
+
 async def test_capable_validator_counts_agree_with_the_per_version_state(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:

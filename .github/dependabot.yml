@@ -27,3 +27,23 @@ updates:
     directory: /services/dittobench-api/integrations/openclaw
     schedule:
       interval: weekly
+
+  - package-ecosystem: pip
+    directory: /apps/platform
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /apps/platform
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /apps/platform/dashboard
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /apps/platform/docker/embedder
+    schedule:
+      interval: weekly

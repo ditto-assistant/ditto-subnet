@@ -2698,6 +2698,7 @@ class TestPublicLeaderboard:
         assert entry["agent_id"] == representative
         family = entry["submission_family"]
         assert family["member_count"] == 2
+        assert family["selection_rule"] == "best_official_score_per_payment_owner"
         assert [member["agent_id"] for member in family["members"]] == [
             representative,
             hidden_generation,
@@ -3611,6 +3612,19 @@ def _v7_capable_row(
     )
 
 
+def _v8_only_capable_row(
+    now: datetime, *, hotkey: str, seen_at: datetime
+) -> SimpleNamespace:
+    """The v0.44 heartbeat: v8 is verified without retired v7 metadata."""
+
+    row = _v7_capable_row(now, hotkey=hotkey, seen_at=seen_at)
+    row.protocol_version = 18
+    scorer = row.capabilities["scorer_benchmarks"]
+    scorer["supported_bench_versions"] = [8]
+    scorer.pop("v7_calibration")
+    return row
+
+
 def _legacy_row(now: datetime, *, hotkey: str) -> SimpleNamespace:
     """The validator this gate exists for: ancient software, no capabilities.
 
@@ -3687,6 +3701,18 @@ class TestActiveBenchCapabilityGate:
         entry = self._snapshot(
             [_v7_capable_row(now, hotkey=_VALIDATOR_C, seen_at=now)],
             version=7,
+            now=now,
+        ).validators[0]
+
+        assert entry.bench_serviceability == "serving"
+        assert entry.health == "healthy"
+        assert entry.health_reasons == []
+
+    def test_a_v8_only_validator_passes_without_v7_calibration(self) -> None:
+        now = datetime(2026, 8, 4, 20, 20, tzinfo=UTC)
+        entry = self._snapshot(
+            [_v8_only_capable_row(now, hotkey=_VALIDATOR_C, seen_at=now)],
+            version=8,
             now=now,
         ).validators[0]
 

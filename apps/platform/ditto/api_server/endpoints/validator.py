@@ -2046,11 +2046,17 @@ async def _validated_heartbeat_work(
 ) -> _HeartbeatWork:
     """Project the signed work claim onto what the ledger actually agrees with.
 
-    Every slot is confirmed against a live ticket and a scoreable agent under
-    ``FOR UPDATE``, so the stored capacity cannot describe work whose lease is
-    being revoked concurrently. Callers must run this where a failure is
-    containable (a savepoint): it row-locks, and it is the half of the ingest
-    that can fail on a payload the validator is legitimately allowed to send.
+    Every slot is confirmed against a live ticket and a scoreable agent using
+    ordinary MVCC reads.  Heartbeats are observational: briefly retaining work
+    whose lease is consumed concurrently is conservative (it cannot issue or
+    score a ticket), and the next heartbeat removes it.  Taking the same ticket
+    row locks as inference accounting made one chat-heavy agent delay the whole
+    validator heartbeat and hide progress for all of its slots.
+
+    The optional first-report stamp is the sole write here.  It reacquires the
+    ticket with ``SKIP LOCKED`` so accounting or scoring always wins; a skipped
+    stamp is retried by the next heartbeat and leaves the lease on the safer,
+    not-yet-revocable side of the liveness gate.
     """
     stored_active_agent_id = request_body.active_agent_id
     stored_benchmark_progress = (
@@ -2079,9 +2085,7 @@ async def _validated_heartbeat_work(
                 }
         valid_active = []
         for slot in stored_benchmark_capacity.active:
-            agent = await get_agent_by_id(
-                session, agent_id=slot.agent_id, for_update=True
-            )
+            agent = await get_agent_by_id(session, agent_id=slot.agent_id)
             # Identity, not deadline stamp. A re-issued lease moves the deadline
             # the validator cached, and matching on it evicted a live slot from
             # the stored capacity: its progress vanished from the fleet view and
@@ -2092,7 +2096,6 @@ async def _validated_heartbeat_work(
                 validator_hotkey=validator_hotkey,
                 slot_id=slot.slot_id,
                 now=now,
-                for_update=True,
             )
             if (
                 ticket is not None
@@ -2107,7 +2110,20 @@ async def _validated_heartbeat_work(
                     # moved -- the gate asks whether this lease has *ever*
                     # testified, not when it last did, and the freshness of the
                     # latest testimony is already ``heartbeat.seen_at``.
-                    ticket.first_reported_at = now
+                    stampable_ticket = await get_live_slot_ticket(
+                        session,
+                        agent_id=slot.agent_id,
+                        validator_hotkey=validator_hotkey,
+                        slot_id=slot.slot_id,
+                        now=now,
+                        for_update=True,
+                        skip_locked=True,
+                    )
+                    if (
+                        stampable_ticket is not None
+                        and stampable_ticket.first_reported_at is None
+                    ):
+                        stampable_ticket.first_reported_at = now
                 previous_slot = previous_slots.get(slot.slot_id)
                 if previous_slot is not None:
                     try:
@@ -2163,9 +2179,7 @@ async def _validated_heartbeat_work(
         and request_body.benchmark_progress is not None
     ):
         assert request_body.active_agent_id is not None
-        agent = await get_agent_by_id(
-            session, agent_id=request_body.active_agent_id, for_update=True
-        )
+        agent = await get_agent_by_id(session, agent_id=request_body.active_agent_id)
         ticket = await get_open_ticket(
             session,
             agent_id=request_body.active_agent_id,
@@ -2173,7 +2187,6 @@ async def _validated_heartbeat_work(
             now=now,
             deadline=request_body.benchmark_progress.ticket_deadline,
             bench_version=None,
-            for_update=True,
         )
         if ticket is None or agent is None or agent.status not in _SCOREABLE_STATUSES:
             # Ticket-bound progress is optional decoration. A benchmark can
@@ -2302,12 +2315,12 @@ async def heartbeat(
     reported_at = datetime.fromtimestamp(request_body.timestamp, tz=UTC)
     async with session.begin():
         try:
-            # SAVEPOINT, not a bare try: deriving the work payload row-locks
-            # tickets and agents, so a database-level failure inside it (lock
-            # timeout, deadlock) would otherwise poison the surrounding
+            # SAVEPOINT, not a bare try: a database-level failure while deriving
+            # the optional work payload would otherwise poison the surrounding
             # transaction and take the liveness write down with it anyway.
-            # Rolling back to the savepoint releases those reads and locks and
-            # leaves the transaction usable for the upsert below.
+            # The only lock this path now attempts is a best-effort SKIP LOCKED
+            # first-report stamp; ticket accounting and scoring never wait on a
+            # heartbeat.
             async with session.begin_nested():
                 work = await _validated_heartbeat_work(
                     session,
@@ -2525,14 +2538,20 @@ async def request_job(
             if (
                 heartbeat_capabilities is not None
                 and heartbeat_capabilities.scorer_benchmarks is not None
-                and target_version >= 7
             ):
                 v7_calibration = heartbeat_capabilities.scorer_benchmarks.v7_calibration
             if heartbeat_capabilities is None or (
                 heartbeat is None
                 or heartbeat.protocol_version < (11 if target_version >= 7 else 10)
                 or not heartbeat_capabilities.ticket_inference
-                or (target_version >= 7 and v7_calibration is None)
+                or (
+                    target_version == 7
+                    and (
+                        heartbeat_capabilities.scorer_benchmarks is None
+                        or heartbeat_capabilities.scorer_benchmarks.v7_calibration
+                        is None
+                    )
+                )
             ):
                 target_inference_ready = False
         slot_id = payload.slot_id or "slot-0"
@@ -3857,7 +3876,10 @@ async def request_top5_confirmation_job(
             except ValidationError as exc:
                 raise HTTPException(
                     status_code=428,
-                    detail="fresh benchmark v7 inference capability is required",
+                    detail=(
+                        f"fresh benchmark v{canonical_version} inference capability "
+                        "is required"
+                    ),
                 ) from exc
             if capabilities.scorer_benchmarks is not None:
                 v7_calibration = capabilities.scorer_benchmarks.v7_calibration
@@ -3865,11 +3887,14 @@ async def request_top5_confirmation_job(
                 heartbeat is None
                 or heartbeat.protocol_version < 11
                 or not capabilities.ticket_inference
-                or v7_calibration is None
+                or (canonical_version == 7 and v7_calibration is None)
             ):
                 raise HTTPException(
                     status_code=428,
-                    detail="fresh benchmark v7 inference capability is required",
+                    detail=(
+                        f"fresh benchmark v{canonical_version} inference capability "
+                        "is required"
+                    ),
                 )
         emission_members, wave_members, members = await _current_retest_cohort(
             session,

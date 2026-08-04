@@ -16,7 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from statistics import median
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, and_, case, func, literal, null, or_, select
@@ -34,7 +34,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.inference import LeaseModelUsage
-from ditto.score_order import score_order_key, score_order_terms
+from ditto.score_order import rank_submissions, score_order_key, score_order_terms
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -1013,8 +1013,16 @@ async def list_eligible_ledger(
     include_fingerprints: bool = True,
     include_details: bool = True,
     bench_version: int | None = None,
+    owner_score: Literal["official", "canonical"] = "official",
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
+
+    ``owner_score="official"`` (the default) chooses each owner's representative
+    with the same continual score used for current ranks and validator weights.
+    ``"canonical"`` is reserved for historical snapshots, where the original
+    three-validator median is the score that era published.  Keeping this
+    choice inside the shared ledger prevents the board, retest scheduler and
+    validator fold from selecting different generations for one owner.
 
     ``include_fingerprints=False`` selects NULL for the anti-copy sketch
     columns (fingerprints + code embedding, several hundred KB per row) —
@@ -1046,8 +1054,9 @@ async def list_eligible_ledger(
        signature still verifies against the exposed composite. An agent with a
        single score is its own median, so pre-quorum agents degrade cleanly.
     2. join to ``agents`` filtered to ``scored``.
-    3. a ``ROW_NUMBER`` window keeps each payment-time coldkey's single best
-       agent, even when that owner submitted through multiple hotkeys or names.
+    3. after the canonical rows are materialized, rank them by the requested
+       owner score and keep each attested payment owner root's first agent.
+       This also dedupes one owner across linked hotkeys and names.
 
     Two senses of "eligible" apply. *Pool* eligibility = ``status == scored``
     (excludes ``ath_pending_review`` holds and ``banned`` agents). *Ranking*
@@ -1264,36 +1273,20 @@ async def list_eligible_ledger(
     authoritative = (
         select(selected_version).where(selected_version.c.version_rn == 1).subquery()
     )
-    rn = (
-        func.row_number()
-        .over(
-            partition_by=authoritative.c.emission_owner,
-            # Eligible-first so a miner is represented by their best full-benchmark
-            # agent, not an inflated smoke run; composite breaks ties within a tier.
-            order_by=score_order_terms(
+    # Keep every canonical agent until the authoritative score is resolved.
+    # Collapsing by owner in SQL here used the k=3 median even after continual
+    # retests had changed the score used for ranks and weights.  That let a
+    # lucky initial median permanently shadow a better later generation.
+    stmt = (
+        select(authoritative)
+        # Canonical order makes the database result deterministic.  The rows
+        # are re-ranked below once the requested owner score has been resolved.
+        .order_by(
+            *score_order_terms(
                 eligible=authoritative.c.eligible,
                 composite=authoritative.c.composite,
                 first_seen=authoritative.c.first_seen,
                 agent_id=authoritative.c.agent_id,
-            ),
-        )
-        .label("rn")
-    )
-    ranked = select(authoritative, rn).subquery()
-    stmt = (
-        select(ranked)
-        .where(ranked.c.rn == 1)
-        # Eligible (ranked) entries first, then provisional ones; the public rank
-        # and the validator fold both read this order. This is the raw-composite
-        # cut: it is the pool the continual mean is computed OVER, so it must not
-        # itself be ordered by the continual mean. Callers that publish a
-        # standing re-rank with ``rank_submissions(..., scores=official)``.
-        .order_by(
-            *score_order_terms(
-                eligible=ranked.c.eligible,
-                composite=ranked.c.composite,
-                first_seen=ranked.c.first_seen,
-                agent_id=ranked.c.agent_id,
             )
         )
     )
@@ -1328,6 +1321,17 @@ async def list_eligible_ledger(
         )
         for row in result
     ]
+    if owner_score == "official":
+        from ditto.db.queries.score_ranking import resolve_ranking_scores
+
+        selection_scores = await resolve_ranking_scores(
+            session,
+            rows=ledger,
+            bench_version=bench_version,
+        )
+    else:
+        selection_scores = {row.agent_id: row.composite for row in ledger}
+    ordered = rank_submissions(ledger, scores=selection_scores)
     roots = await attested_emission_owner_roots(
         session,
         [
@@ -1338,13 +1342,13 @@ async def list_eligible_ledger(
                     miner_coldkey=row.miner_coldkey,
                 ),
             )
-            for row in ledger
+            for row in ordered
         ],
     )
-    # ``stmt`` is already in canonical score order. Keeping the first row per
-    # proven owner therefore selects that owner's best eligible submission.
+    # Keeping the first row per proven owner selects the same generation the
+    # current board and validator fold would rank highest for that owner.
     best_by_owner: dict[str, LedgerRow] = {}
-    for root, row in zip(roots, ledger, strict=True):
+    for root, row in zip(roots, ordered, strict=True):
         best_by_owner.setdefault(root, row)
     return list(best_by_owner.values())
 

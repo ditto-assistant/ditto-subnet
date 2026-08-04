@@ -309,6 +309,56 @@ class TestListEligibleLedger:
 
         assert [row.agent_id for row in ledger] == [best.agent_id]
 
+    async def test_official_score_can_replace_a_lucky_family_incumbent(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Family selection must use the score that ranks and pays the row.
+
+        The incumbent won its initial quorum but fell after continual retests.
+        A later generation whose canonical score is still lower should replace
+        it once that lower score is higher than the incumbent's official score.
+        Historical snapshots deliberately retain the canonical selection.
+        """
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        coldkey = "5ColdkeyOwner"
+        incumbent = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.990,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        challenger = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            coldkey=coldkey,
+            composite=0.985,
+            created_at=t0.replace(hour=13),
+            n=MIN_ELIGIBLE_CASES,
+        )
+
+        async def _official_scores(
+            _session: AsyncSession,
+            *,
+            rows: list,
+            bench_version: int | None,
+            **_: object,
+        ) -> dict:
+            del _session, rows, bench_version
+            return {incumbent.agent_id: 0.954, challenger.agent_id: 0.985}
+
+        monkeypatch.setattr(
+            "ditto.db.queries.score_ranking.resolve_ranking_scores",
+            _official_scores,
+        )
+
+        official = await list_eligible_ledger(session)
+        historical = await list_eligible_ledger(session, owner_score="canonical")
+
+        assert [row.agent_id for row in official] == [challenger.agent_id]
+        assert [row.agent_id for row in historical] == [incumbent.agent_id]
+
     async def test_different_coldkeys_keep_separate_positions(
         self, session: AsyncSession
     ) -> None:

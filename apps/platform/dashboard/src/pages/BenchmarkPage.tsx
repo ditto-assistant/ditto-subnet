@@ -289,7 +289,7 @@ export function BenchmarkPage(): JSX.Element {
                 <li>
                   <b>Grading</b>: no LLM judge. Deterministic per-kind checks from the public{" "}
                   <a
-                    href="https://github.com/ditto-assistant/dittobench-datagen"
+                    href="https://github.com/ditto-assistant/ditto-subnet/tree/main/services/dittobench-datagen"
                     target="_blank"
                     rel="noopener"
                   >
@@ -380,7 +380,7 @@ export function BenchmarkPage(): JSX.Element {
                 What every score metric and gate factor means, and what each scored test category
                 probes. Definitions come from the public{" "}
                 <a
-                  href="https://github.com/ditto-assistant/dittobench-datagen"
+                  href="https://github.com/ditto-assistant/ditto-subnet/tree/main/services/dittobench-datagen"
                   target="_blank"
                   rel="noopener"
                 >

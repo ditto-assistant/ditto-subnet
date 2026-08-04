@@ -4802,6 +4802,59 @@ class TestRequestJob:
         assert response.json()["agent_id"] == str(agent_id)
         refresh.assert_not_awaited()
 
+    async def test_v8_only_validator_receives_work_without_v7_calibration(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A v8-only scorer is not forced to advertise the retired v7 manifest.
+
+        The shared capability gate already treated v7 calibration as specific
+        to v7.  The job endpoint duplicated the old broader condition, making
+        an otherwise healthy v8-only validator poll successfully but receive a
+        204 while eligible v8 submissions waited.
+        """
+        await _seed_activated_era(session_maker, version=8)
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            dataset_version=8,
+        )
+        capabilities = _scorer_capable_capabilities(
+            now=datetime.now(UTC), versions=(8,)
+        )
+        scorer = capabilities["scorer_benchmarks"]
+        assert isinstance(scorer, dict)
+        scorer.pop("v7_calibration")
+        await _seed_validator_heartbeat(
+            session_maker,
+            protocol_version=18,
+            capabilities=capabilities,
+            stack=_V7_STACK,
+            benchmark_capacity=_ACCEPTING_CAPACITY,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        self._enable_compatibility_gate(app)
+        refresh = AsyncMock(return_value=0)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.validator.refresh_rolling_qualification",
+            refresh,
+        )
+
+        response = await client.post(
+            "/api/v1/validator/job",
+            headers=_AUTH_HEADER,
+            json=_job_payload(slot_id=_SLOT_ID),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["agent_id"] == str(agent_id)
+        assert response.json()["bench_version"] == 8
+        refresh.assert_not_awaited()
+
     async def test_required_proxy_issues_only_to_v10_ticket_inference_slots(
         self,
         app: FastAPI,
@@ -8182,6 +8235,42 @@ class TestTop5ConfirmationLane:
 
         assert response.status_code == 428
         assert "fresh heartbeat" in response.json()["message"]
+
+    async def test_v8_only_validator_claims_retest_without_v7_calibration(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        champion, *_ = await _seed_top5_emission_set(
+            session_maker,
+            bench_version=8,
+            seed_heartbeats=False,
+        )
+        capabilities = _scorer_capable_capabilities(
+            now=datetime.now(UTC), versions=(8,)
+        )
+        scorer = capabilities["scorer_benchmarks"]
+        assert isinstance(scorer, dict)
+        scorer.pop("v7_calibration")
+        await _seed_validator_heartbeat(
+            session_maker,
+            protocol_version=18,
+            capabilities=capabilities,
+            stack=_V7_STACK,
+        )
+        _install_db(app, session_maker)
+        _install_chain_with_block(app, block_number=1)
+
+        response = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(champion, champion),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["agent_id"] == str(champion)
+        assert response.json()["bench_version"] == 8
 
     async def test_distributes_concurrent_claims_across_least_covered_members(
         self,

@@ -116,17 +116,19 @@ describe("Public source repositories (row 29)", () => {
       </>
     ));
     expect(document.querySelector('[aria-label="Platform source on GitHub"]')).toBeTruthy();
-    // The platform repo appears exactly twice: the sidebar GitHub button and
+    // The platform source appears exactly twice: the sidebar GitHub button and
     // the footer's "Platform source" link.
     const platformLinks = document.querySelectorAll(
-      'a[href="https://github.com/ditto-assistant/ditto-platform"]',
+      'a[href="https://github.com/ditto-assistant/ditto-subnet/tree/main/apps/platform"]',
     );
     expect(platformLinks.length).toBe(2);
     expect(
       document.querySelector('a[href="https://github.com/ditto-assistant/ditto-subnet"]'),
     ).toBeTruthy();
     expect(
-      document.querySelector('a[href="https://github.com/ditto-assistant/ditto-screener"]'),
+      document.querySelector(
+        'a[href="https://github.com/ditto-assistant/ditto-subnet/tree/main/services/screener"]',
+      ),
     ).toBeTruthy();
     expect(document.querySelector('[aria-label="Open-source Ditto repositories"]')).toBeTruthy();
   });

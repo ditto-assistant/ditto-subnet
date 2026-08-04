@@ -414,9 +414,10 @@ class PublicSubmissionFamily(BaseModel):
     """The scored generations collapsed into one owner leaderboard position."""
 
     member_count: Annotated[int, Field(ge=1)]
-    selection_rule: Literal["best_canonical_score_per_payment_owner"] = (
-        "best_canonical_score_per_payment_owner"
-    )
+    selection_rule: Literal[
+        "best_official_score_per_payment_owner",
+        "best_canonical_score_per_payment_owner",
+    ] = "best_official_score_per_payment_owner"
     members: list[PublicSubmissionFamilyMember] = Field(default_factory=list)
 
 

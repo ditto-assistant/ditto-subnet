@@ -57,7 +57,7 @@ export const THIRD_PARTY_HARNESSES: HarnessEvidence[] = [
     route: "OpenRouter · Nebius pinned",
     measuredAt: "2026-07-23",
     evidenceUrl:
-      "https://github.com/ditto-assistant/dittobench-api/tree/beb8e1a5fb5a2c35f5c34ce33b422978504d611e/docs/third-party-benchmark-timeline",
+      "https://github.com/ditto-assistant/ditto-subnet/tree/main/services/dittobench-api/docs/third-party-benchmark-timeline",
     points: [
       {
         benchVersion: 2,
@@ -128,7 +128,7 @@ export const THIRD_PARTY_HARNESSES: HarnessEvidence[] = [
     route: "OpenRouter · Nebius pinned",
     measuredAt: "2026-07-23",
     evidenceUrl:
-      "https://github.com/ditto-assistant/dittobench-api/tree/beb8e1a5fb5a2c35f5c34ce33b422978504d611e/docs/third-party-benchmark-timeline",
+      "https://github.com/ditto-assistant/ditto-subnet/tree/main/services/dittobench-api/docs/third-party-benchmark-timeline",
     points: [
       {
         benchVersion: 2,

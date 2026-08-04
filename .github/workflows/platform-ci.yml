@@ -24,6 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Enforce workflow security policy
+        working-directory: .
+        run: python3 .github/scripts/check_workflow_security.py
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -35,6 +39,35 @@ jobs:
 
       - name: faircopy
         run: npm run lint:copy -- --format github
+
+  dashboard:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/platform/dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/platform/dashboard
+        run: npm ci
+
+      - name: Check
+        working-directory: apps/platform/dashboard
+        run: npm run check
+
+      - name: Test
+        working-directory: apps/platform/dashboard
+        run: npm test
+
+      - name: Build
+        working-directory: apps/platform/dashboard
+        run: npm run build
 
   lint-and-test:
     runs-on: blacksmith-4vcpu-ubuntu-2404
