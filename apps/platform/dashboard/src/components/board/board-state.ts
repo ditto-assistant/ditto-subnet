@@ -10,15 +10,7 @@ import { createSignal } from "solid-js";
 import { currentPageName, parseHashRoute, spaHref } from "../../lib/router";
 
 export type BoardTab = "all" | "scored" | "provisional";
-export type BoardSortKey =
-  | "rank"
-  | "name"
-  | "bench"
-  | "composite"
-  | "tool"
-  | "memory"
-  | "latency"
-  | "first_seen";
+export type BoardSortKey = "rank" | "composite" | "cost" | "latency" | "first_seen";
 
 /** The board pages 25 rows at a time (boardView.pageSize, monolith 3855). */
 export const boardPageSize = 25;

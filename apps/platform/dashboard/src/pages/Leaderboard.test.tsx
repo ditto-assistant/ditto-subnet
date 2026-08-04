@@ -139,7 +139,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
   it("re-asserts hide-md/hide-sm as table-cell for this board only (the pinned CSS)", () => {
     // The page's promise is every column at every viewport: undo the
     // window-width column hiding for this board only. The table keeps its
-    // 850px floor and scrolls inside .board, so all-columns stays honest on
+    // 1000px floor and scrolls inside .board, so all-columns stays honest on
     // a phone.
     expect(cssNorm).toContain(
       '.page[data-page="leaderboard"] #board .hide-md, ' +
@@ -147,22 +147,19 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     );
   });
 
-  it("carries all nine columns, eight of them sortable", async () => {
+  it("combines identity and scores into six compact columns", async () => {
     renderPage();
     await waitForBoard();
-    expect(document.querySelectorAll("#board thead th").length).toBe(9);
-    for (const key of [
-      "rank",
-      "name",
-      "bench",
-      "composite",
-      "tool",
-      "memory",
-      "latency",
-      "first_seen",
-    ]) {
+    expect(document.querySelectorAll("#board thead th").length).toBe(6);
+    for (const key of ["rank", "composite", "cost", "latency", "first_seen"]) {
       expect(document.querySelector('th.sortable[data-sort="' + key + '"]'), key).toBeTruthy();
     }
+    expect(document.querySelector('th[data-sort="name"]')).toBeNull();
+    expect(document.querySelector('th[data-sort="bench"]')).toBeNull();
+    expect(document.querySelector(".modelcell")).toBeNull();
+    expect(document.querySelectorAll("#rows tr[data-i]:first-child .score-stack-row")).toHaveLength(
+      3,
+    );
     // Emissions is present but deliberately not sortable; its tip explains
     // the KOTH role.
     expect(el("emissions-col-tip").closest("th")?.hasAttribute("data-sort")).toBe(false);
@@ -310,11 +307,33 @@ describe("board view controls (row 1 slice)", () => {
   it("keeps the header's tooltip term as the keyboard sort control", async () => {
     renderPage();
     await waitForBoard();
-    const nameTh = document.querySelector('th[data-sort="name"]') as HTMLElement;
-    const tip = nameTh.querySelector(".tip") as HTMLElement;
+    const costTh = document.querySelector('th[data-sort="cost"]') as HTMLElement;
+    const tip = costTh.querySelector(".tip") as HTMLElement;
     expect(tip).toHaveAttribute("role", "button");
-    fireEvent.keyDown(nameTh, { key: "Enter" });
-    await waitFor(() => expect(nameTh).toHaveAttribute("aria-sort", "ascending"));
+    fireEvent.keyDown(costTh, { key: "Enter" });
+    await waitFor(() => expect(costTh).toHaveAttribute("aria-sort", "descending"));
+  });
+
+  it("shows API-backed average run cost and its settled sample count", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? { ...entry, average_run_cost_microusd: 123_400, inference_run_count: 7 }
+              : entry,
+          ),
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(document.querySelector(".run-cost-cell")?.textContent).toContain("$0.123"),
+    );
+    expect(document.querySelector(".run-cost-cell")?.textContent).toContain("7 settled");
   });
 
   it("opens a row's miner drill-down route on click (plain tabbable tr, no role=button)", async () => {

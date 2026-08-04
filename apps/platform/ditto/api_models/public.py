@@ -471,6 +471,29 @@ class PublicLeaderboardEntry(BaseModel):
         int,
         Field(default=3, ge=1, description="Scores required for finalization."),
     ]
+    average_run_cost_microusd: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Mean platform-metered chat plus embedding spend for this "
+                "agent's settled, non-empty validator leases on the displayed "
+                "benchmark version. Null when the retained run ledger has no "
+                "settled samples."
+            ),
+        ),
+    ] = None
+    inference_run_count: Annotated[
+        int,
+        Field(
+            default=0,
+            ge=0,
+            description=(
+                "Settled validator leases included in average_run_cost_microusd."
+            ),
+        ),
+    ] = 0
     agent_id: Annotated[
         UUID,
         Field(

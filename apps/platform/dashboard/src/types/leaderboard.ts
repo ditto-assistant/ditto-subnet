@@ -100,6 +100,10 @@ export interface LeaderboardEntry {
   agent_id?: string;
   agent_name?: string | null;
   agent_version?: number | null;
+  /** Mean settled platform-metered validator lease cost on this score's bench version. */
+  average_run_cost_microusd?: number | null;
+  /** Settled leases included in average_run_cost_microusd. */
+  inference_run_count?: number;
   composite: number;
   /** Score after continual aggregation and any active efficiency fold. */
   official_composite?: number | null;

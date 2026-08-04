@@ -1,5 +1,5 @@
 // The board itself: toolbar (view tabs + the in-place filter), the
-// nine-column table with its sortable headers, family child rows, and the
+// compact table with its sortable headers, family child rows, and the
 // pager. Ports render()'s row half (renderBoardRows 5037–5188), the view
 // controls (5267–5352), boardMatches (5027–5035) and boardCompare
 // (3876–3887). Solid's keyed <For> replaces the sectionChanged innerHTML
@@ -90,11 +90,8 @@ export function boardMatches(entry: BoardEntry, needle: string): boolean {
 // so an unranked or legacy row never displaces real data at the top.
 const BOARD_SORTS: Record<BoardSortKey, (e: BoardEntry, settledView: boolean) => unknown> = {
   rank: (e) => e.rank,
-  name: (e) => (e.agent_name || e.miner_hotkey || "").toLowerCase(),
-  bench: (e) => e.bench_version,
   composite: (e, settledView) => displayComposite(e, settledView),
-  tool: (e) => e.tool_mean,
-  memory: (e) => e.memory_mean,
+  cost: (e) => e.average_run_cost_microusd,
   latency: (e) => e.median_ms,
   first_seen: (e) => (e.first_seen ? Date.parse(e.first_seen) : null),
 };
@@ -124,14 +121,9 @@ interface HeaderSpec {
 const HEADERS: HeaderSpec[] = [
   {
     key: "rank",
-    label: "Score rank",
-    width: "72px",
-    tip: "Raw rank by finalized composite among full-benchmark runs. This is independent of KOTH emissions; provisional runs are unranked (–).",
-  },
-  {
-    key: "name",
-    label: "Best-scoring agent",
-    tip: "The miner's best-scoring agent, with its current SN118 UID and on-chain hotkey below. Open either identity for details, or copy the hotkey.",
+    label: "Ranked agent",
+    width: "300px",
+    tip: "Score rank and the miner's best-scoring agent. Open either identity for details, or copy the hotkey. Provisional runs remain unranked (–).",
   },
   {
     key: null,
@@ -140,31 +132,17 @@ const HEADERS: HeaderSpec[] = [
     tip: "Current KOTH role. The incumbent champion takes a fixed share of the miner pool; a participation tail splits the remainder.",
   },
   {
-    key: "bench",
-    label: "Model",
-    class: "hide-md",
-    width: "180px",
-    tip: "The model the harness was scored on (Qwen3-32B, locked for every run) and the benchmark version the run was scored under. Sort to group runs by benchmark version.",
-  },
-  {
     key: "composite",
-    label: "Current score",
-    width: "230px",
-    tip: "Score used for ranking and emissions. It begins with the three-validator aggregate, continually incorporates every retained retest sample, then applies any awarded Bench v7+ relative token-efficiency bonus. The row shows both adjustments so the folded score is never silent.",
+    label: "Scores",
+    width: "280px",
+    tip: "Current ranking score with tool and memory subscores stacked beneath it. Sort uses the current ranking score.",
   },
   {
-    key: "tool",
-    label: "Tool",
-    class: "hide-sm",
-    width: "140px",
-    tip: "Mean score across the tool-use cases. Did the agent call the right tools, ground its arguments, and choose memory versus the web correctly?",
-  },
-  {
-    key: "memory",
-    label: "Memory",
-    class: "hide-sm",
-    width: "140px",
-    tip: "Memory subscore, not the overall composite used for rank. It is the mean across memory cases: did the agent recall and reason over stored facts across sessions, over time, and while resisting injected instructions?",
+    key: "cost",
+    label: "Avg run cost",
+    class: "num",
+    width: "120px",
+    tip: "Average platform-metered chat plus embedding spend across settled, non-empty validator runs on this score's benchmark version.",
   },
   {
     key: "latency",
@@ -233,41 +211,52 @@ function Bar(props: { kind: "tool" | "memory"; value: number }): JSX.Element {
 // Composite cell = bar (with a ±1-SE uncertainty band) + value, then a
 // second line carrying the trend sparkline and the chip vocabulary
 // (compositeCell 5582–5601).
-function CompositeCell(props: { entry: BoardEntry; store: LeaderboardStore }): JSX.Element {
+function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): JSX.Element {
   const value = (): number => displayComposite(props.entry, props.store.settledView());
   const band = (): { lo: number; hi: number; width: number } | null =>
     showsCompositeErrBand(props.entry, props.store.settledView())
       ? errBandBounds(value(), props.entry.composite_stderr)
       : null;
   return (
-    <td>
-      <div class="cwrap">
-        <div class="metric">
-          <div class="barwrap">
-            <Show when={band()}>
-              {(b) => (
-                <div
-                  class="err"
-                  title={
-                    "±" +
-                    fx(props.entry.composite_stderr as number) +
-                    " (1 SE), measurement uncertainty"
-                  }
-                  style={{
-                    left: b().lo.toFixed(1) + "%",
-                    width: b().width.toFixed(1) + "%",
-                  }}
-                />
-              )}
-            </Show>
-            <div
-              class="bar composite"
-              style={{ width: (Math.max(0, Math.min(1, value())) * 100).toFixed(1) + "%" }}
-            />
+    <td class="scores-cell">
+      <div class="score-stack">
+        <div class="score-stack-row current">
+          <span class="score-stack-label">Current</span>
+          <div class="metric">
+            <div class="barwrap">
+              <Show when={band()}>
+                {(b) => (
+                  <div
+                    class="err"
+                    title={
+                      "±" +
+                      fx(props.entry.composite_stderr as number) +
+                      " (1 SE), measurement uncertainty"
+                    }
+                    style={{
+                      left: b().lo.toFixed(1) + "%",
+                      width: b().width.toFixed(1) + "%",
+                    }}
+                  />
+                )}
+              </Show>
+              <div
+                class="bar composite"
+                style={{ width: (Math.max(0, Math.min(1, value())) * 100).toFixed(1) + "%" }}
+              />
+            </div>
+            <span class="mval">{fx(value())}</span>
           </div>
-          <span class="mval">{fx(value())}</span>
         </div>
-        <div class="cline2">
+        <div class="score-stack-row">
+          <span class="score-stack-label">Tool</span>
+          <Bar kind="tool" value={props.entry.tool_mean} />
+        </div>
+        <div class="score-stack-row">
+          <span class="score-stack-label">Memory</span>
+          <Bar kind="memory" value={props.entry.memory_mean} />
+        </div>
+        <div class="cline2 score-stack-context">
           <Sparkline history={props.entry.history} />
           <RolloutChip
             entry={props.entry}
@@ -284,79 +273,9 @@ function CompositeCell(props: { entry: BoardEntry; store: LeaderboardStore }): J
   );
 }
 
-// Model column cell (modelCell 5752–5786): harness model + bench-version
-// chip; honest "–" when a run predates run-provenance capture.
-function ModelCell(props: { entry: BoardEntry; store: LeaderboardStore }): JSX.Element {
-  const e = (): BoardEntry => props.entry;
-  const settledVersion = (): number | null =>
-    props.store.bench().active || props.store.bench().current;
-  const chip = (): { cls: string; title: string; text: string } => {
-    const currentBench = props.store.bench().current;
-    if (e().bench_version == null) {
-      if (!isFinalized(e())) {
-        return {
-          cls: "bv",
-          title: "Run provenance appears after the three-validator aggregate is final.",
-          text: "pending quorum",
-        };
-      }
-      // No version recorded → a run from before benchmark versioning. Flag
-      // it as legacy so it reads as "not on the current benchmark".
-      return {
-        cls: "bv prev",
-        title:
-          "Scored before benchmark versioning. A legacy run, not comparable to " +
-          (currentBench ? "the current DittoBench v" + currentBench : "the current benchmark") +
-          ".",
-        text: "legacy",
-      };
-    }
-    // The chip names the version of the score the row displays: mid-rollout
-    // an agent already flipped to the new version still shows its settled
-    // active-version composite, so the chip says the settled version.
-    const shownVersion =
-      props.store.settledView() && e().settled_composite != null
-        ? settledVersion()
-        : (e().bench_version as number);
-    const old = (shownVersion as number) < (settledVersion() ?? 0);
-    return {
-      cls: old ? "bv prev" : "bv",
-      title: old
-        ? "Scored on DittoBench v" +
-          shownVersion +
-          ", a previous benchmark. Not directly comparable to the settled v" +
-          settledVersion() +
-          "."
-        : props.store.settledView()
-          ? "Scored on DittoBench v" +
-            shownVersion +
-            ", the settled benchmark. A v" +
-            props.store.bench().desired +
-            " rollout is collecting; this row switches when it fully activates."
-          : "Scored on the current benchmark (DittoBench v" + shownVersion + ").",
-      text: "v" + shownVersion + (old ? " · old" : ""),
-    };
-  };
-  const modelName = (): string => e().models?.harness || "";
-  return (
-    <td class="hide-md">
-      <div class="modelcell">
-        <Show when={modelName()}>
-          {(name) => (
-            <span class="mname" title={name()}>
-              <span class="mname-icon" aria-hidden="true">
-                🧠
-              </span>
-              {name().indexOf("/") >= 0 ? name().split("/").pop() : name()}
-            </span>
-          )}
-        </Show>
-        <span class={chip().cls} title={chip().title}>
-          {chip().text}
-        </span>
-      </div>
-    </td>
-  );
+function formatRunCost(value: number | null | undefined): string {
+  const dollars = Math.max(0, Number(value) || 0) / 1_000_000;
+  return "$" + dollars.toFixed(dollars >= 1 ? 2 : 3);
 }
 
 function BoardRow(props: {
@@ -442,119 +361,125 @@ function BoardRow(props: {
           pushEntityRoute("miner", e().miner_hotkey);
         }}
       >
-        <td>
-          <Show
-            when={elig()}
-            fallback={
-              <ChipTip
-                class="rank prov-rank tip-chip"
-                text={
-                  "Not ranked (" + (kind() === "zero" ? "scored 0.000" : "provisional run") + ")."
+        <td class="ranked-agent-cell">
+          <div class="ranked-agent">
+            <div class="ranked-agent-rank">
+              <Show
+                when={elig()}
+                fallback={
+                  <ChipTip
+                    class="rank prov-rank tip-chip"
+                    text={
+                      "Not ranked (" +
+                      (kind() === "zero" ? "scored 0.000" : "provisional run") +
+                      ")."
+                    }
+                  >
+                    –
+                  </ChipTip>
                 }
               >
-                –
-              </ChipTip>
-            }
-          >
-            <span class={"rank" + rankCls()}>{finalizedEntry() ? e().rank : "P" + e().rank}</span>
-            <Show when={finalizedEntry()}>
-              <RankMove hotkey={e().miner_hotkey} rank={e().rank as number} />
-            </Show>
-          </Show>
-        </td>
-        <td>
-          <span class="winner-identity">
-            <span class="winner-name">
-              <EntityButton kind="agent" id={e().agent_id} label={displayName()} />
-              <Show when={kind() === "zero"}>
-                <ChipTip
-                  class="prov tip-chip"
-                  text="This full run scored a composite of 0.000, so it is shown for transparency but is not ranked and not emission-eligible."
-                >
-                  no score
-                </ChipTip>
+                <span class={"rank" + rankCls()}>
+                  {finalizedEntry() ? e().rank : "P" + e().rank}
+                </span>
+                <Show when={finalizedEntry()}>
+                  <RankMove hotkey={e().miner_hotkey} rank={e().rank as number} />
+                </Show>
               </Show>
-              <Show when={kind() === "provisional"}>
-                <ChipTip
-                  class="prov tip-chip"
-                  text="Provisional. It ran a smaller profile that did not administer the full benchmark, so it is shown for transparency but is not ranked and not emission-eligible."
-                >
-                  provisional
-                </ChipTip>
-              </Show>
-              <Show when={!finalizedEntry()}>
-                <ChipTip
-                  class="quorum-badge tip-chip"
-                  text={
-                    "Accepted score feedback; final at " +
-                    (e().score_quorum || 3) +
-                    " independent validators."
+            </div>
+            <span class="winner-identity">
+              <span class="winner-name">
+                <EntityButton kind="agent" id={e().agent_id} label={displayName()} />
+                <Show when={kind() === "zero"}>
+                  <ChipTip
+                    class="prov tip-chip"
+                    text="This full run scored a composite of 0.000, so it is shown for transparency but is not ranked and not emission-eligible."
+                  >
+                    no score
+                  </ChipTip>
+                </Show>
+                <Show when={kind() === "provisional"}>
+                  <ChipTip
+                    class="prov tip-chip"
+                    text="Provisional. It ran a smaller profile that did not administer the full benchmark, so it is shown for transparency but is not ranked and not emission-eligible."
+                  >
+                    provisional
+                  </ChipTip>
+                </Show>
+                <Show when={!finalizedEntry()}>
+                  <ChipTip
+                    class="quorum-badge tip-chip"
+                    text={
+                      "Accepted score feedback; final at " +
+                      (e().score_quorum || 3) +
+                      " independent validators."
+                    }
+                  >
+                    {(e().score_count || 0) + " of " + (e().score_quorum || 3) + " · provisional"}
+                  </ChipTip>
+                </Show>
+                <Show when={!registered() && e().registered === false}>
+                  <ChipTip
+                    class="prov tip-chip"
+                    text="This hotkey is not currently registered on SN118. Its score is retained, but it is excluded from active weights and emissions until the same hotkey registers again."
+                  >
+                    not registered
+                  </ChipTip>
+                </Show>
+                <Show
+                  when={
+                    !registered() &&
+                    e().registered !== false &&
+                    // Chain unreachable for the whole snapshot: the notice above
+                    // the board explains it once, so the identical per-row badge
+                    // is suppressed.
+                    !props.chainRegistrationUnknown
                   }
                 >
-                  {(e().score_count || 0) + " of " + (e().score_quorum || 3) + " · provisional"}
-                </ChipTip>
-              </Show>
-              <Show when={!registered() && e().registered === false}>
-                <ChipTip
-                  class="prov tip-chip"
-                  text="This hotkey is not currently registered on SN118. Its score is retained, but it is excluded from active weights and emissions until the same hotkey registers again."
+                  <ChipTip
+                    class="prov tip-chip"
+                    text="Current SN118 registration could not be confirmed. The score is retained, but active weight and emission eligibility are unknown."
+                  >
+                    unconfirmed
+                  </ChipTip>
+                </Show>
+              </span>
+              <span class="submission-version">{agentVersionLabel(e().agent_version)}</span>
+              <Show when={familyMembers().length}>
+                <button
+                  type="button"
+                  class="family-toggle"
+                  data-family-toggle={familyKey()}
+                  aria-expanded={familyExpanded() ? "true" : "false"}
+                  aria-controls={"family-" + familyKey()}
+                  onClick={(ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    toggleFamily(familyKey());
+                  }}
                 >
-                  not registered
-                </ChipTip>
+                  {familyMembers().length +
+                    (familyMembers().length === 1 ? " other submission" : " other submissions")}
+                </button>
               </Show>
-              <Show
-                when={
-                  !registered() &&
-                  e().registered !== false &&
-                  // Chain unreachable for the whole snapshot: the notice above
-                  // the board explains it once, so the identical per-row badge
-                  // is suppressed.
-                  !props.chainRegistrationUnknown
-                }
-              >
-                <ChipTip
-                  class="prov tip-chip"
-                  text="Current SN118 registration could not be confirmed. The score is retained, but active weight and emission eligibility are unknown."
-                >
-                  unconfirmed
-                </ChipTip>
-              </Show>
+              <span class="winner-miner" title={e().miner_hotkey}>
+                <span class="winner-miner-label" aria-hidden="true">
+                  Miner
+                </span>
+                <span class="miner-uid" title="Current SN118 UID">
+                  UID {e().miner_uid == null ? "–" : e().miner_uid}
+                </span>
+                <span class="hotkey">
+                  <EntityButton
+                    kind="miner"
+                    id={e().miner_hotkey}
+                    label={shortKey(e().miner_hotkey)}
+                  />
+                </span>
+                <CopyButton value={e().miner_hotkey} label="full hotkey" />
+              </span>
             </span>
-            <span class="submission-version">{agentVersionLabel(e().agent_version)}</span>
-            <Show when={familyMembers().length}>
-              <button
-                type="button"
-                class="family-toggle"
-                data-family-toggle={familyKey()}
-                aria-expanded={familyExpanded() ? "true" : "false"}
-                aria-controls={"family-" + familyKey()}
-                onClick={(ev) => {
-                  ev.preventDefault();
-                  ev.stopPropagation();
-                  toggleFamily(familyKey());
-                }}
-              >
-                {familyMembers().length +
-                  (familyMembers().length === 1 ? " other submission" : " other submissions")}
-              </button>
-            </Show>
-            <span class="winner-miner" title={e().miner_hotkey}>
-              <span class="winner-miner-label" aria-hidden="true">
-                Miner
-              </span>
-              <span class="miner-uid" title="Current SN118 UID">
-                UID {e().miner_uid == null ? "–" : e().miner_uid}
-              </span>
-              <span class="hotkey">
-                <EntityButton
-                  kind="miner"
-                  id={e().miner_hotkey}
-                  label={shortKey(e().miner_hotkey)}
-                />
-              </span>
-              <CopyButton value={e().miner_hotkey} label="full hotkey" />
-            </span>
-          </span>
+          </div>
         </td>
         <td>
           <Show when={emission()} fallback={<span class="muted">–</span>}>
@@ -582,13 +507,15 @@ function BoardRow(props: {
             )}
           </Show>
         </td>
-        <ModelCell entry={e()} store={props.store} />
-        <CompositeCell entry={e()} store={props.store} />
-        <td class="hide-sm">
-          <Bar kind="tool" value={e().tool_mean} />
-        </td>
-        <td class="hide-sm">
-          <Bar kind="memory" value={e().memory_mean} />
+        <ScoreStackCell entry={e()} store={props.store} />
+        <td class="num run-cost-cell">
+          <Show
+            when={e().average_run_cost_microusd != null && (e().inference_run_count || 0) > 0}
+            fallback={<span class="muted">–</span>}
+          >
+            <strong>{formatRunCost(e().average_run_cost_microusd)}</strong>
+            <span>{e().inference_run_count} settled</span>
+          </Show>
         </td>
         <Show when={e().median_ms != null} fallback={<td class="num hide-sm lat muted">–</td>}>
           <td class="num hide-sm lat">
@@ -611,7 +538,7 @@ function BoardRow(props: {
             <td class="family-branch" aria-hidden="true">
               ↳
             </td>
-            <td colspan="8">
+            <td colspan="5">
               <div class="family-member">
                 <span class="family-member-name">
                   <EntityButton
@@ -707,9 +634,9 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
       setBoardDir(boardDir() === 1 ? -1 : 1);
     } else {
       setBoardSort(key);
-      // Rank and name read naturally ascending; every score-like column is
-      // most useful highest-first.
-      setBoardDir(key === "rank" || key === "name" ? 1 : -1);
+      // Rank reads naturally ascending; every measured column is most useful
+      // highest-first.
+      setBoardDir(key === "rank" ? 1 : -1);
     }
     setBoardPage(1);
     writeBoardPage(false);
@@ -861,19 +788,19 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
           <Show
             when={!store.unavailable()}
             fallback={
-              <EmptyRow colspan={9}>
+              <EmptyRow colspan={6}>
                 Could not load live leaderboard data. Try refreshing in a moment.
               </EmptyRow>
             }
           >
             <Show
               when={store.payload()}
-              fallback={<EmptyRow colspan={9}>Loading leaderboard…</EmptyRow>}
+              fallback={<EmptyRow colspan={6}>Loading leaderboard…</EmptyRow>}
             >
               <Show
                 when={pageRows().length}
                 fallback={
-                  <EmptyRow colspan={9}>
+                  <EmptyRow colspan={6}>
                     {needle()
                       ? "No miner matches that filter."
                       : boardTab() === "provisional"

@@ -771,7 +771,7 @@ describe("async agent evidence", () => {
     expect(pipelineRequests()).toHaveLength(1);
   });
 
-  it("shows the authoritative dollar cost and allowance usage for every benchmark run", async () => {
+  it("groups run cost, compresses allowance usage, and closes expired active grants", async () => {
     stubPipelineFetch(() =>
       Promise.resolve(
         pipelineResponse({
@@ -797,7 +797,7 @@ describe("async agent evidence", () => {
               validator_hotkey: "5GrwvaEFother",
               bench_version: 8,
               ticket_deadline: "2026-07-31T13:30:00Z",
-              status: "revoked",
+              status: "active",
               request_budget: 8192,
               requests: 400,
               prompt_tokens: 1_000_000,
@@ -822,13 +822,16 @@ describe("async agent evidence", () => {
       .getElementById("pipeline-inference-spend")
       ?.closest("section") as HTMLElement;
     expect(section.textContent).toContain("$1.50 total");
+    expect(section.textContent).toContain("$0.7485 average · 2 runs");
     expect(section.querySelectorAll(".inference-run")).toHaveLength(2);
     expect(section.textContent).toContain("$1.25");
     expect(section.textContent).toContain("$0.2500");
-    expect(section.textContent).toContain("8,192 of 8,192 chat requests");
-    expect(section.textContent).toContain("7,500,000 of 25,000,000 chat tokens");
-    expect(section.textContent).toContain("123 embedding requests / 456,789 tokens");
+    expect(section.textContent).toContain("Chat 100%");
+    expect(section.textContent).toContain("Tokens 30%");
+    expect(section.textContent).toContain("Embed 123 / 456.8K tok");
     expect(section.textContent).toContain("Allowance exhausted");
+    expect(section.textContent).toContain("Closed");
+    expect(section.textContent).not.toContain("Running");
   });
 
   it("isolates a detail failure and retries from the section", async () => {

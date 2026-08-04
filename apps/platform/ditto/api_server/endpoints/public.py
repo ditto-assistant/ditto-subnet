@@ -47,7 +47,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1722,6 +1722,8 @@ def _public_entry(
     efficiency_snapshot_id: UUID | None = None,
     efficiency_bonus_preview: float | None = None,
     submission_family: PublicSubmissionFamily | None = None,
+    average_run_cost_microusd: int | None = None,
+    inference_run_count: int = 0,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -1846,6 +1848,8 @@ def _public_entry(
         ),
         history=trend,
         case_results=_safe_case_results(details),
+        average_run_cost_microusd=average_run_cost_microusd,
+        inference_run_count=inference_run_count,
     )
 
 
@@ -2325,6 +2329,44 @@ async def leaderboard(
             provisional_by_owner.setdefault(owner, candidate)
     provisional_rows = list(provisional_by_owner.values())
     rows = finalized_rows + [row for row, _count in provisional_rows]
+    # The run ledger is append-only for its retention window. A grant can keep
+    # its raw ``active`` status after the validator has finished, so settlement
+    # is derived from the immutable lease deadline (or an explicit terminal
+    # state), not from that advisory status. Exclude empty grants and live
+    # partial work so the displayed average is a completed-run cost, never a
+    # transient progress meter.
+    run_costs: dict[tuple[UUID, int], tuple[int, int]] = {}
+    if rows:
+        cost_rows = (
+            await session.execute(
+                select(
+                    InferenceGrant.agent_id,
+                    InferenceGrant.bench_version,
+                    func.avg(
+                        InferenceGrant.cost_microusd
+                        + InferenceGrant.embedding_cost_microusd
+                    ),
+                    func.count(),
+                )
+                .where(
+                    InferenceGrant.agent_id.in_([row.agent_id for row in rows]),
+                    or_(
+                        InferenceGrant.ticket_deadline <= now,
+                        InferenceGrant.status.in_(("revoked", "exhausted")),
+                    ),
+                    or_(
+                        InferenceGrant.request_count > 0,
+                        InferenceGrant.embedding_request_count > 0,
+                    ),
+                )
+                .group_by(InferenceGrant.agent_id, InferenceGrant.bench_version)
+            )
+        ).tuples()
+        run_costs = {
+            (agent_id, version): (int(round(float(average))), int(count))
+            for agent_id, version, average, count in cost_rows
+            if average is not None
+        }
     # During an open rollout the board is a mixed-version pool (v3 at quorum,
     # otherwise v2), which makes composite ordering jump between incomparable
     # scales. Expose each agent's settled active-version median (the comparable
@@ -2457,6 +2499,12 @@ async def leaderboard(
                     )
                 ),
                 continual_aggregate_active=continual_mean_active,
+                average_run_cost_microusd=run_costs.get(
+                    (row.agent_id, row.bench_version), (None, 0)
+                )[0],
+                inference_run_count=run_costs.get(
+                    (row.agent_id, row.bench_version), (None, 0)
+                )[1],
             )
         )
     for row, count in provisional_rows:
@@ -2486,6 +2534,12 @@ async def leaderboard(
                 ),
                 fold_stderr=fold_stderrs.get(row.agent_id),
                 artifact_release=artifact_releases[row.agent_id],
+                average_run_cost_microusd=run_costs.get(
+                    (row.agent_id, row.bench_version), (None, 0)
+                )[0],
+                inference_run_count=run_costs.get(
+                    (row.agent_id, row.bench_version), (None, 0)
+                )[1],
             )
         )
     return PublicLeaderboardResponse(

@@ -108,7 +108,7 @@ async function waitForBoard(): Promise<void> {
 
 // ── Row 3: test_overview_shows_the_full_board_without_a_disclosure ──
 // "Standings are never hidden behind a click" — ditto-platform#383 collapsed
-// the nine-column table behind a <details>; that stays banned. The overview
+// the leaderboard table behind a <details>; that stays banned. The overview
 // is a two-pane layout with a compact board; the full column set lives on the
 // dedicated Leaderboard page ("compactness through a second surface, not
 // through disclosure").
@@ -138,19 +138,10 @@ describe("overview board disclosure ban (row 3)", () => {
     expect(el("leaderboard-version-pills")).toBeTruthy();
   });
 
-  it("keeps every dropped column as a sortable header, with the emissions column tip", async () => {
+  it("keeps the compact leaderboard metrics sortable, with the emissions column tip", async () => {
     renderOverview();
     await waitForBoard();
-    for (const key of [
-      "rank",
-      "name",
-      "bench",
-      "composite",
-      "tool",
-      "memory",
-      "latency",
-      "first_seen",
-    ]) {
+    for (const key of ["rank", "composite", "cost", "latency", "first_seen"]) {
       expect(document.querySelector('th[data-sort="' + key + '"]'), key).toBeTruthy();
     }
     expect(el("emissions-col-tip")).toBeTruthy();

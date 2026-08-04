@@ -119,7 +119,7 @@ describe("no sample data (row 8)", () => {
 });
 
 // ── Row 3 half: standings are never hidden behind a disclosure ──────────────
-// ditto-platform#383 collapsed the nine-column table behind a <details>;
+// ditto-platform#383 collapsed the leaderboard table behind a <details>;
 // that stays banned — compactness comes from the second surface (the
 // dedicated Leaderboard page), not from disclosure.
 describe("no board disclosure (row 3)", () => {

@@ -565,8 +565,8 @@
     margin-top: 0;
   }
 }
-/* The overview board is deliberately compact — score rank, best-scoring
-   agent, emissions, composite — at every viewport; the full column set
+/* The overview board is deliberately compact — ranked agent, emissions,
+   score stack, and average cost — at every viewport; the full column set
    lives on the Leaderboard page (same block, rendered by that route, so
    none of these rules match there). Percentage columns under a fixed table
    layout keep it exactly pane-width with no slack pooling; cell minimums
@@ -582,7 +582,7 @@
 .overview-main #board th.hide-sm {
   width: 0 !important;
 }
-/* The paper system's global `table { min-width: 850px }` would keep this
+/* The paper system's global table minimum would keep this
    table wider than the pane no matter what the columns say — undo it. */
 .overview-main #board {
   table-layout: fixed;
@@ -590,16 +590,16 @@
   min-width: 0;
 }
 .overview-main #board th[data-sort="rank"] {
-  width: 10% !important;
+  width: 40% !important;
 }
-.overview-main #board th[data-sort="name"] {
-  width: 38% !important;
-}
-.overview-main #board thead th:nth-child(3) {
-  width: 22% !important;
+.overview-main #board thead th:nth-child(2) {
+  width: 20% !important;
 }
 .overview-main #board th[data-sort="composite"] {
-  width: 30% !important;
+  width: 27% !important;
+}
+.overview-main #board th[data-sort="cost"] {
+  width: 13% !important;
 }
 .overview-main #board th,
 .overview-main #board td {
@@ -613,6 +613,15 @@
 }
 .overview-main #board .metric {
   min-width: 0;
+}
+.overview-main #board .score-stack-label {
+  display: none;
+}
+.overview-main #board .score-stack-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+.overview-main #board .score-stack-context {
+  margin-left: 0;
 }
 .overview-main #board .chain-weight-note {
   white-space: normal;
