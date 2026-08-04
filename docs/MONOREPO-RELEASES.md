@@ -6,6 +6,10 @@ CLI-only change does not build the validator stack, while a DittoBench API
 change rebuilds the digest-bound stack directly from the same checkout. There
 is no cross-repository version-bump pull request.
 
+The scorer's Go module replaces `dittobench-datagen` with the in-tree
+`research/dittobench-datagen` module. A datagen change therefore selects the
+generator, scorer, and validator-stack components in one release plan.
+
 The `Release` workflow first verifies the exact merged source and then creates
 one semantic monorepo release. Hosted deploys and image publication consume the
 resulting immutable release commit:
@@ -33,6 +37,7 @@ The `prod` GitHub environment must allow only `main` and contain:
 - `GCP_PLATFORM_DEPLOY_SA`
 - `GCP_SUBNET_BUILD_SA`
 - `GCP_DITTOBENCH_DEPLOY_SA`
+- `GCP_DATAGEN_RELEASE_SA`
 - `GCP_SCREENER_DEPLOY_SA`
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`

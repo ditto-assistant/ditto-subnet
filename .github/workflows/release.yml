@@ -18,6 +18,7 @@ env:
   SANDBOX_DOCKER_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker
   DITTOBENCH_API_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-sandbox
   DITTOBENCH_HOSTED_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/cloud-run-source-deploy/dittobench-api
+  DATAGEN_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/datapipeline/generate
   MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
   PYLON_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-pylon
   # Frozen compat-2 updaters still require a relay-shaped image in their signed
@@ -45,6 +46,7 @@ jobs:
       miner_cli: ${{ steps.components.outputs.miner_cli }}
       validator_stack: ${{ steps.components.outputs.validator_stack }}
       dittobench_api: ${{ steps.components.outputs.dittobench_api }}
+      dittobench_datagen: ${{ steps.components.outputs.dittobench_datagen }}
       platform: ${{ steps.components.outputs.platform }}
       backroom: ${{ steps.components.outputs.backroom }}
       screener: ${{ steps.components.outputs.screener }}
@@ -81,6 +83,7 @@ jobs:
       needs.plan.outputs.miner_cli == 'true' ||
       needs.plan.outputs.validator_stack == 'true' ||
       needs.plan.outputs.dittobench_api == 'true' ||
+      needs.plan.outputs.dittobench_datagen == 'true' ||
       needs.plan.outputs.platform == 'true' ||
       needs.plan.outputs.backroom == 'true' ||
       needs.plan.outputs.screener == 'true' ||
@@ -143,6 +146,7 @@ jobs:
       needs.plan.outputs.miner_cli == 'true' ||
       needs.plan.outputs.validator_stack == 'true' ||
       needs.plan.outputs.dittobench_api == 'true' ||
+      needs.plan.outputs.dittobench_datagen == 'true' ||
       needs.plan.outputs.platform == 'true' ||
       needs.plan.outputs.backroom == 'true' ||
       needs.plan.outputs.screener == 'true' ||
@@ -514,11 +518,12 @@ jobs:
       - name: Bind DittoBench to the monorepo release
         id: dittobench-source
         run: |
-          revision="$(git log -1 --format=%H -- services/dittobench-api)"
+          revision="$(git log -1 --format=%H -- services/dittobench-api research/dittobench-datagen)"
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
           git merge-base --is-ancestor "$revision" HEAD
           test -f services/dittobench-api/Dockerfile
           test -f services/dittobench-api/go.mod
+          test -f research/dittobench-datagen/go.mod
           printf 'revision=%s\n' "$revision" >>"$GITHUB_OUTPUT"
 
       - name: Materialize the retired relay compatibility source
@@ -559,7 +564,7 @@ jobs:
         id: dittobench-api
         uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
-          context: services/dittobench-api
+          context: .
           file: services/dittobench-api/Dockerfile
           target: sandbox
           platforms: linux/amd64,linux/arm64
@@ -607,6 +612,62 @@ jobs:
           tags: |
             ${{ env.MODEL_RELAY_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 
+  publish-datagen:
+    needs: [plan, release]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.dittobench_datagen == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+      component_tag: ${{ steps.verify.outputs.component_tag }}
+    steps:
+      - name: Check out the exact tagged release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: research/dittobench-datagen/go.mod
+
+      - name: Verify the monorepo-tagged generate service
+        id: verify
+        run: research/dittobench-datagen/scripts/verify-generate-service-release.sh
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DATAGEN_RELEASE_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Publish immutable component and source tags
+        id: publish
+        env:
+          COMPONENT_TAG: ${{ steps.verify.outputs.component_tag }}
+          SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker tag "generate-service:$COMPONENT_TAG" "$DATAGEN_REPOSITORY:$COMPONENT_TAG"
+          docker tag "generate-service:$COMPONENT_TAG" "$DATAGEN_REPOSITORY:sha-$SOURCE_SHA"
+          docker push "$DATAGEN_REPOSITORY:$COMPONENT_TAG"
+          docker push "$DATAGEN_REPOSITORY:sha-$SOURCE_SHA"
+          digest="$(gcloud artifacts docker images describe \
+            "$DATAGEN_REPOSITORY:sha-$SOURCE_SHA" \
+            --format='value(image_summary.digest)')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "datagen image: $DATAGEN_REPOSITORY@$digest"
+
   deploy-dittobench:
     needs: [plan, release, build-dittobench]
     if: needs.release.outputs.released == 'true' && needs.plan.outputs.dittobench_api == 'true'
@@ -642,7 +703,7 @@ jobs:
             --target runtime \
             --build-arg "DITTOBENCH_SOURCE_SHA=$SOURCE_SHA" \
             --tag "$DITTOBENCH_HOSTED_REPOSITORY:sha-$SOURCE_SHA" \
-            services/dittobench-api
+            .
           docker push "$DITTOBENCH_HOSTED_REPOSITORY:sha-$SOURCE_SHA"
           digest="$(gcloud artifacts docker images describe \
             "$DITTOBENCH_HOSTED_REPOSITORY:sha-$SOURCE_SHA" \

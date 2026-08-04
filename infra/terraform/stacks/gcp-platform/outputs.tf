@@ -67,3 +67,7 @@ output "wif_provider" {
   description = "Full `github` WIF provider resource name — set as the ditto-subnet repo secret GCP_WIF_PROVIDER."
   value       = "projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/providers/${var.wif_provider_id}"
 }
+output "datagen_release_sa_email" {
+  description = "Set as ditto-subnet's GCP_DATAGEN_RELEASE_SA prod-environment secret."
+  value       = google_service_account.datagen_release.email
+}

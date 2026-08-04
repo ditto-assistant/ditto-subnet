@@ -392,6 +392,11 @@ _DATAGEN_VERSION_BY_BENCH_VERSION = {
     6: "v0.11.1",
     7: "v0.12.0",
 }
+# New generator releases live inside this monorepo and cannot reuse the retired
+# repository's module tags. Add an exact semantic monorepo tag or 40-character
+# commit here when a future benchmark epoch is activated; the public command
+# will clone that immutable source and run the nested module in place.
+_DATAGEN_MONOREPO_REF_BY_BENCH_VERSION: dict[int, str] = {}
 # Generator releases from v0.8.0 on require an explicit `-bench-version`: the
 # flag defaults to 0 and the binary exits 2 ("-bench-version is required")
 # without it. protocol.CurrentBenchVersion is deliberately NOT a generation
@@ -3319,16 +3324,42 @@ def _dataset_command(
 ) -> str | None:
     """Return the documented deterministic generator command for a score."""
     datagen_version = _datagen_version(bench_version)
-    if run_size not in _DATAGEN_RUN_SIZES or datagen_version is None:
+    monorepo_ref = (
+        _DATAGEN_MONOREPO_REF_BY_BENCH_VERSION.get(bench_version)
+        if bench_version is not None
+        else None
+    )
+    if run_size not in _DATAGEN_RUN_SIZES or (
+        datagen_version is None and monorepo_ref is None
+    ):
         return None
     version_flag = (
         ""
         if bench_version in _BENCH_VERSIONS_WITHOUT_VERSION_FLAG
         else f" -bench-version {bench_version}"
     )
+    arguments = f"{version_flag} -seed {seed} -run-size {run_size}"
+    output = " -sha" if sha_only else ' -out "$output"'
+    if monorepo_ref is not None:
+        if (
+            re.fullmatch(r"(?:[0-9a-f]{40}|v[0-9]+\.[0-9]+\.[0-9]+)", monorepo_ref)
+            is None
+        ):
+            return None
+        return (
+            'tmp="$(mktemp -d)" && output="$(pwd)/dataset.json" && '
+            "trap 'rm -rf \"$tmp\"' EXIT && "
+            "git clone --filter=blob:none --no-checkout "
+            "https://github.com/ditto-assistant/ditto-subnet.git "
+            '"$tmp/ditto-subnet" && '
+            f'git -C "$tmp/ditto-subnet" fetch --depth=1 origin {monorepo_ref} && '
+            'git -C "$tmp/ditto-subnet" checkout --detach FETCH_HEAD && '
+            '(cd "$tmp/ditto-subnet/research/dittobench-datagen" && '
+            f"go run ./cmd/generate{arguments}{output})"
+        )
     command = (
         "go run github.com/ditto-assistant/dittobench-datagen/cmd/generate@"
-        f"{datagen_version}{version_flag} -seed {seed} -run-size {run_size}"
+        f"{datagen_version}{arguments}"
     )
     return f"{command} -sha" if sha_only else f"{command} -out dataset.json"
 

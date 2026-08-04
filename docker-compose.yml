@@ -4,7 +4,7 @@
 # revision and feeds it to both the local build context and the binary identity;
 # managed releases replace the source-build fallback with their release commit.
 x-dittobench-revision: &dittobench-revision ${DITTOBENCH_SOURCE_REVISION:-source-build}
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-./services/dittobench-api}
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-.}
 x-dittobench-source-identity: &dittobench-source-identity ${DITTOBENCH_SOURCE_IDENTITY:-source:source-build}
 x-dittobench-software-version: &dittobench-software-version ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
 # Shared secret for the validator -> scorer inference control plane
@@ -100,6 +100,7 @@ services:
     build:
       # Build the scorer from the monorepo service at the same reviewed commit.
       context: *dittobench-build-context
+      dockerfile: services/dittobench-api/Dockerfile
       target: sandbox
       # Stamp the pinned identity INTO the image. dittobench-api links these
       # into the binary, so /v1/capabilities reports what the running code IS

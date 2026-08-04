@@ -217,20 +217,22 @@ fi
 export DITTO_SOURCE_REVISION="$source_revision"
 export DITTO_SOURCE_IDENTITY="local-source:$source_revision"
 
-dittobench_context="$ROOT_DIR/services/dittobench-api"
-if [ ! -f "$dittobench_context/Dockerfile" ] || \
-  [ ! -f "$dittobench_context/go.mod" ]; then
-  die "monorepo dittobench-api source is incomplete: $dittobench_context"
+dittobench_context="$ROOT_DIR"
+if [ ! -f "$ROOT_DIR/services/dittobench-api/Dockerfile" ] || \
+  [ ! -f "$ROOT_DIR/services/dittobench-api/go.mod" ] || \
+  [ ! -f "$ROOT_DIR/research/dittobench-datagen/go.mod" ]; then
+  die "monorepo DittoBench source is incomplete: $ROOT_DIR"
 fi
 if [ -n "$(
   git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all -- \
-    services/dittobench-api
+    services/dittobench-api research/dittobench-datagen
 )" ]; then
-  die "dittobench-api source has local changes; commit it before building"
+  die "DittoBench source has local changes; commit it before building"
 fi
 
 checksum="$(
-  git -C "$ROOT_DIR" log -1 --format=%H -- services/dittobench-api
+  git -C "$ROOT_DIR" log -1 --format=%H -- \
+    services/dittobench-api research/dittobench-datagen
 )"
 if [[ ! "$checksum" =~ ^[0-9a-f]{40}$ ]]; then
   die "could not resolve the dittobench-api component revision"

@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - services/dittobench-api/**
+      - research/dittobench-datagen/**
       - .github/workflows/dittobench.yml
   push:
     branches: [main]
     paths:
       - services/dittobench-api/**
+      - research/dittobench-datagen/**
       - .github/workflows/dittobench.yml
 
 concurrency:
@@ -58,7 +60,7 @@ jobs:
       - name: Build image without publishing
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: services/dittobench-api
+          context: .
           file: services/dittobench-api/Dockerfile
           target: ${{ matrix.target }}
           push: false
@@ -77,7 +79,7 @@ jobs:
       - name: Build scorer with stamped identity
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: services/dittobench-api
+          context: .
           file: services/dittobench-api/Dockerfile
           target: sandbox
           push: false

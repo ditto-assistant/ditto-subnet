@@ -1,0 +1,31 @@
+# Build + push the generate-service image to Artifact Registry.
+#
+# The Artifact Registry repo + the Cloud Run service that consumes this image
+# live in the infra repo's Terraform (terraform/envs/gcp-platform/
+# datapipeline.tf). Build from a CHECKED-OUT RELEASE TAG and tag the image with
+# it, so the deployed generator provably matches the public reproduction CLI at
+# that version and a rollback is a tag change, not a rebuild.
+#
+# Release CI is the canonical build/publish path. This file is retained for an
+# operator-reviewed emergency rebuild and requires the same source provenance
+# substitutions as CI; it never deploys Cloud Run.
+
+substitutions:
+  _IMAGE: "REPLACE_WITH_ARTIFACT_REGISTRY_IMAGE"
+  _SOURCE_COMMIT: "REPLACE_WITH_FULL_GIT_SHA"
+  _SOURCE_TAG: "REPLACE_WITH_RELEASE_TAG"
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_IMAGE}
+      - --build-arg=SOURCE_COMMIT=${_SOURCE_COMMIT}
+      - --build-arg=SOURCE_TAG=${_SOURCE_TAG}
+      - --file=cmd/generate-service/Dockerfile
+      - .
+
+images:
+  - "${_IMAGE}"
+
+timeout: 900s

@@ -203,7 +203,7 @@ def test_compose_wrapper_rejects_dirty_dittobench_source(tmp_path: Path) -> None
     )
 
     assert result.returncode == 1
-    assert "dittobench-api source has local changes" in result.stderr
+    assert "DittoBench source has local changes" in result.stderr
 
 
 def test_stack_update_rebuilds_and_replaces_a_stale_scorer_image(
@@ -246,7 +246,7 @@ def test_stack_update_rebuilds_and_replaces_a_stale_scorer_image(
     )
     assert operator_up > calls.index(recreate)
     captured = json.loads(capture.read_text())
-    assert captured["dittobench_context"] == str(ROOT / "services/dittobench-api")
+    assert captured["dittobench_context"] == str(ROOT)
     assert captured["dittobench_revision"] == env["FAKE_DITTOBENCH_CHECKSUM"]
     assert captured["dittobench_identity"] == (
         f"source:{env['FAKE_DITTOBENCH_CHECKSUM']}"

@@ -510,6 +510,26 @@ def test_dataset_command_is_withheld_when_the_generator_pin_is_unknown() -> None
     )
 
 
+def test_future_dataset_command_uses_exact_monorepo_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        public_endpoint._DATAGEN_MONOREPO_REF_BY_BENCH_VERSION,
+        8,
+        "v1.2.3",
+    )
+    command = public_endpoint._dataset_command(
+        seed=17, run_size="full", bench_version=8, sha_only=False
+    )
+
+    assert command is not None
+    assert "https://github.com/ditto-assistant/ditto-subnet.git" in command
+    assert "fetch --depth=1 origin v1.2.3" in command
+    assert 'cd "$tmp/ditto-subnet/research/dittobench-datagen"' in command
+    assert "go run ./cmd/generate -bench-version 8" in command
+    assert '-out "$output"' in command
+
+
 def _install_db(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
     async def _session() -> AsyncIterator[AsyncSession]:
         async with maker() as s:

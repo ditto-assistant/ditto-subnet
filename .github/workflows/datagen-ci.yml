@@ -1,0 +1,53 @@
+name: DittoBench datagen CI
+
+on:
+  pull_request:
+    paths:
+      - research/dittobench-datagen/**
+      - .github/workflows/datagen-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - research/dittobench-datagen/**
+      - .github/workflows/datagen-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: datagen-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: research/dittobench-datagen
+
+jobs:
+  build-test:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: research/dittobench-datagen/go.mod
+      - name: Gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: Validate release script syntax
+        run: bash -n scripts/verify-generate-service-release.sh
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Determinism
+        run: |
+          go build -o "$RUNNER_TEMP/generate" ./cmd/generate
+          a=$("$RUNNER_TEMP/generate" -bench-version 2 -seed 123456789 -run-size full -sha 2>/dev/null)
+          b=$("$RUNNER_TEMP/generate" -bench-version 2 -seed 123456789 -run-size full -sha 2>/dev/null)
+          test "$a" = "$b"
+      - name: Cross-architecture known vector
+        run: GOARCH=386 go test ./gen -run TestKnownVector -count=1

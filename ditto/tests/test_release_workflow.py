@@ -30,6 +30,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     )
     assert {
         "dittobench_api",
+        "dittobench_datagen",
         "platform",
         "backroom",
         "screener",
@@ -50,6 +51,14 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         job = jobs[job_name]
         assert "plan" in job["needs"]
         assert "needs.plan.outputs.validator_stack == 'true'" in job["if"]
+
+    datagen = jobs["publish-datagen"]
+    assert datagen["needs"] == ["plan", "release"]
+    assert "needs.plan.outputs.dittobench_datagen == 'true'" in datagen["if"]
+    publish = _step(datagen["steps"], "Publish immutable component and source tags")
+    assert "$DATAGEN_REPOSITORY:$COMPONENT_TAG" in publish["run"]
+    assert "$DATAGEN_REPOSITORY:sha-$SOURCE_SHA" in publish["run"]
+    assert "GCP_DATAGEN_RELEASE_SA" in str(datagen["steps"])
 
 
 def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:

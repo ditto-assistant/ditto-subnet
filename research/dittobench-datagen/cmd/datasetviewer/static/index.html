@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>DittoBench Dataset Viewer</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="identity">
+        <span class="product-mark" aria-hidden="true">D</span>
+        <div>
+          <h1>Dataset viewer</h1>
+          <p>Inspect the exact generated world before it becomes a benchmark.</p>
+        </div>
+      </div>
+      <form id="dataset-form" class="dataset-controls">
+        <label>
+          <span>Bench</span>
+          <select id="bench-version" name="bench_version"></select>
+        </label>
+        <label>
+          <span>Size</span>
+          <select id="run-size" name="run_size">
+            <option value="small">Small</option>
+            <option value="medium">Medium</option>
+            <option value="full">Full</option>
+          </select>
+        </label>
+        <label class="seed-control">
+          <span>Seed</span>
+          <input id="seed" name="seed" inputmode="numeric" autocomplete="off" spellcheck="false">
+        </label>
+        <button id="random-seed" class="button secondary" type="button">Random seed</button>
+        <button class="button primary" type="submit">Generate</button>
+      </form>
+    </header>
+
+    <section class="dataset-strip" aria-label="Dataset identity">
+      <div id="dataset-summary" class="summary-line" aria-live="polite">Loading dataset…</div>
+      <div class="strip-actions">
+        <button id="copy-link" class="text-button" type="button">Copy deep link</button>
+        <button id="download-artifact" class="text-button" type="button">Download artifact</button>
+        <button id="export-flags" class="text-button" type="button">Export flags <span id="flag-total">0</span></button>
+      </div>
+    </section>
+
+    <main class="workspace" aria-busy="true">
+      <aside class="navigator" aria-label="Dataset items">
+        <div class="view-tabs" role="tablist" aria-label="Dataset view">
+          <button id="cases-tab" class="tab active" role="tab" aria-selected="true" type="button">Cases</button>
+          <button id="memories-tab" class="tab" role="tab" aria-selected="false" type="button">Memories</button>
+        </div>
+        <div class="filters">
+          <label class="search-label">
+            <span class="visually-hidden">Search dataset</span>
+            <input id="search" type="search" placeholder="Search prompt, type, ID…" autocomplete="off">
+            <kbd>/</kbd>
+          </label>
+          <div id="case-filters" class="filter-row">
+            <select id="axis-filter" aria-label="Filter by axis">
+              <option value="all">All axes</option>
+              <option value="tool">Tools</option>
+              <option value="memory">Memory</option>
+            </select>
+            <select id="type-filter" aria-label="Filter by case type">
+              <option value="all">All types</option>
+            </select>
+          </div>
+          <div id="memory-filters" class="filter-row single" hidden>
+            <select id="memory-sort" aria-label="Sort memories">
+              <option value="time">Timeline · oldest first</option>
+              <option value="category">Category · then time</option>
+            </select>
+          </div>
+          <label class="check-filter"><input id="flagged-only" type="checkbox"> Flagged only</label>
+        </div>
+        <div id="result-count" class="result-count"></div>
+        <div id="item-list" class="item-list" role="listbox" aria-label="Dataset items"></div>
+      </aside>
+
+      <section id="inspector" class="inspector" aria-label="Selected item">
+        <div class="empty-state">
+          <strong>Select a case or memory.</strong>
+          <span>Use ↑ and ↓ to move through the list.</span>
+        </div>
+      </section>
+
+      <aside id="review-panel" class="review-panel" aria-label="Evidence and review notes">
+        <div class="panel-heading">
+          <div>
+            <h2>Evidence</h2>
+            <p id="evidence-caption">Select a case to inspect what makes it answerable.</p>
+          </div>
+          <button id="timeline-button" class="text-button" type="button" hidden>Full timeline</button>
+        </div>
+        <div id="evidence-list" class="evidence-list"></div>
+        <form id="flag-form" class="flag-form">
+          <div class="flag-heading">
+            <div>
+              <h2>Smell-test note</h2>
+              <p>Saved only in this browser. Export before clearing storage.</p>
+            </div>
+            <span id="flag-state" class="flag-state">Unflagged</span>
+          </div>
+          <label>
+            <span>What feels wrong?</span>
+            <select id="flag-reason">
+              <option value="unbelievable">Not believable</option>
+              <option value="contrived">Too contrived</option>
+              <option value="writing">Writing / grammar</option>
+              <option value="answerability">Answerability unclear</option>
+              <option value="too-easy">Too easy</option>
+              <option value="too-hard">Too hard</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label>
+            <span>Note</span>
+            <textarea id="flag-note" rows="4" placeholder="What would make this feel like a real person or business?"></textarea>
+          </label>
+          <div class="flag-actions">
+            <button class="button primary" type="submit">Save flag</button>
+            <button id="remove-flag" class="button danger" type="button">Remove</button>
+          </div>
+        </form>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>
