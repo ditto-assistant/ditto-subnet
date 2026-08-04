@@ -458,12 +458,72 @@ tbody tr:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+.ranked-agent {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+.ranked-agent-rank {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  padding-top: 1px;
+  white-space: nowrap;
+}
+.ranked-agent-rank .rankmove {
+  margin-left: 0;
+  font-size: 9.5px;
+  line-height: 1;
+}
+
 .winner-identity {
   display: flex;
   min-width: 190px;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
+}
+
+.score-stack {
+  display: grid;
+  gap: 5px;
+}
+.score-stack-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.score-stack-label {
+  color: var(--text-faint);
+  font: 650 9.5px/1.2 var(--mono);
+  text-transform: uppercase;
+}
+.score-stack .metric {
+  min-width: 0;
+  gap: 8px;
+}
+.score-stack .metric .mval {
+  min-width: 39px;
+  font-size: 11.5px;
+}
+.score-stack-context {
+  margin-left: 56px;
+}
+.run-cost-cell strong,
+.run-cost-cell span {
+  display: block;
+}
+.run-cost-cell strong {
+  color: var(--text);
+  font: 700 12px/1.3 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.run-cost-cell span {
+  margin-top: 3px;
+  color: var(--text-faint);
+  font: 10px/1.2 var(--mono);
 }
 .winner-name {
   display: flex;
@@ -786,7 +846,7 @@ tr.family-child td {
   outline-offset: -2px;
 }
 table {
-  min-width: 850px;
+  min-width: 1000px;
 }
 thead th {
   padding: 11px 14px;
@@ -853,10 +913,8 @@ tbody tr.champion:hover {
 .page[data-page="leaderboard"] .leaderboard-version-switch {
   display: none;
 }
-/* This page's promise is every column at every viewport: undo the
-   window-width column hiding (Model at ≤960, the metric set at ≤720) for
-   this board only. The table keeps its 850px floor and scrolls inside
-   .board, so all-columns stays honest on a phone. */
+/* The dedicated page keeps the compact metric set visible at every width;
+   the table scrolls inside .board when a phone cannot fit it. */
 .page[data-page="leaderboard"] #board .hide-md,
 .page[data-page="leaderboard"] #board .hide-sm {
   display: table-cell;

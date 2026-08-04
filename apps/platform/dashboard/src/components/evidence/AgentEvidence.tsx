@@ -562,6 +562,13 @@ function ConfirmationScores(props: {
     if (counts().expired) bits.push(counts().expired + " expired");
     return bits;
   };
+  const visibleSamples = () => (completedWaves().length ? completedWaves() : pendingSeeds());
+  const sampleMean = () => {
+    const samples = visibleSamples();
+    return samples.length
+      ? samples.reduce((sum, sample) => sum + sample, 0) / samples.length
+      : null;
+  };
   return (
     <Show when={visible()}>
       <section class="pipeline-section" aria-labelledby="pipeline-confirmation-scores">
@@ -571,97 +578,58 @@ function ConfirmationScores(props: {
             <span class="benchmark-cohort-summary">{stateBits().join(" · ")}</span>
           </Show>
         </div>
-        <Show
-          when={boardEntry()?.aggregate_method === "continual_mean"}
-          fallback={
-            <Show
-              when={completedWaves().length}
-              fallback={
-                <Show
-                  when={pendingDepth()}
-                  fallback={
-                    <p class="accepted-score-note">
-                      No full cohort wave has completed for this agent yet, so the initial
-                      three-score median still drives its leaderboard position.
-                    </p>
-                  }
-                >
-                  <p class="accepted-score-note">
-                    {pendingDepth()} retest {pendingDepth() === 1 ? "seed is" : "seeds are"}{" "}
-                    recorded for this agent, but no cohort wave is complete: a wave counts only once
-                    every current emission-set member has a result for the same seed, so it resets
-                    whenever that set changes. The rows below are the append-only audit trail and
-                    were not discarded; the initial three-score median drives its leaderboard
-                    position meanwhile.
-                  </p>
-                </Show>
-              }
-            >
-              <p class="accepted-score-note">
-                {completedWaves().length} full cohort{" "}
-                {completedWaves().length === 1 ? "wave is" : "waves are"} recorded. The initial
-                three-score median remains authoritative until the compatible continual-mean rollout
-                activates.
-              </p>
-            </Show>
-          }
-        >
-          <p class="accepted-score-final">
-            Current leaderboard score: {fx(Number(boardEntry()?.official_composite))} · arithmetic
-            mean of the initial three scores plus {boardEntry()?.completed_wave_count}{" "}
-            aggregate-eligible shared {boardEntry()?.completed_wave_count === 1 ? "wave" : "waves"}{" "}
-            ({boardEntry()?.aggregate_sample_count} samples total). {pendingDepth()} retained
-            confirmation {pendingDepth() === 1 ? "seed remains" : "seeds remain"} in the append-only
-            audit ledger; {excludedDepth()} are not currently fold-eligible.
-          </p>
-        </Show>
-        <p class="accepted-score-note">
-          The initial quorum remains immutable provenance. The current leaderboard score continually
-          adjusts up or down as full cohort waves complete.
-        </p>
-        <p class="accepted-score-note">
-          Only aggregate-eligible shared-wave averages are shown here. Partial, legacy, and
-          superseded confirmation seeds remain in the append-only audit ledger but are omitted from
-          the score list.
+        <div class="retest-summary">
+          <div>
+            <span>Current score</span>
+            <strong>{fx(Number(boardEntry()?.official_composite))}</strong>
+          </div>
+          <div>
+            <span>Initial quorum</span>
+            <strong>3 scores</strong>
+          </div>
+          <div>
+            <span>Retest samples</span>
+            <strong>{completedWaves().length}</strong>
+          </div>
+          <Show when={sampleMean() != null}>
+            <div>
+              <span>Retest mean</span>
+              <strong>{fx(sampleMean() as number)}</strong>
+            </div>
+          </Show>
+        </div>
+        <p class="accepted-score-note retest-note">
+          {boardEntry()?.aggregate_method === "continual_mean"
+            ? `The current score averages the immutable three-score quorum with ${completedWaves().length} retained retest samples.`
+            : completedWaves().length
+              ? `${completedWaves().length} retained samples are recorded; the initial quorum remains authoritative until continual aggregation activates.`
+              : "The initial quorum remains authoritative until a shared retest sample completes."}
+          {excludedDepth()
+            ? ` ${excludedDepth()} retained samples are not currently fold-eligible.`
+            : ""}
         </p>
         <Show
-          when={completedWaves().length || pendingSeeds().length}
-          fallback={<p class="pipeline-detail-state">No completed continual retest wave yet.</p>}
+          when={visibleSamples().length}
+          fallback={<p class="pipeline-detail-state">No completed continual retest sample yet.</p>}
         >
-          <div class="accepted-score-list">
-            <Show
-              when={completedWaves().length}
-              fallback={
-                <For each={pendingSeeds()}>
-                  {(score, index) => (
-                    <div class="accepted-score">
-                      <div>
-                        <span class="accepted-score-value">{fx(score)}</span>
-                        <span class="accepted-score-label">
-                          <span class="bench-version-badge">{benchBadge()}</span>
-                          Retest seed {index() + 1} · recorded, wave not complete
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </For>
-              }
-            >
-              <For each={completedWaves()}>
+          <details class="retest-samples">
+            <summary>
+              View {visibleSamples().length} {completedWaves().length ? "retained" : "pending"}{" "}
+              retest
+              {visibleSamples().length === 1 ? " sample" : " samples"}
+              <span class="bench-version-badge">{benchBadge()}</span>
+            </summary>
+            <div class="retest-score-grid">
+              <For each={visibleSamples()}>
                 {(score, index) => (
-                  <div class="accepted-score">
-                    <div>
-                      <span class="accepted-score-value">{fx(score)}</span>
-                      <span class="accepted-score-label">
-                        <span class="bench-version-badge">{benchBadge()}</span>
-                        Aggregate-eligible shared wave {index() + 1} · consensus aggregate
-                      </span>
-                    </div>
-                  </div>
+                  <span title={`Retest ${index() + 1}: ${fx(score)}`}>
+                    <b>{index() + 1}</b>
+                    {fx(score)}
+                  </span>
                 )}
               </For>
-            </Show>
-          </div>
+            </div>
+          </details>
         </Show>
       </section>
     </Show>
@@ -721,8 +689,28 @@ function formatMicrousd(value: number | null | undefined): string {
   return "$" + dollars.toFixed(dollars >= 1 ? 2 : 4);
 }
 
-function formatCount(value: number | null | undefined): string {
-  return Math.max(0, Number(value) || 0).toLocaleString();
+function compactCount(value: number | null | undefined): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Math.max(0, Number(value) || 0));
+}
+
+function allowancePercent(
+  used: number | null | undefined,
+  budget: number | null | undefined,
+): string {
+  const limit = Math.max(0, Number(budget) || 0);
+  if (!limit) return "0%";
+  return Math.min(100, Math.round((Math.max(0, Number(used) || 0) / limit) * 100)) + "%";
+}
+
+function inferenceRunStatus(run: InferenceRun): [string, string] {
+  if (run.status === "exhausted") return ["Allowance exhausted", "bad"];
+  const leaseOpen = new Date(run.ticket_deadline || 0).getTime() > Date.now();
+  if (run.status === "active" && leaseOpen) return ["Running", "progress"];
+  if (run.status === "pending" && leaseOpen) return ["Preparing", "progress"];
+  return ["Closed", ""];
 }
 
 function InferenceRuns(props: { runs: InferenceRun[] }): JSX.Element {
@@ -736,62 +724,107 @@ function InferenceRuns(props: { runs: InferenceRun[] }): JSX.Element {
   const totalCost = createMemo(() =>
     runs().reduce((sum, run) => sum + Math.max(0, Number(run.cost_microusd) || 0), 0),
   );
-  const status = (run: InferenceRun): [string, string] => {
-    if (run.status === "exhausted") return ["Allowance exhausted", "bad"];
-    if (run.status === "active") return ["Running", "progress"];
-    if (run.status === "pending") return ["Preparing", "progress"];
-    return ["Closed", ""];
-  };
+  const averageCost = () => totalCost() / Math.max(1, runs().length);
+  const groups = createMemo(() => {
+    const grouped = new Map<string, InferenceRun[]>();
+    for (const run of runs()) {
+      const validator = run.validator_hotkey || "unknown validator";
+      const group = grouped.get(validator) ?? [];
+      group.push(run);
+      grouped.set(validator, group);
+    }
+    return Array.from(grouped, ([validator, items]) => ({ validator, items }));
+  });
   return (
     <Show when={runs().length}>
       <section class="pipeline-section" aria-labelledby="pipeline-inference-spend">
         <div class="pipeline-section-heading inference-spend-heading">
           <div>
-            <h4 id="pipeline-inference-spend">Benchmark inference cost</h4>
-            <p>
-              Platform-metered chat and embedding spend. Each row is one validator benchmark run.
-            </p>
+            <h4 id="pipeline-inference-spend">Benchmark runs</h4>
+            <p>Platform-metered inference spend, grouped by validator.</p>
           </div>
-          <strong class="inference-spend-total">{formatMicrousd(totalCost())} total</strong>
+          <div class="inference-spend-totals">
+            <strong>{formatMicrousd(totalCost())} total</strong>
+            <span>
+              {formatMicrousd(averageCost())} average · {runs().length} runs
+            </span>
+          </div>
         </div>
-        <div class="inference-run-list">
-          <For each={runs()}>
-            {(run) => {
-              const state = () => status(run);
-              const chatTokens = () =>
-                (Number(run.prompt_tokens) || 0) + (Number(run.completion_tokens) || 0);
+        <div class="inference-validator-list">
+          <For each={groups()}>
+            {(group) => {
+              const groupCost = () =>
+                group.items.reduce(
+                  (sum, run) => sum + Math.max(0, Number(run.cost_microusd) || 0),
+                  0,
+                );
+              const liveCount = () =>
+                group.items.filter((run) => inferenceRunStatus(run)[0] === "Running").length;
+              const exhaustedCount = () =>
+                group.items.filter((run) => run.status === "exhausted").length;
               return (
-                <div class="inference-run">
-                  <div class="inference-run-cost">{formatMicrousd(run.cost_microusd)}</div>
-                  <div class="inference-run-main">
-                    <div class="inference-run-title">
-                      <span class="bench-version-badge">
-                        {run.bench_version == null
-                          ? "Bench unknown"
-                          : "Bench v" + run.bench_version}
+                <details class="inference-validator-group">
+                  <summary>
+                    <span class="inference-validator-name">
+                      <b>Validator {shortKey(group.validator)}</b>
+                      <span>
+                        {group.items.length} {group.items.length === 1 ? "run" : "runs"}
                       </span>
-                      <EntityButton
-                        kind="validator"
-                        id={run.validator_hotkey}
-                        label={"Validator " + shortKey(run.validator_hotkey)}
-                      />
-                      <span class={"stage" + (state()[1] ? " " + state()[1] : "")}>
-                        {state()[0]}
-                      </span>
-                    </div>
-                    <div class="inference-run-meta">
-                      {formatCount(run.requests)} of {formatCount(run.request_budget)} chat requests
-                      {" · "}
-                      {formatCount(chatTokens())} of {formatCount(run.token_budget)} chat tokens
-                      {" · "}
-                      {formatCount(run.embedding_requests)} embedding requests /{" "}
-                      {formatCount(run.embedding_tokens)} tokens
-                    </div>
+                    </span>
+                    <span class="inference-validator-state">
+                      <Show when={liveCount()}>{liveCount()} live · </Show>
+                      <Show when={exhaustedCount()}>{exhaustedCount()} exhausted · </Show>
+                      {formatMicrousd(groupCost() / group.items.length)} avg
+                    </span>
+                    <strong>{formatMicrousd(groupCost())}</strong>
+                  </summary>
+                  <div class="inference-run-list">
+                    <For each={group.items}>
+                      {(run) => {
+                        const state = () => inferenceRunStatus(run);
+                        const chatTokens = () =>
+                          (Number(run.prompt_tokens) || 0) + (Number(run.completion_tokens) || 0);
+                        return (
+                          <div class="inference-run">
+                            <div class="inference-run-main">
+                              <div class="inference-run-title">
+                                <span class="bench-version-badge">
+                                  {run.bench_version == null
+                                    ? "Bench unknown"
+                                    : "Bench v" + run.bench_version}
+                                </span>
+                                <span class={"stage" + (state()[1] ? " " + state()[1] : "")}>
+                                  {state()[0]}
+                                </span>
+                                <span class="attempt-time">
+                                  {relTime(run.updated_at || run.created_at)}
+                                </span>
+                              </div>
+                              <div
+                                class="inference-run-meta"
+                                aria-label="Inference allowance usage"
+                              >
+                                <span>
+                                  Chat {allowancePercent(run.requests, run.request_budget)}
+                                </span>
+                                <span>
+                                  Tokens {allowancePercent(chatTokens(), run.token_budget)}
+                                </span>
+                                <span>
+                                  Embed {compactCount(run.embedding_requests)} /{" "}
+                                  {compactCount(run.embedding_tokens)} tok
+                                </span>
+                              </div>
+                            </div>
+                            <div class="inference-run-cost">
+                              {formatMicrousd(run.cost_microusd)}
+                            </div>
+                          </div>
+                        );
+                      }}
+                    </For>
                   </div>
-                  <div class="attempt-time" title={String(run.updated_at || run.created_at || "")}>
-                    {relTime(run.updated_at || run.created_at)}
-                  </div>
-                </div>
+                </details>
               );
             }}
           </For>

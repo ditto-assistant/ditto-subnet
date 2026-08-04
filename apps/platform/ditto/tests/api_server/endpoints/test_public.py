@@ -1208,6 +1208,101 @@ class TestPublicBenchmarkTimeline:
 
 
 class TestPublicLeaderboard:
+    async def test_leaderboard_reports_average_settled_run_cost(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = UUID(
+            await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.7, 0.71, 0.72],
+                details={"bench_version": _ERA},
+            )
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            validator = await session.scalar(
+                select(Score.validator_hotkey)
+                .where(Score.agent_id == agent_id)
+                .limit(1)
+            )
+            assert validator is not None
+
+            def grant(
+                *,
+                deadline: datetime,
+                status: str,
+                chat_cost: int,
+                embedding_cost: int,
+            ) -> InferenceGrant:
+                return InferenceGrant(
+                    grant_id=uuid4(),
+                    agent_id=agent_id,
+                    bench_version=_ERA,
+                    validator_hotkey=validator,
+                    slot_id="slot-0",
+                    ticket_deadline=deadline,
+                    expires_at=deadline,
+                    status=status,
+                    generation=1,
+                    allowed_models=["qwen/qwen3-32b"],
+                    request_budget=8192,
+                    request_count=100,
+                    token_budget=25_000_000,
+                    prompt_tokens=1000,
+                    completion_tokens=100,
+                    cost_microusd=chat_cost,
+                    embedding_model="perplexity/pplx-embed-v1-0.6b",
+                    embedding_profile="dittobench-v8-pplx-embed-v1-0.6b-768-v1",
+                    embedding_provider="Perplexity",
+                    embedding_dimensions=768,
+                    embedding_request_budget=10_000,
+                    embedding_request_count=10,
+                    embedding_token_budget=5_000_000,
+                    embedding_tokens=1000,
+                    embedding_cost_microusd=embedding_cost,
+                    usage_accounting_version=2,
+                    created_at=now - timedelta(hours=2),
+                    updated_at=now,
+                )
+
+            session.add_all(
+                [
+                    # Raw active status is stale after the immutable lease end.
+                    grant(
+                        deadline=now - timedelta(hours=1),
+                        status="active",
+                        chat_cost=100_000,
+                        embedding_cost=10_000,
+                    ),
+                    # A terminal grant is settled even before its original deadline.
+                    grant(
+                        deadline=now + timedelta(hours=1),
+                        status="exhausted",
+                        chat_cost=300_000,
+                        embedding_cost=30_000,
+                    ),
+                    # Live partial work must not pull the board average down.
+                    grant(
+                        deadline=now + timedelta(hours=2),
+                        status="active",
+                        chat_cost=900_000,
+                        embedding_cost=90_000,
+                    ),
+                ]
+            )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        entry = next(row for row in body["entries"] if row["agent_id"] == str(agent_id))
+
+        assert entry["average_run_cost_microusd"] == 220_000
+        assert entry["inference_run_count"] == 2
+
     async def test_distinguishes_raw_rank_one_from_koth_emissions_champion(
         self,
         app: FastAPI,
