@@ -1,0 +1,63 @@
+name: Deploy screener capacity controller
+
+on:
+  workflow_call:
+    inputs:
+      revision:
+        description: Exact released monorepo commit
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact released monorepo commit
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-screener-capacity-controller
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: ditto-app-dev
+  GCP_ZONE: us-central1-a
+  CONTROLLER_INSTANCE: ditto-screener-capacity-prod
+  DEPLOY_REVISION: ${{ inputs.revision }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: prod
+    steps:
+      - name: Validate immutable release identity
+        run: '[[ "$DEPLOY_REVISION" =~ ^[0-9a-f]{40}$ ]]'
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.DEPLOY_REVISION }}
+          persist-credentials: false
+
+      - name: Verify deploy configuration
+        env:
+          WIF: ${{ secrets.GCP_WIF_PROVIDER }}
+          SA: ${{ secrets.GCP_SCREENER_DEPLOY_SA }}
+        run: |
+          : "${WIF:?GCP_WIF_PROVIDER prod secret is not set}"
+          : "${SA:?GCP_SCREENER_DEPLOY_SA prod secret is not set}"
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SCREENER_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Deploy the exact release over IAP
+        run: |
+          services/screener-orchestrator/scripts/deploy-via-ssh.sh \
+            "$CONTROLLER_INSTANCE" "$GCP_ZONE" "$DEPLOY_REVISION"

@@ -108,7 +108,17 @@ def test_platform_change_does_not_release_validator_stack(
 ) -> None:
     assert selected(
         components, ignored_paths, "apps/platform/ditto/api_server/factory.py"
-    ) == {"platform", "backroom"}
+    ) == {"platform_api", "platform", "backroom"}
+
+
+def test_platform_dashboard_change_does_not_redeploy_backroom(
+    components, ignored_paths
+) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "apps/platform/dashboard/src/pages/Leaderboard.tsx",
+    ) == {"platform_dashboard", "platform"}
 
 
 def test_screener_change_does_not_release_validator_stack(
@@ -116,7 +126,10 @@ def test_screener_change_does_not_release_validator_stack(
 ) -> None:
     assert selected(
         components, ignored_paths, "workers/screener/ditto_screener/worker.py"
-    ) == {"screener", "screener_orchestrator"}
+    ) == {
+        "screener",
+        "screener_orchestrator",
+    }
 
 
 def test_orchestrator_change_is_isolated_from_validator_release(
@@ -141,6 +154,7 @@ def test_screening_contract_change_propagates_to_every_consumer(
         "miner_cli",
         "validator",
         "validator_stack",
+        "platform_api",
         "platform",
         "backroom",
         "screener",

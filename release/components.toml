@@ -112,16 +112,50 @@ paths = [
   "research/dittobench-datagen/**",
 ]
 
-[components.platform]
-description = "Subnet API and control plane"
+[components.platform_api]
+description = "Subnet API, database migrations, relays, and control plane"
 depends_on = ["screening_protocol"]
 paths = [
-  "apps/platform/**",
+  "apps/platform/.agents/**",
+  "apps/platform/alembic/**",
+  "apps/platform/ditto/**",
+  "apps/platform/docker/**",
+  "apps/platform/docs/**",
+  "apps/platform/scripts/**",
+  "apps/platform/.env.example",
+  "apps/platform/.gitignore",
+  "apps/platform/.gitleaks.toml",
+  "apps/platform/CLAUDE.md",
+  "apps/platform/CODE_OF_CONDUCT.md",
+  "apps/platform/CONTRIBUTING.md",
+  "apps/platform/LICENSE",
+  "apps/platform/Makefile",
+  "apps/platform/README.md",
+  "apps/platform/SECURITY.md",
+  "apps/platform/UPSTREAM.md",
+  "apps/platform/alembic.ini",
+  "apps/platform/docker-compose.yml",
+  "apps/platform/faircopy.config.mjs",
+  "apps/platform/package-lock.json",
+  "apps/platform/package.json",
+  "apps/platform/pyproject.toml",
+  "apps/platform/skills-lock.json",
+  "apps/platform/uv.lock",
 ]
+
+[components.platform_dashboard]
+description = "Public Platform dashboard UI"
+paths = [
+  "apps/platform/dashboard/**",
+]
+
+[components.platform]
+description = "Deployable Platform API and dashboard aggregate"
+depends_on = ["platform_api", "platform_dashboard"]
 
 [components.backroom]
 description = "Subnet operations console"
-depends_on = ["platform"]
+depends_on = ["platform_api"]
 paths = [
   "apps/backroom/**",
 ]

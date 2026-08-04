@@ -18,13 +18,29 @@ resulting immutable release commit:
   without rebuilding the validator stack;
 - Platform uses the reusable exact-SHA IAP deploy and migrates from
   `/opt/ditto-subnet/apps/platform`;
-- Backroom builds and deploys `backroom.dittobench.ai` from the same release;
+- Platform API/runtime changes also select Backroom, so both build and deploy
+  from the same release. Dashboard-only changes deploy Platform without the
+  practically unrelated Backroom redeploy;
+- Backroom deploys `backroom.dittobench.ai` automatically and preserves its
+  Cloudflare-encrypted Worker secrets;
 - hosted DittoBench builds its Cloud Run runtime from the release commit;
 - screener image publication queues a dedicated Targon Kaniko rental first,
   then uses the existing GitHub/GCP build runner only after an explicit
   provider fallback;
+- the capacity controller and its trusted-builder sibling deploy together from
+  the exact release commit over IAP whenever either orchestrator or screener
+  source changes;
 - the five-minute GCE screener reconciling deploy resolves the latest GitHub
   release tag instead of deploying an arbitrary current `main` SHA.
+
+Release planning starts from the latest published semantic tag so queued or
+failed pre-tag runs carry their changes into the next attempt. Once semantic
+release has published a tag, that tag becomes the next planning baseline even
+if a downstream deploy fails. Recover that release by re-running its failed
+jobs; do not rely on a later source push to select already-tagged components.
+Datagen releases additionally require a new component version, publish the
+source-SHA tag once, and attach the component tag to that exact digest so a
+partial rerun converges without overwriting immutable tags.
 
 Manual Platform and screener dispatches also require the selected commit to be
 the target of a semantic `vX.Y.Z` release tag. The visible `force` input is the
@@ -54,6 +70,12 @@ WIF identity into a mode-0600 runner file. The Targon key is never a GitHub
 secret: only the private capacity VM may read `TARGON_API_KEY` from Secret
 Manager, and the build rental receives a 30-minute registry-only token.
 
+Backroom application secrets are not Terraform values. Bootstrap them once
+with `apps/backroom/scripts/bootstrap-worker-secrets.sh`; the script consumes
+Google's OAuth JSON locally, streams `ADMIN_API_PASSWORD` from GCP Secret
+Manager, and installs the encrypted Worker bindings in one Cloudflare deploy.
+Only the scoped Cloudflare deployment token belongs in the GitHub environment.
+
 ## First activation order
 
 1. Merge and apply the infra stack, but leave the capacity-controller flag off.
@@ -63,10 +85,13 @@ Manager, and the build rental receives a 30-minute registry-only token.
 4. Deploy Platform from a reviewed release so the trusted-build queue migration
    and controller API exist.
 5. Enable and converge the capacity controller and separate image-builder unit.
+   Later semantic releases deploy both units automatically; Ansible remains the
+   first-boot/configuration path.
 6. Queue one screener build. Verify either a Targon immutable digest or an
    audited GCP fallback in Backroom.
 7. Exercise GCE worker scale `0 -> 1 -> 0` before retiring the pet screener.
 
-None of these activation steps is performed by merging infra. Terraform apply,
-Ansible convergence, secret population, and production deployment remain
-explicit operator actions.
+Merging application source performs semantic release and automatic runtime
+deployment. Infrastructure remains separate: Terraform apply, first-boot
+Ansible convergence, and initial secret population are explicit operator
+actions backed by a reviewed plan.

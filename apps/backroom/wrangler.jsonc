@@ -11,6 +11,19 @@
     "GOOGLE_REDIRECT_URI": "https://backroom.dittobench.ai/auth/callback",
     "DITTO_PLATFORM_API_BASE_URL": "https://platform-api.heyditto.ai",
   },
+  // Fail closed before publishing a version that cannot authenticate an
+  // operator or call Platform. Values live only in Cloudflare's encrypted
+  // Worker bindings; scripts/bootstrap-worker-secrets.sh installs them from
+  // Google's downloaded OAuth JSON plus the existing GCP Platform secret.
+  "secrets": {
+    "required": [
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "SESSION_SECRET",
+      "BACKROOM_ADMIN_EMAILS",
+      "DITTO_ADMIN_API_TOKEN",
+    ],
+  },
   "observability": {
     "enabled": true,
   },

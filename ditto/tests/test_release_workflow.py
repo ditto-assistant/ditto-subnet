@@ -71,6 +71,28 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "GCP_DATAGEN_RELEASE_SA" in str(datagen["steps"])
 
 
+def test_release_auto_deploys_controller_and_builder_from_exact_release() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    deploy = workflow["jobs"]["deploy-screener-controller"]
+
+    assert deploy["needs"] == ["plan", "release", "deploy_platform"]
+    assert "needs.plan.outputs.screener_orchestrator == 'true'" in deploy["if"]
+    assert deploy["uses"] == "./.github/workflows/screener-controller-deploy.yml"
+    assert deploy["with"]["revision"] == "${{ needs.release.outputs.commit_sha }}"
+    assert deploy["secrets"] == "inherit"
+
+
+def test_platform_and_backroom_deploy_from_one_release_plan() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+
+    assert jobs["deploy_platform"]["with"]["revision"] == (
+        "${{ needs.release.outputs.commit_sha }}"
+    )
+    assert jobs["deploy-backroom"]["needs"] == ["plan", "release"]
+    assert "needs.plan.outputs.backroom == 'true'" in jobs["deploy-backroom"]["if"]
+
+
 def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     config = tomllib.loads(PYPROJECT_PATH.read_text())["tool"]["semantic_release"]
     build_command = config["build_command"]

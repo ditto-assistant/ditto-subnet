@@ -269,8 +269,20 @@ jobs:
       - name: Deploy the subnet-only worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm exec wrangler deploy
+
+  deploy-screener-controller:
+    needs: [plan, release, deploy_platform]
+    if: >-
+      always() &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.screener_orchestrator == 'true' &&
+      (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
+    uses: ./.github/workflows/screener-controller-deploy.yml
+    with:
+      revision: ${{ needs.release.outputs.commit_sha }}
+    secrets: inherit
 
   build-screener:
     needs: [plan, release, deploy_platform]

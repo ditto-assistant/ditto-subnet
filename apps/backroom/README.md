@@ -26,6 +26,25 @@ Cloudflare Worker secrets:
 - `BACKROOM_ADMIN_EMAILS` (comma-separated `@omniaura.ai` write administrators)
 - `DITTO_ADMIN_API_TOKEN`
 
+Bootstrap them without copying credential values through Terraform, GitHub, or
+the terminal. The command reads Google's downloaded OAuth JSON, streams the
+existing Platform admin token from GCP Secret Manager, generates a session key,
+and sends all five values to Cloudflare in the same deployment:
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=02b4e9dca5d5f93c6043d6b3e259cbb5
+export CLOUDFLARE_API_TOKEN # set without printing it
+export BACKROOM_ADMIN_EMAILS=peyton@omniaura.ai
+pnpm install --frozen-lockfile
+scripts/bootstrap-worker-secrets.sh /path/to/google-oauth-client.json
+```
+
+`wrangler.jsonc` declares every binding required, so subsequent automatic
+deploys fail closed if a secret is missing. Wrangler preserves encrypted secret
+values across ordinary code deployments. The project requires Wrangler 4.88+
+because `--secrets-file` first shipped in 4.74 and the formerly experimental
+`secrets.required` configuration became stable in 4.88.
+
 Runtime configuration is in `wrangler.jsonc`. Google OAuth must register
 `https://backroom.dittobench.ai/auth/callback`. The existing product Backroom
 callback remains registered separately. Any verified `@omniaura.ai` Google
