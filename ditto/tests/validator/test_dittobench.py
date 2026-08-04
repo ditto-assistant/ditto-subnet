@@ -29,6 +29,7 @@ from ditto.validator.dittobench import (
     DittobenchClient,
     DittobenchProgressSnapshot,
     InferenceBrokerSession,
+    _agent_attributable_failure_code,
     _sandbox_infrastructure_failure_code,
     safe_progress_snapshot,
 )
@@ -1562,6 +1563,14 @@ async def test_agent_attributable_inference_failures_stay_the_agents(
                 "run-1", expected_bench_version=8
             )
         assert not isinstance(raised.value, ValidatorInfrastructureError)
+        expected_code = (
+            "inference_allowance_exhausted"
+            if failure["kind"] == "sandbox_failure"
+            else None
+        )
+        assert raised.value.code == expected_code
+        if expected_code is not None:
+            assert failure_detail(raised.value) == expected_code
 
 
 def test_agent_inference_codes_are_never_no_fault() -> None:
@@ -1574,6 +1583,18 @@ def test_agent_inference_codes_are_never_no_fault() -> None:
     """
     assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
     for code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES:
+        assert (
+            _agent_attributable_failure_code(
+                {
+                    "failure": {
+                        "kind": "sandbox_failure",
+                        "code": code,
+                        "retryable": False,
+                    }
+                }
+            )
+            == code
+        )
         assert (
             _sandbox_infrastructure_failure_code(
                 {

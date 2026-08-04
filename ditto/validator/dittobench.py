@@ -181,6 +181,31 @@ def _sandbox_infrastructure_failure_code(payload: dict[str, object]) -> str | No
     )
 
 
+def _agent_attributable_failure_code(payload: dict[str, object]) -> str | None:
+    """Accept only the scorer's terminal, source-free agent classifier.
+
+    This is deliberately the mirror image of
+    :func:`_sandbox_infrastructure_failure_code`: the kind must be the terminal
+    sandbox class and ``retryable`` must be exactly false.  Keeping the code
+    through :class:`DittobenchError` lets ``failure_detail`` publish the safe
+    reason instead of collapsing it into an opaque ``scoring_error`` string.
+    """
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        return None
+    if (
+        failure.get("kind") != "sandbox_failure"
+        or failure.get("retryable") is not False
+    ):
+        return None
+    code = failure.get("code")
+    return (
+        code
+        if isinstance(code, str) and code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES
+        else None
+    )
+
+
 _RELAY_CAUSES = frozenset(
     {
         "inference_lane_saturated",
@@ -1059,7 +1084,13 @@ class DittobenchClient:
                     )
                 if status == _FAILED:
                     error = str(data.get("error", "unknown"))
+                    agent_failure_code = _agent_attributable_failure_code(data)
                     infrastructure_code = _sandbox_infrastructure_failure_code(data)
+                    if agent_failure_code is not None:
+                        raise DittobenchError(
+                            f"run {run_id} exhausted its inference allowance",
+                            code=agent_failure_code,
+                        )
                     # `code=` is what stops the scorer's own classifier from
                     # dying here. All five infrastructure codes collapse into
                     # one `infrastructure` hand-back, so without it the specific
