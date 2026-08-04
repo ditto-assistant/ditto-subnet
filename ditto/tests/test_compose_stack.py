@@ -279,15 +279,16 @@ def test_screened_image_capability_is_enabled_without_a_global_requirement() -> 
 def test_dittobench_context_is_the_local_monorepo_service() -> None:
     raw_compose = COMPOSE_PATH.read_text()
     compose = yaml.safe_load(raw_compose)
-    assert compose["x-dittobench-build-context"] == (
-        "${DITTOBENCH_BUILD_CONTEXT:-./services/dittobench-api}"
-    )
+    assert compose["x-dittobench-build-context"] == "${DITTOBENCH_BUILD_CONTEXT:-.}"
     assert compose["x-dittobench-revision"] == (
         "${DITTOBENCH_SOURCE_REVISION:-source-build}"
     )
     assert (
         compose["services"]["dittobench-api"]["build"]["context"]
         == (compose["x-dittobench-build-context"])
+    )
+    assert compose["services"]["dittobench-api"]["build"]["dockerfile"] == (
+        "services/dittobench-api/Dockerfile"
     )
     validator_environment = compose["services"]["ditto-subnet"]["environment"]
     assert validator_environment["VALIDATOR_STACK_COMPONENT_DITTOBENCH_API"] == (
@@ -301,10 +302,11 @@ def test_dittobench_context_is_the_local_monorepo_service() -> None:
     )
     assert "DITTOBENCH_SOURCE_SHA: *dittobench-revision" in raw_compose
     wrapper = COMPOSE_WRAPPER_PATH.read_text()
-    assert 'dittobench_context="$ROOT_DIR/services/dittobench-api"' in wrapper
+    assert 'dittobench_context="$ROOT_DIR"' in wrapper
+    assert "research/dittobench-datagen" in wrapper
     assert 'export DITTOBENCH_SOURCE_REVISION="$checksum"' in wrapper
     assert 'export DITTOBENCH_SOURCE_IDENTITY="source:$checksum"' in wrapper
-    assert "dittobench-api source has local changes" in wrapper
+    assert "DittoBench source has local changes" in wrapper
     assert "materialize_context=false" in wrapper
 
 

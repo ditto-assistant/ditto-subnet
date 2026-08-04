@@ -94,6 +94,10 @@ resource "google_artifact_registry_repository" "datapipeline" {
   repository_id = local.datapipeline_repo_id
   format        = "DOCKER"
   description   = "Per-submission dataset generator (dittobench-datagen cmd/generate-service) images for Cloud Run."
+
+  docker_config {
+    immutable_tags = true
+  }
 }
 
 resource "google_artifact_registry_repository_iam_member" "datapipeline_reader" {

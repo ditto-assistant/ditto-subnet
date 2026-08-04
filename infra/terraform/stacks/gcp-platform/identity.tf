@@ -116,7 +116,7 @@ resource "google_service_account" "datagen_release" {
 resource "google_service_account_iam_member" "datagen_release_wif" {
   service_account_id = google_service_account.datagen_release.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/dittobench-datagen:environment:${var.platform_deploy_environment}"
+  member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/ditto-subnet:environment:${var.platform_deploy_environment}"
 }
 
 # The pre-for_each address held the ditto-platform binding; keep its state entry.

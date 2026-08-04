@@ -83,6 +83,18 @@ def test_all_dittobench_surfaces_release(components, ignored_paths, path: str) -
     }
 
 
+def test_datagen_change_rebuilds_scorer_and_validator_stack(
+    components, ignored_paths
+) -> None:
+    assert selected(
+        components, ignored_paths, "research/dittobench-datagen/grade/grade.go"
+    ) == {
+        "dittobench_datagen",
+        "dittobench_api",
+        "validator_stack",
+    }
+
+
 def test_platform_change_does_not_release_validator_stack(
     components, ignored_paths
 ) -> None:

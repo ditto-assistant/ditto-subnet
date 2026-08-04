@@ -17,6 +17,7 @@ def test_dittobench_workflow_uses_monorepo_contexts_without_repinning() -> None:
 
     assert "repin" not in text.lower()
     assert "services/dittobench-api/**" in text
+    assert "research/dittobench-datagen/**" in text
 
     for job_name in ("docker-build", "provenance"):
         build = next(
@@ -24,7 +25,8 @@ def test_dittobench_workflow_uses_monorepo_contexts_without_repinning() -> None:
             for step in jobs[job_name]["steps"]
             if step.get("uses", "").startswith("docker/build-push-action@")
         )
-        assert build["with"]["context"] == "services/dittobench-api"
+        assert build["with"]["context"] == "."
+        assert build["with"]["file"] == "services/dittobench-api/Dockerfile"
         assert build["with"]["file"] == "services/dittobench-api/Dockerfile"
 
 

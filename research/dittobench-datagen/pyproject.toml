@@ -1,0 +1,9 @@
+[tool.semantic_release]
+allow_zero_version = true
+commit_message = "chore(release): v{version} [skip ci]"
+tag_format = "v{version}"
+version_variables = ["internal/version/version.go:Version"]
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false

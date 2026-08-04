@@ -7,15 +7,14 @@ on DittoBench (tool-calling and memory recall).
 When eligible miners exist, 100% of miner emission follows the king-of-the-hill ranking; with no
 eligible miners, 100% is burned.
 
-This monorepo holds the miner CLI, validator worker, and DittoBench scoring
-engine. Other public Ditto stack components currently live in:
+This monorepo holds the public subnet runtime and research surfaces:
 
-- [`ditto-platform`](https://github.com/ditto-assistant/ditto-platform): the public API server, live dashboard, submission coordinator, and score ledger.
+- [`apps/platform`](apps/platform): the public API server, live dashboard, submission coordinator, and score ledger.
 - [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness): the Rust reference library used by the starter kit.
 - [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit): the miner starting point plus the offline practice loop.
 - [`services/dittobench-api`](services/dittobench-api): the scoring engine each validator runs.
-- [`dittobench-datagen`](https://github.com/ditto-assistant/dittobench-datagen): the dataset generator and judge-free grader.
-- [`ditto-screener`](https://github.com/ditto-assistant/ditto-screener): the platform-operated build and health gate plus the shared screening protocol.
+- [`research/dittobench-datagen`](research/dittobench-datagen): the dataset generator and judge-free grader.
+- [`workers/screener`](workers/screener): the platform-operated build and health gate.
 
 ## Layout
 - `ditto/miner_cli/`: the `ditto` CLI: submit an agent, poll status, pre-flight a tarball.
@@ -25,6 +24,7 @@ engine. Other public Ditto stack components currently live in:
 - `ditto/api_models/`: Pydantic wire shapes shared with the platform (the HTTP contract).
 - `ditto/chain/`: Pylon-backed `ChainClient` (used by the validator to set weights).
 - `services/dittobench-api/`: the Go scorer used by validators and hosted practice.
+- `research/dittobench-datagen/`: deterministic datasets, grader, and research tools.
 - `services/screener-orchestrator/`: Targon-first screener capacity and build control.
 - `apps/platform/`: the subnet API, durable queue, dashboard, and control plane.
 - `apps/backroom/`: the public-source SN118 operations console.

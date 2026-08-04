@@ -14,18 +14,22 @@ ARG DITTOBENCH_SOURCE_SHA=unknown
 
 # ---- build stage ----
 FROM golang:1.23-alpine AS build
-WORKDIR /src
+WORKDIR /src/services/dittobench-api
 
 # The AST structural fingerprint (internal/astfp) uses go-tree-sitter, which wraps
 # the tree-sitter C parser via cgo — so the build needs a C toolchain. build-base
 # pulls in gcc + musl-dev.
 RUN apk add --no-cache build-base
 
-# Cache deps first.
-COPY go.mod go.sum* ./
+# The scorer consumes the in-tree generator module. The build context is the
+# monorepo root so a generator change and its scorer consumer are one reviewed
+# source unit instead of a cross-repository version-bump PR.
+COPY services/dittobench-api/go.mod services/dittobench-api/go.sum* ./
+COPY research/dittobench-datagen/go.mod /src/research/dittobench-datagen/go.mod
 RUN go mod download
 
-COPY . .
+COPY services/dittobench-api/ /src/services/dittobench-api/
+COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
 
 # Stamp release identity INTO the binary. Declared here (not before COPY) so the
 # dependency layers above stay cacheable across identity changes.

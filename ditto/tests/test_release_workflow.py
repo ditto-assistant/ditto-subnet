@@ -30,12 +30,14 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     )
     assert {
         "dittobench_api",
+        "dittobench_datagen",
         "platform",
         "backroom",
         "screener",
         "screener_orchestrator",
     } <= plan["outputs"].keys()
     assert "scripts/release-plan.py" in resolver["run"]
+    assert plan["outputs"]["release_base"] == "${{ steps.release-base.outputs.sha }}"
     release_base = _step(plan["steps"], "Resolve the last published release")
     assert "0000000000000000000000000000000000000000" in release_base["run"]
     assert jobs["release"]["needs"] == ["plan", "verify-source"]
@@ -53,6 +55,16 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         assert "plan" in job["needs"]
         assert "needs.plan.outputs.validator_stack == 'true'" in job["if"]
 
+    datagen = jobs["publish-datagen"]
+    assert datagen["needs"] == ["plan", "release"]
+    assert "needs.plan.outputs.dittobench_datagen == 'true'" in datagen["if"]
+    publish = _step(datagen["steps"], "Publish immutable component and source tags")
+    assert "$DATAGEN_REPOSITORY:$COMPONENT_TAG" in publish["run"]
+    assert "$DATAGEN_REPOSITORY:sha-$SOURCE_SHA" in publish["run"]
+    assert "gcloud artifacts docker tags add" in publish["run"]
+    assert "reusing immutable datagen image" in publish["run"]
+    assert "GCP_DATAGEN_RELEASE_SA" in str(datagen["steps"])
+
 
 def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     config = tomllib.loads(PYPROJECT_PATH.read_text())["tool"]["semantic_release"]
@@ -64,6 +76,9 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     # publication cannot race ahead of the exact merged source gate.
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     verify_steps = workflow["jobs"]["verify-source"]["steps"]
+    version_gate = _step(verify_steps, "Require a new datagen component version")
+    assert version_gate["if"] == "needs.plan.outputs.dittobench_datagen == 'true'"
+    assert "verify-version-bump.sh" in version_gate["run"]
     verification = _step(verify_steps, "Gate the release on exact merge source")
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
     assert workflow["jobs"]["release"]["needs"] == ["plan", "verify-source"]

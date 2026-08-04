@@ -86,6 +86,7 @@ paths = [
 
 [components.dittobench_api]
 description = "DittoBench scorer and hosted API"
+depends_on = ["dittobench_datagen"]
 paths = [
   "services/dittobench-api/Dockerfile*",
   "services/dittobench-api/calibration/**",
@@ -97,6 +98,12 @@ paths = [
   "services/dittobench-api/internal/**",
   "services/dittobench-api/scripts/**",
   "services/dittobench-api/skills-lock.json",
+]
+
+[components.dittobench_datagen]
+description = "Deterministic benchmark generator and judge-free grader"
+paths = [
+  "research/dittobench-datagen/**",
 ]
 
 [components.platform]
