@@ -34,7 +34,7 @@ RUN huggingface-cli download "$MODEL_ID" \
     --local-dir-use-symlinks False
 
 # --- stage 2: the TEI runtime with the model already on disk ---
-FROM ghcr.io/huggingface/text-embeddings-inference:cpu-1.8.2
+FROM ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3
 
 COPY --from=fetch /model /model
 
