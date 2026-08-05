@@ -6,8 +6,8 @@
 # pin — must be this one anchor. A hardcoded copy that could drift from the
 # build context is exactly what let a cached scorer image assert a revision it
 # was not built from (see docs/VALIDATOR.md, "Stale scorer image").
-x-dittobench-revision: &dittobench-revision d7f52703e896fc879089a345eba1a0568a18d076
-x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=d7f52703e896fc879089a345eba1a0568a18d076}
+x-dittobench-revision: &dittobench-revision 4f4759b1e80187174ff628b6c4ab8f2bbc479123
+x-dittobench-build-context: &dittobench-build-context ${DITTOBENCH_BUILD_CONTEXT:-https://github.com/ditto-assistant/dittobench-api.git?ref=refs/heads/main&checksum=4f4759b1e80187174ff628b6c4ab8f2bbc479123}
 x-dittobench-software-version: &dittobench-software-version ${DITTOBENCH_SOFTWARE_VERSION:-source-build}
 # Shared secret for the validator -> scorer inference control plane
 # (POST/DELETE /v1/inference/session*). The scorer joins sandbox-docker's
@@ -305,7 +305,7 @@ services:
       VALIDATOR_STACK_MODE: source
       VALIDATOR_STACK_COMPOSE_SCHEMA: "1"
       VALIDATOR_STACK_COMPONENT_DITTO_SUBNET: ${DITTO_SOURCE_IDENTITY:-version:source-build}
-      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:d7f52703e896fc879089a345eba1a0568a18d076
+      VALIDATOR_STACK_COMPONENT_DITTOBENCH_API: source:4f4759b1e80187174ff628b6c4ab8f2bbc479123
       VALIDATOR_STACK_COMPONENT_SANDBOX_DOCKER: ${DITTO_SOURCE_IDENTITY:-version:source-build}
       VALIDATOR_STACK_COMPONENT_PYLON: source:d36d1a28e761ff9d743bbcc83d091309c4d3599e
       VALIDATOR_START_DRAINED: ${VALIDATOR_START_DRAINED:-false}
