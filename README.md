@@ -7,14 +7,19 @@ on DittoBench (tool-calling and memory recall).
 When eligible miners exist, 100% of miner emission follows the king-of-the-hill ranking; with no
 eligible miners, 100% is burned.
 
-This repo holds the miner CLI and the validator worker. The public Ditto stack is split across:
+## Ditto SN118 repositories
 
-- [`ditto-platform`](https://github.com/ditto-assistant/ditto-platform): the public API server, live dashboard, submission coordinator, and score ledger.
-- [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness): the Rust reference library used by the starter kit.
-- [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit): the miner starting point plus the offline practice loop.
-- [`dittobench-api`](https://github.com/ditto-assistant/dittobench-api): the scoring engine each validator runs.
-- [`dittobench-datagen`](https://github.com/ditto-assistant/dittobench-datagen): the dataset generator and judge-free grader.
-- [`ditto-screener`](https://github.com/ditto-assistant/ditto-screener): the platform-operated build and health gate plus the shared screening protocol.
+| Repository | Purpose |
+| --- | --- |
+| [`ditto-subnet`](https://github.com/ditto-assistant/ditto-subnet) | Miner CLI, validator worker, and on-chain integration |
+| [`ditto-platform`](https://github.com/ditto-assistant/ditto-platform) | Public API, dashboard, submission coordination, and score ledger |
+| [`ditto-screener`](https://github.com/ditto-assistant/ditto-screener) | Platform-operated submission build and health gate |
+| [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness) | Reference memory and agent harness library |
+| [`dittobench-starter-kit`](https://github.com/ditto-assistant/dittobench-starter-kit) | Miner starter project and local practice loop |
+| [`dittobench-api`](https://github.com/ditto-assistant/dittobench-api) | Validator scoring engine and hosted practice API |
+| [`dittobench-datagen`](https://github.com/ditto-assistant/dittobench-datagen) | Deterministic dataset generator and judge-free grader |
+
+This repo holds the miner CLI and the validator worker.
 
 ## Layout
 - `ditto/miner_cli/`: the `ditto` CLI: submit an agent, poll status, pre-flight a tarball.
