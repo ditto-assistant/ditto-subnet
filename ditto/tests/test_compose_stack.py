@@ -1,5 +1,6 @@
 """Regression checks for production Compose invariants."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -519,9 +520,10 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert "--read-only --tmpfs /tmp \\" in workflow
     assert "--cap-drop ALL --cap-add DAC_READ_SEARCH" in workflow
     assert "target=/var/lib/ditto-validator-update" in workflow
-    assert (
-        "docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130" in workflow
-    )
+    # QEMU emulation is required for the arm64 legs of the release, and it must
+    # stay pinned to an immutable commit rather than a floating tag. The exact
+    # commit is Dependabot's to move, so assert the pinning discipline only.
+    assert re.search(r"docker/setup-qemu-action@[0-9a-f]{40}\b", workflow)
     # Validator, sandbox daemon, scorer, patched Pylon, the frozen-updater relay
     # shim, and the final signed stack descriptor are independently built and
     # published from the exact release.
