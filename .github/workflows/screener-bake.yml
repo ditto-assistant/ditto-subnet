@@ -21,7 +21,7 @@ jobs:
     env:
       GCP_PROJECT: ditto-app-dev
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -34,12 +34,12 @@ jobs:
           : "${WIF:?GCP_WIF_PROVIDER repo secret is not set}"
           : "${SA:?GCP_SCREENER_BAKE_SA repo secret is not set}"
 
-      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_SCREENER_BAKE_SA }}
 
-      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       # The action itself is commit-pinned; it installs the explicit Packer
       # version below. This is a version pin, not a locally verified binary hash.
