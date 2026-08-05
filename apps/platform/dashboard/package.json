@@ -17,7 +17,7 @@
     "check": "npm run typecheck && npm run lint && npm run format:check"
   },
   "dependencies": {
-    "@tanstack/solid-query": "5.100.11",
+    "@tanstack/solid-query": "5.101.4",
     "solid-js": "1.9.14"
   },
   "devDependencies": {
