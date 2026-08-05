@@ -85,6 +85,14 @@ jobs:
             --head "${{ github.sha }}" \
             --github-output "$GITHUB_OUTPUT"
 
+      # The plan checkout already has the release ancestry needed by this gate.
+      # Keep verify-source shallow instead of fetching the same history twice.
+      - name: Require a new datagen component version
+        if: steps.components.outputs.dittobench_datagen == 'true'
+        run: >-
+          research/dittobench-datagen/scripts/verify-version-bump.sh
+          "${{ steps.release-base.outputs.sha }}"
+
   release:
     needs: [plan, verify-source]
     if: >-
@@ -168,14 +176,9 @@ jobs:
       - name: Check out the exact merge commit before release
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
+          fetch-depth: 1
           ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Require a new datagen component version
-        if: needs.plan.outputs.dittobench_datagen == 'true'
-        run: >-
-          research/dittobench-datagen/scripts/verify-version-bump.sh
-          "${{ needs.plan.outputs.release_base }}"
 
       - name: Install uv
         uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3

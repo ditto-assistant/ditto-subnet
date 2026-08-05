@@ -41,6 +41,12 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert plan["outputs"]["release_base"] == "${{ steps.release-base.outputs.sha }}"
     release_base = _step(plan["steps"], "Resolve the last published release")
     assert "0000000000000000000000000000000000000000" in release_base["run"]
+    version_gate = _step(plan["steps"], "Require a new datagen component version")
+    assert version_gate["if"] == (
+        "steps.components.outputs.dittobench_datagen == 'true'"
+    )
+    assert "verify-version-bump.sh" in version_gate["run"]
+    assert "steps.release-base.outputs.sha" in version_gate["run"]
     assert jobs["release"]["needs"] == ["plan", "verify-source"]
     assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
     assert (
@@ -109,15 +115,16 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     # publication cannot race ahead of the exact merged source gate.
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     verify_steps = workflow["jobs"]["verify-source"]["steps"]
+    verify_checkout = _step(
+        verify_steps, "Check out the exact merge commit before release"
+    )
+    assert verify_checkout["with"]["fetch-depth"] == 1
     node_setup = next(
         step
         for step in verify_steps
         if str(step.get("uses", "")).startswith("actions/setup-node@")
     )
     assert node_setup["with"]["node-version"] == 24
-    version_gate = _step(verify_steps, "Require a new datagen component version")
-    assert version_gate["if"] == "needs.plan.outputs.dittobench_datagen == 'true'"
-    assert "verify-version-bump.sh" in version_gate["run"]
     verification = _step(verify_steps, "Gate the release on exact merge source")
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
     assert workflow["jobs"]["release"]["needs"] == ["plan", "verify-source"]
