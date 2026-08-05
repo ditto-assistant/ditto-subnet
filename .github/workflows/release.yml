@@ -313,6 +313,9 @@ jobs:
   deploy_platform:
     needs: [plan, release]
     if: needs.release.outputs.released == 'true' && needs.plan.outputs.platform == 'true'
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/platform-deploy.yml
     with:
       revision: ${{ needs.release.outputs.commit_sha }}
@@ -368,6 +371,9 @@ jobs:
       needs.plan.outputs.screener_orchestrator == 'true' &&
       vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true' &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/screener-controller-deploy.yml
     with:
       revision: ${{ needs.release.outputs.commit_sha }}

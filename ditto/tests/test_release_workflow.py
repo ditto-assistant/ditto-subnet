@@ -81,6 +81,7 @@ def test_release_auto_deploys_controller_and_builder_from_exact_release() -> Non
     assert deploy["uses"] == "./.github/workflows/screener-controller-deploy.yml"
     assert deploy["with"]["revision"] == "${{ needs.release.outputs.commit_sha }}"
     assert deploy["secrets"] == "inherit"
+    assert deploy["permissions"] == {"contents": "read", "id-token": "write"}
 
 
 def test_platform_and_backroom_deploy_from_one_release_plan() -> None:
@@ -90,6 +91,10 @@ def test_platform_and_backroom_deploy_from_one_release_plan() -> None:
     assert jobs["deploy_platform"]["with"]["revision"] == (
         "${{ needs.release.outputs.commit_sha }}"
     )
+    assert jobs["deploy_platform"]["permissions"] == {
+        "contents": "read",
+        "id-token": "write",
+    }
     assert jobs["deploy-backroom"]["needs"] == ["plan", "release"]
     assert "needs.plan.outputs.backroom == 'true'" in jobs["deploy-backroom"]["if"]
 
