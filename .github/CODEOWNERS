@@ -1,6 +1,2 @@
 # Default and component ownership survive the repository cutover.
-* @Peyton-Spencer @Tetramputechture
-/apps/platform/ @Peyton-Spencer @Tetramputechture
-/packages/ditto-screening-protocol/ @Peyton-Spencer @Tetramputechture
-/services/screener-orchestrator/ @Peyton-Spencer @Tetramputechture
-/workers/screener/ @Peyton-Spencer @Tetramputechture
+* @Peyton-Spencer
