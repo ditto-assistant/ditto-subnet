@@ -28,6 +28,9 @@ def test_fleet_boot_is_bound_to_a_protected_release_sha() -> None:
     workflow = yaml.safe_load(
         (ROOT / ".github" / "workflows" / "infra-plan-apply.yml").read_text()
     )
+    checkout = workflow["jobs"]["plan"]["steps"][0]
+    assert checkout["with"]["ref"] == "main"
+    assert checkout["with"]["fetch-depth"] == 0
     bind_step = next(
         step
         for step in workflow["jobs"]["plan"]["steps"]

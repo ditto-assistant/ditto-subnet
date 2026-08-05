@@ -24,8 +24,11 @@ different configurations safe.
 - `CLOUDFLARE_DITTOBENCH_ZONE_ID`
 
 The plan identity needs read access to Terraform state and managed resources,
-plus create/read access only under the private
-`gs://ditto-app-dev-tfstate/ci-plans/` prefix.
+create-only access under the private
+`gs://ditto-app-dev-tfstate/ci-plans/` prefix, and create/delete access only to
+the exact `gcp-platform/default.tflock` and
+`cloudflare-dittobench-ai/default.tflock` objects. It must not be able to write
+either state object.
 
 ## `infra-apply`
 
