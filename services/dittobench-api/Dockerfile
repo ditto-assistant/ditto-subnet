@@ -13,7 +13,7 @@ ARG DITTOBENCH_SOFTWARE_VERSION=unknown
 ARG DITTOBENCH_SOURCE_SHA=unknown
 
 # ---- build stage ----
-FROM golang:1.23-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src/services/dittobench-api
 
 # The AST structural fingerprint (internal/astfp) uses go-tree-sitter, which wraps
