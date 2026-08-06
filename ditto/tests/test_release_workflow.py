@@ -74,6 +74,10 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "gcloud artifacts docker tags add" in publish["run"]
     assert "reusing immutable datagen image" in publish["run"]
     assert "GCP_DATAGEN_RELEASE_SA" in str(datagen["steps"])
+    smoke_auth = _step(datagen["steps"], "Mint the authenticated datagen smoke token")
+    assert smoke_auth["id"] == "datagen-smoke-auth"
+    assert smoke_auth["with"]["token_format"] == "id_token"
+    assert smoke_auth["with"]["id_token_audience"] == "${{ env.DATAGEN_SERVICE_URL }}"
     deploy = _step(
         datagen["steps"], "Stage, verify, and deploy the immutable datagen image"
     )
@@ -81,7 +85,12 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "--no-traffic" in deploy["run"]
     assert '--tag="$candidate_tag"' in deploy["run"]
     assert "bench_version=8" in deploy["run"]
-    assert "gcloud auth print-identity-token" in deploy["run"]
+    assert deploy["env"]["DATAGEN_ID_TOKEN"] == (
+        "${{ steps.datagen-smoke-auth.outputs.id_token }}"
+    )
+    assert 'test "$service_url" = "$DATAGEN_SERVICE_URL"' in deploy["run"]
+    assert "gcloud auth print-identity-token" not in deploy["run"]
+    assert "Authorization: Bearer $DATAGEN_ID_TOKEN" in deploy["run"]
     assert "^x-bench-version: 8$" in deploy["run"]
     assert '--remove-tags="$candidate_tag"' in deploy["run"]
     assert "--to-latest" in deploy["run"]

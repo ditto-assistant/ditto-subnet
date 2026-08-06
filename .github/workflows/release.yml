@@ -20,6 +20,7 @@ env:
   DITTOBENCH_HOSTED_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/cloud-run-source-deploy/dittobench-api
   DATAGEN_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/datapipeline/generate
   DATAGEN_SERVICE: ditto-datapipeline
+  DATAGEN_SERVICE_URL: https://ditto-datapipeline-m4cg7rn54q-uc.a.run.app
   DATAGEN_PROJECT: ditto-app-dev
   DATAGEN_REGION: us-central1
   MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
@@ -866,8 +867,21 @@ jobs:
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
           echo "datagen image: $DATAGEN_REPOSITORY@$digest"
 
+      # External-account ADC cannot mint an audience-bound token through
+      # `gcloud auth print-identity-token --audiences`. Ask the auth action for
+      # a fresh Cloud Run token immediately before the candidate smoke test.
+      - name: Mint the authenticated datagen smoke token
+        id: datagen-smoke-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DATAGEN_RELEASE_SA }}
+          token_format: id_token
+          id_token_audience: ${{ env.DATAGEN_SERVICE_URL }}
+
       - name: Stage, verify, and deploy the immutable datagen image
         env:
+          DATAGEN_ID_TOKEN: ${{ steps.datagen-smoke-auth.outputs.id_token }}
           IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
         run: |
@@ -879,7 +893,7 @@ jobs:
           service_url="$(gcloud run services describe "$DATAGEN_SERVICE" \
             --project="$DATAGEN_PROJECT" --region="$DATAGEN_REGION" \
             --format='value(status.url)')"
-          [[ "$service_url" == https://* ]]
+          test "$service_url" = "$DATAGEN_SERVICE_URL"
 
           # A zero-traffic tagged revision gives release CI an authenticated URL
           # for the exact digest without exposing a broken generator to Platform.
@@ -904,11 +918,11 @@ jobs:
           test "$deployed_image" = "$image"
           [[ "$candidate_url" == https://* ]]
 
-          identity_token="$(gcloud auth print-identity-token --audiences="$service_url")"
+          test -n "$DATAGEN_ID_TOKEN"
           http_status="$(curl --silent --show-error \
             --retry 3 --retry-all-errors \
             --request POST \
-            --header "Authorization: Bearer $identity_token" \
+            --header "Authorization: Bearer $DATAGEN_ID_TOKEN" \
             --dump-header "$headers_file" \
             --output "$response_file" \
             --write-out '%{http_code}' \
