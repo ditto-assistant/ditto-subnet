@@ -372,3 +372,66 @@ def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> 
         "scripts/test-validator-stack-release-runtime.sh" in steps[smoke_index]["run"]
     )
     assert "build/stack-release/compose.yml" in steps[smoke_index]["run"]
+
+
+def test_release_scopes_each_docker_layer_cache_to_one_image() -> None:
+    """Concurrent release builds must not share one layer cache.
+
+    The image jobs fan out from the same ``needs``, and Blacksmith resolves
+    concurrent committers to a cache key Last-Write-Wins. On a shared key only
+    one of the parallel builds keeps its layers per release, so every build
+    needs a key scoped to the image it actually builds.
+    """
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+
+    keys: dict[str, str] = {}
+    for job_name, job in jobs.items():
+        for step in job.get("steps") or []:
+            if "useblacksmith/setup-docker-builder@" not in (step.get("uses") or ""):
+                continue
+            key = (step.get("with") or {}).get("cache-key")
+            # An unkeyed builder falls back to the repository-wide cache that
+            # every other image build also lands on.
+            assert key, f"{job_name} sets up a builder without a cache-key"
+            assert key.startswith("ditto-subnet/"), (
+                f"{job_name} cache-key is not repository-scoped: {key}"
+            )
+            assert "${{" not in key, f"{job_name} cache-key is not a static string"
+            keys[job_name] = key
+
+    assert keys == {
+        "build-validator": "ditto-subnet/Dockerfile",
+        "build-sandbox-docker": "ditto-subnet/Dockerfile.sandbox-docker",
+        "build-pylon": "ditto-subnet/Dockerfile.pylon",
+        "build-dittobench": "ditto-subnet/services/dittobench-api",
+        "assemble-stack": "ditto-subnet/Dockerfile.stack-release",
+        # Neither of these builds an image; they only need buildx for
+        # imagetools, so they stay off the caches the build jobs depend on.
+        "smoke-validator-arm64": "ditto-subnet/release-manifest-tools",
+        "promote-stack-release": "ditto-subnet/release-manifest-tools",
+    }
+
+    # No Dockerfile may be split across keys, and no key may collect Dockerfiles
+    # that share no layers. Both cost cache hits on every release.
+    for job_name, key in keys.items():
+        built = {
+            (step.get("with") or {}).get("file")
+            for step in jobs[job_name]["steps"]
+            if "build-push-action@" in (step.get("uses") or "")
+        }
+        if key == "ditto-subnet/release-manifest-tools":
+            assert not built, f"{job_name} builds an image on the no-build key"
+        elif len(built) == 1:
+            assert built == {key.removeprefix("ditto-subnet/")}
+        else:
+            # An image set behind one builder: the scorer and the frozen relay
+            # shim are built from one job and share a distroless runtime base.
+            assert job_name == "build-dittobench"
+            assert built == {
+                "services/dittobench-api/Dockerfile",
+                "${{ env.MODEL_RELAY_COMPAT_DIR }}/Dockerfile",
+            }
+            assert workflow["env"]["MODEL_RELAY_COMPAT_DIR"].startswith(
+                key.removeprefix("ditto-subnet/")
+            )
