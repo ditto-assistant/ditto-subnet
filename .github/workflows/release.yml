@@ -994,7 +994,7 @@ jobs:
             ["$VALIDATOR_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
             ["$SANDBOX_DOCKER_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
             ["$DITTOBENCH_API_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
-            ["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
+            ["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet/tree/$REVISION/services/dittobench-api/compat/model-relay"
           )
           declare -A revisions=(
             ["$VALIDATOR_REPOSITORY"]="$REVISION"

@@ -264,6 +264,12 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
         "Verify every first-party multi-platform index",
     )["run"]
     assert '["$MODEL_RELAY_REPOSITORY"]="$DITTOBENCH_REVISION"' in assembly
+    assert (
+        '["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/'
+        'ditto-subnet/tree/$REVISION/services/dittobench-api/compat/model-relay"'
+        in assembly
+    )
+    assert 'https://github.com/ditto-assistant/dittobench-api"' not in assembly
     assert "io.heyditto.validator.compat-source-revision" in assembly
 
 
