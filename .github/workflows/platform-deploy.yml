@@ -258,6 +258,28 @@ jobs:
         # `tee` pipe below would otherwise be masked by tee's exit 0 -- the same
         # class of "failure reported as success" this deploy path already had.
         #
+        # THE CHECKOUT PREFLIGHT (2026-08-06).
+        #
+        # This step used to open with a bare `cd /opt/ditto-subnet`. On a host
+        # the platform_app role has never converged, that directory does not
+        # exist, and the entire failure a human sees is:
+        #
+        #   bash: line 1: cd: /opt/ditto-subnet: No such file or directory
+        #
+        # which names neither the cause nor the fix. Worse, prod was still
+        # serving from the PRE-CUTOVER /opt/ditto-platform checkout of
+        # ditto-assistant/ditto-platform, so `apps/platform` changes merged here
+        # reached nothing while looking shipped -- a leaderboard fix sat merged
+        # on this monorepo's main and never went live. The guard below separates
+        # "never provisioned" from "deploy broke", detects the legacy checkout
+        # explicitly, and names the playbook that fixes it. Exit 78 (EX_CONFIG)
+        # rather than 1, so a configuration gap is not read as a deploy fault.
+        #
+        # It cannot bootstrap the checkout itself: the role also renders .env
+        # from Secret Manager, writes the Caddy vhost, and first-starts pm2. A
+        # bare clone here would leave a half-provisioned host that looks
+        # deployable, which is the same failure in a new costume.
+        #
         # THE RETRY IS NARROW ON PURPOSE (run 30179674679).
         #
         # Re-running this command is only safe while nothing on the host has
@@ -290,7 +312,7 @@ jobs:
               --zone "$GCP_ZONE" \
               --tunnel-through-iap \
               --quiet \
-              --command "sudo -iu deploy bash -lc 'cd /opt/ditto-subnet && git fetch --prune origin && git checkout --detach $DEPLOY_REVISION && git reset --hard $DEPLOY_REVISION && cd apps/platform && DITTO_DEPLOY_BRANCH=main DITTO_DEPLOY_COMMIT=$DEPLOY_REVISION DITTO_UPLOAD_PAYMENT_ADDRESS=${{ secrets.DITTO_UPLOAD_PAYMENT_ADDRESS }} DITTO_DASHBOARD_WANDB_URL=${{ vars.DITTO_DASHBOARD_WANDB_URL }} ./scripts/update.sh'" \
+              --command "sudo -iu deploy bash -lc 'if [ ! -d /opt/ditto-subnet/.git ]; then echo \"ERROR: /opt/ditto-subnet is not a monorepo checkout on this host, so this workflow cannot deploy it.\" >&2; if [ -d /opt/ditto-platform/.git ]; then echo \"This host still serves the platform from the PRE-CUTOVER /opt/ditto-platform checkout (ditto-assistant/ditto-platform). Merging to this monorepo does NOT reach production until the cutover completes.\" >&2; fi; echo \"Provision the monorepo checkout with the platform_app role: infra/ansible/playbooks/gcp-platform-app.yml (platform_checkout_root).\" >&2; exit 78; fi; cd /opt/ditto-subnet && git fetch --prune origin && git checkout --detach $DEPLOY_REVISION && git reset --hard $DEPLOY_REVISION && cd apps/platform && DITTO_DEPLOY_BRANCH=main DITTO_DEPLOY_COMMIT=$DEPLOY_REVISION DITTO_UPLOAD_PAYMENT_ADDRESS=${{ secrets.DITTO_UPLOAD_PAYMENT_ADDRESS }} DITTO_DASHBOARD_WANDB_URL=${{ vars.DITTO_DASHBOARD_WANDB_URL }} ./scripts/update.sh'" \
               2>&1 | tee /tmp/deploy.log || rc=$?
             if [ "$rc" -eq 0 ]; then
               break
