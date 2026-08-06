@@ -102,6 +102,10 @@ func TestV8CapabilityRequiresLiveExecutorReadiness(t *testing.T) {
 	s := &server{
 		softwareVersion: "0.10.0",
 		sourceRevision:  testSourceRevision,
+		// The validator-owned sandbox posture: this deployment accepts
+		// screener-built images, so it really can be handed an untrusted
+		// container and must prove its isolation before advertising v8.
+		allowScreenedImages: true,
 		sandbox: &diagnosticSandbox{
 			v8IsolationErr: errors.New("rootless policy is not enabled"),
 		},
@@ -113,6 +117,31 @@ func TestV8CapabilityRequiresLiveExecutorReadiness(t *testing.T) {
 	}
 	if foundV8 {
 		t.Fatal("v8 was advertised without a verified rootless executor")
+	}
+}
+
+// The hosted practice endpoint runs with no Docker daemon and rejects screened
+// images, so no miner container can ever start there and harness_url is its only
+// v8 path. Its capability document must therefore advertise v8 rather than
+// contradict the /v1/submit calls it accepts.
+func TestV8CapabilityIsAdvertisedByABuildlessPracticeDeployment(t *testing.T) {
+	s := &server{
+		softwareVersion: "0.10.0",
+		sourceRevision:  testSourceRevision,
+		sandbox: &diagnosticSandbox{
+			v8IsolationErr: errors.New("v8 executor isolation unavailable: docker daemon is unreachable"),
+		},
+	}
+	if s.executesUntrustedImages() {
+		t.Fatal("a deployment that refuses screened images cannot launch a miner container")
+	}
+	got := capabilitiesOf(t, s)
+	foundV8 := false
+	for _, version := range got.SupportedBenchVersions {
+		foundV8 = foundV8 || version == protocol.BenchVersionV8
+	}
+	if !foundV8 {
+		t.Fatal("hosted practice advertised no supported bench version while accepting v8 submissions")
 	}
 }
 

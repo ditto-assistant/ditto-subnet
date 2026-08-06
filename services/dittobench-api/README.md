@@ -441,7 +441,13 @@ caller-supplied harness URLs, so it guards against abuse:
   Imported archive and local runner tags are removed after each run so validator
   disks do not accumulate submission images.
 - Benchmark v7 and v8 require the screener-built, digest- and image-ID-bound
-  archive; the source-build fallback is retired.
+  archive; the source-build fallback is retired. That contract governs
+  validator-side builds, so it applies to `git_url` and `tarball_url` on every
+  deployment. A `harness_url` practice submission builds nothing — the miner
+  runs their own harness and this engine only drives and scores it — so it is
+  outside the contract and remains the supported v8 practice path. The canonical
+  validator path (`POST /v2/score`) still requires the screened image for every
+  source kind, `harness_url` included.
 - Miner containers run as an unprivileged UID with a read-only root filesystem,
   an ephemeral no-exec `/tmp`, all capabilities dropped, no-new-privileges,
   bounded CPU/memory/PIDs/file descriptors, and request-scoped cleanup.

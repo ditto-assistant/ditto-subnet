@@ -956,17 +956,26 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
+      # Both identity args are required. The runtime fails /v1/capabilities
+      # closed when either resolves empty, and the Dockerfile's `unknown`
+      # default normalizes to empty — so omitting the version arg publishes an
+      # image whose capability endpoint answers 503 "scorer release identity
+      # unavailable" for the life of the release, which is exactly how hosted
+      # practice went dark.
       - name: Publish the hosted runtime from the release commit
         id: hosted-image
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+          SOFTWARE_VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
+          [[ -n "$SOFTWARE_VERSION" && "$SOFTWARE_VERSION" != "unknown" ]]
           gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
           docker build \
             --file services/dittobench-api/Dockerfile \
             --target runtime \
             --build-arg "DITTOBENCH_SOURCE_SHA=$SOURCE_SHA" \
+            --build-arg "DITTOBENCH_SOFTWARE_VERSION=$SOFTWARE_VERSION" \
             --tag "$DITTOBENCH_HOSTED_REPOSITORY:sha-$SOURCE_SHA" \
             .
           docker push "$DITTOBENCH_HOSTED_REPOSITORY:sha-$SOURCE_SHA"
@@ -992,6 +1001,33 @@ jobs:
             --timeout 3600 \
             --set-env-vars GENERATOR_MODEL=google/gemini-3.1-flash-lite,SCORER_MODEL=google/gemini-3.1-flash-lite \
             --quiet
+
+      # A deploy that serves /health but answers 503 on /v1/capabilities is
+      # indistinguishable from a healthy one at the Cloud Run level, and every
+      # miner-facing practice client reads the capability document. Assert the
+      # live identity here so an unstamped image fails the release instead of
+      # sitting broken until a miner reports it.
+      - name: Verify the live practice endpoint reports its release identity
+        env:
+          SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+          SOFTWARE_VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          service_url="$(gcloud run services describe dittobench-api \
+            --project ditto-app-dev \
+            --region us-central1 \
+            --format='value(status.url)')"
+          [[ -n "$service_url" ]]
+          capabilities="$(curl --fail --silent --show-error --retry 5 \
+            --retry-all-errors --retry-delay 10 --max-time 30 \
+            "$service_url/v1/capabilities")"
+          echo "$capabilities" | jq -e \
+            --arg sha "$SOURCE_SHA" --arg version "$SOFTWARE_VERSION" '
+              .source_revision == $sha and
+              .software_version == $version and
+              (.source_revision_mismatch | not) and
+              (.supported_bench_versions | index(8) != null)
+            ' >/dev/null
 
   # ---------------------------------------------------------------------------
   # Fan-in: every component image exists and the source re-verified. Authenticate

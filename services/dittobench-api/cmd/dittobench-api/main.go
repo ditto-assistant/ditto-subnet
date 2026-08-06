@@ -361,14 +361,38 @@ type v8IsolationReporter interface {
 	V8IsolationReady(context.Context) error
 }
 
+// executesUntrustedImages reports whether this deployment can be asked to launch
+// a miner container at all. Only two paths start one: a screener-built image,
+// accepted solely under the narrow DITTOBENCH_ALLOW_SCREENED_IMAGES opt-in that
+// marks a validator-owned sandbox, and a validator-side source build, which the
+// v8 contract retires. A deployment with neither — the hosted practice endpoint
+// — serves v8 only over harness_url, driving and scoring a harness the miner
+// already runs themselves, so it has no isolation boundary to make ready.
+//
+// The source-build half is derived from validateBenchmarkImageContract rather
+// than restated, so a future version that re-enables source builds re-arms the
+// isolation gate here instead of silently leaving it exempt.
+func (s *server) executesUntrustedImages() bool {
+	if s.allowScreenedImages {
+		return true
+	}
+	sourceBuild := submitRequest{BenchVersion: protocol.BenchVersionV8, TarballURL: "https://example.invalid/source.tgz"}
+	return validateBenchmarkImageContract(sourceBuild) == ""
+}
+
 // runtimeSupportedBenchVersions intersects the immutable scorer contract with
 // the live untrusted-execution boundary. A code-only `version` report can still
 // prove that the image contains V8, while the validator-facing capability omits
 // V8 until the configured executor is reachable and satisfies its selected
 // isolation policy.
+//
+// The intersection applies only where that boundary exists. Gating every
+// deployment on a reachable Docker daemon made the hosted practice endpoint
+// advertise an empty version set while /v1/submit accepted v8 — the capability
+// document contradicting the endpoint it describes.
 func (s *server) runtimeSupportedBenchVersions(ctx context.Context) []int {
 	versions := supportedBenchVersions()
-	if s.sandbox == nil {
+	if s.sandbox == nil || !s.executesUntrustedImages() {
 		return versions
 	}
 	reporter, ok := s.sandbox.(v8IsolationReporter)
@@ -803,10 +827,15 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// The screened-image contract bans validator-side SOURCE BUILDS (git_url /
 	// tarball_url). A direct harness_url run never builds anything — the miner runs
 	// their own already-built harness and the API only drives + scores it — so the
-	// contract is inapplicable there. In local/dev mode (allowPrivate) exempt the
-	// direct path so a reachable harness can be scored on v5 without a screener
-	// round-trip; build modes stay gated.
-	if req.HarnessURL == "" || !s.allowPrivate {
+	// contract is inapplicable there. The exemption is keyed on the SOURCE KIND,
+	// not on the deployment: gating it on allowPrivate instead took hosted
+	// practice offline once v8 became the only supported version, because
+	// harness_url is the only submission path the public practice endpoint has
+	// (it runs without a Docker daemon and rejects screened images), so every
+	// practice submission answered 403. Build modes stay gated everywhere, and
+	// the canonical validator path (handleScoreRequest) enforces the contract
+	// unconditionally — including for harness_url.
+	if req.HarnessURL == "" {
 		if msg := validateBenchmarkImageContract(req); msg != "" {
 			writeError(w, http.StatusForbidden, msg)
 			return
