@@ -180,6 +180,19 @@ resource "google_secret_manager_secret" "validator_pylon_open_access_token" {
   }
 }
 
+# Both Pylon token containers predate the public monorepo state handoff. Adopt
+# their metadata without reading or replacing either secret value. These imports
+# are idempotent once the resources are recorded in the GCS state.
+import {
+  to = google_secret_manager_secret.validator_pylon_identity_token[0]
+  id = "projects/${var.project}/secrets/validator-pylon-identity-token"
+}
+
+import {
+  to = google_secret_manager_secret.validator_pylon_open_access_token[0]
+  id = "projects/${var.project}/secrets/validator-pylon-open-access-token"
+}
+
 # This secret + its runtime-SA accessor binding were first created out-of-band
 # (gcloud) when telemetry was turned on; adopt them into state on the next apply
 # so config is the source of truth. Harmless once imported.
