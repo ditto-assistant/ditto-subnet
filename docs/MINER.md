@@ -60,7 +60,7 @@ submission or charge a fee. Do not package `.env` or any API or wallet secret.
 
 To submit, you need:
 
-- Python 3.11+ and [`uv`](https://docs.astral.sh/uv/)
+- Python 3.12+ and [`uv`](https://docs.astral.sh/uv/)
 - a funded Bittensor coldkey
 - a hotkey registered on Finney netuid 118
 - enough TAO for the platform-controlled evaluation fee (currently 0.04 TAO,

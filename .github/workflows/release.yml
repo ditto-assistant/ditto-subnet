@@ -185,13 +185,7 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Set up Python 3.11
-        run: uv python install 3.11
-
-      - name: Set up Python 3.12 for Platform and screener verification
-        if: >-
-          needs.plan.outputs.platform == 'true' ||
-          needs.plan.outputs.screener == 'true'
+      - name: Set up Python 3.12
         run: uv python install 3.12
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
@@ -961,8 +955,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Set up Python 3.11
-        run: uv python install 3.11
+      - name: Set up Python 3.12
+        run: uv python install 3.12
 
       # The render script (build-stack-release.py) imports PyYAML, so the project
       # env must be synced here — the full source re-verification that used to

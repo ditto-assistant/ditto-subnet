@@ -8,7 +8,7 @@ version = "0.44.4"
 description = "Ditto Bittensor Subnet 118 (SN118): miner CLI + validator for the language-neutral agent-memory-harness incentive layer."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.14"
 authors = [{ name = "heyDitto" }]
 dependencies = [
     # 10.3.0 carries a breaking change the subnet requires — older releases no
@@ -55,7 +55,7 @@ packages = ["ditto"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 extend-exclude = [
     "apps/platform",
     "miners/dittobench-starter-kit",
@@ -78,7 +78,7 @@ known-first-party = ["ditto", "ditto_screening_protocol"]
 # ─── Mypy ────────────────────────────────────────────────────────────────────
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 disallow_untyped_defs = false
 check_untyped_defs = true
 ignore_missing_imports = true

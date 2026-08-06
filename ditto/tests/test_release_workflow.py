@@ -8,6 +8,7 @@ from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
 PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
+ROOT_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
 
 
 def _step(steps: list[dict], name: str) -> dict:
@@ -166,6 +167,29 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     }
     for name, condition in component_gates.items():
         assert _step(verify_steps, name)["if"] == condition
+
+
+def test_release_uses_the_root_projects_minimum_python() -> None:
+    project = tomllib.loads(PYPROJECT_PATH.read_text())["project"]
+    assert project["requires-python"] == ">=3.12,<3.14"
+
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    verify_setup = _step(
+        workflow["jobs"]["verify-source"]["steps"], "Set up Python 3.12"
+    )
+    assemble_setup = _step(
+        workflow["jobs"]["assemble-stack"]["steps"], "Set up Python 3.12"
+    )
+    assert verify_setup["run"] == "uv python install 3.12"
+    assert assemble_setup["run"] == "uv python install 3.12"
+
+    dockerfile = ROOT_DOCKERFILE_PATH.read_text().splitlines()
+    assert dockerfile[0].startswith("FROM python:3.12-slim@sha256:")
+    protocol_copy = dockerfile.index(
+        "COPY packages/ditto-screening-protocol ./packages/ditto-screening-protocol"
+    )
+    frozen_sync = dockerfile.index("RUN uv sync --frozen --no-dev --extra telemetry")
+    assert protocol_copy < frozen_sync
 
 
 def test_screener_runner_fallback_requires_platform_authorization() -> None:

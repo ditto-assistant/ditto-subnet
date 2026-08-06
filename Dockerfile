@@ -1,4 +1,4 @@
-FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3
+FROM python:3.12-slim@sha256:646fb0bca3dd3ea1bcc6feb72c17ed16eed6e10cffc732fcc1478bd3e7f02d7b
 
 ARG DITTO_VERSION=0.0.0
 ARG DITTO_REVISION=local
@@ -25,6 +25,7 @@ COPY --from=ghcr.io/astral-sh/uv@sha256:0f36cb9361a3346885ca3677e3767016687b5a17
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY ditto ./ditto
+COPY packages/ditto-screening-protocol ./packages/ditto-screening-protocol
 RUN uv sync --frozen --no-dev --extra telemetry
 
 CMD ["uv", "run", "--no-sync", "python", "-m", "ditto.validator"]
