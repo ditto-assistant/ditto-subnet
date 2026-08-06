@@ -290,7 +290,17 @@ def _official_scores(entries: Iterable[KothEntry]) -> dict[UUID, float]:
 
 
 def project_koth(entries: Sequence[KothEntry]) -> KothProjection | None:
-    """Return the champion and participation tail for an eligible score pool."""
+    """Return the champion and participation tail for an eligible score pool.
+
+    The fold makes the earliest ``first_seen`` the provisional champion and asks
+    every later entry to clear the indifference band, so ``first_seen`` is what
+    decides a tie. It is the **lineage's** first arrival at the score being
+    defended, not the winning submission's upload time — the platform resolves
+    that across the owner family before serving the ledger
+    (``LedgerRow.crown_first_seen``). Feeding raw upload times in here instead
+    reinstates the defect that motivated the distinction: a tied miner that
+    resubmits re-anchors itself behind its rival and hands over the crown.
+    """
     scored = [entry for entry in entries if entry.composite > 0.0]
     if not scored:
         return None

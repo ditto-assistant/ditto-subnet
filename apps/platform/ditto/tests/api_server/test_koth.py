@@ -148,6 +148,43 @@ def test_older_incumbent_survives_a_sub_margin_raw_leader() -> None:
     assert projection.raw_leader_decision.dethrones is False
 
 
+def test_a_tied_incumbent_does_not_lose_the_crown_by_resubmitting() -> None:
+    """The 2026-08-06 report, as arithmetic.
+
+    Two miners sat on identical composites at the top of the board. The one that
+    got there first had uploaded at 15:52; its rival uploaded at 16:00, seven
+    minutes later, and could not clear the indifference band, so the crown was
+    the first miner's. It then shipped two more generations. Each one replaced it
+    in the ledger and carried a later upload time, which handed its rival the
+    incumbency the fold hands to whoever is earliest — and the improved agent,
+    tied, could no longer take it back.
+
+    ``first_seen`` reaching this fold is the *lineage's* arrival, so the extra
+    generations change nothing. The rival still has to earn the crown.
+    """
+    king_at_1552 = _entry(1, 0.997012, minutes=0)
+    rival_at_1600 = _entry(2, 0.997012, minutes=8)
+
+    opening = project_koth([king_at_1552, rival_at_1600])
+    assert opening is not None
+    assert opening.champion == king_at_1552
+
+    # Two resubmissions later. The agent is new, the anchor is not.
+    resubmitted = _entry(3, 0.997012, minutes=0)
+    held = project_koth([resubmitted, rival_at_1600])
+    assert held is not None
+    assert held.champion == resubmitted
+    assert held.raw_leader_decision is None
+
+    # And the anchor is the only thing holding it: on the submission's own
+    # upload time (21:20, ~329 minutes later) the crown crosses the board to a
+    # miner that never beat anything.
+    anchored_on_the_upload = _entry(3, 0.997012, minutes=329)
+    flipped = project_koth([anchored_on_the_upload, rival_at_1600])
+    assert flipped is not None
+    assert flipped.champion == rival_at_1600
+
+
 def test_statistical_band_matches_validator_unpaired_rule() -> None:
     incumbent = _entry(2, 0.80, minutes=0, stderr=0.03)
     raw_leader = _entry(1, 0.85, minutes=1, stderr=0.03)

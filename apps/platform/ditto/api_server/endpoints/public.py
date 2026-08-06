@@ -1960,7 +1960,7 @@ def _public_koth_emissions(
                 miner_hotkey=row.miner_hotkey,
                 agent_id=row.agent_id,
                 composite=row.composite,
-                first_seen=row.first_seen,
+                first_seen=row.fold_first_seen,
                 raw_rank=raw_rank,
                 bench_version=row.bench_version,
                 composite_stderr=stderrs.get(row.agent_id),

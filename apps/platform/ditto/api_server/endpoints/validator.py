@@ -3151,7 +3151,7 @@ async def _current_koth_entries(
             miner_hotkey=row.miner_hotkey,
             agent_id=row.agent_id,
             composite=row.composite,
-            first_seen=row.first_seen,
+            first_seen=row.fold_first_seen,
             raw_rank=rank,
             bench_version=row.bench_version,
             composite_stderr=_ledger_stderr(
@@ -3207,7 +3207,7 @@ async def _current_koth_entries(
                 miner_hotkey=row.miner_hotkey,
                 agent_id=row.agent_id,
                 composite=row.composite,
-                first_seen=row.first_seen,
+                first_seen=row.fold_first_seen,
                 raw_rank=rank,
                 bench_version=row.bench_version,
                 composite_stderr=_ledger_stderr(details, quorum.get(row.agent_id, [])),

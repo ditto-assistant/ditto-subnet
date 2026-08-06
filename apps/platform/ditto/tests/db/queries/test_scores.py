@@ -768,6 +768,264 @@ class TestListEligibleLedger:
         assert ledger[0].eligible is True
 
 
+# Band arithmetic for the era these tests run in (_BENCH_VERSION >= 6, so the
+# high-score decay applies): at a 0.90 winner the fold's flat indifference band
+# is 0.007 * exp(-2 * (0.90 - 0.60)) ~= 0.00384 composite points. The two
+# ancestor scores below sit either side of that by a wide margin, so nothing here
+# turns on the third decimal place of the decay.
+_WINNER_COMPOSITE = 0.90
+_WITHIN_BAND = 0.898
+_OUTSIDE_BAND = 0.88
+
+
+class TestCrownFirstSeen:
+    """The KOTH fold anchors on the lineage's arrival, not the winning upload.
+
+    The fold makes the earliest ``first_seen`` the provisional champion and asks
+    everyone later to clear an indifference band, so this timestamp decides who
+    holds a tie. Reading it off the winning submission meant a miner tied at the
+    top handed the crown to its rival by resubmitting: the owner's representative
+    row moved to the new agent, the anchor moved forward with it, and the rival's
+    older row became the incumbent that the improved agent could no longer beat.
+    """
+
+    async def test_lineage_keeps_its_anchor_across_a_resubmission(
+        self, session: AsyncSession
+    ) -> None:
+        """The defect, stated directly: improving must not forfeit seniority."""
+        first = datetime(2026, 6, 8, 15, 52, tzinfo=UTC)
+        later = datetime(2026, 6, 8, 21, 20, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WITHIN_BAND,
+            created_at=first,
+            n=MIN_ELIGIBLE_CASES,
+            name="v47",
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=later,
+            n=MIN_ELIGIBLE_CASES,
+            name="v49",
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.crown_first_seen == first
+        assert row.fold_first_seen == first
+        # The two questions stay separate: this tarball really did arrive later,
+        # and the anti-copy comparison and public board still say so.
+        assert row.first_seen == later
+
+    async def test_a_distinctly_worse_ancestor_confers_no_seniority(
+        self, session: AsyncSession
+    ) -> None:
+        """Seniority is earned at a score, not by having shown up early."""
+        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_OUTSIDE_BAND,
+            created_at=first,
+            n=MIN_ELIGIBLE_CASES,
+            name="early-but-weak",
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=later,
+            n=MIN_ELIGIBLE_CASES,
+            name="winner",
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.crown_first_seen == later
+
+    async def test_a_banned_ancestor_confers_no_seniority(
+        self, session: AsyncSession
+    ) -> None:
+        """A generation removed from the pool cannot backdate its replacement."""
+        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WITHIN_BAND,
+            created_at=first,
+            n=MIN_ELIGIBLE_CASES,
+            status=AgentStatus.BANNED,
+            name="banned-ancestor",
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=later,
+            n=MIN_ELIGIBLE_CASES,
+            name="winner",
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.crown_first_seen == later
+
+    async def test_an_unranked_ancestor_confers_no_seniority(
+        self, session: AsyncSession
+    ) -> None:
+        """A smoke/practice run is trivially aced; its date must not count."""
+        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=first,
+            n=MIN_ELIGIBLE_CASES // 2,
+            name="smoke-run",
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=later,
+            n=MIN_ELIGIBLE_CASES,
+            name="winner",
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.eligible is True
+        assert row.crown_first_seen == later
+
+    async def test_an_ancestor_on_another_benchmark_version_confers_no_seniority(
+        self, session: AsyncSession
+    ) -> None:
+        """Two eras are two scales, and a lineage cannot cross between them.
+
+        Mid-rollout the pool really can hold both: an agent with a source-era
+        quorum stays authoritative there while one that has only ever been scored
+        on the target era resolves to the target era. A 0.898 that meant
+        "runner-up" under the old benchmark must not backdate a 0.90 earned under
+        gates the old benchmark never applied.
+        """
+        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _open_rollout(session)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WITHIN_BAND,
+            created_at=first,
+            n=MIN_ELIGIBLE_CASES,
+            name="source-era-ancestor",
+        )
+        winner = Agent(
+            agent_id=uuid4(),
+            miner_hotkey=_MINER,
+            name="target-era-winner",
+            sha256="ab" * 32,
+            size_bytes=524288,
+            status=AgentStatus.SCORED,
+            created_at=later,
+        )
+        async with session.begin():
+            session.add(winner)
+            await session.flush()
+            await upsert_score(
+                session,
+                agent_id=winner.agent_id,
+                validator_hotkey=_VALIDATOR,
+                bench_version=_ROLLOUT_DESIRED,
+                run_id="run_1",
+                seed=42,
+                composite=_WINNER_COMPOSITE,
+                tool_mean=_WINNER_COMPOSITE,
+                memory_mean=_WINNER_COMPOSITE,
+                median_ms=500,
+                n=MIN_ELIGIBLE_CASES,
+                generated_at=_GEN_AT,
+            )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.agent_id == winner.agent_id
+        assert row.bench_version == _ROLLOUT_DESIRED
+        assert row.crown_first_seen == later
+
+    async def test_a_lone_submission_anchors_on_itself(
+        self, session: AsyncSession
+    ) -> None:
+        """No family, no backdating: the anchor can only ever move earlier."""
+        created = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=created,
+            n=MIN_ELIGIBLE_CASES,
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.crown_first_seen == created
+        assert row.first_seen == created
+
+    async def test_another_owners_earlier_submission_confers_nothing(
+        self, session: AsyncSession
+    ) -> None:
+        """The anchor is per lineage. A rival's history is not yours to inherit."""
+        rival_time = datetime(2026, 6, 8, 8, 0, tzinfo=UTC)
+        own_time = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER_B,
+            composite=_WINNER_COMPOSITE,
+            created_at=rival_time,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=own_time,
+            n=MIN_ELIGIBLE_CASES,
+        )
+
+        by_hotkey = {
+            row.miner_hotkey: row for row in await list_eligible_ledger(session)
+        }
+
+        assert by_hotkey[_MINER].crown_first_seen == own_time
+        assert by_hotkey[_MINER_B].crown_first_seen == rival_time
+
+    async def test_provisional_rows_fall_back_to_their_own_upload_time(
+        self, session: AsyncSession
+    ) -> None:
+        """``crown_first_seen`` is an owner-family fact; rows built without one
+        must behave exactly as they did before the anchor existed."""
+        created = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
+        agent = await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=created,
+            n=MIN_ELIGIBLE_CASES,
+            status=AgentStatus.EVALUATING,
+        )
+
+        ((row, _rank),) = await list_provisional_ledger(session)
+
+        assert row.agent_id == agent.agent_id
+        assert row.crown_first_seen is None
+        assert row.fold_first_seen == created
+
+
 class TestListProvisionalLedger:
     async def test_returns_one_row_per_coldkey_not_per_hotkey(
         self, session: AsyncSession

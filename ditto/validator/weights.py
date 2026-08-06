@@ -686,7 +686,15 @@ def _champion(
 ) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
     order, dethroning only when a later entry clears the indifference band
-    (:func:`_beats`)."""
+    (:func:`_beats`).
+
+    ``first_seen`` is the platform's lineage anchor — when this miner first
+    reached the score the entry defends — not the winning submission's upload
+    time. The distinction is invisible here and deliberately so: the validator
+    folds the ledger exactly as served, and resolving an owner's family is the
+    platform's job. It matters only in that a tied miner keeps its crown across
+    a resubmission, which is the whole reason the anchor is served that way.
+    """
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
     champ = ordered[0]
     for e in ordered[1:]:

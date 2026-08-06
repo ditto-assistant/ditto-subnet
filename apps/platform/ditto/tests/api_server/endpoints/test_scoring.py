@@ -146,6 +146,8 @@ async def _seed_scored(
     miner: str,
     composite: float,
     status: AgentStatus = AgentStatus.SCORED,
+    created_at: datetime | None = None,
+    n: int = 20,
 ) -> None:
     async with maker() as s, s.begin():
         agent = Agent(
@@ -155,7 +157,7 @@ async def _seed_scored(
             sha256="ab" * 32,
             size_bytes=524288,
             status=status,
-            created_at=datetime.now(UTC),
+            created_at=created_at or datetime.now(UTC),
         )
         s.add(agent)
         await s.flush()
@@ -170,7 +172,7 @@ async def _seed_scored(
             tool_mean=composite,
             memory_mean=composite,
             median_ms=500,
-            n=20,
+            n=n,
             generated_at=datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC),
             signature="ab" * 64,
             details={
@@ -181,6 +183,48 @@ async def _seed_scored(
 
 
 class TestScoringLedger:
+    async def test_first_seen_on_the_wire_is_the_lineage_anchor(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The one field the champion fold anchors on must be the lineage's.
+
+        Every validator folds this payload byte for byte, so this is where the
+        rule actually takes effect: a miner that resubmits while tied at the top
+        keeps the arrival time it earned, and does not hand its rival the
+        incumbency by shipping an improvement. The owner-family resolution behind
+        it is covered in ``tests/db/queries/test_scores.py``.
+        """
+        from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
+
+        arrived = datetime(2026, 6, 8, 15, 52, tzinfo=UTC)
+        resubmitted = datetime(2026, 6, 8, 21, 20, tzinfo=UTC)
+        await _seed_scored(
+            session_maker,
+            miner=_MINER,
+            composite=0.898,
+            created_at=arrived,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        await _seed_scored(
+            session_maker,
+            miner=_MINER,
+            composite=0.900,
+            created_at=resubmitted,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+
+        assert resp.status_code == 200
+        (entry,) = resp.json()["entries"]
+        assert entry["composite"] == pytest.approx(0.900)
+        assert datetime.fromisoformat(entry["first_seen"]) == arrived
+
     async def test_returns_best_per_miner_highest_first(
         self,
         app: FastAPI,

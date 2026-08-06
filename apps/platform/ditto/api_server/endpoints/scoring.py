@@ -362,7 +362,10 @@ async def scores(
             agent_id=r.agent_id,
             composite=r.composite,
             n=r.n,
-            first_seen=r.first_seen,
+            # The fold anchor, not this tarball's upload time: the wire field is
+            # read by exactly one thing, the validator's champion fold, and that
+            # fold must anchor on the lineage. See LedgerRow.crown_first_seen.
+            first_seen=r.fold_first_seen,
             sha256=r.sha256,
             size_bytes=r.size_bytes,
             run_id=r.run_id,

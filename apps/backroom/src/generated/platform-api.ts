@@ -7890,11 +7890,11 @@ export interface components {
          *
          *     The public score pool (PROJECT.md D3) the validator folds into KOTH+ATH
          *     weights. One entry per active miner = that miner's highest-scoring eligible
-         *     agent (status ``scored``). ``first_seen`` (the agent's upload time) is the
-         *     tie-break that lets the original beat a later copy of the same score;
-         *     ``composite`` is the raw reported double (never rounded, so every validator
-         *     folds identical bytes). ``signature`` is the reporting validator's sr25519
-         *     signature so the ledger is self-verifying.
+         *     agent (status ``scored``). ``first_seen`` is the tie-break that lets the
+         *     original beat a later copy of the same score; ``composite`` is the raw
+         *     reported double (never rounded, so every validator folds identical bytes).
+         *     ``signature`` is the reporting validator's sr25519 signature so the ledger is
+         *     self-verifying.
          */
         LedgerEntry: {
             /**
@@ -7951,7 +7951,7 @@ export interface components {
             /**
              * First Seen
              * Format: date-time
-             * @description Agent upload time (UTC); the KOTH first-seen tie-break.
+             * @description The KOTH first-seen tie-break (UTC): when this miner's lineage first reached the score this entry defends, which is the entry's own upload time unless an earlier generation of the same owner already held a band-equivalent score. Anchoring on the entry alone made a miner forfeit its crown by resubmitting.
              */
             first_seen: string;
             /**

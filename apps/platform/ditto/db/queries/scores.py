@@ -87,6 +87,43 @@ def _is_ranked() -> ColumnElement[bool]:
     return and_(Score.n >= MIN_ELIGIBLE_CASES, Score.composite > 0.0)
 
 
+def _crown_band(
+    top_score: ColumnElement[Any], bench_version: ColumnElement[Any]
+) -> ColumnElement[Any]:
+    """How close an ancestor must be to count as the same score, in SQL.
+
+    This is the *flat* half of the validator's indifference band — the fixed
+    ``KOTH_MARGIN``, scaled by the same versioned high-score decay
+    (:func:`ditto.api_server.koth._dethrone_band_scale`) — and deliberately not
+    the statistical half. The dethrone requirement is
+    ``max(margin, z * sqrt(se² + se²))``, so the flat term is its floor: taking
+    only the floor admits *fewer* ancestors than the fold would call
+    indistinguishable, never more. Seniority is the thing being granted here, so
+    the conservative direction is the correct one — and it keeps the anchor off
+    the per-row standard errors, which move under every retest and would make a
+    lineage's provenance wobble with measurement noise rather than with what it
+    actually achieved.
+    """
+    from ditto.api_server.koth import (
+        KOTH_BAND_DECAY_MIN_BENCH_VERSION,
+        KOTH_BAND_DECAY_RATE,
+        KOTH_BAND_DECAY_START_COMPOSITE,
+        KOTH_MARGIN,
+    )
+
+    bounded = func.least(func.greatest(top_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
+    return case(
+        (
+            bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION,
+            KOTH_MARGIN
+            * func.exp(
+                -KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE)
+            ),
+        ),
+        else_=KOTH_MARGIN,
+    )
+
+
 @dataclass(frozen=True)
 class LedgerFamilyMember:
     """Minimal identity and score needed to render one grouped board child."""
@@ -103,8 +140,11 @@ class LedgerRow:
 
     The immutable value object :func:`list_eligible_ledger` returns and the
     ``GET /scoring/scores`` endpoint maps onto the ``LedgerEntry`` wire model.
-    ``first_seen`` is the agent's upload time — the KOTH tie-break that lets the
-    original beat a later copy of the same score.
+    ``first_seen`` is *this agent's* upload time: the anti-copy comparison, the
+    scoring gate and the public board all need the literal fact of when this
+    tarball arrived. :attr:`crown_first_seen` is the lineage-level answer to the
+    same question and is what the KOTH fold orders on — see
+    :attr:`fold_first_seen`.
     """
 
     miner_hotkey: str
@@ -189,6 +229,45 @@ class LedgerRow:
     """Small ranking scalar projected from score details after winner selection."""
     family_members: tuple[LedgerFamilyMember, ...] = ()
     """Compact owner-family rows, populated only for leaderboard list reads."""
+    crown_first_seen: datetime | None = None
+    """When this owner's lineage *first arrived* at the score it now defends.
+
+    The KOTH fold makes the earliest entry the provisional champion and requires
+    every later one to clear an indifference band (:func:`ditto.api_server.koth
+    ._dethrone_decision`), so whatever it orders on decides who holds a tie. Left
+    on :attr:`first_seen` that anchor is the *winning submission's* upload time,
+    which a miner forfeits every time its representative row changes — and the
+    representative changes on any resubmission the continual mean prefers, not
+    only on an improvement. The consequence was backwards: two agents tied at the
+    top, and the one that kept iterating handed the crown to the one that stood
+    still.
+
+    So the anchor is the lineage's, not the submission's: the earliest
+    :attr:`first_seen` among this owner's ``scored`` agents that are at the
+    winner's ``bench_version`` and within the flat dethrone band of the winner's
+    official score. Only band-equivalent ancestors count, so an early low-scoring
+    submission confers nothing; the version match keeps the comparison on one
+    scale; ``scored`` excludes banned and rejected generations. The winner always
+    satisfies its own filter, so this can only ever move the anchor *earlier* —
+    never later than :attr:`first_seen`.
+
+    ``None`` on rows built outside the owner-family query (provisional
+    ``evaluating`` rows, moderation fixtures); :attr:`fold_first_seen` falls back
+    to :attr:`first_seen` there, which is exactly the pre-anchor behaviour.
+    """
+
+    @property
+    def fold_first_seen(self) -> datetime:
+        """The anchor the KOTH champion fold orders on.
+
+        Every consumer that reproduces or serves the fold reads this; every
+        consumer that means "when did this tarball arrive" — anti-copy priority,
+        the scoring gate, the public board's displayed timestamp, the canonical
+        rank comparator — keeps reading :attr:`first_seen`. Splitting them is the
+        point: those two questions had one answer, and the fold was getting the
+        wrong one.
+        """
+        return self.crown_first_seen or self.first_seen
 
 
 @dataclass(frozen=True)
@@ -1101,6 +1180,11 @@ async def list_eligible_ledger(
     3. after the canonical rows are materialized, rank them by the requested
        owner score and keep each attested payment owner root's first agent.
        This also dedupes one owner across linked hotkeys and names.
+    4. before the losing generations are discarded, read the lineage's earliest
+       band-equivalent arrival off them into the surviving row's
+       :attr:`LedgerRow.crown_first_seen`. The owner family is the only place
+       that fact exists, and step 3 is about to throw it away — see the
+       attribute for why the KOTH fold needs it.
 
     Two senses of "eligible" apply. *Pool* eligibility = ``status == scored``
     (excludes ``ath_pending_review`` holds and ``banned`` agents). *Ranking*
@@ -1512,22 +1596,50 @@ async def list_eligible_ledger(
         )
         .cte("rooted_candidates")
     )
+    owner_order = score_order_terms(
+        eligible=rooted.c.eligible,
+        composite=rooted.c.official_score,
+        first_seen=rooted.c.first_seen,
+        agent_id=rooted.c.agent_id,
+    )
+    # Rank the owner's family once and read the winner's score and benchmark
+    # version back onto every sibling row, so the next level can measure each
+    # generation against the one that actually represents the owner. Windows do
+    # not nest, which is the only reason this is two CTEs instead of one.
     owner_ranked = select(
         rooted,
         func.row_number()
-        .over(
-            partition_by=rooted.c.owner_root,
-            order_by=score_order_terms(
-                eligible=rooted.c.eligible,
-                composite=rooted.c.official_score,
-                first_seen=rooted.c.first_seen,
-                agent_id=rooted.c.agent_id,
-            ),
-        )
+        .over(partition_by=rooted.c.owner_root, order_by=owner_order)
         .label("owner_rank"),
+        func.first_value(rooted.c.official_score)
+        .over(partition_by=rooted.c.owner_root, order_by=owner_order)
+        .label("owner_top_score"),
+        func.first_value(rooted.c.bench_version)
+        .over(partition_by=rooted.c.owner_root, order_by=owner_order)
+        .label("owner_top_bench_version"),
     ).cte("owner_ranked")
+    owner_provenance = select(
+        owner_ranked,
+        func.min(owner_ranked.c.first_seen)
+        .filter(
+            and_(
+                owner_ranked.c.eligible,
+                owner_ranked.c.bench_version == owner_ranked.c.owner_top_bench_version,
+                owner_ranked.c.official_score
+                >= owner_ranked.c.owner_top_score
+                - _crown_band(
+                    owner_ranked.c.owner_top_score,
+                    owner_ranked.c.owner_top_bench_version,
+                ),
+            )
+        )
+        .over(partition_by=owner_ranked.c.owner_root)
+        .label("crown_first_seen"),
+    ).cte("owner_provenance")
     winners = (
-        select(owner_ranked).where(owner_ranked.c.owner_rank == 1).cte("ledger_winners")
+        select(owner_provenance)
+        .where(owner_provenance.c.owner_rank == 1)
+        .cte("ledger_winners")
     )
 
     if details_keys is not None:
@@ -1606,6 +1718,7 @@ async def list_eligible_ledger(
             Score.validator_hotkey,
             Score.signature,
             Score.bench_version,
+            winners.c.crown_first_seen,
         )
         .join(Agent, Agent.agent_id == winners.c.agent_id)
         .join(
@@ -1702,6 +1815,7 @@ async def list_eligible_ledger(
                 official_composite=float(row.official_score),
                 stored_composite_stderr=row.stored_composite_stderr,
                 family_members=family_members,
+                crown_first_seen=row.crown_first_seen,
             )
         )
     return ledger
