@@ -271,6 +271,12 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
         "${{ steps.relay-source.outputs.relay_compat_revision }}"
         in relay["with"]["labels"]
     )
+    assert (
+        "org.opencontainers.image.source="
+        "https://github.com/ditto-assistant/dittobench-api" in relay["with"]["labels"]
+    )
+    assert "io.heyditto.validator.build-source=" in relay["with"]["labels"]
+    assert "io.heyditto.validator.build-source-revision=" in relay["with"]["labels"]
 
     assembly = _step(
         workflow["jobs"]["assemble-stack"]["steps"],
@@ -278,12 +284,38 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
     )["run"]
     assert '["$MODEL_RELAY_REPOSITORY"]="$DITTOBENCH_REVISION"' in assembly
     assert (
-        '["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/'
-        'ditto-subnet/tree/$REVISION/services/dittobench-api/compat/model-relay"'
-        in assembly
+        '["$MODEL_RELAY_REPOSITORY"]='
+        '"https://github.com/ditto-assistant/dittobench-api"' in assembly
     )
-    assert 'https://github.com/ditto-assistant/dittobench-api"' not in assembly
+    assert "io.heyditto.validator.build-source" in assembly
+    assert "io.heyditto.validator.build-source-revision" in assembly
     assert "io.heyditto.validator.compat-source-revision" in assembly
+
+
+def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+    build = jobs["build-dittobench"]
+    scorer = _step(build["steps"], "Build and publish the scorer index")
+    relay = _step(
+        build["steps"], "Build and publish the retired relay compatibility index"
+    )
+    promotion = _step(
+        jobs["promote-stack-release"]["steps"],
+        "Promote only the authenticated stack descriptor",
+    )["run"]
+
+    frozen_source = "https://github.com/ditto-assistant/dittobench-api"
+    for image in (scorer, relay):
+        labels = image["with"]["labels"]
+        assert f"org.opencontainers.image.source={frozen_source}" in labels
+        assert "org.opencontainers.image.version=" in labels
+        assert "org.opencontainers.image.revision=" in labels
+        assert "io.heyditto.validator.build-source=" in labels
+        assert "io.heyditto.validator.build-source-revision=" in labels
+
+    assert '--tag "$STACK_REPOSITORY:compat-$COMPATIBILITY_EPOCH"' in promotion
+    assert 'test "$promoted" = "$STACK_DIGEST"' in promotion
 
 
 def test_validator_release_smokes_each_architecture_natively_before_promotion() -> None:

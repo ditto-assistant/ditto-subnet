@@ -744,10 +744,15 @@ jobs:
           build-args: |
             DITTOBENCH_SOURCE_SHA=${{ steps.dittobench-source.outputs.revision }}
             DITTOBENCH_SOFTWARE_VERSION=${{ needs.release.outputs.version }}
+          # compat-2 is also consumed by frozen v0.44.4 host updaters. Keep
+          # their canonical component identity while recording the exact
+          # monorepo build provenance in separate immutable labels.
           labels: |
-            org.opencontainers.image.source=https://github.com/ditto-assistant/ditto-subnet
+            org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
             org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
+            io.heyditto.validator.build-source=https://github.com/ditto-assistant/ditto-subnet
+            io.heyditto.validator.build-source-revision=${{ steps.dittobench-source.outputs.revision }}
             io.heyditto.validator.stack-version=${{ needs.release.outputs.version }}
             io.heyditto.validator.stack-revision=${{ needs.release.outputs.commit_sha }}
             io.heyditto.validator.stack-service=dittobench-api
@@ -770,9 +775,11 @@ jobs:
           # advertise the descriptor's active dittobench revision. Preserve
           # the bridge's actual frozen source in a separate label.
           labels: |
-            org.opencontainers.image.source=https://github.com/ditto-assistant/ditto-subnet/tree/${{ needs.release.outputs.commit_sha }}/services/dittobench-api/compat/model-relay
+            org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
             org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
+            io.heyditto.validator.build-source=https://github.com/ditto-assistant/ditto-subnet/tree/${{ needs.release.outputs.commit_sha }}/services/dittobench-api/compat/model-relay
+            io.heyditto.validator.build-source-revision=${{ needs.release.outputs.commit_sha }}
             io.heyditto.validator.compat-source-revision=${{ steps.relay-source.outputs.relay_compat_revision }}
             io.heyditto.validator.stack-version=${{ needs.release.outputs.version }}
             io.heyditto.validator.stack-revision=${{ needs.release.outputs.commit_sha }}
@@ -1069,8 +1076,8 @@ jobs:
           declare -A sources=(
             ["$VALIDATOR_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
             ["$SANDBOX_DOCKER_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
-            ["$DITTOBENCH_API_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
-            ["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet/tree/$REVISION/services/dittobench-api/compat/model-relay"
+            ["$DITTOBENCH_API_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
+            ["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
           )
           declare -A revisions=(
             ["$VALIDATOR_REPOSITORY"]="$REVISION"
@@ -1108,10 +1115,14 @@ jobs:
               test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-service" }}' "$child")" = "${services[$repository]}"
             fi
             if [ "$repository" = "$DITTOBENCH_API_REPOSITORY" ]; then
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.build-source" }}' "$child")" = "https://github.com/ditto-assistant/ditto-subnet"
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.build-source-revision" }}' "$child")" = "$DITTOBENCH_REVISION"
               test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-version" }}' "$child")" = "$VERSION"
               test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.stack-revision" }}' "$child")" = "$REVISION"
             fi
             if [ "$repository" = "$MODEL_RELAY_REPOSITORY" ]; then
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.build-source" }}' "$child")" = "https://github.com/ditto-assistant/ditto-subnet/tree/$REVISION/services/dittobench-api/compat/model-relay"
+              test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.build-source-revision" }}' "$child")" = "$REVISION"
               test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compat-source-revision" }}' "$child")" = "$MODEL_RELAY_COMPAT_REVISION"
             fi
           done

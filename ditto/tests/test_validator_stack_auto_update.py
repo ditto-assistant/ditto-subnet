@@ -812,6 +812,30 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
     return env, state_path, state_dir, env_file
 
 
+@pytest.mark.parametrize(
+    "dittobench_source",
+    [
+        "https://github.com/ditto-assistant/dittobench-api",
+        "https://github.com/ditto-assistant/ditto-subnet",
+    ],
+)
+def test_adoption_accepts_standalone_and_monorepo_dittobench_identity(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    dittobench_source: str,
+) -> None:
+    env, state_path, _, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    image = _images()["DITTOBENCH_API_IMAGE"]
+    state["descriptor_labels"][image]["org.opencontainers.image.source"] = (
+        dittobench_source
+    )
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+
+    assert result.returncode == 0, result.stderr
+
+
 def _run_updater(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(UPDATER), *args],
