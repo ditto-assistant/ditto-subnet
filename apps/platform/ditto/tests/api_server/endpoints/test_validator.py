@@ -10398,6 +10398,33 @@ class TestTop5CatchUpConvergence:
             settled[:3]
         ), "each validator must hold a distinct backlog seed"
 
+    async def test_emission_catchup_bypasses_the_growth_cadence(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Already-owed coverage drains even when a new wave is not due.
+
+        The reign cadence limits introduction of fresh shared seeds. It must not
+        strand a promoted emission member below the already-accepted wave depth:
+        that is reconciliation work, and until it lands the fold has less paired
+        evidence even while healthy validator slots sit idle.
+        """
+        champion, newcomer, settled = await _seed_catchup_board(app, session_maker)
+        _install_chain_with_block(app, block_number=361)
+        app.state.config = replace(app.state.config, top5_backoff_base=2)
+
+        response = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_top5_auth_header(_KEYPAIRS[0]),
+            json=_top5_job_payload(champion, newcomer, keypair=_KEYPAIRS[0]),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["agent_id"] == str(newcomer)
+        assert response.json()["confirmation_datasets"][0]["seed"] in settled
+
     async def test_draining_the_backlog_restores_the_shared_seed_set(
         self,
         app: FastAPI,

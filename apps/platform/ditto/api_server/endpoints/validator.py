@@ -3967,15 +3967,9 @@ async def request_top5_confirmation_job(
                 now=now,
             )
         )
-        if (
-            not scheduled_round
-            and not spare_capacity_round
-            and not continual_settings.idle_retests_enabled
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="top-5 shared-seed rescore round is not due at this block",
-            )
+        # Serialize the coverage read with ticket issuance. Catch-up is allowed
+        # outside the reign cadence below, so two validators must not both see
+        # the same unserved gap and spend separate slots on it.
         if session.get_bind().dialect.name == "postgresql":
             await session.execute(
                 select(
@@ -3983,6 +3977,23 @@ async def request_top5_confirmation_job(
                         func.hashtextextended("top5-confirmation-fairness", 0)
                     )
                 )
+            )
+        catchup_member_ids = await _unserved_catchup_members(
+            session,
+            champion_agent_id=champion_agent_id,
+            emission_member_ids=tuple(member.agent_id for member in emission_members),
+            canonical_version=canonical_version,
+            now=now,
+        )
+        if (
+            not scheduled_round
+            and not spare_capacity_round
+            and not continual_settings.idle_retests_enabled
+            and payload.member_agent_id not in catchup_member_ids
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="top-5 shared-seed rescore round is not due at this block",
             )
         seeds = await _top5_confirmation_seed_plan(
             session,
@@ -4040,15 +4051,7 @@ async def request_top5_confirmation_job(
             session,
             members=members,
             emission_member_ids=emission_member_ids,
-            catchup_member_ids=await _unserved_catchup_members(
-                session,
-                champion_agent_id=champion_agent_id,
-                emission_member_ids=tuple(
-                    member.agent_id for member in emission_members
-                ),
-                canonical_version=canonical_version,
-                now=now,
-            ),
+            catchup_member_ids=catchup_member_ids,
             requested_member_id=payload.member_agent_id,
             wave_seed=wave_seed,
             validator_hotkey=payload.validator_hotkey,
