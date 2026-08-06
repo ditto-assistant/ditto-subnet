@@ -239,7 +239,7 @@ validate_image_labels() {
 }
 
 validate_release_image_labels() {
-  local dir="$1" manifest stack_revision dbench_revision version
+  local dir="$1" manifest stack_revision dbench_revision version relay_image
   manifest="$dir/manifest.env"
   stack_revision="$(manifest_value "$manifest" STACK_REVISION)"
   dbench_revision="$(manifest_value "$manifest" DITTOBENCH_REVISION)"
@@ -253,8 +253,12 @@ validate_release_image_labels() {
   validate_image_labels "$(manifest_value "$manifest" DITTOBENCH_API_IMAGE)" \
     https://github.com/ditto-assistant/ditto-subnet "$dbench_revision" "$version" || return 1
   if release_is_legacy "$dir"; then
-    validate_image_labels "$(manifest_value "$manifest" MODEL_RELAY_IMAGE)" \
-      https://github.com/ditto-assistant/dittobench-api "$dbench_revision" "$version" || return 1
+    relay_image="$(manifest_value "$manifest" MODEL_RELAY_IMAGE)"
+    validate_image_labels "$relay_image" \
+      https://github.com/ditto-assistant/dittobench-api "$dbench_revision" "$version" ||
+      validate_image_labels "$relay_image" \
+        "https://github.com/ditto-assistant/ditto-subnet/tree/$dbench_revision/services/dittobench-api/compat/model-relay" \
+        "$dbench_revision" "$version" || return 1
   fi
   return 0
 }

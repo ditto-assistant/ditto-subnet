@@ -1066,8 +1066,19 @@ def test_waits_for_busy_validator_before_replacing_stack(
     assert any("up" in call for call in state["compose_calls"])
 
 
+@pytest.mark.parametrize(
+    "relay_source",
+    [
+        "https://github.com/ditto-assistant/dittobench-api",
+        (
+            f"https://github.com/ditto-assistant/ditto-subnet/tree/{REVISION}"
+            "/services/dittobench-api/compat/model-relay"
+        ),
+    ],
+)
 def test_four_service_candidate_can_roll_back_to_legacy_six_service_release(
     stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    relay_source: str,
 ) -> None:
     env, state_path, state_dir, env_file = stack_updater_env
     state = json.loads(state_path.read_text())
@@ -1087,9 +1098,7 @@ def test_four_service_candidate_can_roll_back_to_legacy_six_service_release(
             "health": "healthy",
         }
     state["descriptor_labels"][relay] = {
-        "org.opencontainers.image.source": (
-            "https://github.com/ditto-assistant/dittobench-api"
-        ),
+        "org.opencontainers.image.source": relay_source,
         "org.opencontainers.image.revision": REVISION,
         "org.opencontainers.image.version": "0.10.0",
     }
