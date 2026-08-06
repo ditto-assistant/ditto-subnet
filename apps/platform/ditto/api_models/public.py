@@ -30,6 +30,21 @@ from ditto.api_models.validator_capabilities import (
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
 
+# Family-member DISPLAY models accept a zero composite; ranking models do not.
+#
+# A legacy bench-v6 child that genuinely scored 0.0 is valid history, and the
+# leaderboard renders it in the owner's family dropdown. Excluding zero here was
+# not a policy choice about emissions -- it made the whole response unserializable,
+# so `GET /api/v1/public/leaderboard?bench_version=6` returned 500 for every
+# caller whenever any owner family contained such a child.
+#
+# This bound governs rendering only. Zero-score rows stay unranked and
+# provisional, cannot displace a positive eligible score as the owner
+# representative, and never enter KOTH/tail allocation or validator weights --
+# those gates live in the eligibility and ranking paths, not in a display bound.
+# Non-finite values remain rejected: NaN and +inf fail `le`, -inf fails `ge`.
+_MIN_DISPLAY_COMPOSITE = 0.0
+
 
 class PublicBenchmarkRelease(BaseModel):
     """One immutable DittoBench contract release shown on the timeline."""
@@ -405,7 +420,7 @@ class PublicSubmissionFamilyMember(BaseModel):
     agent_name: str
     agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
     miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
-    canonical_composite: Annotated[float, Field(gt=0.0, le=1.0)]
+    canonical_composite: Annotated[float, Field(ge=_MIN_DISPLAY_COMPOSITE, le=1.0)]
     submitted_at: datetime
     representative: bool = False
 
@@ -427,7 +442,7 @@ class PublicLeaderboardFamilyMember(BaseModel):
     agent_id: UUID
     agent_name: str
     agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
-    canonical_composite: Annotated[float, Field(gt=0.0, le=1.0)]
+    canonical_composite: Annotated[float, Field(ge=_MIN_DISPLAY_COMPOSITE, le=1.0)]
 
 
 class PublicLeaderboardFamily(BaseModel):

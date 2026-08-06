@@ -2743,6 +2743,66 @@ class TestPublicLeaderboard:
 
         assert pipeline["submission_family"] == family
 
+    async def test_owner_family_with_a_zero_score_child_still_serves(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A zero-scoring sibling must not 500 the whole leaderboard.
+
+        In production every 500 on `/api/v1/public/leaderboard?bench_version=6`
+        came from this shape: the response model rejected a family child whose
+        canonical composite was exactly 0.0, so one legacy row took out the
+        entire board for every caller. The child is valid history and renders;
+        it stays unranked and never becomes the representative.
+        """
+        coldkey = "5ZeroScoreFamilyColdkey"
+        representative = await _seed_k3(
+            session_maker,
+            miner="5" + "V" * 47,
+            composites=[0.95, 0.96, 0.97],
+            created_at=datetime(2026, 6, 8, 12, 0, tzinfo=UTC),
+        )
+        zero_scored = await _seed_k3(
+            session_maker,
+            miner="5" + "W" * 47,
+            composites=[0.0, 0.0, 0.0],
+            created_at=datetime(2026, 6, 8, 13, 0, tzinfo=UTC),
+        )
+        await _seed_payment(
+            session_maker,
+            agent_id=representative,
+            miner_hotkey="5" + "V" * 47,
+            miner_coldkey=coldkey,
+            index=43,
+        )
+        await _seed_payment(
+            session_maker,
+            agent_id=zero_scored,
+            miner_hotkey="5" + "W" * 47,
+            miner_coldkey=coldkey,
+            index=44,
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        response = await client.get("/api/v1/public/leaderboard")
+
+        assert response.status_code == 200
+        board = response.json()
+        entry = next(
+            entry for entry in board["entries"] if entry["agent_id"] == representative
+        )
+        # The positive score still owns the slot; zero never displaces it.
+        assert entry["agent_id"] == representative
+        family_members = (entry["submission_family"] or {}).get("members", [])
+        assert [member["canonical_composite"] for member in family_members] == [
+            pytest.approx(0.0)
+        ]
+        # Unranked: a zero-score child is rendered, never listed as its own entry.
+        assert zero_scored not in [listed["agent_id"] for listed in board["entries"]]
+
     async def test_attested_owner_family_keeps_linked_coldkeys_visible(
         self,
         app: FastAPI,
