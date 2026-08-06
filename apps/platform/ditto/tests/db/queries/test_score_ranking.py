@@ -352,6 +352,37 @@ class TestContinuationFloor:
         assert continuation.row.agent_id != by_marker["E"]
         assert continuation.score != pytest.approx(0.82)
 
+    async def test_floor_read_does_not_hydrate_score_telemetry(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The allocator floor read must stay scalar-only.
+
+        Every ordinary idle-slot claim reaches this read, and it consumes
+        nothing but ranking fields. Hydrating `details` detoasted and decoded
+        the full per-case audit blob for every eligible row on every claim and
+        then discarded it -- user CPU burned on the single API worker's event
+        loop, which is the shape production saturated on (#388).
+        """
+        for rank, marker in enumerate("ABCDEF"):
+            await _seed(
+                session_maker,
+                hotkey="5" + marker * 47,
+                composites=((0.90 - rank * 0.02),) * 3,
+                created_at=_BASE + timedelta(days=rank),
+            )
+
+        async with session_maker() as session:
+            continuation, provisional = await get_score_priority_floor_rows(
+                session, bench_version=_BENCH
+            )
+
+        assert continuation is not None
+        # None here means the column was never selected, not that the row has
+        # no telemetry: these seeded scores carry details.
+        assert continuation.row.details is None
+        if provisional is not None:
+            assert provisional.row.details is None
+
     async def test_no_floor_below_five_finalized_owners(
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:

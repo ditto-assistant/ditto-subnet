@@ -172,11 +172,21 @@ async def get_score_priority_floor_rows(
     Returns ``(continuation_row, provisional_row)``, each ``None`` when the era
     has fewer eligible agents than the position needs.
     """
+    # Scalars only. This read is on the hot allocator path -- every ordinary
+    # idle-slot claim reaches it -- and it consumes nothing but ranking fields:
+    # neither rank_submissions nor resolve_ranking_scores looks at telemetry,
+    # and the one caller that keeps a floor ROW reads only `row.agent_id` to
+    # name the holder. Hydrating `details` here detoasted and decoded the full
+    # per-case audit blob for every eligible row on every claim (~22KB/row over
+    # ~1.2k rows on bench v8) and then discarded it, which is user CPU burned on
+    # the single API worker's event loop. `include_fingerprints=False` was
+    # already set for exactly this reason; `include_details=False` is its pair.
     eligible = [
         row
         for row in await list_eligible_ledger(
             session,
             include_fingerprints=False,
+            include_details=False,
             bench_version=bench_version,
         )
         if row.eligible
