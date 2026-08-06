@@ -24,6 +24,9 @@ resulting immutable release commit:
 - Backroom deploys `backroom.dittobench.ai` automatically and preserves its
   Cloudflare-encrypted Worker secrets;
 - hosted DittoBench builds its Cloud Run runtime from the release commit;
+- datagen publishes an immutable component digest, stages it on a zero-traffic
+  Cloud Run revision, verifies an authenticated v8 generation, and only then
+  promotes it to 100% traffic;
 - screener image publication queues a dedicated Targon Kaniko rental first,
   then uses the existing GitHub/GCP build runner only after an explicit
   provider fallback;
@@ -38,9 +41,13 @@ failed pre-tag runs carry their changes into the next attempt. Once semantic
 release has published a tag, that tag becomes the next planning baseline even
 if a downstream deploy fails. Recover that release by re-running its failed
 jobs; do not rely on a later source push to select already-tagged components.
-Datagen releases additionally require a new component version, publish the
-source-SHA tag once, and attach the component tag to that exact digest so a
-partial rerun converges without overwriting immutable tags.
+Semantic release writes the monorepo version into datagen's Go provenance,
+publishes the source-SHA tag once, and attaches that same monorepo release tag
+to the exact digest so a partial rerun converges without overwriting immutable
+tags. Semantic release, not Terraform, owns the running datagen image version.
+Terraform owns its service shape and least-privilege release IAM, and ignores
+image drift after the one-time creation bootstrap so an unrelated apply cannot
+roll the generator back.
 
 Manual Platform and screener dispatches also require the selected commit to be
 the target of a semantic `vX.Y.Z` release tag. The visible `force` input is the

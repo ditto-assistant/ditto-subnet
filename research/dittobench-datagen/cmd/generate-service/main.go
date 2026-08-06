@@ -1,7 +1,7 @@
 // Command generate-service is the HTTP wrapper the SN118 platform deploys to
 // pin a per-submission dataset.
 //
-// POST /generate?seed=<int64>&run_size=<small|medium|full>&bench_version=<2|3> returns the FULL
+// POST /generate?seed=<int64>&run_size=<small|medium|full>&bench_version=<2..8> returns the FULL
 // canonical DatasetArtifact (JSON): the tool cases, the staged memory seeding
 // waves, the memory cases (with their unlock wave + graph user_id), and the
 // tool-fixture digests — everything a validator needs to replay the eval, plus
@@ -80,7 +80,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	version, err := strconv.Atoi(versionText)
 	if err != nil || !protocol.SupportedBenchVersion(version) {
-		http.Error(w, "bench_version query param required (supported: 2, 3, 4, 5, 6, 7)", http.StatusBadRequest)
+		http.Error(w, "bench_version query param required (supported: 2, 3, 4, 5, 6, 7, 8)", http.StatusBadRequest)
 		return
 	}
 

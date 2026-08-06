@@ -109,7 +109,10 @@ build_command = "python -m ensurepip && python -m pip install --disable-pip-vers
 commit_message = "chore(release): v{version} [skip ci]"
 tag_format = "v{version}"
 version_toml = ["pyproject.toml:project.version"]
-version_variables = ["ditto/__init__.py:__version__"]
+version_variables = [
+    "ditto/__init__.py:__version__",
+    "research/dittobench-datagen/internal/version/version.go:Version",
+]
 
 [tool.semantic_release.branches.main]
 match = "main"

@@ -27,6 +27,10 @@ declared_version="$(sed -n 's/^const Version = "\([0-9][0-9.]*\)"$/\1/p' "$modul
   exit 1
 }
 component_tag="v$declared_version"
+[[ "$component_tag" = "$monorepo_tag" ]] || {
+  echo "release verification refused: datagen version $component_tag does not match monorepo release $monorepo_tag" >&2
+  exit 1
+}
 
 (
   cd "$module_dir"

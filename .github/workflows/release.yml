@@ -19,6 +19,9 @@ env:
   DITTOBENCH_API_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-sandbox
   DITTOBENCH_HOSTED_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/cloud-run-source-deploy/dittobench-api
   DATAGEN_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/datapipeline/generate
+  DATAGEN_SERVICE: ditto-datapipeline
+  DATAGEN_PROJECT: ditto-app-dev
+  DATAGEN_REGION: us-central1
   MODEL_RELAY_REPOSITORY: ghcr.io/ditto-assistant/dittobench-api-relay
   PYLON_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-pylon
   # Frozen compat-2 updaters still require a relay-shaped image in their signed
@@ -87,12 +90,6 @@ jobs:
 
       # The plan checkout already has the release ancestry needed by this gate.
       # Keep verify-source shallow instead of fetching the same history twice.
-      - name: Require a new datagen component version
-        if: steps.components.outputs.dittobench_datagen == 'true'
-        run: >-
-          research/dittobench-datagen/scripts/verify-version-bump.sh
-          "${{ steps.release-base.outputs.sha }}"
-
   release:
     needs: [plan, verify-source]
     if: >-
@@ -868,6 +865,73 @@ jobs:
             --format='value(image_summary.digest)')" = "$digest"
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
           echo "datagen image: $DATAGEN_REPOSITORY@$digest"
+
+      - name: Stage, verify, and deploy the immutable datagen image
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+          SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          image="$DATAGEN_REPOSITORY@$IMAGE_DIGEST"
+          candidate_tag="release-${SOURCE_SHA:0:12}"
+          service_url="$(gcloud run services describe "$DATAGEN_SERVICE" \
+            --project="$DATAGEN_PROJECT" --region="$DATAGEN_REGION" \
+            --format='value(status.url)')"
+          [[ "$service_url" == https://* ]]
+
+          # A zero-traffic tagged revision gives release CI an authenticated URL
+          # for the exact digest without exposing a broken generator to Platform.
+          gcloud run services update "$DATAGEN_SERVICE" \
+            --project="$DATAGEN_PROJECT" \
+            --region="$DATAGEN_REGION" \
+            --image="$image" \
+            --no-traffic \
+            --tag="$candidate_tag" \
+            --quiet
+
+          status_file="$(mktemp)"
+          headers_file="$(mktemp)"
+          response_file="$(mktemp)"
+          trap 'rm -f "$status_file" "$headers_file" "$response_file"' EXIT
+          gcloud run services describe "$DATAGEN_SERVICE" \
+            --project="$DATAGEN_PROJECT" --region="$DATAGEN_REGION" \
+            --format=json >"$status_file"
+          deployed_image="$(jq -r '.spec.template.spec.containers[0].image' "$status_file")"
+          candidate_url="$(jq -r --arg tag "$candidate_tag" \
+            '.status.traffic[] | select(.tag == $tag) | .url' "$status_file")"
+          test "$deployed_image" = "$image"
+          [[ "$candidate_url" == https://* ]]
+
+          identity_token="$(gcloud auth print-identity-token --audiences="$service_url")"
+          http_status="$(curl --silent --show-error \
+            --retry 3 --retry-all-errors \
+            --request POST \
+            --header "Authorization: Bearer $identity_token" \
+            --dump-header "$headers_file" \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            "$candidate_url/generate?seed=42&run_size=small&bench_version=8")"
+          test "$http_status" = "200"
+          tr -d '\r' <"$headers_file" | grep -Eqi '^x-bench-version: 8$'
+          jq -e . "$response_file" >/dev/null
+
+          # Promotion also restores the declarative "latest receives 100%"
+          # traffic policy so future semantic releases converge the same way.
+          gcloud run services update-traffic "$DATAGEN_SERVICE" \
+            --project="$DATAGEN_PROJECT" \
+            --region="$DATAGEN_REGION" \
+            --remove-tags="$candidate_tag" \
+            --to-latest \
+            --quiet
+          gcloud run services describe "$DATAGEN_SERVICE" \
+            --project="$DATAGEN_PROJECT" --region="$DATAGEN_REGION" \
+            --format=json | jq -e --arg image "$image" '
+              .spec.template.spec.containers[0].image == $image and
+              any(.status.traffic[];
+                .latestRevision == true and .percent == 100)
+            ' >/dev/null
 
   deploy-dittobench:
     needs: [plan, release, build-dittobench]

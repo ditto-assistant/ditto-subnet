@@ -103,10 +103,10 @@ resource "google_service_account_iam_member" "platform_deploy_wif_dev" {
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/ditto-subnet:environment:dev"
 }
 
-# Datagen releases publish one immutable generate-service image but never deploy
-# Cloud Run or administer a host. Keep that writer separate from the broad
-# platform deploy identity and scope federation to main through the protected
-# GitHub `prod` environment.
+# Datagen releases publish one immutable generate-service image and deploy it to
+# only the ditto-datapipeline Cloud Run service. Keep that identity separate
+# from the broad platform deploy identity and scope federation to main through
+# the protected GitHub `prod` environment.
 resource "google_service_account" "datagen_release" {
   project      = var.project
   account_id   = "github-actions-datagen-release"

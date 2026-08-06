@@ -22,15 +22,18 @@
 #     image is a static Go binary, so a cold start is well under a second.
 #
 # OFF by default so a routine `terraform apply` doesn't create it. Provisioning
-# is two-phase because Cloud Run needs the image to exist before it can pull it:
+# is two-phase because Cloud Run needs a bootstrap image before semantic release
+# can take ownership of subsequent image deploys:
 #
 #   1. Create the Artifact Registry repo first:
 #        terraform apply -var=enable_datapipeline=true \
 #          -target=google_artifact_registry_repository.datapipeline
-#   2. Merge a conventional datagen PR. Semantic-release tags the exact release,
-#      verifies it, publishes the image, and prints its immutable digest.
-#   3. Apply the rest (the Cloud Run service + IAM):
+#   2. Apply the rest (the Cloud Run service + release IAM) with the audited
+#      bootstrap digest below:
 #        terraform apply -var=enable_datapipeline=true
+#   3. Merge a conventional datagen PR. Semantic release tags the exact release,
+#      verifies it, publishes the image, deploys its immutable digest, and
+#      smoke-tests the selected benchmark contract before shifting traffic.
 #   4. Wire DATA_PIPELINE_URL (the datapipeline_url output) into the
 #      platform_app role (as PLATFORM_DATAPIPELINE_URL) and converge.
 ###############################################################################
@@ -42,7 +45,7 @@ variable "enable_datapipeline" {
 }
 
 variable "datapipeline_image" {
-  description = "Full digest-pinned Artifact Registry image ref the Cloud Run service runs. Empty retains the audited v0.12.0/v7 default published and verified by semantic-release CI."
+  description = "Bootstrap-only digest-pinned image used when Cloud Run is first created. Semantic release owns every subsequent image deployment; Terraform ignores image drift."
   type        = string
   default     = ""
 }
@@ -57,33 +60,12 @@ locals {
   datapipeline_count   = var.enable_datapipeline ? 1 : 0
   datapipeline_repo_id = "datapipeline"
 
-  # Default image path when var.datapipeline_image is empty. Region-scoped
-  # Artifact Registry, repo `datapipeline`, image `generate`, digest tied to the
-  # pinned generator release. The v0.12.0 tag was built from immutable datagen
-  # commit c168a2593abe8e2da1b72dd5f38493f1e86dc39e.
-  #
-  # Keep this digest current with the deployed generator, in the same change that
-  # cuts the datagen release. This has drifted twice: it sat at v0.7.1, then
-  # v0.8.0, while the live service ran a newer image deployed out of band. An
-  # apply with the variable unset ROLLS THE GENERATOR BACK, and that does not
-  # fail loudly -- the scorer fails runs whose regenerated dataset hash
-  # mismatches the pin, so a skew surfaces as failing benchmark runs, not as an
-  # infra error, and not near the apply that caused it.
-  #
-  # v0.12.0 preserves bench versions 2-6 and ships the v7 product-grounded
-  # difficulty generator that dittobench-api's v7 strict scoring is calibrated
-  # against (the api build at 001d3aa pins datagen v0.12.0 in go.mod). Keep the
-  # digest, release tag, and source commit together so an apply cannot silently
-  # select a mutable tag or an unverified generator build.
-  #
-  # This bump is a deliberate FORWARD upgrade, not a drift repair: at the time of
-  # the change the live ditto-datapipeline service was verified to be serving the
-  # previous v0.11.2 digest (7c798902), exactly matching the old pin. Note the
-  # forward direction of the same hazard — v0.11.2 still ANSWERS bench_version=7,
-  # so a lagging generator does not 502; it renders the pre-difficulty v7 bytes
-  # while dittobench-api regenerates v0.12.0 bytes. Apply this BEFORE the bench
-  # rollout is flipped to 7.
-  datapipeline_image = var.datapipeline_image != "" ? var.datapipeline_image : "${var.region}-docker.pkg.dev/${var.project}/${local.datapipeline_repo_id}/generate@sha256:78f2a4da66b8ef8465ffe650cf8bfda0e60ec8dcd80cc6f36d824f604d99e132"
+  # This is a creation bootstrap, not the desired ongoing version. The default
+  # is the immutable v0.13.2 multi-platform index that was live-verified to serve
+  # bench_version=8 on 2026-08-06. The service lifecycle below deliberately
+  # ignores image changes after creation, so a later Terraform apply can never
+  # roll back a semantic-release deployment.
+  datapipeline_image = var.datapipeline_image != "" ? var.datapipeline_image : "${var.region}-docker.pkg.dev/${var.project}/${local.datapipeline_repo_id}/generate@sha256:321c264198641de74583d566a16d863d95837233a116acb5500db8ab4d412796"
 }
 
 # --- Artifact Registry repo holding the generate-service image(s). ---
@@ -109,8 +91,8 @@ resource "google_artifact_registry_repository_iam_member" "datapipeline_reader" 
   member     = local.run_service_agent
 }
 
-# Semantic-release publishes immutable datagen images through a dedicated
-# environment-scoped WIF identity. It cannot deploy Cloud Run or mutate hosts.
+# Semantic release publishes and deploys immutable datagen images through a
+# dedicated environment-scoped WIF identity. It cannot mutate any host.
 resource "google_artifact_registry_repository_iam_member" "datapipeline_release_writer" {
   count      = local.datapipeline_count
   project    = var.project
@@ -120,38 +102,87 @@ resource "google_artifact_registry_repository_iam_member" "datapipeline_release_
   member     = "serviceAccount:${google_service_account.datagen_release.email}"
 }
 
-# --- The Cloud Run service (private, scale-to-zero). ---
-module "datapipeline" {
-  source   = "../../modules/cloudrun"
+# Permit the release identity to update only this Cloud Run service. Developer
+# can create revisions but cannot alter the service IAM policy; actAs remains
+# separately scoped to the one runtime identity below.
+resource "google_cloud_run_v2_service_iam_member" "datapipeline_release_developer" {
   count    = local.datapipeline_count
   project  = var.project
-  name     = "ditto-datapipeline"
   location = var.region
-  image    = local.datapipeline_image
+  name     = google_cloud_run_v2_service.datapipeline[0].name
+  role     = "roles/run.developer"
+  member   = "serviceAccount:${google_service_account.datagen_release.email}"
+}
 
-  # Runs as the platform SA (needs no GCP permissions itself — it makes no GCP
-  # calls; this just avoids the broad default compute SA).
-  service_account_email = local.run_sa_email
+resource "google_service_account_iam_member" "datapipeline_release_actas_runtime" {
+  count              = local.datapipeline_count
+  service_account_id = google_service_account.ditto_platform.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.datagen_release.email}"
+}
 
-  container_port    = 8090 # cmd/generate-service reads PORT (default 8090)
-  cpu               = "1"
-  memory            = "512Mi"
-  min_instances     = 0 # scale to zero
-  max_instances     = var.datapipeline_max_instances
-  concurrency       = 4  # deterministic CPU generation; keep per-instance queueing modest
-  timeout_seconds   = 60 # covers a full-profile generation with margin (client default is 30s)
-  cpu_idle          = true
-  startup_cpu_boost = true
+# --- The Cloud Run service (private, scale-to-zero). ---
+#
+# This resource is intentionally local rather than the generic Cloud Run module:
+# Terraform owns the service shape, while semantic release owns the container
+# image. A lifecycle rule on the generic module would also hide image drift for
+# services whose images Terraform still owns.
+resource "google_cloud_run_v2_service" "datapipeline" {
+  count               = local.datapipeline_count
+  project             = var.project
+  name                = "ditto-datapipeline"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  labels              = { role = "datapipeline", managed = "terraform" }
+  deletion_protection = false
 
-  # PRIVATE: only the app SA may invoke (binding below). Ingress stays open
-  # because the app VMs call the public run.app URL over the internet; IAM — not
-  # network reachability — is the gate.
-  allow_unauthenticated = false
-  ingress               = "INGRESS_TRAFFIC_ALL"
+  template {
+    # Runs as the platform SA (needs no GCP permissions itself — it makes no GCP
+    # calls; this just avoids the broad default compute SA).
+    service_account                  = local.run_sa_email
+    timeout                          = "60s"
+    max_instance_request_concurrency = 4
 
-  labels = { role = "datapipeline", managed = "terraform" }
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.datapipeline_max_instances
+    }
+
+    containers {
+      image = local.datapipeline_image
+
+      ports {
+        container_port = 8090
+      }
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+        cpu_idle          = true
+        startup_cpu_boost = true
+      }
+    }
+  }
+
+  traffic {
+    type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+    percent = 100
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
 
   depends_on = [google_artifact_registry_repository.datapipeline]
+}
+
+# Preserve the existing Cloud Run service while changing only which layer owns
+# its image version. This is a state address move, not a destroy/create.
+moved {
+  from = module.datapipeline[0].google_cloud_run_v2_service.this
+  to   = google_cloud_run_v2_service.datapipeline[0]
 }
 
 # The app VMs (running as ditto-platform) invoke the generator with a metadata
@@ -160,7 +191,7 @@ resource "google_cloud_run_v2_service_iam_member" "datapipeline_invoker" {
   count    = local.datapipeline_count
   project  = var.project
   location = var.region
-  name     = module.datapipeline[0].name
+  name     = google_cloud_run_v2_service.datapipeline[0].name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${local.run_sa_email}"
 }
@@ -173,12 +204,12 @@ resource "google_cloud_run_v2_service_iam_member" "platform_api_datapipeline_inv
   count    = local.datapipeline_count
   project  = var.project
   location = var.region
-  name     = module.datapipeline[0].name
+  name     = google_cloud_run_v2_service.datapipeline[0].name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${local.platform_api_sa_email}"
 }
 
 output "datapipeline_url" {
   description = "Cloud Run URL of the dataset generator (empty when enable_datapipeline = false). Feeds DATA_PIPELINE_URL in the platform_app role (as PLATFORM_DATAPIPELINE_URL)."
-  value       = var.enable_datapipeline ? module.datapipeline[0].uri : ""
+  value       = var.enable_datapipeline ? google_cloud_run_v2_service.datapipeline[0].uri : ""
 }

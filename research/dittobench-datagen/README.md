@@ -160,11 +160,10 @@ than keeping their own copies.
 ### Releasing the generation service
 
 Every merge to `main` is interpreted from its conventional squash title by
-semantic-release. Release CI updates the Go provenance version, creates the
-semver tag and GitHub release, verifies the exact tagged source, then publishes
-the generator image with source tag/commit OCI labels. The job summary prints
-the immutable Artifact Registry digest for the infra repository to pin. Tags
-must not be created manually.
+the monorepo's semantic release. Release CI writes that version into the Go
+provenance, creates the semver tag and GitHub release, verifies the exact tagged
+source, then publishes the generator image with source tag/commit OCI labels.
+Tags must not be created manually.
 
 The same tagged source can be checked locally without publishing:
 
@@ -174,13 +173,16 @@ git switch --detach v0.11.2
 scripts/verify-generate-service-release.sh
 ```
 
-Publishing an image does not deploy Cloud Run; the reviewed digest is activated
-only by the separate infra pin and rollout.
+Release CI stages the immutable image on a zero-traffic Cloud Run revision,
+performs an authenticated current-benchmark generation, and promotes only a
+passing revision. Terraform owns the service shape but ignores later image
+changes so an unrelated infrastructure apply cannot roll back a release.
 
 The release job uses the standard organization release token. Image publication
 uses a `prod` GitHub environment restricted to `main` and a dedicated WIF
-identity that can write only to the datagen Artifact Registry repository. Those
-bindings must be staged before merging the first release-aware PR.
+identity that can write only to the datagen Artifact Registry repository and
+the `ditto-datapipeline` Cloud Run service. Its `actAs` grant is scoped to that
+service's one runtime identity.
 
 ## License
 

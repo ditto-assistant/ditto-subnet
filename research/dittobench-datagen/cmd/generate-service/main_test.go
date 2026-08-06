@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,9 @@ func TestHandleGenerateRequiresSupportedVersion(t *testing.T) {
 		handleGenerate(rr, httptest.NewRequest(http.MethodPost, path, nil))
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("%s: got %d, want 400", path, rr.Code)
+		}
+		if !strings.Contains(rr.Body.String(), "supported: 2, 3, 4, 5, 6, 7, 8") {
+			t.Errorf("%s: stale supported-version response: %q", path, rr.Body.String())
 		}
 	}
 }

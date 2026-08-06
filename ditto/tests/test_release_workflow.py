@@ -42,12 +42,10 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert plan["outputs"]["release_base"] == "${{ steps.release-base.outputs.sha }}"
     release_base = _step(plan["steps"], "Resolve the last published release")
     assert "0000000000000000000000000000000000000000" in release_base["run"]
-    version_gate = _step(plan["steps"], "Require a new datagen component version")
-    assert version_gate["if"] == (
-        "steps.components.outputs.dittobench_datagen == 'true'"
+    assert all(
+        step.get("name") != "Require a new datagen component version"
+        for step in plan["steps"]
     )
-    assert "verify-version-bump.sh" in version_gate["run"]
-    assert "steps.release-base.outputs.sha" in version_gate["run"]
     assert jobs["release"]["needs"] == ["plan", "verify-source"]
     assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
     assert (
@@ -76,6 +74,17 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "gcloud artifacts docker tags add" in publish["run"]
     assert "reusing immutable datagen image" in publish["run"]
     assert "GCP_DATAGEN_RELEASE_SA" in str(datagen["steps"])
+    deploy = _step(
+        datagen["steps"], "Stage, verify, and deploy the immutable datagen image"
+    )
+    assert '--image="$image"' in deploy["run"]
+    assert "--no-traffic" in deploy["run"]
+    assert '--tag="$candidate_tag"' in deploy["run"]
+    assert "bench_version=8" in deploy["run"]
+    assert "gcloud auth print-identity-token" in deploy["run"]
+    assert "^x-bench-version: 8$" in deploy["run"]
+    assert '--remove-tags="$candidate_tag"' in deploy["run"]
+    assert "--to-latest" in deploy["run"]
 
 
 def test_release_auto_deploys_controller_and_builder_from_exact_release() -> None:
@@ -111,6 +120,10 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     build_command = config["build_command"]
     assert 'uv lock --upgrade-package "$PACKAGE_NAME"' in build_command
     assert "git add uv.lock" in build_command
+    assert (
+        "research/dittobench-datagen/internal/version/version.go:Version"
+        in config["version_variables"]
+    )
 
     # Verification runs before semantic release, so hosted deploys and image
     # publication cannot race ahead of the exact merged source gate.
