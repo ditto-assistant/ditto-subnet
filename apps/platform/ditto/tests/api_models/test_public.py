@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from ditto.api_models.public import (
     PublicLeaderboardFamilyMember,
@@ -119,7 +119,7 @@ def test_provisional_score_rejects_untrusted_command_inputs(
     ids=["compact", "full"],
 )
 def test_family_members_render_a_zero_canonical_composite(
-    model: type, extra: dict[str, object]
+    model: type[BaseModel], extra: dict[str, object]
 ) -> None:
     """A legacy child that genuinely scored 0.0 is history, not a bad value.
 
@@ -136,7 +136,7 @@ def test_family_members_render_a_zero_canonical_composite(
         }
     )
 
-    assert member.canonical_composite == 0.0
+    assert member.model_dump()["canonical_composite"] == 0.0
 
 
 @pytest.mark.parametrize(
@@ -159,7 +159,7 @@ def test_family_members_render_a_zero_canonical_composite(
     ids=["negative", "tiny-negative", "just-over-one", "two", "nan", "inf", "-inf"],
 )
 def test_family_members_still_reject_impossible_composites(
-    model: type, extra: dict[str, object], composite: float
+    model: type[BaseModel], extra: dict[str, object], composite: float
 ) -> None:
     """Widening the floor to zero must not admit anything else.
 
