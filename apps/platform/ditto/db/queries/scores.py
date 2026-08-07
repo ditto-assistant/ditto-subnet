@@ -1042,6 +1042,7 @@ async def list_eligible_ledger(
     *,
     include_fingerprints: bool = True,
     include_details: bool = True,
+    details_keys: tuple[str, ...] | None = None,
     include_family_members: bool = False,
     bench_version: int | None = None,
     owner_score: Literal["official", "canonical"] = "official",
@@ -1061,6 +1062,12 @@ async def list_eligible_ledger(
     only reader that compares them. The public leaderboard, validator ledger
     read, and ticket-eligibility paths were paying that serialization cost on
     every poll for data they never used.
+
+    ``details_keys=(...)`` is the middle setting between the two: the row still
+    carries a ``details`` dict, but Postgres builds it from only those keys, so
+    a consumer that reads three fields out of a 22KB audit blob stops paying to
+    detoast, ship and JSON-decode the other 22KB. Production measured 41% of the
+    API worker's CPU inside asyncpg's JSONB decoder with the whole blob selected.
 
     ``include_details=False`` likewise replaces the large score telemetry JSON
     with NULL. Queue-floor, cleanup, and efficiency-cohort consumers need only
@@ -1523,9 +1530,20 @@ async def list_eligible_ledger(
         select(owner_ranked).where(owner_ranked.c.owner_rank == 1).cte("ledger_winners")
     )
 
-    details_column = (
-        Score.details.label("details") if include_details else null().label("details")
-    )
+    if details_keys is not None:
+        # Narrow projection: build an object holding ONLY the requested keys, so
+        # Postgres never ships (and asyncpg never decodes) the rest of the blob.
+        # A key the row does not have arrives as SQL NULL -> Python None, which
+        # every reader of these keys already treats as absent.
+        pairs: list[ColumnElement[Any]] = []
+        for key in details_keys:
+            pairs.append(literal(key))
+            pairs.append(Score.details[key])
+        details_column = func.jsonb_build_object(*pairs).label("details")
+    elif include_details:
+        details_column = Score.details.label("details")
+    else:
+        details_column = null().label("details")
     sketch_columns: tuple[ColumnElement[Any], ...]
     if include_fingerprints:
         sketch_columns = (

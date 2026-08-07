@@ -3091,6 +3091,21 @@ async def request_job(
     return job
 
 
+# The only keys this builder reads out of a score's telemetry blob:
+# ``_ledger_stderr`` -> ``composite_stderr``, and the legacy paired-confirmation
+# pair. Everything else in ``details`` is per-case audit payload -- roughly 22KB
+# a row, across every eligible agent, on a path that runs for every continual
+# retest request. Selecting the whole blob here put the API worker at 41% of CPU
+# inside asyncpg's JSONB decoder and drove /top5-confirmation-job to a measured
+# 152s, while the canonical /validator/job path -- which never calls this --
+# stayed serviceable. Keep this tuple in step with the readers below.
+_KOTH_DETAIL_KEYS = (
+    "composite_stderr",
+    "confirmation_seeds",
+    "confirmation_composites",
+)
+
+
 async def _current_koth_entries(
     session: AsyncSession,
     *,
@@ -3115,6 +3130,7 @@ async def _current_koth_entries(
         for row in await list_eligible_ledger(
             session,
             include_fingerprints=False,
+            details_keys=_KOTH_DETAIL_KEYS,
             bench_version=canonical_version,
         )
         if row.eligible and row.composite > 0.0

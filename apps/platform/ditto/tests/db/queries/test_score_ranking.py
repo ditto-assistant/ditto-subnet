@@ -383,6 +383,69 @@ class TestContinuationFloor:
         if provisional is not None:
             assert provisional.row.details is None
 
+    async def test_narrow_details_projection_ships_only_requested_keys(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """`details_keys` must return the asked-for keys and nothing else.
+
+        The KOTH/retest builder reads three fields out of a per-case audit blob
+        that runs ~22KB a row. Shipping the whole blob for every eligible agent,
+        on a path that executes for every continual-retest request, put the API
+        worker at 41% of CPU inside asyncpg's JSONB decoder and drove
+        /top5-confirmation-job to a measured 152 seconds.
+        """
+        await _seed(
+            session_maker,
+            hotkey="5" + "N" * 47,
+            composites=(0.90, 0.90, 0.90),
+            created_at=_BASE,
+        )
+
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                details_keys=("bench_version",),
+                bench_version=_BENCH,
+            )
+
+        assert rows
+        details = rows[0].details
+        assert isinstance(details, dict)
+        # Exactly the requested key survives; the seeded blob's other content
+        # never leaves Postgres.
+        assert set(details) == {"bench_version"}
+        assert details["bench_version"] == _BENCH
+
+    async def test_narrow_details_projection_nulls_absent_keys(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A key the row lacks must arrive as None, not raise or vanish.
+
+        Every reader of these keys already treats absent as None, so this is the
+        contract that lets the projection stand in for the whole blob.
+        """
+        await _seed(
+            session_maker,
+            hotkey="5" + "O" * 47,
+            composites=(0.90, 0.90, 0.90),
+            created_at=_BASE,
+        )
+
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                details_keys=("composite_stderr", "confirmation_seeds"),
+                bench_version=_BENCH,
+            )
+
+        assert rows
+        details = rows[0].details
+        assert isinstance(details, dict)
+        assert set(details) == {"composite_stderr", "confirmation_seeds"}
+        assert details["confirmation_seeds"] is None
+
     async def test_no_floor_below_five_finalized_owners(
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
