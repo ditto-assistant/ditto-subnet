@@ -89,3 +89,23 @@ def test_platform_deploy_preflights_the_checkout_before_touching_the_host() -> N
     assert "gcp-platform-app.yml" in command
     # EX_CONFIG: a provisioning gap is not a deploy fault.
     assert "exit 78" in command
+
+
+def test_platform_deploy_rejects_a_half_provisioned_checkout() -> None:
+    """A cloned checkout with no rendered .env must not read as deployable.
+
+    A converge that aborts between cloning and rendering leaves `.git` present
+    and `.env` absent. Guarding only on `.git` waves that straight through into
+    an app that cannot boot, and unlike "never provisioned" it looks ready.
+    """
+    command = _platform_deploy_command()
+    root = _platform_checkout_root()
+
+    assert f"[ ! -s {root}/apps/platform/.env ]" in command
+    # -s, not -f: a zero-byte .env is as unbootable as a missing one.
+    assert f"[ ! -f {root}/apps/platform/.env ]" not in command
+    # Both guards run before the cd they protect.
+    assert command.index(f"[ ! -s {root}/apps/platform/.env ]") < command.index(
+        f"cd {root} &&"
+    )
+    assert "HALF provisioned" in command
