@@ -9,6 +9,16 @@ ditto_logs: /opt/ditto/logs
 ditto_backups: /opt/ditto/backups
 ditto_repos: /opt/ditto/repos
 
+# Every role here connects through IAP + OS Login, and the key OS Login knows is
+# the one `gcloud compute ssh` manages -- not ~/.ssh/id_*. Without this, plain
+# ssh offers the wrong identity and the connection ends at
+# `Permission denied (publickey)` after the tunnel has already succeeded, which
+# points suspicion at IAM rather than at the key being offered. Override with
+# GCP_SSH_KEY if your OS Login key lives elsewhere.
+ansible_ssh_private_key_file: >-
+  {{ lookup('env', 'GCP_SSH_KEY')
+     | default(lookup('env', 'HOME') ~ '/.ssh/google_compute_engine', true) }}
+
 deploy_user: deploy
 deploy_group: ditto
 team_members:
