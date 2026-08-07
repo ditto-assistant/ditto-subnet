@@ -45,7 +45,13 @@ secret_pylon_token: platform-prod-pylon-open-access-token
 # key holds no stake and needs no on-chain registration.
 platform_screener_hotkey: "5G6fGXnXFYdLM3ZyAm9whUbCY4ziQzcbMiTEqZB5c9KekTtR"
 secret_screener_api_token: "screener-api-token-prod"
-secret_screener_controller_api_token: "screener-controller-api-token-prod"
+# INTENTIONALLY UNSET. `screener-controller-api-token-prod` has never existed in
+# ditto-app-dev Secret Manager, and the live .env has never carried
+# SCREENER_CONTROLLER_API_TOKEN. Naming it here made the role's read run and fail
+# the whole converge partway -- after the checkout was cloned but before .env was
+# rendered, leaving a host that looks provisioned and is not. The role default is
+# "", which skips the read. Set this only once the secret is actually created.
+secret_screener_controller_api_token: ""
 
 # Publish the screening backlog (waiting_screening + screening) to Cloud
 # Monitoring every 60s — the prod screener fleet's autoscaling signal

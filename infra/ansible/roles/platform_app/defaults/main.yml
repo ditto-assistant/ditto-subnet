@@ -52,6 +52,10 @@ platform_optional_env_values:
       no per-submission dataset is pinned — scores carry no on-chain seed
       provenance and no reproduction command (v7 requires dataset pinning).
 
+# Pinned so the compose project identity does not follow the checkout path.
+# See templates/platform.env.j2 for why this is not left to compose's default.
+platform_compose_project_name: ditto-platform
+
 platform_checkout_root: /opt/ditto-subnet
 platform_root: "{{ platform_checkout_root }}/apps/platform"
 platform_repo_url: "git@github.com:ditto-assistant/ditto-subnet.git"
