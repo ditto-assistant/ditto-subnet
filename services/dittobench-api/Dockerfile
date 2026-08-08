@@ -53,7 +53,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 # This opt-in target runs the API beside a host Docker daemon. The binary shells
 # out to both git and docker when it materializes and runs miner submissions.
 # Keep the ordinary runtime below as the default target for hosted practice.
-FROM docker:28.3.3-cli-alpine3.22 AS sandbox
+FROM docker:29.1.2-cli-alpine3.22 AS sandbox
 ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 RUN apk add --no-cache git
