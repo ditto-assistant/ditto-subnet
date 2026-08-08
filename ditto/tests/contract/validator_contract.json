@@ -908,6 +908,12 @@
         "minimum": 0,
         "type": "integer"
       },
+      "burn_share": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
       "continual_retest_cohort_size": {
         "default": 5,
         "minimum": 5,

@@ -108,6 +108,9 @@ import {
   efficiencyBonusSettingsControlSchema,
   efficiencyBonusSettingsRevisionSchema,
   setEfficiencyBonusSettingsInputSchema,
+  burnSettingsControlSchema,
+  burnSettingsRevisionSchema,
+  setBurnSettingsInputSchema,
   continualRetestSettingsForPlatform,
   parseContinualRetestSettingsControl,
   setContinualRetestSettingsInputSchema,
@@ -460,6 +463,48 @@ export async function setEfficiencyBonusSettings(rawInput: unknown, actor: strin
   } catch (cause) {
     throw efficiencyBonusConflict(cause) ?? cause
   }
+}
+
+const BURN_SETTINGS_PATH = '/api/v1/admin/burn-settings'
+
+export async function fetchBurnSettings() {
+  const payload = await platformAdminRequest(BURN_SETTINGS_PATH)
+  return burnSettingsControlSchema.parse(payload)
+}
+
+// The platform refuses a burn revision on a stale `expected_revision` or a
+// concurrent write that won the same parent, and its message names the revision
+// now current. Keep that wording verbatim and only append the recovery — an
+// operator reading "nothing was applied" about the emission split must not have
+// to wonder whether Backroom paraphrased it.
+function burnSettingsConflict(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : String(cause)
+  if (!/burn settings changed/i.test(message)) return null
+  return new Error(
+    `${message}. Nothing was applied: re-read get_burn_settings and resubmit with the revision it reports.`,
+  )
+}
+
+export async function setBurnSettings(rawInput: unknown, actor: string) {
+  const input = setBurnSettingsInputSchema.parse(rawInput)
+  try {
+    const payload = await platformAdminRequest(BURN_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        scope: input.scope,
+        expected_revision: input.expectedRevision,
+        settings: input.settings,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+    burnSettingsRevisionSchema.parse(payload)
+  } catch (cause) {
+    throw burnSettingsConflict(cause) ?? cause
+  }
+  return fetchBurnSettings()
 }
 
 const CONTINUAL_RETEST_SETTINGS_PATH = '/api/v1/admin/continual-retest-settings'

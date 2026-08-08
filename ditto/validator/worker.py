@@ -100,6 +100,7 @@ from ditto.validator.weights import (
     apply_miner_emission_cap,
     compute_weights,
     contested_confirmation_set,
+    resolve_miner_emission_share,
     select_champion,
     top5_confirmation_set,
 )
@@ -1525,9 +1526,22 @@ class ValidatorWorker:
             rank_shares=self._config.koth_rank_shares,
             dethrone_z=self._config.koth_dethrone_z,
         )
+        # The burn is operator policy served on the ledger, not a compiled-in
+        # constant; the config value is the fallback for a platform that does not
+        # carry the field and for anything that fails validation.
+        miner_share = resolve_miner_emission_share(
+            ledger, default_share=self._config.miner_emission_share
+        )
+        if miner_share != self._config.miner_emission_share:
+            logger.info(
+                "platform burn policy in effect: %.2f%% of miner emission burned "
+                "(compiled default burns %.2f%%)",
+                (1.0 - miner_share) * 100.0,
+                (1.0 - self._config.miner_emission_share) * 100.0,
+            )
         weights = apply_miner_emission_cap(
             miner_weights,
-            miner_share=self._config.miner_emission_share,
+            miner_share=miner_share,
             burn_hotkey=self._config.burn_hotkey,
         )
         champion = select_champion(

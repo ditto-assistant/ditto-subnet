@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -404,6 +404,29 @@ async def list_validator_heartbeats(
         )
     )
     return list(result)
+
+
+async def count_live_validators(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    freshness: timedelta = timedelta(minutes=15),
+) -> int:
+    """How many validators have heartbeated recently enough to be folding weights.
+
+    Deliberately capability-agnostic, unlike
+    :func:`live_validator_fleet_supports_protocol`: every registered validator
+    submits weights regardless of which benchmark versions it can score, so for
+    "is anyone out there applying this policy" the capable subset is the wrong
+    denominator.
+    """
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(ValidatorHeartbeat)
+            .where(ValidatorHeartbeat.seen_at >= now - freshness)
+        )
+    ) or 0
 
 
 async def live_validator_fleet_supports_protocol(

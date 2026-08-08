@@ -736,3 +736,91 @@ class TestScoringLedgerConfirmationHistory:
             (200, "5V1"),
         }
         assert {h["bench_version"] for h in history} == {_BENCH_VERSION}
+
+
+class TestLedgerBurnShare:
+    """The operator-owned miner/burn split rides the ledger to the fleet."""
+
+    @staticmethod
+    async def _set_burn(
+        app: FastAPI, maker: async_sessionmaker[AsyncSession], share: float
+    ) -> None:
+        from ditto.db.models import BurnSettingsRevision
+
+        async with maker() as session, session.begin():
+            session.add(
+                BurnSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={"burn_share": share},
+                    checksum="ab" * 32,
+                    reason="operator burn policy for the test",
+                    actor="operator@example.com",
+                )
+            )
+        app.state.session_maker = maker
+        app.state.burn_settings.invalidate()
+
+    async def test_absent_policy_serves_no_burn(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Omission must never be a change: 0.0 is what the frozen validator
+        constant (MINER_EMISSION_SHARE = 1.0) already folds."""
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.burn_settings.invalidate()
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert resp.status_code == 200
+        assert resp.json()["burn_share"] == 0.0
+
+    async def test_configured_policy_reaches_the_ledger(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        await self._set_burn(app, session_maker, 0.35)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert resp.status_code == 200
+        assert resp.json()["burn_share"] == 0.35
+
+    async def test_stale_snapshot_replays_the_share_it_was_taken_under(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A database outage must not silently reset the burn to zero.
+
+        The resolver reads the same database that just failed, so re-resolving
+        on the stale path would hand the fleet a 0% burn for the length of the
+        outage. Replaying the snapshot's own share is the only answer that does
+        not move emissions because of an infrastructure problem.
+        """
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        await self._set_burn(app, session_maker, 0.5)
+
+        ok = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ok.status_code == 200
+        assert ok.json()["burn_share"] == 0.5
+
+        async def _boom(_session: object, **_kwargs: object) -> list:
+            raise OperationalError("SELECT ...", {}, Exception("db down"))
+
+        monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _boom)
+        stale = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert stale.status_code == 200
+        assert stale.json()["stale"] is True
+        assert stale.json()["burn_share"] == 0.5

@@ -222,8 +222,13 @@ result.
   by re-scoring both agents on shared seeds rather than dataset luck.
 - Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
   and next four distinct miners, respectively. The competitive vector receives
-  100% of available miner emission — nothing is burned while eligible miners
-  exist. With no eligible miners, 100% is burned.
+  100% of available miner emission by default — nothing is burned while eligible
+  miners exist. With no eligible miners, 100% is burned. The subnet owner can
+  publish a non-zero burn share, which scales the whole competitive vector
+  without re-ordering it: your share *of what miners receive* is unchanged, and
+  the rest goes to the owner burn hotkey. Any such change is announced, applies
+  subnet-wide, and takes up to one validator epoch to be fully reflected on
+  chain.
 - Those five slots are ordered by the score that settles a near-miss — the mean
   including shared-seed re-scores — not by the raw composite shown next to your
   entry. The two orders usually agree and occasionally do not, so the slot you

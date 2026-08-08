@@ -66,6 +66,7 @@ from ditto.validator.stack_health import fallback_stack_health
 from ditto.validator.weights import (
     apply_miner_emission_cap,
     compute_weights,
+    resolve_miner_emission_share,
 )
 from ditto.validator.worker import ValidatorWorker
 
@@ -306,6 +307,93 @@ class TestMinerEmissionCap:
             miner_share=0.2,
             burn_hotkey=_BURN_HOTKEY,
         ) == {"miner": pytest.approx(0.2), _BURN_HOTKEY: pytest.approx(0.8)}
+
+
+class TestPlatformBurnShare:
+    """The burn is operator policy on the ledger, with the constant as fallback."""
+
+    def test_absent_field_keeps_the_compiled_default(self) -> None:
+        # An older platform omits it; pydantic defaults it to 0.0, which is what
+        # MINER_EMISSION_SHARE = 1.0 already folds. Omission is never a change.
+        ledger = LedgerResponse(entries=[], count=0)
+        assert resolve_miner_emission_share(ledger, default_share=1.0) == 1.0
+
+    def test_served_share_wins_over_the_default(self) -> None:
+        ledger = LedgerResponse(entries=[], count=0, burn_share=0.25)
+        assert resolve_miner_emission_share(ledger, default_share=1.0) == pytest.approx(
+            0.75
+        )
+
+    def test_full_burn_is_folded(self) -> None:
+        ledger = LedgerResponse(entries=[], count=0, burn_share=1.0)
+        assert resolve_miner_emission_share(ledger, default_share=1.0) == pytest.approx(
+            0.0
+        )
+
+    @pytest.mark.parametrize(
+        "burn_share",
+        [None, "0.5", float("nan"), float("inf"), -0.1, 1.5, True],
+        ids=["none", "string", "nan", "inf", "negative", "over-one", "bool"],
+    )
+    def test_anything_that_is_not_a_share_falls_back(self, burn_share: object) -> None:
+        """A truncated or malformed ledger must degrade to the shipped behaviour,
+        never to an arbitrary split. Constructed by hand rather than through the
+        model because the model would already have rejected these."""
+        malformed = cast("LedgerResponse", SimpleNamespace(burn_share=burn_share))
+        assert resolve_miner_emission_share(malformed, default_share=1.0) == 1.0
+
+
+class TestWeightFoldUsesPlatformBurn:
+    async def _submitted_weights(self, ledger: LedgerResponse) -> dict[str, float]:
+        platform = MagicMock()
+        platform.get_ledger = AsyncMock(return_value=ledger)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._registered_ledger_entries = AsyncMock(  # type: ignore[method-assign]
+            return_value=list(ledger.entries)
+        )
+        worker._validator_permitted = AsyncMock(  # type: ignore[method-assign]
+            return_value=True
+        )
+        worker._stake_sufficient = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        worker._log_commit_reveal_mode = AsyncMock()  # type: ignore[method-assign]
+        worker._put_weights_with_retry = AsyncMock(  # type: ignore[method-assign]
+            return_value=True
+        )
+        outcome = await worker._update_weights()
+        assert outcome.submitted
+        return outcome.weights
+
+    async def test_default_ledger_pays_miners_everything(self) -> None:
+        entries = [_entry("5Champ" + "x" * 42, 0.90), _entry("5Tail" + "x" * 43, 0.50)]
+        weights = await self._submitted_weights(
+            LedgerResponse(entries=entries, count=len(entries))
+        )
+        assert _BURN_HOTKEY not in weights
+        assert sum(weights.values()) == pytest.approx(1.0)
+
+    async def test_served_burn_scales_the_vector_without_reordering_it(self) -> None:
+        """The operator dial must move the miner/burn split and nothing else:
+        each miner keeps its share *of what miners receive*."""
+        entries = [_entry("5Champ" + "x" * 42, 0.90), _entry("5Tail" + "x" * 43, 0.50)]
+        uncapped = await self._submitted_weights(
+            LedgerResponse(entries=entries, count=len(entries))
+        )
+        burned = await self._submitted_weights(
+            LedgerResponse(entries=entries, count=len(entries), burn_share=0.4)
+        )
+
+        assert burned[_BURN_HOTKEY] == pytest.approx(0.4)
+        assert sum(burned.values()) == pytest.approx(1.0)
+        miners = {k: v for k, v in burned.items() if k != _BURN_HOTKEY}
+        assert set(miners) == set(uncapped)
+        for hotkey, weight in miners.items():
+            assert weight == pytest.approx(uncapped[hotkey] * 0.6)
 
 
 def _job(

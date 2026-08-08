@@ -51,9 +51,15 @@ TOP5_CATCH_UP_RATE = 2
 # Hard ceiling on the operator-requested continual retest cohort. Mirrors the
 # platform's own cap so the two agree on what an operator may ask for.
 TOP5_MAX_COHORT_SIZE = 25
-# Release the full miner emission through KOTH. The burn hotkey is retained only
-# as the safe idle vector: with no eligible miners the whole vector still routes
-# to burn rather than zeroing the chain.
+# Fallback share of miner emission released through KOTH, used when the platform
+# ledger carries no burn policy (an older platform) or serves one that fails
+# validation. The live value is ``LedgerResponse.burn_share``, resolved by the
+# platform so the whole fleet folds the same number without agreeing about
+# clocks -- see ``weights.resolve_miner_emission_share``. Releasing everything is
+# the right fallback precisely because it is what the subnet did before the field
+# existed, so an omission is never a change. The burn hotkey is retained in
+# either case as the safe idle vector: with no eligible miners the whole vector
+# still routes to burn rather than zeroing the chain.
 MINER_EMISSION_SHARE = 1.0
 FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
 
@@ -284,8 +290,10 @@ class ValidatorConfig:
     emissions are the top five at any cohort size."""
 
     miner_emission_share: float
-    """Share of miner emission released through KOTH; the remainder is burned.
-    ``1.0`` releases all of it (the deployed value)."""
+    """Fallback share of miner emission released through KOTH; the remainder is
+    burned. ``1.0`` releases all of it. The live share comes from the platform
+    ledger's ``burn_share``; this is what the fold uses when that field is absent
+    or invalid."""
 
     burn_hotkey: str
     """Owner-associated hotkey whose miner incentive Subtensor burns. Used for

@@ -1,0 +1,72 @@
+# SN118 Backroom MCP
+
+`https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
+server exposing the same operations as the console: screening quarantines and
+disputes, validator queue/slot/inference policy, benchmark rollouts, scoring
+policy, scores and leaderboards, and the emission burn.
+
+It was ported from the private `ditto-assistant/backroom` repository, which
+keeps only `backroom.heyditto.ai` and the Ditto app surface. Feature flags and
+app reviews are deliberately **not** served here: they reach the private product
+API this deployment holds no credentials for. `src/lib/subnet-surface.test.ts`
+enforces both halves of that boundary — the MCP must be wired, those tools must
+not be.
+
+## Authorization
+
+The MCP endpoint is a full OAuth 2.1 resource. `@cloudflare/workers-oauth-provider`
+owns `/authorize`, `/token`, and `/register`; discovery lives at
+`/.well-known/oauth-authorization-server/mcp` and `/.well-known/mcp/server.json`.
+A client registers dynamically, then the operator approves the connection on
+`/oauth/consent` while signed in to Backroom with Google.
+
+Three scopes, in ascending sensitivity:
+
+| Scope | Grants |
+|---|---|
+| `backroom:read` | Every read. Required for any connection. |
+| `backroom:artifact:read` | Miner-submitted source: tarball URLs, file listings, copy and baseline diffs. |
+| `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO. |
+
+Two independent gates apply to every privileged call. The grant must carry the
+scope, **and** the operator's account must still resolve to `write` through
+`BACKROOM_ADMIN_EMAILS`. The level is re-derived from that binding at consent
+time rather than read from the session cookie, so removing an address stops the
+next authorization from minting a privileged grant even while a 12-hour session
+is still live. `mcp-scope.server.ts` additionally challenges the request with a
+`WWW-Authenticate` scope hint before the tool runs, so an under-scoped client
+gets a 403 naming the scope it needs rather than a tool-level refusal.
+
+Access tokens never outlive the operator session: `tokenExchangeCallback`
+refuses an expired one and clamps the token TTL to the session's remaining life.
+There is no refresh path for the identity itself — when the session ends, the
+operator authorizes again.
+
+## Bindings
+
+Beyond the console's own secrets (`docs/oauth.md`), the MCP needs:
+
+- `OAUTH_KV` — registered clients, grants, and issued tokens. Terraform owns the
+  namespace (`infra/terraform/stacks/cloudflare-dittobench`); paste its
+  `backroom_oauth_kv_namespace_id` output into `wrangler.jsonc`. Deleting this
+  namespace revokes every operator's MCP connection.
+- The hourly cron trigger, which purges expired grants and tokens.
+
+## Adding a tool
+
+Tools wrap `admin.service.ts`, the same layer the console's server functions
+call, so a new capability is one `registerTool` entry:
+
+1. Add or reuse the service function and its zod schema in `admin.schemas.ts`.
+2. Register the tool in `mcp.server.ts`. Writes go through `write(() => …)` and
+   pass `props.session.email` so the platform records the real operator as the
+   audit actor; artifact reads go through `artifact(() => …)`.
+3. Add the name to `WRITE_TOOL_NAMES` (or `TOOL_SCOPE_REQUIREMENTS` for artifact
+   scope) so the pre-flight scope challenge covers it.
+4. Add it to the expected catalog list in `mcp.server.test.ts`. That list is
+   exhaustive on purpose: a tool that is not named there fails the suite.
+
+Keep the catalog description in `MCP_CATALOG_DESCRIPTIONS` short — the whole
+catalog is loaded into model context before any call, and the test bounds both
+the total and the per-description length. Long-form operational notes belong in
+the `description` field, which `get_backroom_tool_help` serves on demand.

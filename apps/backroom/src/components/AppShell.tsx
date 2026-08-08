@@ -5,6 +5,7 @@ import {
   Activity,
   CircleDollarSign,
   Copy,
+  Flame,
   Gauge,
   Layers,
   LogOut,
@@ -35,6 +36,12 @@ const navigation = [
     label: 'Bench rollout',
     description: 'SN118 contract activation',
     icon: Gauge,
+  },
+  {
+    to: '/burn' as const,
+    label: 'Emission burn',
+    description: 'Miner / owner-burn split',
+    icon: Flame,
   },
   {
     to: '/continual-retests' as const,

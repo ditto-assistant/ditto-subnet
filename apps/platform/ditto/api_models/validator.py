@@ -1364,6 +1364,27 @@ class LedgerResponse(BaseModel):
             description="Age of the snapshot in seconds (0 on a fresh read).",
         ),
     ] = 0
+    burn_share: Annotated[
+        float,
+        Field(
+            default=0.0,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Share of miner emission the fold must route to the subnet "
+                "owner's burn hotkey; the remainder is normalized across the "
+                "eligible miner weights. Operator-owned and resolved here, so "
+                "every validator reads one already-decided scalar rather than a "
+                "schedule it has to evaluate against its own clock. ``0.0`` (the "
+                "default, and what an older platform's omission means) releases "
+                "the full miner emission through KOTH, which is what the "
+                "validator's frozen MINER_EMISSION_SHARE already does -- so a "
+                "validator that ignores this field keeps folding exactly as it "
+                "did. On a served last-known-good snapshot this is the share "
+                "that was current when the snapshot was taken."
+            ),
+        ),
+    ] = 0.0
     continual_retest_cohort_size: Annotated[
         int,
         Field(
@@ -1386,6 +1407,7 @@ class LedgerResponse(BaseModel):
         json_schema_extra={
             "example": {
                 "generated_at": "2026-06-08T12:00:00Z",
+                "burn_share": 0.0,
                 "continual_retest_cohort_size": 5,
                 "stale": False,
                 "age_seconds": 0,

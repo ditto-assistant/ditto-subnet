@@ -3682,6 +3682,61 @@ class ContinualRetestSettingsRevision(Base):
     )
 
 
+class BurnSettingsRevision(Base):
+    """Append-only operator policy for the subnet-owner emission burn.
+
+    One scalar (``burn_share``) that the scoring ledger serves to every
+    validator, replacing a constant that previously required a validator release
+    to move. Append-only for the same reason every other emission-affecting
+    control here is: the question after an unexpected weight vector is always
+    "what was the policy at the time", and only a revision log answers it.
+    """
+
+    __tablename__ = "burn_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="burn_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="burn_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="burn_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="burn_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="burn_settings_actor_check",
+        ),
+        Index(
+            "burn_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="burn_settings_scope_parent_key",
+        ),
+    )
+
+
 class QueuePolicySettingsRevision(Base):
     """Append-only operator policy for the validator queue.
 

@@ -11,6 +11,21 @@
     "GOOGLE_REDIRECT_URI": "https://backroom.dittobench.ai/auth/callback",
     "DITTO_PLATFORM_API_BASE_URL": "https://platform-api.heyditto.ai",
   },
+  // OAuth grants, registered MCP clients, and issued tokens for the /mcp
+  // endpoint. Terraform owns the namespace in the cloudflare-dittobench stack;
+  // this id must match its output, and a deploy without it fails closed because
+  // the OAuth provider has nowhere to persist a grant.
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "REPLACE_WITH_TERRAFORM_OAUTH_KV_ID",
+    },
+  ],
+  // Purges expired OAuth grants and tokens. Hourly is well inside the 7-day
+  // refresh-token TTL, so a missed run never strands a live connection.
+  "triggers": {
+    "crons": ["17 * * * *"],
+  },
   // Fail closed before publishing a version that cannot authenticate an
   // operator or call Platform. Values live only in Cloudflare's encrypted
   // Worker bindings; scripts/bootstrap-worker-secrets.sh installs them from

@@ -34,7 +34,7 @@ from ditto.validator.crn import confirmation_seeds
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from ditto.api_models.validator import LedgerEntry
+    from ditto.api_models.validator import LedgerEntry, LedgerResponse
 
 # ``bench_version`` is retained for telemetry and re-score scheduling. The
 # platform is the authority that selects exactly one score per agent: desired
@@ -54,6 +54,42 @@ DEFAULT_BENCH_VERSION = 1
 # leaderboard, marked provisional). Keep in sync with the platform's
 # MIN_ELIGIBLE_CASES (ditto-platform ditto/db/queries/scores.py).
 MIN_ELIGIBLE_CASES = 100
+
+
+def resolve_miner_emission_share(
+    ledger: LedgerResponse, *, default_share: float
+) -> float:
+    """The miner share this epoch: ``1 - burn_share`` from the platform ledger.
+
+    The burn used to be the frozen ``MINER_EMISSION_SHARE`` constant, so moving
+    it meant shipping a validator release and waiting for the fleet to take it.
+    The platform now owns it and serves it on the same ledger read that already
+    decides who is eligible at all — which is the argument for trusting it: a
+    platform that wanted to stop emissions could already do it by serving an
+    empty ledger (``apply_miner_emission_cap`` routes 100% to burn on an empty
+    pool). A burn share is that same authority expressed continuously, not new
+    authority.
+
+    What this function refuses to do is fold a value that is not a share. A
+    missing field, a NaN, or anything outside ``[0, 1]`` falls back to
+    ``default_share`` — the compiled-in constant — so a malformed or truncated
+    ledger degrades to the shipped behaviour rather than to an arbitrary split.
+    Older platforms omit the field entirely, and pydantic defaults it to ``0.0``
+    (no burn), which is exactly what the deployed constant already does; a
+    validator running against one folds byte-identically to before.
+
+    Note the field is *not* a schedule: the platform resolves it, so every
+    validator polling the ledger reads the same number and the fleet never has
+    to agree about clocks. It is still not instantaneous — a validator that
+    submitted just before a change keeps its vector until its next epoch.
+    """
+    burn_share = getattr(ledger, "burn_share", None)
+    if not isinstance(burn_share, (int, float)) or isinstance(burn_share, bool):
+        return default_share
+    burn_share = float(burn_share)
+    if not math.isfinite(burn_share) or not 0.0 <= burn_share <= 1.0:
+        return default_share
+    return 1.0 - burn_share
 
 
 def apply_miner_emission_cap(

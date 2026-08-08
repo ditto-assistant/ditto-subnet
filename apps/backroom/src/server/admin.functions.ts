@@ -40,6 +40,7 @@ import {
   applyScreenerReviewSettingsInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
+  setBurnSettingsInputSchema,
   setContinualRetestSettingsInputSchema,
   setQueuePolicySettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
@@ -99,6 +100,8 @@ import {
   updateArtifactReleaseSettings as updateArtifactReleaseSettingsService,
   fetchSubmissionSettingsControl,
   updateSubmissionSettings as updateSubmissionSettingsService,
+  fetchBurnSettings,
+  setBurnSettings as setBurnSettingsService,
   fetchContinualRetestSettings,
   setContinualRetestSettings as setContinualRetestSettingsService,
   fetchQueuePolicySettings,
@@ -228,6 +231,23 @@ export const setSubmissionSettings = createServerFn({ method: 'POST' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return updateSubmissionSettingsService(context.session.email, data)
+  })
+
+export const getBurnSettings = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchBurnSettings()
+  })
+
+export const updateBurnSettings = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(setBurnSettingsInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return setBurnSettingsService(data, context.session.email)
   })
 
 export const getContinualRetestSettings = createServerFn({ method: 'GET' })

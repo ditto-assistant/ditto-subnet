@@ -11,6 +11,9 @@ from ditto.api_server.endpoints.admin_attestation import (
 from ditto.api_server.endpoints.admin_benchmark_rollout import (
     router as admin_benchmark_rollout_router,
 )
+from ditto.api_server.endpoints.admin_burn_settings import (
+    router as admin_burn_settings_router,
+)
 from ditto.api_server.endpoints.admin_continual_retest_settings import (
     router as admin_continual_retest_settings_router,
 )
@@ -79,6 +82,7 @@ __all__ = [
     "admin_artifact_release_settings_router",
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
+    "admin_burn_settings_router",
     "admin_inference_concurrency_settings_router",
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",

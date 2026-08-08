@@ -178,6 +178,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/burn-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_burn_settings_get"];
+        put?: never;
+        /** Create Settings Revision */
+        post: operations["create_settings_revision_api_v1_admin_burn_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/continual-retest-settings": {
         parameters: {
             query?: never;
@@ -3585,6 +3603,35 @@ export interface components {
             /** Target Dataset Sha256 */
             target_dataset_sha256: string;
         };
+        /** AdminBurnSettingsRequest */
+        AdminBurnSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["BurnSettings"];
+        };
+        /** AdminBurnSettingsResponse */
+        AdminBurnSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["BurnSettingsRevision"][];
+            default: components["schemas"]["BurnSettings"];
+            effective: components["schemas"]["EffectiveBurnSettings"];
+            /** History */
+            history: components["schemas"]["BurnSettingsRevision"][];
+        };
         /** AdminContinualRetestSettingsRequest */
         AdminContinualRetestSettingsRequest: {
             /**
@@ -6742,6 +6789,38 @@ export interface components {
             signature: string;
         };
         /**
+         * BurnSettings
+         * @description Complete subnet-global emission-burn policy stored per revision.
+         */
+        BurnSettings: {
+            /**
+             * Burn Share
+             * @default 0
+             */
+            burn_share: number;
+        };
+        /** BurnSettingsRevision */
+        BurnSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["BurnSettings"];
+        };
+        /**
          * CaseScore
          * @description Per-case breakdown inside a :class:`ScoreReport`.
          *
@@ -7095,6 +7174,37 @@ export interface components {
             status: "healthy" | "degraded" | "unavailable";
             /** Unhealthy Containers */
             unhealthy_containers: number;
+        };
+        /** EffectiveBurnSettings */
+        EffectiveBurnSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Live Validator Count */
+            live_validator_count?: number | null;
+            /** Max Age Seconds */
+            max_age_seconds: number;
+            /**
+             * Max Burn Share
+             * @default 1
+             */
+            max_burn_share: number;
+            /**
+             * Min Burn Share
+             * @default 0
+             */
+            min_burn_share: number;
+            /** Miner Emission Share */
+            miner_emission_share: number;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["BurnSettings"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
         };
         /** EffectiveContinualRetestSettings */
         EffectiveContinualRetestSettings: {
@@ -8011,6 +8121,7 @@ export interface components {
          *     so the exposed pool and the computed weights agree by construction.
          * @example {
          *       "age_seconds": 0,
+         *       "burn_share": 0,
          *       "continual_retest_cohort_size": 5,
          *       "count": 1,
          *       "entries": [
@@ -8040,6 +8151,12 @@ export interface components {
              * @default 0
              */
             age_seconds: number;
+            /**
+             * Burn Share
+             * @description Share of miner emission the fold must route to the subnet owner's burn hotkey; the remainder is normalized across the eligible miner weights. Operator-owned and resolved here, so every validator reads one already-decided scalar rather than a schedule it has to evaluate against its own clock. ``0.0`` (the default, and what an older platform's omission means) releases the full miner emission through KOTH, which is what the validator's frozen MINER_EMISSION_SHARE already does -- so a validator that ignores this field keeps folding exactly as it did. On a served last-known-good snapshot this is the share that was current when the snapshot was taken.
+             * @default 0
+             */
+            burn_share: number;
             /**
              * Continual Retest Cohort Size
              * @description How many ranked agents the operator currently has the continual retest lane covering: 5 (the emission set) up to 25. Advisory planning input for the validator's shared-seed round — the platform still enforces membership when it issues the lease, so a validator that ignores this field simply keeps planning the top five and loses nothing but the extra coverage. Emissions, the weight fold, and wave completion are always the top five, whatever this says.
@@ -14197,6 +14314,72 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_burn_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminBurnSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_burn_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminBurnSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BurnSettingsRevision"];
                 };
             };
             /** @description Validation Error */

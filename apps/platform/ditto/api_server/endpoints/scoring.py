@@ -90,6 +90,14 @@ class _LedgerSnapshot:
 
     entries: list[LedgerEntry]
     generated_at: datetime
+    burn_share: float = 0.0
+    """The burn share that was current when this snapshot was taken.
+
+    Carried on the snapshot rather than re-resolved on the stale path: the
+    resolver reads the same database that just failed, and defaulting the field
+    instead would silently hand the fleet a 0% burn for as long as the outage
+    lasts. Replaying the last known share is the only answer that does not move
+    emissions because of a database problem."""
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -320,6 +328,9 @@ async def scores(
         continual_settings = await request.app.state.continual_retest_settings.resolve(
             getattr(request.app.state, "session_maker", None)
         )
+        burn_settings = await request.app.state.burn_settings.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
         continual_mean_active = aggregate_is_active(
             continual_settings, fleet_protocol_ready=fleet_protocol_ready
         )
@@ -409,7 +420,12 @@ async def scores(
         for r in rows
     ]
     _store_snapshot(
-        request, _LedgerSnapshot(entries=entries, generated_at=generated_at)
+        request,
+        _LedgerSnapshot(
+            entries=entries,
+            generated_at=generated_at,
+            burn_share=burn_settings.burn_share,
+        ),
     )
     logger.info(
         "validator=%s read scoring ledger: %d miner(s)",
@@ -427,6 +443,10 @@ async def scores(
         # so a Backroom change reaches every validator on its next ledger poll
         # rather than on a redeploy.
         continual_retest_cohort_size=continual_settings.retest_cohort_size,
+        # Consensus-relevant, unlike the cohort size: this is the miner/burn
+        # split the fold applies. Resolved here so every validator reads one
+        # decided scalar instead of evaluating a schedule against its own clock.
+        burn_share=burn_settings.burn_share,
     )
 
 
@@ -487,4 +507,6 @@ def _serve_last_known(
         generated_at=snapshot.generated_at,
         stale=True,
         age_seconds=max(0, age),
+        # Replayed, not re-resolved: see _LedgerSnapshot.burn_share.
+        burn_share=snapshot.burn_share,
     )

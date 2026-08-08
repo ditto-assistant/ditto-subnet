@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as OauthConsentRouteImport } from './routes/oauth.consent'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AuthenticatedValidatorSlotsRouteImport } from './routes/_authenticated/validator-slots'
 import { Route as AuthenticatedSubmissionSettingsRouteImport } from './routes/_authenticated/submission-settings'
@@ -24,6 +25,7 @@ import { Route as AuthenticatedInferenceRoutingRouteImport } from './routes/_aut
 import { Route as AuthenticatedInferenceConcurrencyRouteImport } from './routes/_authenticated/inference-concurrency'
 import { Route as AuthenticatedCopyReviewRouteImport } from './routes/_authenticated/copy-review'
 import { Route as AuthenticatedContinualRetestsRouteImport } from './routes/_authenticated/continual-retests'
+import { Route as AuthenticatedBurnRouteImport } from './routes/_authenticated/burn'
 import { Route as AuthenticatedBenchmarkRolloutRouteImport } from './routes/_authenticated/benchmark-rollout'
 import { Route as AuthenticatedArtifactReleaseRouteImport } from './routes/_authenticated/artifact-release'
 import { Route as AuthenticatedScreeningQuarantineIndexRouteImport } from './routes/_authenticated/screening-quarantine.index'
@@ -42,6 +44,11 @@ const AuthenticatedRoute = AuthenticatedRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthConsentRoute = OauthConsentRouteImport.update({
+  id: '/oauth/consent',
+  path: '/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
@@ -113,6 +120,11 @@ const AuthenticatedContinualRetestsRoute =
     path: '/continual-retests',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedBurnRoute = AuthenticatedBurnRouteImport.update({
+  id: '/burn',
+  path: '/burn',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedBenchmarkRolloutRoute =
   AuthenticatedBenchmarkRolloutRouteImport.update({
     id: '/benchmark-rollout',
@@ -149,6 +161,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
+  '/burn': typeof AuthenticatedBurnRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
   '/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
@@ -161,6 +174,7 @@ export interface FileRoutesByFullPath {
   '/submission-settings': typeof AuthenticatedSubmissionSettingsRoute
   '/validator-slots': typeof AuthenticatedValidatorSlotsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/screening-quarantine/disputes': typeof AuthenticatedScreeningQuarantineDisputesRoute
   '/screening-quarantine/history': typeof AuthenticatedScreeningQuarantineHistoryRoute
   '/screening-quarantine/': typeof AuthenticatedScreeningQuarantineIndexRoute
@@ -170,6 +184,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
+  '/burn': typeof AuthenticatedBurnRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
   '/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
@@ -181,6 +196,7 @@ export interface FileRoutesByTo {
   '/submission-settings': typeof AuthenticatedSubmissionSettingsRoute
   '/validator-slots': typeof AuthenticatedValidatorSlotsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/screening-quarantine/disputes': typeof AuthenticatedScreeningQuarantineDisputesRoute
   '/screening-quarantine/history': typeof AuthenticatedScreeningQuarantineHistoryRoute
   '/screening-quarantine': typeof AuthenticatedScreeningQuarantineIndexRoute
@@ -192,6 +208,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_authenticated/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/_authenticated/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
+  '/_authenticated/burn': typeof AuthenticatedBurnRoute
   '/_authenticated/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/_authenticated/copy-review': typeof AuthenticatedCopyReviewRoute
   '/_authenticated/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
@@ -204,6 +221,7 @@ export interface FileRoutesById {
   '/_authenticated/submission-settings': typeof AuthenticatedSubmissionSettingsRoute
   '/_authenticated/validator-slots': typeof AuthenticatedValidatorSlotsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/_authenticated/screening-quarantine/disputes': typeof AuthenticatedScreeningQuarantineDisputesRoute
   '/_authenticated/screening-quarantine/history': typeof AuthenticatedScreeningQuarantineHistoryRoute
   '/_authenticated/screening-quarantine/': typeof AuthenticatedScreeningQuarantineIndexRoute
@@ -215,6 +233,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/artifact-release'
     | '/benchmark-rollout'
+    | '/burn'
     | '/continual-retests'
     | '/copy-review'
     | '/inference-concurrency'
@@ -227,6 +246,7 @@ export interface FileRouteTypes {
     | '/submission-settings'
     | '/validator-slots'
     | '/auth/callback'
+    | '/oauth/consent'
     | '/screening-quarantine/disputes'
     | '/screening-quarantine/history'
     | '/screening-quarantine/'
@@ -236,6 +256,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/artifact-release'
     | '/benchmark-rollout'
+    | '/burn'
     | '/continual-retests'
     | '/copy-review'
     | '/inference-concurrency'
@@ -247,6 +268,7 @@ export interface FileRouteTypes {
     | '/submission-settings'
     | '/validator-slots'
     | '/auth/callback'
+    | '/oauth/consent'
     | '/screening-quarantine/disputes'
     | '/screening-quarantine/history'
     | '/screening-quarantine'
@@ -257,6 +279,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/_authenticated/artifact-release'
     | '/_authenticated/benchmark-rollout'
+    | '/_authenticated/burn'
     | '/_authenticated/continual-retests'
     | '/_authenticated/copy-review'
     | '/_authenticated/inference-concurrency'
@@ -269,6 +292,7 @@ export interface FileRouteTypes {
     | '/_authenticated/submission-settings'
     | '/_authenticated/validator-slots'
     | '/auth/callback'
+    | '/oauth/consent'
     | '/_authenticated/screening-quarantine/disputes'
     | '/_authenticated/screening-quarantine/history'
     | '/_authenticated/screening-quarantine/'
@@ -279,6 +303,7 @@ export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   LoginRoute: typeof LoginRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
+  OauthConsentRoute: typeof OauthConsentRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -302,6 +327,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/consent': {
+      id: '/oauth/consent'
+      path: '/oauth/consent'
+      fullPath: '/oauth/consent'
+      preLoaderRoute: typeof OauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth/callback': {
@@ -388,6 +420,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedContinualRetestsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/burn': {
+      id: '/_authenticated/burn'
+      path: '/burn'
+      fullPath: '/burn'
+      preLoaderRoute: typeof AuthenticatedBurnRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/benchmark-rollout': {
       id: '/_authenticated/benchmark-rollout'
       path: '/benchmark-rollout'
@@ -450,6 +489,7 @@ const AuthenticatedScreeningQuarantineRouteWithChildren =
 interface AuthenticatedRouteChildren {
   AuthenticatedArtifactReleaseRoute: typeof AuthenticatedArtifactReleaseRoute
   AuthenticatedBenchmarkRolloutRoute: typeof AuthenticatedBenchmarkRolloutRoute
+  AuthenticatedBurnRoute: typeof AuthenticatedBurnRoute
   AuthenticatedContinualRetestsRoute: typeof AuthenticatedContinualRetestsRoute
   AuthenticatedCopyReviewRoute: typeof AuthenticatedCopyReviewRoute
   AuthenticatedInferenceConcurrencyRoute: typeof AuthenticatedInferenceConcurrencyRoute
@@ -466,6 +506,7 @@ interface AuthenticatedRouteChildren {
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedArtifactReleaseRoute: AuthenticatedArtifactReleaseRoute,
   AuthenticatedBenchmarkRolloutRoute: AuthenticatedBenchmarkRolloutRoute,
+  AuthenticatedBurnRoute: AuthenticatedBurnRoute,
   AuthenticatedContinualRetestsRoute: AuthenticatedContinualRetestsRoute,
   AuthenticatedCopyReviewRoute: AuthenticatedCopyReviewRoute,
   AuthenticatedInferenceConcurrencyRoute:
@@ -491,6 +532,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LoginRoute: LoginRoute,
   AuthCallbackRoute: AuthCallbackRoute,
+  OauthConsentRoute: OauthConsentRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

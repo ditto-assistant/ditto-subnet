@@ -1,0 +1,4480 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BackroomSession } from '../lib/auth.types'
+import { deriveRequestId } from '../lib/idempotency'
+import {
+  BACKROOM_ARTIFACT_SCOPE,
+  BACKROOM_READ_SCOPE,
+  BACKROOM_WRITE_SCOPE,
+  createBackroomMcpServer,
+  type McpGrantProps,
+} from './mcp.server'
+
+const session: BackroomSession = {
+  version: 2,
+  uid: 'staff-1',
+  email: 'peyton@omniaura.ai',
+  name: 'Staff User',
+  picture: '',
+  accessLevel: 'write',
+  issuedAt: Date.now(),
+  expiresAt: Date.now() + 7 * 24 * 60 * 60_000,
+}
+
+const originalAdminToken = process.env.DITTO_ADMIN_API_TOKEN
+
+async function connect(scopes: Array<string>) {
+  const props: McpGrantProps = { session, scopes, clientName: 'Test client' }
+  const server = createBackroomMcpServer(props)
+  const client = new Client({ name: 'backroom-test', version: '1.0.0' })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+  return { client, server }
+}
+
+function readTextResult(response: unknown) {
+  if (!response || typeof response !== 'object' || !('content' in response)) {
+    throw new Error('Expected an MCP content result')
+  }
+  const { content } = response
+  if (!Array.isArray(content)) throw new Error('Expected MCP result content')
+  const text = content.find(
+    (item): item is { type: 'text'; text: string } =>
+      !!item &&
+      typeof item === 'object' &&
+      item.type === 'text' &&
+      typeof item.text === 'string',
+  )?.text
+  if (text === undefined) throw new Error('Expected an MCP text result')
+  return text
+}
+
+function readJsonResult(response: unknown) {
+  return JSON.parse(readTextResult(response)) as unknown
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  if (originalAdminToken === undefined) delete process.env.DITTO_ADMIN_API_TOKEN
+  else process.env.DITTO_ADMIN_API_TOKEN = originalAdminToken
+})
+
+describe('Backroom MCP tools', () => {
+  it('publishes every Backroom operation with MCP safety annotations', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.listTools()
+
+    expect(response.tools.map((tool) => tool.name).sort()).toEqual(
+      [
+        'execute_screening_quarantine_batch',
+        'expand_benchmark_rollout_cohort',
+        'get_backroom_access',
+        'get_backroom_tool_help',
+        'get_ath_review',
+        'get_benchmark_contract_refresh',
+        'get_benchmark_contract_migration',
+        'get_benchmark_rollout_qualification',
+        'get_burn_settings',
+        'get_copy_review_source_diff',
+        'get_continual_retest_settings',
+        'get_efficiency_bonus_settings',
+        'get_inference_concurrency_settings',
+        'get_queue_policy_settings',
+        'get_validator_slot_settings',
+        'set_burn_settings',
+        'set_continual_retest_settings',
+        'set_efficiency_bonus_settings',
+        'set_queue_policy_settings',
+        'set_validator_slot_settings',
+        'read_copy_review_source_diff_file',
+        'get_screening_baseline_diff',
+        'read_screening_baseline_diff_file',
+        'get_screening_quarantine_context',
+        'get_screening_quarantine_contexts',
+        'get_screening_review_queue',
+        'get_screening_submission',
+        'get_source_release_policy',
+        'get_owner_attestations',
+        'get_submission_cooldown',
+        'get_validation_retry',
+        'list_stuck_submissions',
+        'list_lease_revocations',
+        'batch_retry_validator_evaluation',
+        'agent_scoring_readiness',
+        'get_agent_scores',
+        'get_leaderboard',
+        'get_miner_owner_footprint',
+        'get_score_history',
+        'get_screened_image_rebuild',
+        'get_validator_score_replacement',
+        'open_ath_review',
+        'preview_screening_quarantine_batch',
+        'list_screening_quarantines',
+        'list_screening_disputes',
+        'list_screening_source_files',
+        'list_screening_submissions',
+        'read_screening_source_file',
+        'rebuild_screened_image',
+        'get_screening_artifact',
+        'refresh_benchmark_contract',
+        'migrate_zero_score_benchmark_contract',
+        'remove_failed_submission_from_queue',
+        'evict_live_validator_leases',
+        'reinstate_evicted_submission_to_queue',
+        'qualify_scored_benchmark_rollout',
+        'resolve_screening_quarantine',
+        'resolve_screening_dispute',
+        'resolve_ath_review',
+        'rescreen_rejected_submission',
+        'retry_failed_screening_now',
+        'retry_validator_evaluation',
+        'replace_validator_score',
+        'set_inference_concurrency_settings',
+        'set_source_release_policy',
+        'set_submission_cooldown',
+      ].sort(),
+    )
+    for (const tool of response.tools) {
+      const reason = (
+        tool.inputSchema as {
+          properties?: Record<string, { maxLength?: number }>
+        }
+      ).properties?.reason
+      expect(reason?.maxLength, `${tool.name} must preserve detailed reasons`).toBeUndefined()
+    }
+    // The catalog is loaded before any call. Keep both the complete JSON and
+    // its descriptions bounded so a new operational tutorial cannot silently
+    // tax every MCP session. Before catalog summaries this was ~109k chars,
+    // including ~57k chars of descriptions alone.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(75_000)
+    const descriptions = response.tools.map((tool) => tool.description ?? '')
+    expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
+      20_000,
+    )
+    expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
+    expect(
+      response.tools.find((tool) => tool.name === 'get_screening_review_queue')?.annotations
+        ?.readOnlyHint,
+    ).toBe(true)
+    expect(
+      response.tools.find((tool) => tool.name === 'resolve_screening_quarantine')?.annotations
+        ?.destructiveHint,
+    ).toBe(true)
+    expect(
+      response.tools.find((tool) => tool.name === 'get_screening_artifact')?.annotations
+        ?.readOnlyHint,
+    ).toBe(true)
+    expect(response.tools.some((tool) => tool.name.includes('start_benchmark'))).toBe(false)
+    expect(response.tools.some((tool) => tool.name.includes('supersede_benchmark'))).toBe(false)
+    // Subnet scoring policy is a production mutation, never a read hint, and it
+    // must stay separable from the product entitlement flags in its description.
+    expect(
+      response.tools.find((tool) => tool.name === 'get_efficiency_bonus_settings')?.annotations
+        ?.readOnlyHint,
+    ).toBe(true)
+    const efficiencyWrite = response.tools.find(
+      (tool) => tool.name === 'set_efficiency_bonus_settings',
+    )
+    expect(efficiencyWrite?.annotations?.readOnlyHint).toBe(false)
+    expect(efficiencyWrite?.annotations?.destructiveHint).toBe(true)
+    expect(efficiencyWrite?.description).toContain('not served by this server')
+    expect(
+      response.tools.find((tool) => tool.name === 'get_continual_retest_settings')
+        ?.annotations?.readOnlyHint,
+    ).toBe(true)
+    const retestWrite = response.tools.find(
+      (tool) => tool.name === 'set_continual_retest_settings',
+    )
+    expect(retestWrite?.annotations?.destructiveHint).toBe(true)
+    // A revision stores the whole policy, so the published schema has to demand
+    // the whole policy. If any of these drifts back to optional, an agent that
+    // flips one switch silently writes defaults over the rest — reverting the
+    // wave_membership rollback among them.
+    const retestSettings = (
+      retestWrite?.inputSchema?.properties as
+        | { settings?: { required?: Array<string> } }
+        | undefined
+    )?.settings
+    expect(retestSettings?.required).toEqual(
+      expect.arrayContaining([
+        'aggregate_mode',
+        'idle_retests_enabled',
+        'wave_membership',
+        'retest_cohort_size',
+        'retest_eligibility_mode',
+        'retest_eligibility_z',
+        'retest_cohort_max_size',
+      ]),
+    )
+    expect(retestWrite?.description).toContain('CHANGES WHAT VALIDATORS WEIGHT')
+    expect(retestWrite?.description).toContain('every one of these fields is required')
+    expect(
+      response.tools.find((tool) => tool.name === 'get_queue_policy_settings')?.annotations
+        ?.readOnlyHint,
+    ).toBe(true)
+    const queuePolicyWrite = response.tools.find(
+      (tool) => tool.name === 'set_queue_policy_settings',
+    )
+    expect(queuePolicyWrite?.annotations?.readOnlyHint).toBe(false)
+    expect(queuePolicyWrite?.annotations?.destructiveHint).toBe(true)
+    // Operators read these descriptions to decide what is live now versus what
+    // only lands at the next rollout, so the two lifetimes must stay documented.
+    expect(queuePolicyWrite?.description).toContain('NEVER resizes an in-flight rollout')
+    expect(queuePolicyWrite?.description).toContain('REFUSED while a benchmark rollout is open')
+    expect(queuePolicyWrite?.description).toContain('queue-fairness and capacity rail')
+    expect(queuePolicyWrite?.description).toContain('The whole nested block is required')
+    expect(queuePolicyWrite?.description).toContain('ships DISABLED')
+    expect(queuePolicyWrite?.description).toContain('not served by this server')
+    expect(
+      response.tools.find((tool) => tool.name === 'get_validator_slot_settings')?.annotations
+        ?.readOnlyHint,
+    ).toBe(true)
+    const validatorSlotWrite = response.tools.find(
+      (tool) => tool.name === 'set_validator_slot_settings',
+    )
+    expect(validatorSlotWrite?.annotations?.readOnlyHint).toBe(false)
+    expect(validatorSlotWrite?.annotations?.destructiveHint).toBe(true)
+    // Operators read these descriptions before ramping a live fleet, so the
+    // properties that make the confirmation meaningful must stay documented.
+    expect(validatorSlotWrite?.description).toContain('APPLY VALIDATOR SLOT CAP <n>')
+    expect(validatorSlotWrite?.description).toContain('It is deliberately not derived')
+    expect(validatorSlotWrite?.description).toContain('never revokes tickets a validator already holds')
+    expect(validatorSlotWrite?.description).toContain('a partial write is rejected')
+    expect(validatorSlotWrite?.description).toContain('not served by this server')
+    // The read tool has to pre-empt the "fleet looks idle" misread.
+    expect(
+      response.tools.find((tool) => tool.name === 'get_validator_slot_settings')?.description,
+    ).toContain('not an underutilized host')
+    // Eviction destroys benchmark runs a validator may still be executing, and
+    // the tool description is the operator's only documentation at the call
+    // site. These are the four things they must not have to guess: what it
+    // frees, what survives it, which phrase it demands, and why the two
+    // queue-removal tools are not interchangeable.
+    const evictLeases = response.tools.find(
+      (tool) => tool.name === 'evict_live_validator_leases',
+    )
+    expect(evictLeases?.annotations?.readOnlyHint).toBe(false)
+    expect(evictLeases?.annotations?.destructiveHint).toBe(true)
+    expect(evictLeases?.description).toContain('EVICT LIVE VALIDATOR LEASES')
+    expect(evictLeases?.description).toContain('REMOVE FROM VALIDATOR QUEUE')
+    expect(evictLeases?.description).toContain('remove_failed_submission_from_queue')
+    expect(evictLeases?.description).toContain('can still reach quorum automatically')
+    expect(evictLeases?.description).toContain('90-minute lease')
+    expect(evictLeases?.description).toContain('does NOT mint a no-fault retry grant')
+    expect(evictLeases?.description).toContain('NOT deletion, NOT rejection, and NOT rescreening')
+    // And the operator who hits the removal tool's refusal has to be told where
+    // the escape hatch is, at the moment they are refused.
+    expect(
+      response.tools.find((tool) => tool.name === 'remove_failed_submission_from_queue')
+        ?.description,
+    ).toContain('evict_live_validator_leases')
+    // The read tool is where an operator decides whether to reach for it.
+    const validationRetryRead = response.tools.find(
+      (tool) => tool.name === 'get_validation_retry',
+    )
+    expect(validationRetryRead?.description).toContain('eviction_allowed')
+    expect(validationRetryRead?.description).toContain('eviction_blocking_reason')
+    expect(validationRetryRead?.description).toContain('live_ticket_count')
+    expect(validationRetryRead?.description).toContain('evicted_validator_hotkeys')
+    // Reinstatement is what makes the eviction lever usable at all, so the
+    // operator must be told at the eviction call site that it is reversible,
+    // and told at the reversal call site exactly what it does not give back.
+    expect(evictLeases?.description).toContain('REVERSIBLE')
+    expect(evictLeases?.description).toContain('reinstate_evicted_submission_to_queue')
+    const reinstate = response.tools.find(
+      (tool) => tool.name === 'reinstate_evicted_submission_to_queue',
+    )
+    expect(reinstate?.annotations?.readOnlyHint).toBe(false)
+    expect(reinstate?.annotations?.destructiveHint).toBe(true)
+    expect(reinstate?.description).toContain('REINSTATE TO VALIDATOR QUEUE')
+    expect(reinstate?.description).toContain('EVICT LIVE VALIDATOR LEASES')
+    expect(reinstate?.description).toContain('REMOVE FROM VALIDATOR QUEUE')
+    expect(reinstate?.description).toContain('does not mint a no-fault retry grant')
+    expect(reinstate?.description).toContain('no longer the active one')
+    expect(reinstate?.description).toContain('retry_budget_snapshot')
+    expect(validationRetryRead?.description).toContain('reinstatement_allowed')
+    expect(validationRetryRead?.description).toContain('reinstated_at')
+    // Why a ticket ended, at the call site. infra_retry_grants is named
+    // explicitly because it is the field whose absence caused 2026-07-27 to be
+    // read as "the validator has gone silent" when the failures were in fact
+    // being reported and the platform was re-leasing on them.
+    expect(validationRetryRead?.description).toContain('infra_retry_grants')
+    expect(validationRetryRead?.description).toContain('silently_expired')
+    expect(validationRetryRead?.description).toContain('failure_reason')
+    const stuckList = response.tools.find(
+      (tool) => tool.name === 'list_stuck_submissions',
+    )
+    expect(stuckList?.description).toContain('silent_expiry_count')
+    expect(stuckList?.description).toContain('infra_retry_grants')
+    // The revocation ledger is read-only, and its two hazards have to be stated
+    // where an operator reads them: evidence is not a fixed shape, and an empty
+    // answer is a finding rather than an unwired feature.
+    const revocations = response.tools.find(
+      (tool) => tool.name === 'list_lease_revocations',
+    )
+    expect(revocations?.annotations?.readOnlyHint).toBe(true)
+    expect(revocations?.annotations?.destructiveHint).toBe(false)
+    expect(revocations?.description).toContain('WHOLE AND UNTYPED')
+    expect(revocations?.description).toContain(
+      'AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE',
+    )
+    expect(revocations?.description).toContain('validator_lease_audit')
+    expect(revocations?.description).toContain('operator_evicted')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('keeps detailed operational help available without loading it in the catalog', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_backroom_tool_help',
+      arguments: { tool: 'set_queue_policy_settings' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const payload = readJsonResult(response) as { tool: string; guidance: string }
+    expect(payload.tool).toBe('set_queue_policy_settings')
+    expect(payload.guidance.length).toBeGreaterThan(3_000)
+    expect(payload.guidance).toContain('APPLY QUEUE POLICY SETTINGS')
+    expect(payload.guidance).toContain('deferred_source_review')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('omits settings history by default and pages it newest-first on demand', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const revision = (number: number, createdDay = number) => ({
+      revision: number,
+      parent_revision: Math.max(0, number - 1),
+      disclosure: 'public',
+      embargo_hours: 48,
+      reason: `policy revision ${number}`,
+      actor: 'peyton@omniaura.ai',
+      created_at: `2026-07-0${createdDay}T12:00:00Z`,
+    })
+    const control = {
+      current: revision(3),
+      // Deliberately unordered: the MCP contract, not upstream incidental
+      // ordering, guarantees newest-first audit pages.
+      // Revision 1 was backfilled after revisions 2 and 3. Timestamp order,
+      // rather than revision order, must win.
+      history: [revision(1, 5), revision(3, 3), revision(2, 4)],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(control))
+      .mockResolvedValueOnce(Response.json(control))
+      .mockResolvedValueOnce(
+        Response.json({
+          current: { ...revision(4), created_at: null },
+          history: [2, 4, 3].map((number) => ({
+            ...revision(number),
+            created_at: null,
+          })),
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const currentOnly = await client.callTool({
+      name: 'get_source_release_policy',
+      arguments: {},
+    })
+    expect(readJsonResult(currentOnly)).toMatchObject({
+      current: { revision: 3 },
+      history: [],
+      history_count: 3,
+      history_limit: 0,
+      history_offset: 0,
+      history_has_more: true,
+    })
+
+    const historyPage = await client.callTool({
+      name: 'get_source_release_policy',
+      arguments: { historyLimit: 2, historyOffset: 0 },
+    })
+    expect(readJsonResult(historyPage)).toMatchObject({
+      history: [{ revision: 1 }, { revision: 2 }],
+      history_count: 3,
+      history_limit: 2,
+      history_offset: 0,
+      history_has_more: true,
+    })
+
+    const nullTimestampPage = await client.callTool({
+      name: 'get_source_release_policy',
+      arguments: { historyLimit: 3 },
+    })
+    expect(readJsonResult(nullTimestampPage)).toMatchObject({
+      history: [{ revision: 4 }, { revision: 3 }, { revision: 2 }],
+      history_count: 3,
+      history_has_more: false,
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('publishes bounded pagination inputs for every MCP collection page', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.listTools()
+    const paginatedTools = [
+      'get_screening_review_queue',
+      'list_screening_quarantines',
+      'list_screening_disputes',
+      'list_screening_source_files',
+      'list_screening_submissions',
+      'list_stuck_submissions',
+      'list_lease_revocations',
+      'get_leaderboard',
+    ]
+
+    for (const name of paginatedTools) {
+      const tool = response.tools.find((candidate) => candidate.name === name)
+      const properties = tool?.inputSchema?.properties as
+        | Record<
+            string,
+            {
+              default?: unknown
+              maximum?: number
+              minimum?: number
+            }
+          >
+        | undefined
+
+      expect(tool, `${name} must stay registered`).toBeDefined()
+      expect(properties?.limit, `${name} must publish a limit`).toMatchObject({
+        minimum: 1,
+      })
+      expect(properties?.limit?.maximum, `${name} must cap its page size`).toBeLessThanOrEqual(200)
+      expect(properties?.limit?.default, `${name} must default to a context-safe page`).toBeLessThanOrEqual(50)
+      expect(properties?.offset, `${name} must publish an offset`).toMatchObject({
+        minimum: 0,
+        default: 0,
+      })
+    }
+
+    await client.close()
+    await server.close()
+  })
+
+  it('makes every settings audit history opt-in and bounded', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.listTools()
+    const settingsReads = [
+      'get_efficiency_bonus_settings',
+      'get_source_release_policy',
+      'get_submission_cooldown',
+      'get_continual_retest_settings',
+      'get_queue_policy_settings',
+      'get_validator_slot_settings',
+      'get_inference_concurrency_settings',
+    ]
+
+    for (const name of settingsReads) {
+      const tool = response.tools.find((candidate) => candidate.name === name)
+      const properties = tool?.inputSchema?.properties as
+        | Record<string, { default?: unknown; maximum?: number; minimum?: number }>
+        | undefined
+      expect(properties?.historyLimit, name).toMatchObject({
+        minimum: 0,
+        maximum: 50,
+        default: 0,
+      })
+      expect(properties?.historyOffset, name).toMatchObject({ minimum: 0, default: 0 })
+    }
+
+    for (const name of ['list_screening_submissions', 'list_screening_quarantines']) {
+      const tool = response.tools.find((candidate) => candidate.name === name)
+      const properties = tool?.inputSchema?.properties as
+        | Record<string, { default?: unknown; enum?: Array<string> }>
+        | undefined
+      expect(properties?.detail, name).toMatchObject({
+        default: 'summary',
+        enum: ['summary', 'full'],
+      })
+    }
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reports the staff identity and read-only grant without network access', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_backroom_access',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      accessLevel: 'read-only',
+      scopes: [BACKROOM_READ_SCOPE],
+      user: { email: 'peyton@omniaura.ai' },
+    })
+    expect(response.structuredContent).toBeUndefined()
+    expect(readTextResult(response)).not.toContain('\n')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('defense-in-depth rejects a write tool when the grant is read-only', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'resolve_screening_quarantine',
+      arguments: {
+        quarantineId: '11111111-1111-4111-8111-111111111111',
+        resolution: 'reject',
+        reason: 'a read-only grant must never reach this call',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(response.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining('read-only') }),
+      ]),
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('keeps batch preview read-only and batch execution write-scoped', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const decision = {
+      quarantineId: '11111111-1111-4111-8111-111111111111',
+      expectedAgentId: '22222222-2222-4222-8222-222222222222',
+      expectedArtifactSha256: 'ab'.repeat(32),
+      resolution: 'rescreen',
+      reason: 'Run the preserved artifact against the current policy',
+    }
+    const previewPayload = {
+      preview_token: `1234567890.${'a'.repeat(64)}`,
+      expires_at: '2026-07-17T16:10:00Z',
+      items: [
+        {
+          quarantine_id: decision.quarantineId,
+          agent_id: decision.expectedAgentId,
+          agent_name: 'review-agent',
+          artifact_sha256: decision.expectedArtifactSha256,
+          resolution: decision.resolution,
+          reason: decision.reason,
+          disposition: 'ready',
+          resulting_agent_status: 'screening_failed',
+          message: 'will set submission status to screening_failed',
+        },
+      ],
+      ready_count: 1,
+      already_applied_count: 0,
+      blocked_count: 0,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(previewPayload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const preview = await client.callTool({
+      name: 'preview_screening_quarantine_batch',
+      arguments: { decisions: [decision] },
+    })
+    expect(preview.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/batch-preview')
+
+    const execute = await client.callTool({
+      name: 'execute_screening_quarantine_batch',
+      arguments: {
+        decisions: [decision],
+        previewToken: previewPayload.preview_token,
+        confirmed: true,
+      },
+    })
+    expect(execute.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('inspects and refreshes a benchmark contract with exact MCP guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const artifactSha256 = 'ab'.repeat(32)
+    const datasetSha256 = 'cd'.repeat(32)
+    const detail = {
+      agent_id: agentId,
+      agent_name: 'stale-v3-agent',
+      agent_status: 'evaluating',
+      artifact_sha256: artifactSha256,
+      bench_version: 3,
+      dataset_sha256: datasetSha256,
+      score_count: 0,
+      screening_attempt_active: false,
+      refresh_allowed: true,
+      blocking_reason: null,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(detail))
+      .mockResolvedValueOnce(
+        Response.json({
+          agent_id: agentId,
+          agent_status: 'screening_failed',
+          bench_version: 3,
+          expired_ticket_count: 1,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const inspection = await client.callTool({
+      name: 'get_benchmark_contract_refresh',
+      arguments: { agentId },
+    })
+    expect(inspection.isError).not.toBe(true)
+    expect(readJsonResult(inspection)).toMatchObject({
+      agent_id: agentId,
+      refresh_allowed: true,
+    })
+
+    const refresh = await client.callTool({
+      name: 'refresh_benchmark_contract',
+      arguments: {
+        agentId,
+        expectedSha256: artifactSha256,
+        expectedBenchVersion: 3,
+        expectedDatasetSha256: datasetSha256,
+        expectedScoreCount: 0,
+        reason: 'Confirmed generator and validator dataset drift',
+      },
+    })
+    expect(refresh.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/refresh-benchmark-contract`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({
+          reason: 'Confirmed generator and validator dataset drift',
+          expected_sha256: artifactSha256,
+          expected_bench_version: 3,
+          expected_dataset_sha256: datasetSha256,
+          expected_score_count: 0,
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('inspects and rebuilds only a stale screened image with exact MCP guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const artifactSha256 = 'ab'.repeat(32)
+    const imageSha256 = 'cd'.repeat(32)
+    const imageUploadId = '22345678-1234-4234-8234-123456789012'
+    const detail = {
+      agent_id: agentId,
+      agent_name: 'stale-image-agent',
+      agent_status: 'evaluating',
+      artifact_sha256: artifactSha256,
+      bench_version: 8,
+      score_count: 0,
+      screened_image_sha256: imageSha256,
+      screened_image_upload_id: imageUploadId,
+      screening_attempt_active: false,
+      validator_ticket_active: true,
+      rebuild_allowed: true,
+      blocking_reason: null,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(detail))
+      .mockResolvedValueOnce(Response.json({
+        agent_id: agentId,
+        agent_status: 'evaluating',
+        bench_version: 8,
+        expired_ticket_count: 3,
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const inspection = await client.callTool({
+      name: 'get_screened_image_rebuild',
+      arguments: { agentId },
+    })
+    expect(inspection.isError).not.toBe(true)
+    expect(readJsonResult(inspection)).toMatchObject({
+      agent_id: agentId,
+      rebuild_allowed: true,
+    })
+
+    const rebuild = await client.callTool({
+      name: 'rebuild_screened_image',
+      arguments: {
+        agentId,
+        expectedSha256: artifactSha256,
+        expectedBenchVersion: 8,
+        expectedScoreCount: 0,
+        expectedImageSha256: imageSha256,
+        expectedImageUploadId: imageUploadId,
+        reason: 'Healthy validators reject this legacy image archive',
+      },
+    })
+    expect(rebuild.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/rebuild-screened-image`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({
+          reason: 'Healthy validators reject this legacy image archive',
+          expected_sha256: artifactSha256,
+          expected_bench_version: 8,
+          expected_score_count: 0,
+          expected_image_sha256: imageSha256,
+          expected_image_upload_id: imageUploadId,
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('inspects and replaces one validator score with exact MCP guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const validatorHotkey = '5Validator'
+    const requestId = '11111111-1111-4111-8111-111111111111'
+    const snapshot = 'ab'.repeat(32)
+    const detail = {
+      agent_id: agentId,
+      validator_hotkey: validatorHotkey,
+      agent_status: 'scored',
+      bench_version: 4,
+      score_count: 3,
+      quorum: 3,
+      snapshot,
+      run_id: 'run-123',
+      composite: 0.488,
+      ticket_status: 'scored',
+      ticket_deadline: '2026-07-20T04:00:00Z',
+      replacement_pending: false,
+      replacement_request_id: null,
+      replacement_reason: null,
+      replacement_actor: null,
+      replacement_allowed: true,
+      blocking_reason: null,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(detail))
+      .mockResolvedValueOnce(
+        Response.json({
+          request_id: requestId,
+          agent_id: agentId,
+          validator_hotkey: validatorHotkey,
+          original_run_id: 'run-123',
+          bench_version: 4,
+          replacement_deadline: '2026-07-20T05:30:00Z',
+          preserved_score_count: 3,
+          idempotent: false,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const inspection = await client.callTool({
+      name: 'get_validator_score_replacement',
+      arguments: { agentId, validatorHotkey },
+    })
+    expect(inspection.isError).not.toBe(true)
+    expect(readJsonResult(inspection)).toMatchObject({
+      agent_id: agentId,
+      validator_hotkey: validatorHotkey,
+      replacement_allowed: true,
+      run_id: 'run-123',
+    })
+
+    const replacement = await client.callTool({
+      name: 'replace_validator_score',
+      arguments: {
+        agentId,
+        validatorHotkey,
+        expectedSnapshot: snapshot,
+        expectedRunId: 'run-123',
+        reason: 'Verified validator relay failure corrupted this run',
+      },
+    })
+    expect(replacement.isError).not.toBe(true)
+    expect(readJsonResult(replacement)).toMatchObject({
+      original_run_id: 'run-123',
+      preserved_score_count: 3,
+      idempotent: false,
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/validators/${validatorHotkey}/replace-score`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('expands an open rollout cohort with exact MCP guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        active_version: 7,
+        desired_version: 8,
+        status: 'collecting',
+        blocked_reason: null,
+        capability_bench_version: 8,
+        canary_capable_validator_count: 4,
+        v3_capable_validator_count: 4,
+        current_hybrid_top_five: [],
+        qualification_converged: false,
+        members: [],
+        expansion: { previous_target: 10, new_target: 15, appended_members: 5 },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'expand_benchmark_rollout_cohort',
+      arguments: {
+        desiredVersion: 8,
+        expectedActiveVersion: 7,
+        expectedCurrentTarget: 10,
+        newTarget: 15,
+        reason: 'restore the intended top fifteen rollout cohort',
+        confirmation: 'EXPAND BENCHMARK V8 TO 15',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      expansion: { previous_target: 10, new_target: 15, appended_members: 5 },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/8/expand',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('inspects and qualifies a scored rollout member with exact MCP guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const rolloutId = '8f734f51-fde1-4cbb-8f43-15e6882804f4'
+    const artifactSha256 = 'ab'.repeat(32)
+    const datasetSha256 = 'cd'.repeat(32)
+    const detail = {
+      agent_id: agentId,
+      agent_name: 'legacy-champion',
+      agent_status: 'scored',
+      artifact_sha256: artifactSha256,
+      rollout_id: rolloutId,
+      source_bench_version: 2,
+      target_bench_version: 3,
+      currently_top_five: true,
+      rollout_member: false,
+      target_dataset_sha256: null,
+      total_score_count: 3,
+      source_score_count: 3,
+      target_score_count: 0,
+      screening_attempt_active: false,
+      validator_run_active: false,
+      qualification_allowed: true,
+      blocking_reason: null,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(detail))
+      .mockResolvedValueOnce(
+        Response.json({
+          agent_id: agentId,
+          agent_status: 'scored',
+          rollout_id: rolloutId,
+          target_bench_version: 3,
+          target_dataset_sha256: datasetSha256,
+          rollout_member: true,
+          screening_queued: true,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const inspection = await client.callTool({
+      name: 'get_benchmark_rollout_qualification',
+      arguments: { agentId },
+    })
+    expect(inspection.isError).not.toBe(true)
+    expect(readJsonResult(inspection)).toMatchObject({
+      agent_id: agentId,
+      qualification_allowed: true,
+    })
+
+    const qualification = await client.callTool({
+      name: 'qualify_scored_benchmark_rollout',
+      arguments: {
+        agentId,
+        expectedSha256: artifactSha256,
+        expectedRolloutId: rolloutId,
+        expectedTotalScoreCount: 3,
+        expectedSourceScoreCount: 3,
+        expectedTargetScoreCount: 0,
+        reason: 'Current hybrid champion requires policy v9 and benchmark v3',
+      },
+    })
+    expect(qualification.isError).not.toBe(true)
+    expect(readJsonResult(qualification)).toMatchObject({
+      agent_id: agentId,
+      rollout_member: true,
+      screening_queued: true,
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/qualify-benchmark-rollout`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+        body: JSON.stringify({
+          reason: 'Current hybrid champion requires policy v9 and benchmark v3',
+          expected_sha256: artifactSha256,
+          expected_rollout_id: rolloutId,
+          expected_total_score_count: 3,
+          expected_source_score_count: 3,
+          expected_target_score_count: 0,
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not qualify a scored rollout member without write access', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'qualify_scored_benchmark_rollout',
+      arguments: {
+        agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+        expectedSha256: 'ab'.repeat(32),
+        expectedRolloutId: '8f734f51-fde1-4cbb-8f43-15e6882804f4',
+        expectedTotalScoreCount: 3,
+        expectedSourceScoreCount: 3,
+        expectedTargetScoreCount: 0,
+        reason: 'Current hybrid champion requires policy v9 and benchmark v3',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the efficiency bonus policy still governed by the deployment seed', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const seed = {
+      enabled: false,
+      fold_enabled: false,
+      cap: 0.05,
+      deep_cap: 0.1,
+      deep_frontier_ratio: 0.5,
+      cohort_size: 25,
+      min_cohort: 8,
+      epoch_hours: 24,
+      quality_floor: 0,
+      memory_floor: 0,
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        current: [],
+        history: [],
+        seed_default: seed,
+        effective: {
+          revision: 0,
+          scope: '*',
+          settings: seed,
+          checksum: '',
+          source: 'seed',
+          fold_effective: false,
+          max_age_seconds: 5,
+        },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_efficiency_bonus_settings',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      current: [],
+      effective: { revision: 0, source: 'seed', fold_effective: false },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/efficiency-bonus-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the emission burn and the miner share it leaves', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const control = {
+      current: [],
+      history: [],
+      default: { burn_share: 0 },
+      effective: {
+        revision: 0,
+        scope: '*',
+        settings: { burn_share: 0 },
+        checksum: '',
+        source: 'default',
+        max_age_seconds: 5,
+        miner_emission_share: 1,
+        min_burn_share: 0,
+        max_burn_share: 1,
+        live_validator_count: 3,
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({ name: 'get_burn_settings', arguments: {} })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 0, source: 'default', miner_emission_share: 1 },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/burn-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies one burn revision and attributes it to the connected operator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const control = (burn_share: number, revision: number) => ({
+      current: [],
+      history: [],
+      default: { burn_share: 0 },
+      effective: {
+        revision,
+        scope: '*',
+        settings: { burn_share },
+        checksum: revision === 0 ? '' : 'ab'.repeat(32),
+        source: revision === 0 ? 'default' : 'revision',
+        max_age_seconds: 5,
+        miner_emission_share: 1 - burn_share,
+        min_burn_share: 0,
+        max_burn_share: 1,
+        live_validator_count: 3,
+      },
+    })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          revision: 1,
+          parent_revision: 0,
+          scope: '*',
+          settings: { burn_share: 0.25 },
+          reason: 'owner-approved emission burn change',
+          actor: 'peyton@omniaura.ai',
+          created_at: '2026-08-08T12:00:00Z',
+          checksum: 'ab'.repeat(32),
+        }),
+      )
+      .mockResolvedValueOnce(Response.json(control(0.25, 1)))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_burn_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { burn_share: 0.25 },
+        reason: 'owner-approved emission burn change',
+        confirmation: 'APPLY BURN SETTINGS',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 1, settings: { burn_share: 0.25 }, miner_emission_share: 0.75 },
+    })
+    // The signed-in operator, not a shared service identity, is what the
+    // platform records as the actor on a revision that moves TAO.
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/burn-settings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          scope: '*',
+          expected_revision: 0,
+          settings: { burn_share: 0.25 },
+          reason: 'owner-approved emission burn change',
+          actor: 'peyton@omniaura.ai',
+          confirmation: 'APPLY BURN SETTINGS',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies one efficiency bonus revision with the exact platform contract', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      enabled: true,
+      fold_enabled: false,
+      cap: 0.05,
+      deep_cap: 0.1,
+      deep_frontier_ratio: 0.5,
+      cohort_size: 25,
+      min_cohort: 8,
+      epoch_hours: 24,
+      quality_floor: 0,
+      memory_floor: 0,
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        revision: 1,
+        parent_revision: 0,
+        scope: '*',
+        settings,
+        reason: 'Enable the v7 efficiency bonus and watch the shadow board',
+        actor: 'peyton@omniaura.ai',
+        created_at: '2026-07-23T12:00:00Z',
+        checksum: 'ab'.repeat(32),
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'set_efficiency_bonus_settings',
+      arguments: {
+        scope: '*',
+        expectedRevision: 0,
+        settings,
+        reason: 'Enable the v7 efficiency bonus and watch the shadow board',
+        confirmation: 'APPLY EFFICIENCY BONUS ENABLED',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      revision: 1,
+      parent_revision: 0,
+      scope: '*',
+      settings: { enabled: true, fold_enabled: false },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/efficiency-bonus-settings',
+    )
+    expect(init.method).toBe('POST')
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer platform-admin-token',
+      'X-Admin-Actor': 'peyton@omniaura.ai',
+    })
+    // The audited actor is always the signed-in operator, never a tool argument.
+    expect(JSON.parse(String(init.body))).toEqual({
+      scope: '*',
+      expected_revision: 0,
+      settings,
+      reason: 'Enable the v7 efficiency bonus and watch the shadow board',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'APPLY EFFICIENCY BONUS ENABLED',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('surfaces a stale efficiency bonus revision as a recoverable conflict', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json(
+        {
+          detail:
+            'efficiency bonus settings changed; refresh before applying (expected 0, current 2)',
+        },
+        { status: 409 },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'set_efficiency_bonus_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: {
+          enabled: true,
+          fold_enabled: true,
+          cap: 0.05,
+          deep_cap: 0.1,
+          deep_frontier_ratio: 0.5,
+          cohort_size: 25,
+          min_cohort: 8,
+          epoch_hours: 24,
+          quality_floor: 0,
+          memory_floor: 0,
+        },
+        reason: 'Fold the efficiency bonus into validator weights',
+        confirmation: 'APPLY EFFICIENCY BONUS ENABLED',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    const message = readTextResult(response)
+    expect(message).toContain('expected 0, current 2')
+    expect(message).toContain('Nothing was applied')
+    expect(message).toContain('get_efficiency_bonus_settings')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('rejects an efficiency bonus revision with the wrong confirmation before any admin call', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'set_efficiency_bonus_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: {
+          enabled: true,
+          fold_enabled: false,
+          cap: 0.05,
+          deep_cap: 0.1,
+          deep_frontier_ratio: 0.5,
+          cohort_size: 25,
+          min_cohort: 8,
+          epoch_hours: 24,
+          quality_floor: 0,
+          memory_floor: 0,
+        },
+        reason: 'Enable the v7 efficiency bonus for the shadow window',
+        confirmation: 'APPLY EFFICIENCY BONUS DISABLED',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not change subnet scoring policy without the write scope', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_efficiency_bonus_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: {
+          enabled: true,
+          fold_enabled: false,
+          cap: 0.05,
+          deep_cap: 0.1,
+          deep_frontier_ratio: 0.5,
+          cohort_size: 25,
+          min_cohort: 8,
+          epoch_hours: 24,
+          quality_floor: 0,
+          memory_floor: 0,
+        },
+        reason: 'Enable the v7 efficiency bonus for the shadow window',
+        confirmation: 'APPLY EFFICIENCY BONUS ENABLED',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the queue policy governed by an open rollout it cannot resize', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      rescore_cohort_size: 20,
+      priority_cohort_size: 8,
+      lane_cycle_size: 4,
+      fresh_submission_slots: [0, 1, 3],
+      prev_gen_carryover: {
+        enabled: false,
+        max_agents: 10,
+        min_score_count: 2,
+        include_exhausted: false,
+        dedupe_scope: 'coldkey',
+        require_cohort_complete: true,
+        require_desired_era_drained: true,
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        current: [],
+        history: [],
+        default: settings,
+        effective: {
+          revision: 3,
+          scope: '*',
+          settings,
+          checksum: 'cd'.repeat(32),
+          source: 'revision',
+          open_rollout_desired_version: 8,
+          open_rollout_rescore_cohort_target: 10,
+          open_rollout_priority_cohort_target: 5,
+          open_rollout_overrides_setting: true,
+          rollout_locked_fields: ['lane_cycle_size', 'fresh_submission_slots'],
+        },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_queue_policy_settings',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: {
+        revision: 3,
+        source: 'revision',
+        open_rollout_desired_version: 8,
+        open_rollout_rescore_cohort_target: 10,
+        open_rollout_overrides_setting: true,
+      },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/queue-policy-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies one queue policy revision with the exact platform contract', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      rescore_cohort_size: 15,
+      priority_cohort_size: 6,
+      lane_cycle_size: 5,
+      fresh_submission_slots: [0, 1, 3],
+      owner_concurrent_submission_limit: 2,
+      deferred_source_review: {
+        mode: 'off',
+        min_cohort_size: 8,
+        composite_mad_multiplier: 6,
+        axis_mad_multiplier: 6,
+        min_composite_delta: 0.1,
+        min_axis_delta: 0.15,
+      },
+      similarity_budget: {
+        enabled: true,
+        concurrent_submission_limit: 1,
+        jaccard_threshold: 0.9,
+        containment_threshold: 0.95,
+      },
+      prev_gen_carryover: {
+        enabled: true,
+        max_agents: 8,
+        min_score_count: 2,
+        include_exhausted: false,
+        dedupe_scope: 'coldkey',
+        require_cohort_complete: true,
+        require_desired_era_drained: true,
+      },
+    }
+    const control = {
+      current: [],
+      history: [],
+      default: settings,
+      effective: {
+        revision: 4,
+        scope: '*',
+        settings,
+        checksum: 'ef'.repeat(32),
+        source: 'revision',
+        open_rollout_desired_version: null,
+        open_rollout_rescore_cohort_target: null,
+        open_rollout_priority_cohort_target: null,
+        open_rollout_overrides_setting: false,
+        rollout_locked_fields: [],
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 4 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_queue_policy_settings',
+      arguments: {
+        scope: '*',
+        expectedRevision: 3,
+        settings,
+        reason: 'admit stranded prior-generation submissions for one wave',
+        confirmation: 'APPLY QUEUE POLICY SETTINGS',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 4, source: 'revision' },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/queue-policy-settings')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer platform-admin-token',
+      'X-Admin-Actor': 'peyton@omniaura.ai',
+    })
+    // The audited actor is always the signed-in operator, never a tool argument.
+    expect(JSON.parse(String(init.body))).toEqual({
+      scope: '*',
+      expected_revision: 3,
+      settings,
+      reason: 'admit stranded prior-generation submissions for one wave',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'APPLY QUEUE POLICY SETTINGS',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('surfaces the open-rollout lane refusal verbatim with its recovery', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const detail =
+      'lane_cycle_size cannot change while benchmark rollout 8 is open: the lane counter is completed jobs since rollout start mod N'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ detail }, { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_queue_policy_settings',
+      arguments: {
+        expectedRevision: 3,
+        settings: {
+          rescore_cohort_size: 10,
+          priority_cohort_size: 5,
+          lane_cycle_size: 6,
+          fresh_submission_slots: [0, 1, 2, 4],
+          owner_concurrent_submission_limit: 2,
+          deferred_source_review: {
+            mode: 'off',
+            min_cohort_size: 8,
+            composite_mad_multiplier: 6,
+            axis_mad_multiplier: 6,
+            min_composite_delta: 0.1,
+            min_axis_delta: 0.15,
+          },
+          similarity_budget: {
+            enabled: true,
+            concurrent_submission_limit: 1,
+            jaccard_threshold: 0.9,
+            containment_threshold: 0.95,
+          },
+          prev_gen_carryover: {
+            enabled: false,
+            max_agents: 10,
+            min_score_count: 2,
+            include_exhausted: false,
+            dedupe_scope: 'coldkey',
+            require_cohort_complete: true,
+            require_desired_era_drained: true,
+          },
+        },
+        reason: 'lengthen the lane cycle for the onboarding wave',
+        confirmation: 'APPLY QUEUE POLICY SETTINGS',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    const message = readTextResult(response)
+    expect(message).toContain(detail)
+    expect(message).toContain('rollout_locked_fields')
+    expect(message).toContain('Nothing was applied')
+
+    await client.close()
+    await server.close()
+  })
+
+  // The hosted v7 inference admission board. It existed on the platform from
+  // ditto-platform#477 and was unreachable from backroom until this suite.
+  const inferenceConcurrencySettings = {
+    chat_request_budget: 8192,
+    chat_token_budget: 25_000_000,
+    embedding_per_ticket_concurrency: 12,
+    embedding_per_validator_concurrency: 48,
+    embedding_global_concurrency: 96,
+  }
+
+  it('reads the hosted inference admission policy in force', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        current: [],
+        history: [],
+        default: inferenceConcurrencySettings,
+        effective: {
+          revision: 0,
+          scope: '*',
+          settings: inferenceConcurrencySettings,
+          checksum: '',
+          source: 'default',
+        },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_inference_concurrency_settings',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: {
+        revision: 0,
+        source: 'default',
+        settings: { chat_token_budget: 25_000_000 },
+      },
+    })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/inference-concurrency-settings',
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies one inference concurrency revision with the exact platform contract', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    // The move the incident wanted: raise the token budget, leave the rest.
+    const nextSettings = { ...inferenceConcurrencySettings, chat_token_budget: 40_000_000 }
+    const control = {
+      current: [],
+      history: [],
+      default: inferenceConcurrencySettings,
+      effective: {
+        revision: 5,
+        scope: '*',
+        settings: nextSettings,
+        checksum: 'ab'.repeat(32),
+        source: 'revision',
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 5 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_inference_concurrency_settings',
+      arguments: {
+        scope: '*',
+        expectedRevision: 4,
+        settings: nextSettings,
+        reason: 'let the heaviest v7 strategies finish a full run',
+        confirmation: 'APPLY INFERENCE CONCURRENCY SETTINGS',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 5, source: 'revision' },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/inference-concurrency-settings',
+    )
+    expect(init.method).toBe('POST')
+    // The audited actor is always the signed-in operator, never a tool argument.
+    expect(JSON.parse(String(init.body))).toEqual({
+      scope: '*',
+      expected_revision: 4,
+      settings: nextSettings,
+      reason: 'let the heaviest v7 strategies finish a full run',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'APPLY INFERENCE CONCURRENCY SETTINGS',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses a partial inference policy before any admin call', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    // Omitting chat_token_budget must not silently reset it to the shipped
+    // default: a revision stores the whole object.
+    const { chat_token_budget: _dropped, ...partial } = inferenceConcurrencySettings
+    const response = await client.callTool({
+      name: 'set_inference_concurrency_settings',
+      arguments: {
+        expectedRevision: 4,
+        settings: partial,
+        reason: 'raise the per-ticket embedding concurrency',
+        confirmation: 'APPLY INFERENCE CONCURRENCY SETTINGS',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(readTextResult(response)).toContain('chat_token_budget')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses an inference concurrency hierarchy the platform would reject', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_inference_concurrency_settings',
+      arguments: {
+        expectedRevision: 4,
+        settings: {
+          ...inferenceConcurrencySettings,
+          embedding_per_ticket_concurrency: 64,
+          embedding_per_validator_concurrency: 48,
+        },
+        reason: 'widen the per-ticket embedding lane for a calibration run',
+        confirmation: 'APPLY INFERENCE CONCURRENCY SETTINGS',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(readTextResult(response)).toContain('embedding_per_validator_concurrency')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('names the recovery for a stale inference concurrency revision', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const detail =
+      'inference concurrency settings changed; refresh before applying (expected 4, current 6)'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail }, { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_inference_concurrency_settings',
+      arguments: {
+        expectedRevision: 4,
+        settings: inferenceConcurrencySettings,
+        reason: 'restore the shipped hosted inference allowances',
+        confirmation: 'APPLY INFERENCE CONCURRENCY SETTINGS',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    const message = readTextResult(response)
+    expect(message).toContain(detail)
+    expect(message).toContain('get_inference_concurrency_settings')
+    expect(message).toContain('Nothing was applied')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('rejects a queue policy revision with the wrong confirmation before any admin call', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_queue_policy_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { lane_cycle_size: 4, fresh_submission_slots: [0, 1, 3] },
+        reason: 'restore the shipped lane cycle after the wave',
+        confirmation: 'APPLY QUEUE POLICY',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not change queue policy without the write scope', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_queue_policy_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { prev_gen_carryover: { enabled: true } },
+        reason: 'admit stranded prior-generation submissions for one wave',
+        confirmation: 'APPLY QUEUE POLICY SETTINGS',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the validator slot policy the dispatch path resolves', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      max_concurrent_slots: 2,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      // The exact payload production answers today, before any revision.
+      Response.json({
+        current: [],
+        history: [],
+        default: settings,
+        effective: {
+          revision: 0,
+          scope: '*',
+          settings,
+          checksum: '',
+          source: 'default',
+          hard_slot_ceiling: 8,
+          disk_restricted_slots: 1,
+          max_age_seconds: 5.0,
+        },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_validator_slot_settings',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: {
+        revision: 0,
+        source: 'default',
+        settings: {
+      max_concurrent_slots: 2,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+    },
+        hard_slot_ceiling: 8,
+        disk_restricted_slots: 1,
+        max_age_seconds: 5,
+      },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-slot-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('ramps the slot cap with the exact platform contract', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      max_concurrent_slots: 3,
+      disk_percent_ceiling: 85,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+    }
+    const control = {
+      current: [],
+      history: [],
+      default: {
+      max_concurrent_slots: 2,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+    },
+      effective: {
+        revision: 1,
+        scope: '*',
+        settings,
+        checksum: 'ef'.repeat(32),
+        source: 'revision',
+        hard_slot_ceiling: 8,
+        disk_restricted_slots: 1,
+        max_age_seconds: 5.0,
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 1 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_validator_slot_settings',
+      arguments: {
+        scope: '*',
+        expectedRevision: 0,
+        settings,
+        reason: 'ramp the fleet to three slots now that dispatch is stable',
+        confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 1, source: 'revision', settings },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-slot-settings',
+    )
+    expect(init.method).toBe('POST')
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer platform-admin-token',
+      'X-Admin-Actor': 'peyton@omniaura.ai',
+    })
+    // The audited actor is always the signed-in operator, never a tool argument.
+    expect(JSON.parse(String(init.body))).toEqual({
+      scope: '*',
+      expected_revision: 0,
+      settings,
+      reason: 'ramp the fleet to three slots now that dispatch is stable',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  // The confirmation names the resulting cap, so the number is stated twice and
+  // the two statements are only ever checked against each other. A caller who
+  // types the current cap while ramping to a new one is caught here.
+  it('refuses a slot revision whose confirmation names a different cap', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_validator_slot_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: {
+      max_concurrent_slots: 3,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+    },
+        reason: 'ramp the fleet to three slots now that dispatch is stable',
+        confirmation: 'APPLY VALIDATOR SLOT CAP 2',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(readTextResult(response)).toContain('APPLY VALIDATOR SLOT CAP 3')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  // The empty-default failure class: the platform 422s a partial body, but a
+  // client that defaults its knobs pre-fills the omission into a full body and
+  // the operator silently ships a default they never chose.
+  it('rejects a partial slot policy instead of defaulting the omitted knob', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_validator_slot_settings',
+      arguments: {
+        expectedRevision: 0,
+        // disk_percent_ceiling omitted: the current revision's value is NOT
+        // inherited, so accepting this would ship the shipped default silently.
+        settings: { max_concurrent_slots: 3 },
+        reason: 'ramp the fleet to three slots now that dispatch is stable',
+        confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('surfaces the stale-revision refusal verbatim with its recovery', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const detail =
+      'validator slot settings changed; refresh before applying (expected 0, current 2)'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ detail }, { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_validator_slot_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: {
+      max_concurrent_slots: 3,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+    },
+        reason: 'ramp the fleet to three slots now that dispatch is stable',
+        confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    const message = readTextResult(response)
+    expect(message).toContain(detail)
+    expect(message).toContain('get_validator_slot_settings')
+    expect(message).toContain('Nothing was applied')
+    // No re-read after a refusal, so a fresh GET is never mistaken for an apply.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not change the slot cap without the write scope', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_validator_slot_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: {
+      max_concurrent_slots: 1,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+    },
+        reason: 'drop to the serial-dispatch kill switch',
+        confirmation: 'APPLY VALIDATOR SLOT CAP 1',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('keeps benchmark contract refresh read-only without the write scope', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'refresh_benchmark_contract',
+      arguments: {
+        agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+        expectedSha256: 'ab'.repeat(32),
+        expectedBenchVersion: 3,
+        expectedDatasetSha256: 'cd'.repeat(32),
+        expectedScoreCount: 0,
+        reason: 'Confirmed generator and validator dataset drift',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not issue screening artifact URLs for a read-only grant', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_artifact',
+      arguments: { agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054' },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('defense-in-depth rejects Alan even with a stale write scope', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const props: McpGrantProps = {
+      session: { ...session, email: 'alan@omniaura.ai', accessLevel: 'read' },
+      scopes: [BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE],
+      clientName: 'Test client',
+    }
+    const server = createBackroomMcpServer(props)
+    const client = new Client({ name: 'backroom-test', version: '1.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+
+    const response = await client.callTool({
+      name: 'approve_app',
+      arguments: { appId: 'app-123' },
+    })
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await client.close()
+    await server.close()
+  })
+
+  it('opens an attributed ATH hold with exact artifact guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const expectedSha256 = 'ab'.repeat(32)
+    const detailedReason = `Deterministic benchmark-family routing: ${'e'.repeat(1_000)}`
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        review: {
+          review_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          agent_id: agentId,
+          miner_hotkey: '5Miner',
+          agent_name: 'benchmax',
+          agent_version: 1,
+          submitted_at: '2026-07-16T12:00:00Z',
+          status: 'pending',
+          opened_at: '2026-07-16T13:00:00Z',
+          resolved_at: null,
+          resolved_by: null,
+          resolution: null,
+          resolution_reason: null,
+          original: {
+            review_kind: 'benchmark_overfit',
+            duplicate_of: null,
+            reason: 'Deterministic benchmark-family routing',
+            policy_version: 8,
+            fingerprint_versions: {},
+            reference_provenance: 'unknown',
+            backfilled: false,
+          },
+          current_comparison: null,
+        },
+        agent_status: 'ath_pending_review',
+        idempotent: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'open_ath_review',
+      arguments: {
+        agentId,
+        expectedSha256,
+        expectedScoreCount: 3,
+        reason: detailedReason,
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/${agentId}/open`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({
+          expected_sha256: expectedSha256,
+          expected_score_count: 3,
+          reason: detailedReason,
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('explains a durable ATH hold through a read-only grant', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const expectedSha256 = 'ab'.repeat(32)
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        review: {
+          review_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          agent_id: agentId,
+          miner_hotkey: '5Miner',
+          agent_name: 'benchmax',
+          agent_version: 1,
+          submitted_at: '2026-07-16T12:00:00Z',
+          status: 'pending',
+          opened_at: '2026-07-16T13:00:00Z',
+          resolved_at: null,
+          resolved_by: null,
+          resolution: null,
+          resolution_reason: null,
+          original: {
+            review_kind: 'benchmark_overfit',
+            duplicate_of: null,
+            reason: 'Deterministic benchmark-family routing',
+            policy_version: 8,
+            fingerprint_versions: {},
+            reference_provenance: 'unknown',
+            backfilled: false,
+          },
+          current_comparison: null,
+        },
+        agent_status: 'ath_pending_review',
+        held_artifact_sha256: expectedSha256,
+        held_score_count: 3,
+        previous_status: 'live',
+        opened_by: 'operator@omniaura.ai',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_ath_review',
+      arguments: { agentId },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      review: {
+        agent_id: agentId,
+        original: {
+          review_kind: 'benchmark_overfit',
+          reason: 'Deterministic benchmark-family routing',
+        },
+      },
+      held_artifact_sha256: expectedSha256,
+      held_score_count: 3,
+      previous_status: 'live',
+      opened_by: 'operator@omniaura.ai',
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/${agentId}/audit`,
+      expect.any(Object),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('resolves an ATH hold with an attributed public reason', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const detailedReason = `General behavior confirmed: ${'e'.repeat(1_000)}`
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        review: {
+          review_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          agent_id: agentId,
+          miner_hotkey: '5Miner',
+          agent_name: 'benchmax',
+          agent_version: 1,
+          submitted_at: '2026-07-16T12:00:00Z',
+          status: 'resolved',
+          opened_at: '2026-07-16T13:00:00Z',
+          resolved_at: '2026-07-16T14:00:00Z',
+          resolved_by: 'peyton@omniaura.ai',
+          resolution: 'clear',
+          resolution_reason: 'General behavior confirmed',
+          original: {
+            review_kind: 'benchmark_overfit',
+            duplicate_of: null,
+            reason: 'Deterministic benchmark-family routing',
+            policy_version: 8,
+            fingerprint_versions: {},
+            reference_provenance: 'unknown',
+            backfilled: false,
+          },
+          current_comparison: null,
+        },
+        agent_status: 'live',
+        idempotent: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'resolve_ath_review',
+      arguments: {
+        agentId,
+        resolution: 'clear',
+        reason: detailedReason,
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/${agentId}/resolve`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({
+          resolution: 'clear',
+          reason: detailedReason,
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('lists screening quarantines through the platform admin API', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ items: [], count: 0 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'list_screening_quarantines',
+      arguments: { status: 'resolved', limit: 17, offset: 34 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      items: [],
+      count: 0,
+      limit: 17,
+      offset: 34,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines?status=resolved&sort=newest&limit=17&offset=34',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('pages the oldest-first screening review queue through the platform API', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ items: [], count: 81 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_review_queue',
+      arguments: { limit: 12, offset: 24 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      items: [],
+      count: 81,
+      limit: 12,
+      offset: 24,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines?status=active&sort=oldest&limit=12&offset=24',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('lists screening attempt history without write access', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ items: [], count: 0 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'list_screening_submissions',
+      arguments: { limit: 17, offset: 34 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      items: [],
+      count: 0,
+      limit: 17,
+      offset: 34,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?limit=17&offset=34',
+      expect.any(Object),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('gets one exact screening submission without artifact scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const submission = {
+      agent_id: agentId,
+      miner_hotkey: '5Miner',
+      agent_name: 'exact-agent',
+      agent_version: 2,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'scored',
+      screening_policy_version: 9,
+      screening_reason: null,
+      screening_reason_code: null,
+      submitted_at: '2026-07-19T12:00:00Z',
+      attempts: [
+        {
+          attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          policy_version: 9,
+          status: 'passed',
+          screener_hotkey: '5Screener',
+          started_at: '2026-07-19T12:01:00Z',
+          deadline: '2026-07-19T13:11:00Z',
+          finished_at: '2026-07-19T12:05:00Z',
+          reason: null,
+          reason_code: 'behavioral-oracle-passed',
+          duplicate_of: null,
+          duplicate_name: null,
+          duplicate_version: null,
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(submission))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_submission',
+      arguments: { agentId },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual({ ...submission, miner_coldkey: null })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}`,
+      expect.any(Object),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('answers owner attestations on read scope alone, keeping every grade and revoked links', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const queried = '5QueriedHotkey'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        hotkey: queried,
+        netuid: 118,
+        attestations: [
+          {
+            attestation_id: '77777777-7777-4777-8777-777777777777',
+            netuid: 118,
+            hotkey_lo: '5AlphaLinkedHotkey',
+            hotkey_hi: queried,
+            counterparty: '5AlphaLinkedHotkey',
+            evidence_grade: 'hotkey-hotkey',
+            lo_key_kind: 'hotkey',
+            lo_signer: '5AlphaLinkedHotkey',
+            hi_key_kind: 'hotkey',
+            hi_signer: queried,
+            nonce: '88888888-8888-4888-8888-888888888888',
+            issued_at: '2026-07-01T00:00:00Z',
+            created_at: '2026-07-01T00:05:00Z',
+            revoked_at: null,
+            revoked_by: null,
+            revoked_reason: null,
+            active: true,
+          },
+          {
+            attestation_id: '99999999-9999-4999-8999-999999999999',
+            netuid: 118,
+            hotkey_lo: '5BravoLinkedHotkey',
+            hotkey_hi: queried,
+            counterparty: '5BravoLinkedHotkey',
+            evidence_grade: 'mixed',
+            lo_key_kind: 'coldkey',
+            lo_signer: '5BravoPayingColdkey',
+            hi_key_kind: 'hotkey',
+            hi_signer: queried,
+            nonce: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            issued_at: '2026-06-01T00:00:00Z',
+            created_at: '2026-06-01T00:05:00Z',
+            revoked_at: null,
+            revoked_by: null,
+            revoked_reason: null,
+            active: true,
+          },
+          {
+            attestation_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            netuid: 118,
+            hotkey_lo: '5CharlieLinkedHotkey',
+            hotkey_hi: queried,
+            counterparty: '5CharlieLinkedHotkey',
+            evidence_grade: 'coldkey-coldkey',
+            lo_key_kind: 'coldkey',
+            lo_signer: '5CharliePayingColdkey',
+            hi_key_kind: 'coldkey',
+            hi_signer: '5QueriedPayingColdkey',
+            nonce: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            issued_at: '2026-05-01T00:00:00Z',
+            created_at: '2026-05-01T00:05:00Z',
+            revoked_at: '2026-06-15T00:00:00Z',
+            revoked_by: 'peyton@omniaura.ai',
+            revoked_reason: 'Miner reported the linked hotkey compromised',
+            active: false,
+          },
+        ],
+        linked_hotkeys: [
+          {
+            hotkey: '5AlphaLinkedHotkey',
+            attestation_id: '77777777-7777-4777-8777-777777777777',
+            evidence_grade: 'hotkey-hotkey',
+          },
+          {
+            hotkey: '5BravoLinkedHotkey',
+            attestation_id: '99999999-9999-4999-8999-999999999999',
+            evidence_grade: 'mixed',
+          },
+        ],
+        linkage_basis: 'signed_owner_attestation',
+        scope_caveat:
+          'Exempts near-duplicate plagiarism screening between the linked hotkeys only; not an input to emission-slot allocation.',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    // Identity metadata, so no artifact scope and no write scope: a signed
+    // owner link exposes no miner source.
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_owner_attestations',
+      arguments: { hotkey: queried },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const payload = readJsonResult(response) as {
+      linkage_basis: string
+      scope_caveat: string
+      attestations: Array<Record<string, unknown>>
+      attestations_shared: Record<string, unknown>
+      linked_hotkeys: Array<Record<string, unknown>>
+    }
+    expect(payload.linkage_basis).toBe('signed_owner_attestation')
+    expect(payload.scope_caveat).toContain('emission-slot allocation')
+    // Every grade survives intact and none is ranked away: all three establish
+    // the link identically, so the tool must not editorialise.
+    expect(payload.attestations.map((row) => row.evidence_grade)).toEqual([
+      'hotkey-hotkey',
+      'mixed',
+      'coldkey-coldkey',
+    ])
+    // The counterparty stays on every row rather than being hoisted, so a
+    // reader never has to reconstruct who a link names.
+    expect(payload.attestations.map((row) => row.counterparty)).toEqual([
+      '5AlphaLinkedHotkey',
+      '5BravoLinkedHotkey',
+      '5CharlieLinkedHotkey',
+    ])
+    // A revoked link is reported, not filtered: whether it was live at the
+    // time of the held submission is the question a dispute turns on.
+    expect(payload.attestations[2]).toMatchObject({
+      revoked_at: '2026-06-15T00:00:00Z',
+      revoked_by: 'peyton@omniaura.ai',
+      revoked_reason: 'Miner reported the linked hotkey compromised',
+      active: false,
+    })
+    // Only the active links appear as linked hotkeys, and the relation is not
+    // transitive, so this is a direct-link list rather than a closure.
+    expect(payload.linked_hotkeys).toEqual([
+      {
+        hotkey: '5AlphaLinkedHotkey',
+        attestation_id: '77777777-7777-4777-8777-777777777777',
+        evidence_grade: 'hotkey-hotkey',
+      },
+      {
+        hotkey: '5BravoLinkedHotkey',
+        attestation_id: '99999999-9999-4999-8999-999999999999',
+        evidence_grade: 'mixed',
+      },
+    ])
+    // Compaction lifts what every row repeats; nothing is summarised away.
+    expect(payload.attestations_shared).toEqual({
+      netuid: 118,
+      hotkey_hi: queried,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/owner-attestations/${queried}`,
+      expect.any(Object),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('answers an unlinked hotkey with empty lists rather than an error', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        Response.json({
+          hotkey: '5NeverLinked',
+          netuid: 118,
+          attestations: [],
+          linked_hotkeys: [],
+          linkage_basis: 'signed_owner_attestation',
+          scope_caveat: 'No signed owner link is recorded for this hotkey.',
+        }),
+      ),
+    )
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_owner_attestations',
+      arguments: { hotkey: '5NeverLinked' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      attestations: [],
+      linked_hotkeys: [],
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  // A platform that has not shipped the grade yet still answers; the link is
+  // established either way, since the grade never gated it.
+  it('answers from a platform that predates the evidence grade', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        Response.json({
+          hotkey: '5QueriedHotkey',
+          attestations: [
+            {
+              attestation_id: '77777777-7777-4777-8777-777777777777',
+              hotkey_lo: '5AlphaLinkedHotkey',
+              hotkey_hi: '5QueriedHotkey',
+              counterparty: '5AlphaLinkedHotkey',
+            },
+          ],
+        }),
+      ),
+    )
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_owner_attestations',
+      arguments: { hotkey: '5QueriedHotkey' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const payload = readJsonResult(response) as {
+      attestations: Array<Record<string, unknown>>
+    }
+    expect(payload.attestations[0]).toMatchObject({
+      counterparty: '5AlphaLinkedHotkey',
+      evidence_grade: null,
+      active: null,
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('lists miner disputes without write access', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ items: [], count: 0 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'list_screening_disputes',
+      arguments: { status: 'pending', limit: 17, offset: 34 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      items: [],
+      count: 0,
+      limit: 17,
+      offset: 34,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-disputes?status=pending&limit=17&offset=34',
+      expect.any(Object),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('attributes an explicitly write-scoped quarantine resolution', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const detailedReason = [
+      'Source review evidence shows src/router.ts:118 selects providers from the declared runtime configuration instead of matching benchmark prompts.',
+      'The branch at src/router.ts:146 handles a documented timeout fallback and does not inspect prompt text, expected answers, evaluator metadata, or test fixture identifiers.',
+      'A repository-wide search found no embedded benchmark answers, prompt hashes, fixture names, response lookup tables, or network calls to undeclared services.',
+      'The submitted Docker image was rebuilt from the reviewed archive, then smoke-tested with unrelated prompts that exercised both the primary provider and fallback path.',
+      'Observed outputs varied with the request and provider response, which is inconsistent with replay or benchmark emulation.',
+      'Release is appropriate because the suspicious fast path is general routing logic; retain this source-level evidence in the audited miner-visible decision.',
+    ].join(' ')
+    expect(detailedReason.length).toBeGreaterThan(500)
+    const quarantine = {
+      quarantine_id: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      attempt_id: '20236f60-c143-43b0-b03e-2cbe51f281d8',
+      miner_hotkey: '5Miner',
+      agent_name: 'memory-agent',
+      artifact_sha256: 'artifact',
+      policy_version: 7,
+      manifest_digest: 'manifest',
+      finding_digest: 'finding',
+      reason_code: 'source_review_suspicious',
+      status: 'resolved',
+      created_at: '2026-07-14T12:00:00Z',
+      resolved_at: '2026-07-14T12:30:00Z',
+      resolved_by: 'peyton@omniaura.ai',
+      resolution: 'rescreen',
+      resolution_reason: detailedReason,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ quarantine, agent_status: 'screening_failed' }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const response = await client.callTool({
+      name: 'resolve_screening_quarantine',
+      arguments: {
+        quarantineId: quarantine.quarantine_id,
+        resolution: 'rescreen',
+        reason: detailedReason,
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines/${quarantine.quarantine_id}/resolve`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+        body: JSON.stringify({ resolution: 'rescreen', reason: detailedReason }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('rescreens a rejected submission with explicit concurrency guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const expectedSha256 = 'ab'.repeat(32)
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ agent_id: agentId, agent_status: 'screening_failed' }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+    const response = await client.callTool({
+      name: 'rescreen_rejected_submission',
+      arguments: {
+        agentId,
+        reason: 'Build was interrupted by the screening worker DNS incident',
+        expectedSha256,
+        expectedScoreCount: 0,
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      agent_id: agentId,
+      agent_status: 'screening_failed',
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/rescreen`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+        body: JSON.stringify({
+          reason: 'Build was interrupted by the screening worker DNS incident',
+          expected_sha256: expectedSha256,
+          expected_score_count: 0,
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not rescreen a rejected submission without write access', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'rescreen_rejected_submission',
+      arguments: {
+        agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+        reason: 'Build was interrupted by the screening worker DNS incident',
+        expectedSha256: 'ab'.repeat(32),
+        expectedScoreCount: 0,
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('waives one exact failed screening backoff with explicit guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '270acbcc-268d-4380-9db7-c5fb90726941'
+    const attemptId = 'af86d39d-51c6-46d7-83d4-36b61cab6aef'
+    const overrideId = 'a32db723-c43e-4f1b-a4fc-6d8ec1ed985b'
+    const expectedSha256 = 'ab'.repeat(32)
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        override_id: overrideId,
+        agent_id: agentId,
+        attempt_id: attemptId,
+        agent_status: 'screening_failed',
+        backoff_deadline: '2026-08-02T16:54:16.324536Z',
+        created_at: '2026-08-02T16:25:00Z',
+        idempotent: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+    const response = await client.callTool({
+      name: 'retry_failed_screening_now',
+      arguments: {
+        agentId,
+        reason: 'Retry immediately after source-review budget exhaustion',
+        expectedSha256,
+        expectedScoreCount: 0,
+        expectedAttemptId: attemptId,
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      override_id: overrideId,
+      agent_id: agentId,
+      attempt_id: attemptId,
+      idempotent: false,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/retry-now`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+        body: JSON.stringify({
+          reason: 'Retry immediately after source-review budget exhaustion',
+          expected_sha256: expectedSha256,
+          expected_score_count: 0,
+          expected_attempt_id: attemptId,
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not let write scope implicitly issue screening artifact URLs', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_artifact',
+      arguments: { agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054' },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('attributes an explicitly write-scoped dispute resolution', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const disputeId = 'c5973a8c-36e3-431e-96b0-9a05f4ab35ac'
+    const dispute = {
+      dispute_id: disputeId,
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      quarantine_id: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+      miner_hotkey: '5Miner',
+      agent_name: 'memory-agent',
+      artifact_sha256: 'artifact',
+      message: 'The finding was caused by generic routing logic.',
+      status: 'resolved',
+      created_at: '2026-07-15T12:00:00Z',
+      original_reason: 'Benchmark-specific behavior',
+      resolved_at: '2026-07-15T12:30:00Z',
+      resolved_by: 'peyton@omniaura.ai',
+      resolution: 'release',
+      resolution_reason: 'Manual source review confirmed generic behavior',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ dispute, agent_status: 'evaluating' }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const response = await client.callTool({
+      name: 'resolve_screening_dispute',
+      arguments: {
+        disputeId,
+        resolution: 'release',
+        reason: 'Manual source review confirmed generic behavior',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-disputes/${disputeId}/resolve`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('serves quarantine review context to a read-only grant', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const quarantineId = 'e3bb1518-530f-42d7-a50b-b21ac9853798'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = '20236f60-c143-43b0-b03e-2cbe51f281d8'
+    const finding = {
+      artifact_sha256: 'ab'.repeat(32),
+      prompt_revision: 'source-review-v2',
+      risk_level: 'high',
+      confidence: 0.97,
+      categories: ['benchmark_emulation'],
+      evidence: [{ path: 'src/main.rs', line: 42, category: 'benchmark_emulation' }],
+      summary: 'Deterministic shortcut bypasses the general provider path.',
+    }
+    const quarantine = {
+      quarantine_id: quarantineId,
+      agent_id: agentId,
+      attempt_id: attemptId,
+      miner_hotkey: '5Miner',
+      agent_name: 'memory-agent',
+      artifact_sha256: 'ab'.repeat(32),
+      policy_version: 7,
+      manifest_digest: 'cd'.repeat(32),
+      finding_digest: 'ef'.repeat(32),
+      reason_code: 'agentic-source-review-tripwire',
+      evidence: [
+        {
+          module_id: 'luna-source-review',
+          code: 'agentic-source-review-tripwire',
+          summary: 'private source analysis selected a behavioral audit',
+          digest: 'ef'.repeat(32),
+        },
+      ],
+      finding,
+      finding_verified: true,
+      status: 'active',
+      created_at: '2026-07-14T12:00:00Z',
+      resolved_at: null,
+      resolved_by: null,
+      resolution: null,
+      resolution_reason: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        quarantine,
+        agent: {
+          agent_id: agentId,
+          miner_hotkey: '5Miner',
+          agent_name: 'memory-agent',
+          artifact_sha256: 'ab'.repeat(32),
+          agent_status: 'quarantined',
+          size_bytes: 20480,
+          submitted_at: '2026-07-14T11:00:00Z',
+          screening_policy_version: 7,
+          screening_reason: 'Submission held for anti-cheat review',
+        },
+        attempts: [
+          {
+            attempt_id: attemptId,
+            policy_version: 7,
+            status: 'quarantined',
+            screener_hotkey: '5Screener',
+            started_at: '2026-07-14T11:30:00Z',
+            deadline: '2026-07-14T12:00:00Z',
+            finished_at: '2026-07-14T11:45:00Z',
+            reason: 'Submission held for anti-cheat review',
+          },
+        ],
+        miner: {
+          miner_hotkey: '5Miner',
+          total_submissions: 4,
+          quarantine_count: 2,
+          released_count: 1,
+          rescreened_count: 0,
+          rejected_count: 0,
+          recent_quarantines: [],
+        },
+        duplicates: [],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_quarantine_context',
+      arguments: { quarantineId },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines/${quarantineId}/context`,
+      expect.any(Object),
+    )
+    expect(readJsonResult(response)).toMatchObject({
+      quarantine: expect.objectContaining({ finding_verified: true }),
+      miner: expect.objectContaining({ total_submissions: 4 }),
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('gates source reads on the artifact scope and audits them', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        path: 'src/main.rs',
+        total_lines: 3,
+        start_line: 1,
+        end_line: 3,
+        lines: [{ line: 2, text: '    fast_path();' }],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (const scopes of [
+      [BACKROOM_READ_SCOPE],
+      [BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE],
+    ]) {
+      const refusedGrant = await connect(scopes)
+      const refused = await refusedGrant.client.callTool({
+        name: 'read_screening_source_file',
+        arguments: { agentId, path: 'src/main.rs' },
+      })
+      expect(refused.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      await refusedGrant.client.close()
+      await refusedGrant.server.close()
+    }
+
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    const allowed = await granted.client.callTool({
+      name: 'read_screening_source_file',
+      arguments: { agentId, path: 'src/main.rs', startLine: 1, endLine: 3 },
+    })
+    expect(allowed.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/source-file?path=src%2Fmain.rs&start_line=1&end_line=3`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+    await granted.client.close()
+    await granted.server.close()
+  })
+
+  it('locally pages source-file manifests while preserving the total file count', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        artifact_sha256: 'ab'.repeat(32),
+        file_count: 3,
+        files: [
+          { path: 'src/a.rs', bytes: 10 },
+          { path: 'src/b.rs', bytes: 20 },
+          { path: 'src/c.rs', bytes: 30 },
+        ],
+        opaque_blobs: [{ path: 'assets/model.bin', bytes: 40, reason: 'non_utf8' }],
+        opaque_total: 1,
+        truncated: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_ARTIFACT_SCOPE,
+    ])
+    const response = await client.callTool({
+      name: 'list_screening_source_files',
+      arguments: { agentId, limit: 1, offset: 1 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      file_count: 3,
+      files: [{ path: 'src/b.rs', bytes: 20 }],
+      opaque_blobs: [{ path: 'assets/model.bin' }],
+      count: 3,
+      limit: 1,
+      offset: 1,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/source-files`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('gates the starter-kit baseline diff on the artifact scope and audits it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        artifact_sha256: 'a'.repeat(64),
+        baseline: {
+          source: 'https://github.com/ditto-assistant/dittobench-starter-kit',
+          revision: 'b'.repeat(40),
+          commit_set_sha256: 'c'.repeat(64),
+          commit_count: 24,
+        },
+        files: [
+          {
+            path: 'src/solver.rs',
+            status: 'added',
+            candidate_lines: 3,
+            reference_lines: 0,
+            added_lines: 3,
+            removed_lines: 0,
+            similarity: 0,
+            normalized_identical: false,
+            stock_kit: false,
+          },
+        ],
+        file_count: 1,
+        identical_count: 0,
+        modified_count: 0,
+        added_count: 1,
+        removed_count: 0,
+        stock_kit_count: 0,
+        custom_file_count: 1,
+        custom_added_lines: 3,
+        path_aligned: false,
+        truncated: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refusedGrant = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const refused = await refusedGrant.client.callTool({
+      name: 'get_screening_baseline_diff',
+      arguments: { agentId },
+    })
+    expect(refused.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await refusedGrant.client.close()
+    await refusedGrant.server.close()
+
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    const allowed = await granted.client.callTool({
+      name: 'get_screening_baseline_diff',
+      arguments: { agentId },
+    })
+    expect(allowed.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/baseline-diff`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+    await granted.client.close()
+    await granted.server.close()
+  })
+
+  it('issues an audited artifact URL only with explicit artifact scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        sha256: 'ab'.repeat(32),
+        download_url: 'https://signed.example/agent.tar.gz?signature=short-lived',
+        expires_at: '2026-07-14T12:05:00Z',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_artifact',
+      arguments: { agentId },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/artifact`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reports what each queue remedy would do to one stuck submission', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '974832d2-bfd0-4f38-a0d6-518be0d2571d'
+    const snapshot = 'ab'.repeat(32)
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        miner_hotkey: '5Miner',
+        agent_name: 'mnemox-v55',
+        agent_version: 55,
+        agent_status: 'evaluating',
+        score_count: 0,
+        quorum: 3,
+        snapshot,
+        automatic_retry_available: false,
+        recovery_allowed: false,
+        blocking_reason: null,
+        withdrawal_allowed: false,
+        withdrawal_blocking_reason: 'submission can still reach quorum automatically',
+        eviction_allowed: true,
+        eviction_blocking_reason: null,
+        live_ticket_count: 3,
+        withdrawal: null,
+        tickets: [],
+        recoveries: [],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_validation_retry',
+      arguments: { agentId },
+    })
+
+    expect(response.isError).not.toBe(true)
+    // The 2026-07-27 shape exactly: removal refuses it, eviction is the move,
+    // and the operator can see the three slots it is holding.
+    expect(readJsonResult(response)).toMatchObject({
+      withdrawal_allowed: false,
+      eviction_allowed: true,
+      eviction_blocking_reason: null,
+      live_ticket_count: 3,
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('evicts live validator leases under a write grant and its own phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '974832d2-bfd0-4f38-a0d6-518be0d2571d'
+    const snapshot = 'ab'.repeat(32)
+    const reason = 'Hung through three full leases with zero scores reported'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        eviction: {
+          eviction_id: '33333333-3333-4333-8333-333333333333',
+          agent_id: agentId,
+          bench_version: 7,
+          actor: 'peyton@omniaura.ai',
+          reason,
+          expected_snapshot: snapshot,
+          score_count: 0,
+          evicted_validator_hotkeys: ['5ValidatorA', '5ValidatorB'],
+          created_at: '2026-07-27T18:00:00Z',
+        },
+        evicted_leases: [
+          {
+            validator_hotkey: '5ValidatorA',
+            slot_id: 'slot-1',
+            bench_version: 7,
+            issued_at: '2026-07-27T17:00:00Z',
+            original_deadline: '2026-07-27T18:30:00Z',
+            attempt_count: 9,
+            audit_id: '44444444-4444-4444-8444-444444444444',
+          },
+          {
+            validator_hotkey: '5ValidatorB',
+            slot_id: 'slot-2',
+            bench_version: 7,
+            issued_at: '2026-07-27T17:00:00Z',
+            original_deadline: '2026-07-27T18:30:00Z',
+            attempt_count: 9,
+            audit_id: '55555555-5555-4555-8555-555555555555',
+          },
+        ],
+        freed_slots: 2,
+        idempotent: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'evict_live_validator_leases',
+      arguments: {
+        agentId,
+        expectedSnapshot: snapshot,
+        reason,
+        confirmation: 'EVICT LIVE VALIDATOR LEASES',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const evicted = readJsonResult(response) as {
+      freed_slots: number
+      evicted_leases: Array<Record<string, unknown>>
+      evicted_leases_shared: Record<string, unknown>
+    }
+    expect(evicted.freed_slots).toBe(2)
+    // Both revoked leases survive with their own audit id; what is identical
+    // across them is stated once.
+    expect(evicted.evicted_leases).toEqual([
+      {
+        validator_hotkey: '5ValidatorA',
+        slot_id: 'slot-1',
+        audit_id: '44444444-4444-4444-8444-444444444444',
+      },
+      {
+        validator_hotkey: '5ValidatorB',
+        slot_id: 'slot-2',
+        audit_id: '55555555-5555-4555-8555-555555555555',
+      },
+    ])
+    expect(evicted.evicted_leases_shared).toMatchObject({
+      bench_version: 7,
+      original_deadline: '2026-07-27T18:30:00Z',
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/evict`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+        body: JSON.stringify({
+          request_id: await deriveRequestId('validation-evict', [
+            agentId,
+            'peyton@omniaura.ai',
+            reason,
+            snapshot,
+          ]),
+          expected_snapshot: snapshot,
+          reason,
+          confirmation: 'EVICT LIVE VALIDATOR LEASES',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses an eviction typed with the ordinary removal phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'evict_live_validator_leases',
+      arguments: {
+        agentId: '974832d2-bfd0-4f38-a0d6-518be0d2571d',
+        expectedSnapshot: 'ab'.repeat(32),
+        reason: 'Hung through three full leases with zero scores reported',
+        confirmation: 'REMOVE FROM VALIDATOR QUEUE',
+      },
+    })
+
+    // An operator reaching for an ordinary removal must never land here by
+    // editing the tool name and keeping the phrase.
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reinstates an evicted submission under a write grant and its own phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '974832d2-bfd0-4f38-a0d6-518be0d2571d'
+    const snapshot = 'ab'.repeat(32)
+    const reason = 'source review found no hang primitives, only latency work'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        reinstatement: {
+          reinstatement_id: '66666666-6666-4666-8666-666666666666',
+          withdrawal_id: '33333333-3333-4333-8333-333333333333',
+          agent_id: agentId,
+          bench_version: 7,
+          actor: 'peyton@omniaura.ai',
+          reason,
+          expected_snapshot: snapshot,
+          score_count: 0,
+          retry_budget_snapshot: {
+            attempts_used: 2,
+            agent_infra_retry_grants: 4,
+            max_agent_infra_retry_grants: 12,
+            manual_retry_grants: 1,
+            operator_recoveries: 1,
+            max_operator_recoveries: 3,
+          },
+          created_at: '2026-07-27T19:00:00Z',
+        },
+        eviction: {
+          eviction_id: '33333333-3333-4333-8333-333333333333',
+          agent_id: agentId,
+          bench_version: 7,
+          actor: 'peyton@omniaura.ai',
+          reason: 'Hung through three full leases with zero scores reported',
+          expected_snapshot: snapshot,
+          score_count: 0,
+          evicted_validator_hotkeys: ['5ValidatorA'],
+          created_at: '2026-07-27T18:00:00Z',
+          reinstated_at: '2026-07-27T19:00:00Z',
+        },
+        restored_bench_version: 7,
+        idempotent: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'reinstate_evicted_submission_to_queue',
+      arguments: {
+        agentId,
+        expectedSnapshot: snapshot,
+        reason,
+        confirmation: 'REINSTATE TO VALIDATOR QUEUE',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    // The eviction comes back resolved rather than erased, and the budget the
+    // reversal left alone comes back with it.
+    expect(readJsonResult(response)).toMatchObject({
+      restored_bench_version: 7,
+      eviction: {
+        evicted_validator_hotkeys: ['5ValidatorA'],
+        reinstated_at: '2026-07-27T19:00:00Z',
+      },
+      reinstatement: {
+        retry_budget_snapshot: {
+          agent_infra_retry_grants: 4,
+          max_agent_infra_retry_grants: 12,
+          operator_recoveries: 1,
+        },
+      },
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/reinstate`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+        body: JSON.stringify({
+          // Its own namespace: deriving the eviction's key would make a
+          // reversal collide with the action it reverses.
+          request_id: await deriveRequestId('validation-reinstate', [
+            agentId,
+            'peyton@omniaura.ai',
+            reason,
+            snapshot,
+          ]),
+          expected_snapshot: snapshot,
+          reason,
+          confirmation: 'REINSTATE TO VALIDATOR QUEUE',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses a reinstatement typed with either removal phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    for (const confirmation of [
+      'EVICT LIVE VALIDATOR LEASES',
+      'REMOVE FROM VALIDATOR QUEUE',
+    ]) {
+      const response = await client.callTool({
+        name: 'reinstate_evicted_submission_to_queue',
+        arguments: {
+          agentId: '974832d2-bfd0-4f38-a0d6-518be0d2571d',
+          expectedSnapshot: 'ab'.repeat(32),
+          reason: 'source review found no hang primitives, only latency work',
+          confirmation,
+        },
+      })
+
+      // The mirror of the eviction guard: an operator must not reverse an
+      // eviction by editing the tool name and keeping the phrase, in either
+      // direction.
+      expect(response.isError).toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses to reinstate an evicted submission on a read-only grant', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'reinstate_evicted_submission_to_queue',
+      arguments: {
+        agentId: '974832d2-bfd0-4f38-a0d6-518be0d2571d',
+        expectedSnapshot: 'ab'.repeat(32),
+        reason: 'source review found no hang primitives, only latency work',
+        confirmation: 'REINSTATE TO VALIDATOR QUEUE',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(response.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining('read-only') }),
+      ]),
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses to evict live leases on a read-only grant', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'evict_live_validator_leases',
+      arguments: {
+        agentId: '974832d2-bfd0-4f38-a0d6-518be0d2571d',
+        expectedSnapshot: 'ab'.repeat(32),
+        reason: 'Hung through three full leases with zero scores reported',
+        confirmation: 'EVICT LIVE VALIDATOR LEASES',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(response.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining('read-only') }),
+      ]),
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('lists stuck submissions as a read-scoped fleet triage view', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const snapshot = 'ab'.repeat(32)
+    const payload = {
+      generated_at: '2026-07-21T00:00:00Z',
+      quorum: 3,
+      counts: { exhausted: 1, cooling_down: 0 },
+      submissions: [
+        {
+          agent_id: agentId,
+          miner_hotkey: '5Miner',
+          agent_name: 'stuck-agent',
+          agent_version: 4,
+          bench_version: 4,
+          score_count: 2,
+          quorum: 3,
+          retry_state: 'exhausted',
+          automatic_retry_available: false,
+          recovery_allowed: true,
+          blocking_reason: null,
+          earliest_retry_after: null,
+          attempts_used: 5,
+          exhausted_validator_count: 1,
+          snapshot,
+          tickets: [
+            {
+              validator_hotkey: '5Validator',
+              status: 'expired',
+              issued_at: '2026-07-20T00:00:00Z',
+              deadline: '2026-07-20T04:00:00Z',
+              bench_version: 4,
+              attempt_count: 5,
+              manual_retry_grants: 0,
+              infra_retry_grants: 0,
+              retry_after: null,
+              retry_budget_exhausted: true,
+            },
+          ],
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'list_stuck_submissions',
+      arguments: { state: ['exhausted', 'cooling_down'] },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      quorum: 3,
+      counts: { exhausted: 1 },
+      submissions: [{ agent_id: agentId, retry_state: 'exhausted' }],
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?state=exhausted&state=cooling_down',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('lists every stuck submission when no state filter is given', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        generated_at: '2026-07-21T00:00:00Z',
+        quorum: 3,
+        counts: {},
+        submissions: [],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'list_stuck_submissions',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries',
+      expect.anything(),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('summarises stuck submissions by default and keeps tickets on request', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const otherAgentId = '11111111-1111-4111-8111-111111111111'
+    const ticket = (validatorHotkey: string, issuedAt: string) => ({
+      validator_hotkey: validatorHotkey,
+      status: 'expired',
+      issued_at: issuedAt,
+      deadline: '2026-07-25T17:00:00Z',
+      bench_version: 7,
+      attempt_count: 3,
+      manual_retry_grants: 0,
+      infra_retry_grants: 0,
+      retry_after: null,
+      retry_budget_exhausted: true,
+    })
+    const submission = (id: string, snapshot: string, issuedAt: string) => ({
+      agent_id: id,
+      miner_hotkey: '5Miner',
+      agent_name: `agent-${id.slice(0, 4)}`,
+      agent_version: 3,
+      bench_version: 7,
+      score_count: 1,
+      quorum: 3,
+      retry_state: 'exhausted',
+      automatic_retry_available: false,
+      recovery_allowed: true,
+      blocking_reason: null,
+      earliest_retry_after: null,
+      attempts_used: 3,
+      exhausted_validator_count: 3,
+      snapshot,
+      tickets: [ticket('5ValidatorA', issuedAt), ticket('5ValidatorB', issuedAt)],
+    })
+    const payload = {
+      generated_at: '2026-07-25T18:00:00Z',
+      quorum: 3,
+      counts: { exhausted: 2 },
+      submissions: [
+        submission(agentId, 'ab'.repeat(32), '2026-07-25T15:00:00Z'),
+        submission(otherAgentId, 'cd'.repeat(32), '2026-07-25T15:30:00Z'),
+      ],
+    }
+    // A fresh Response per call: this tool is read twice in one test.
+    const fetchMock = vi.fn().mockImplementation(() => Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const summary = await client.callTool({
+      name: 'list_stuck_submissions',
+      arguments: { limit: 1, offset: 1 },
+    })
+    expect(summary.isError).not.toBe(true)
+    const summarised = readJsonResult(summary) as {
+      submissions: Array<Record<string, unknown>>
+      submissions_shared: Record<string, unknown>
+      count: number
+      limit: number
+      offset: number
+    }
+    // The selected row survives with the snapshot a retry needs, while count
+    // still reports the total matching fleet before local MCP paging.
+    expect(summarised.submissions).toEqual([
+      {
+        agent_id: otherAgentId,
+        agent_name: 'agent-1111',
+        snapshot: 'cd'.repeat(32),
+        miner_hotkey: '5Miner',
+        agent_version: 3,
+        bench_version: 7,
+        score_count: 1,
+        retry_state: 'exhausted',
+        automatic_retry_available: false,
+        recovery_allowed: true,
+        blocking_reason: null,
+        earliest_retry_after: null,
+        attempts_used: 3,
+        exhausted_validator_count: 3,
+        silent_expiry_count: null,
+        ticket_states: { expired: 2 },
+      },
+    ])
+    expect(summarised).toMatchObject({ count: 2, limit: 1, offset: 1 })
+    expect(summarised).not.toHaveProperty('submissions_shared')
+
+    const full = await client.callTool({
+      name: 'list_stuck_submissions',
+      arguments: { detail: 'full', limit: 1, offset: 0 },
+    })
+    expect(full.isError).not.toBe(true)
+    const detailed = readJsonResult(full) as {
+      submissions: Array<{ tickets: Array<unknown> }>
+    }
+    expect(detailed.submissions[0].tickets).toHaveLength(2)
+    // The detail flag shapes the response only; the platform request is the same.
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries',
+      expect.anything(),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('shows a re-lease loop as a re-lease loop, not as a silent validator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '974832d2-bfd0-4f38-a0d6-518be0d2571d'
+    const snapshot = 'ab'.repeat(32)
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        miner_hotkey: '5Miner',
+        agent_name: 'mnemox-v55',
+        agent_version: 55,
+        agent_status: 'evaluating',
+        score_count: 0,
+        quorum: 3,
+        snapshot,
+        automatic_retry_available: true,
+        recovery_allowed: false,
+        blocking_reason: null,
+        withdrawal_allowed: false,
+        withdrawal_blocking_reason:
+          'submission can still reach quorum automatically',
+        withdrawal: null,
+        tickets: [
+          {
+            validator_hotkey: '5ValidatorA',
+            slot_id: 'slot-1',
+            status: 'expired',
+            issued_at: '2026-07-27T15:00:00Z',
+            deadline: '2026-07-27T16:30:00Z',
+            bench_version: 7,
+            attempt_count: 9,
+            manual_retry_grants: 0,
+            infra_retry_grants: 8,
+            retry_after: null,
+            retry_budget_exhausted: false,
+            failure_reason: 'infrastructure',
+            failed_at: '2026-07-27T16:29:00Z',
+            silently_expired: false,
+          },
+        ],
+        recoveries: [],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_validation_retry',
+      arguments: { agentId },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const detail = readJsonResult(response) as {
+      tickets: Array<Record<string, unknown>>
+    }
+    // Backroom used to strip all five of these. What is left without them is a
+    // ticket that expired with a rewritten deadline and a rising attempt count,
+    // which is byte-identical to a validator that stopped answering. With them,
+    // eight no-fault grants against zero manual ones says the failures WERE
+    // reported and the platform kept re-leasing on them.
+    expect(detail.tickets[0]).toMatchObject({
+      infra_retry_grants: 8,
+      manual_retry_grants: 0,
+      failure_reason: 'infrastructure',
+      failed_at: '2026-07-27T16:29:00Z',
+      silently_expired: false,
+      slot_id: 'slot-1',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the lease revocation ledger, empty answer included', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '974832d2-bfd0-4f38-a0d6-518be0d2571d'
+    const rows = {
+      generated_at: '2026-07-27T18:00:00Z',
+      total: 2,
+      revocations: [
+        {
+          audit_id: '44444444-4444-4444-8444-444444444444',
+          agent_id: agentId,
+          validator_hotkey: '5ValidatorA',
+          slot_id: 'slot-1',
+          bench_version: 7,
+          action: 'operator_evicted',
+          reason: 'operator_evicted_occupied_not_progressing',
+          context: 'issue_ticket',
+          recorded_at: '2026-07-27T17:59:00Z',
+          evidence: {
+            lease_age_seconds: 5400,
+            original_deadline: '2026-07-27T18:30:00Z',
+            heartbeat: { slot_id: 'slot-1', running: true },
+          },
+        },
+        {
+          audit_id: '55555555-5555-4555-8555-555555555555',
+          agent_id: agentId,
+          validator_hotkey: '5ValidatorB',
+          slot_id: 'slot-2',
+          bench_version: 7,
+          action: 'operator_evicted',
+          reason: 'operator_evicted_occupancy_unobservable',
+          context: 'issue_ticket',
+          recorded_at: '2026-07-27T17:59:00Z',
+          evidence: { last_seen_at: null },
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockImplementation(() => Response.json(rows))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'list_lease_revocations',
+      arguments: { agentId, action: ['operator_evicted'] },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const ledger = readJsonResult(response) as {
+      total: number
+      revocations: Array<Record<string, unknown>>
+      revocations_shared: Record<string, unknown>
+    }
+    expect(ledger.total).toBe(2)
+    // Each row keeps its own audit id, hotkey, slot, reason code, and — the
+    // point of the tool — its own evidence object, whose keys differ per reason
+    // code and are therefore never hoisted or trimmed.
+    expect(ledger.revocations[0]).toMatchObject({
+      audit_id: '44444444-4444-4444-8444-444444444444',
+      reason: 'operator_evicted_occupied_not_progressing',
+      evidence: {
+        lease_age_seconds: 5400,
+        heartbeat: { slot_id: 'slot-1', running: true },
+      },
+    })
+    expect(ledger.revocations[1]).toMatchObject({
+      evidence: { last_seen_at: null },
+    })
+    expect(ledger.revocations_shared).toMatchObject({
+      agent_id: agentId,
+      action: 'operator_evicted',
+      context: 'issue_ticket',
+    })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url).pathname).toBe('/api/v1/admin/lease-revocations')
+    expect(new URL(url).searchParams.getAll('action')).toEqual([
+      'operator_evicted',
+    ])
+
+    // An empty ledger is the production state today: force_expire_lease has
+    // never fired. It must come back as a clean, readable zero rather than an
+    // error an operator could mistake for a missing endpoint.
+    fetchMock.mockImplementation(() =>
+      Response.json({
+        generated_at: '2026-07-27T18:00:00Z',
+        total: 0,
+        revocations: [],
+      }),
+    )
+    const empty = await client.callTool({
+      name: 'list_lease_revocations',
+      arguments: {},
+    })
+    expect(empty.isError).not.toBe(true)
+    expect(readJsonResult(empty)).toMatchObject({ total: 0, revocations: [] })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('batch retries validator evaluation with per-item snapshot guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentA = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const agentB = '11111111-1111-4111-8111-111111111111'
+    const snapshotA = 'ab'.repeat(32)
+    const snapshotB = 'cd'.repeat(32)
+    const reason = 'Verified validator datacenter outage across both runs'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        granted: 1,
+        results: [
+          { agent_id: agentA, status: 'granted', detail: null, recovery: null },
+          {
+            agent_id: agentB,
+            status: 'skipped',
+            detail: 'snapshot moved since inspection',
+            recovery: null,
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'batch_retry_validator_evaluation',
+      arguments: {
+        reason,
+        items: [
+          { agentId: agentA, expectedSnapshot: snapshotA },
+          { agentId: agentB, expectedSnapshot: snapshotB },
+        ],
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      counts: { total: 2, granted: 1, idempotent: 0, skipped: 1 },
+      results: {
+        granted: { items: [{ agent_id: agentA }] },
+        skipped: {
+          items: [
+            { agent_id: agentB, detail: 'snapshot moved since inspection' },
+          ],
+        },
+      },
+    })
+    // The caller supplied no request ids; each is derived per agent from the
+    // action itself, exactly as the single-agent retry derives it.
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries/batch-retry',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({
+          reason,
+          items: [
+            {
+              agent_id: agentA,
+              request_id: await deriveRequestId('validation-retry', [
+                agentA,
+                'peyton@omniaura.ai',
+                reason,
+                snapshotA,
+              ]),
+              expected_snapshot: snapshotA,
+            },
+            {
+              agent_id: agentB,
+              request_id: await deriveRequestId('validation-retry', [
+                agentB,
+                'peyton@omniaura.ai',
+                reason,
+                snapshotB,
+              ]),
+              expected_snapshot: snapshotB,
+            },
+          ],
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('rejects a batch retry with a duplicate agent id before any network call', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const agentA = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'batch_retry_validator_evaluation',
+      arguments: {
+        reason: 'Verified validator datacenter outage',
+        items: [
+          { agentId: agentA, expectedSnapshot: 'ab'.repeat(32) },
+          { agentId: agentA, expectedSnapshot: 'cd'.repeat(32) },
+        ],
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not batch retry without the write scope', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'batch_retry_validator_evaluation',
+      arguments: {
+        reason: 'Verified validator datacenter outage',
+        items: [
+          {
+            agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+            expectedSnapshot: 'ab'.repeat(32),
+          },
+        ],
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reports agent scoring readiness as a read-scoped lease diagnosis', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const payload = {
+      agent_id: agentId,
+      agent_name: 'readiness-agent',
+      miner_hotkey: '5Miner',
+      status: 'evaluating',
+      active_bench_version: 4,
+      screening_policy_version: 8,
+      required_screening_policy_version: 9,
+      requires_screened_image: true,
+      has_versioned_dataset: true,
+      screened_image: {
+        complete: false,
+        verified: false,
+        policy_ok: false,
+        missing_fields: ['digest'],
+      },
+      leaseable: false,
+      blocking_reasons: ['stale_screening_policy', 'screened_image_incomplete'],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'agent_scoring_readiness',
+      arguments: { agentId },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      agent_id: agentId,
+      leaseable: false,
+      blocking_reasons: ['stale_screening_policy', 'screened_image_incomplete'],
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/scoring-readiness`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('serves authoritative scores, leaderboard, and history to a read-only grant without the admin token', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const entry = {
+      rank: 1,
+      finalized: true,
+      score_count: 3,
+      score_quorum: 3,
+      agent_id: agentId,
+      agent_name: 'apex-agent',
+      agent_version: 4,
+      miner_hotkey: '5TopMiner',
+      miner_uid: 12,
+      registered: true,
+      emission_eligible: true,
+      composite: 0.957,
+      raw_composite: 0.965,
+      composite_stderr: 0.003,
+      tool_mean: 0.981,
+      memory_mean: 0.933,
+      first_seen: '2026-07-01T00:00:00Z',
+      median_ms: 2100,
+      n: 40,
+      eligible: true,
+      bench_version: 7,
+      dataset_sha256: 'ab'.repeat(32),
+      composite_breakdown: null,
+      history: [0.91, 0.957],
+    }
+    const leaderboard = {
+      generated_at: '2026-07-23T00:00:00Z',
+      count: 1,
+      current_bench_version: 7,
+      active_bench_version: 7,
+      desired_bench_version: 7,
+      available_bench_versions: [7, 6],
+      selection_mode: 'authoritative',
+      entries: [entry],
+      emissions: null,
+    }
+    const scoreRow = (overrides: Record<string, unknown>) => ({
+      validator_hotkey: '5ValA',
+      composite: 0.957,
+      tool_mean: 0.981,
+      memory_mean: 0.933,
+      median_ms: 2100,
+      n: 40,
+      bench_version: 7,
+      seed: 424242,
+      run_id: 'run-a7',
+      generated_at: '2026-07-21T00:00:00Z',
+      ...overrides,
+    })
+    const agentScores = {
+      agent_id: agentId,
+      miner_hotkey: '5TopMiner',
+      status: 'scored',
+      quorum: 3,
+      score_count: 6,
+      median_composite: 0.957,
+      dataset_seed: 987654321,
+      dataset_sha256: 'cd'.repeat(32),
+      dataset_run_size: 'full',
+      scores: [
+        scoreRow({ composite: 0.91, bench_version: 6, seed: 111, run_id: 'run-a6' }),
+        scoreRow({ validator_hotkey: '5ValB', composite: 0.92, bench_version: 6, seed: 111, run_id: 'run-b6' }),
+        scoreRow({ validator_hotkey: '5ValC', composite: 0.9, bench_version: 6, seed: 111, run_id: 'run-c6' }),
+        scoreRow({}),
+        scoreRow({ validator_hotkey: '5ValB', composite: 0.955, run_id: 'run-b7' }),
+        scoreRow({ validator_hotkey: '5ValC', composite: 0.96, run_id: 'run-c7' }),
+      ],
+      generated_at: '2026-07-23T00:00:00Z',
+    }
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      void init
+      return Promise.resolve(
+        String(url).includes('/public/leaderboard')
+          ? Response.json(leaderboard)
+          : Response.json(agentScores),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const scores = await client.callTool({
+      name: 'get_agent_scores',
+      arguments: { minerHotkey: '5TopMiner' },
+    })
+    expect(scores.isError).not.toBe(true)
+    expect(readJsonResult(scores)).toMatchObject({
+      agent_id: agentId,
+      median_composite: 0.957,
+      active_bench_version: 7,
+      leaderboard: { rank: 1, emission_eligible: true },
+    })
+
+    const board = await client.callTool({
+      name: 'get_leaderboard',
+      arguments: { status: 'finalized', limit: 10 },
+    })
+    expect(board.isError).not.toBe(true)
+    expect(readJsonResult(board)).toMatchObject({
+      count: 1,
+      selection_mode: 'authoritative',
+      entries: [{ rank: 1, agent_id: agentId, composite: 0.957 }],
+    })
+
+    const history = await client.callTool({
+      name: 'get_score_history',
+      arguments: { agentId },
+    })
+    expect(history.isError).not.toBe(true)
+    expect(readJsonResult(history)).toMatchObject({
+      agent_id: agentId,
+      total_score_count: 6,
+      versions: [
+        { bench_version: 6, median_composite: 0.91 },
+        { bench_version: 7, median_composite: 0.957 },
+      ],
+    })
+
+    // Every score read stayed on the credential-free public ledger.
+    for (const call of fetchMock.mock.calls) {
+      expect(String(call[0])).toContain('/api/v1/public/')
+      const headers = (call[1] as { headers?: Record<string, string> } | undefined)?.headers
+      expect(headers ?? {}).not.toHaveProperty('Authorization')
+    }
+
+    await client.close()
+    await server.close()
+  })
+  it('resolves an owner footprint on read scope alone, with standings joined', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '55555555-5555-4555-8555-555555555555'
+    const footprint = {
+      identifier: '5TopMiner',
+      identifier_kind: 'miner_hotkey',
+      depth: 1,
+      miner_coldkeys: ['5Cold'],
+      hotkey_count: 2,
+      submission_count: 3,
+      expansion_complete: true,
+      ownership_basis: 'evaluation_payment_records',
+      linkage_caveat:
+        'Coldkeys here are payment-time records of who paid for each evaluation, not on-chain metagraph ownership.',
+      hotkeys: [
+        {
+          miner_hotkey: '5TopMiner',
+          miner_coldkeys: ['5Cold'],
+          link_hop: 0,
+          submission_count: 2,
+          paid_submission_count: 2,
+          latest_submitted_at: '2026-07-22T00:00:00Z',
+          agents_truncated: false,
+          agents: [
+            {
+              agent_id: agentId,
+              agent_name: 'apex-agent',
+              agent_version: 4,
+              agent_status: 'scored',
+              artifact_sha256: 'ab'.repeat(32),
+              submitted_at: '2026-07-22T00:00:00Z',
+              miner_coldkey: '5Cold',
+            },
+          ],
+        },
+        {
+          miner_hotkey: '5Sibling',
+          miner_coldkeys: ['5Cold'],
+          link_hop: 1,
+          submission_count: 1,
+          paid_submission_count: 0,
+          latest_submitted_at: '2026-07-19T00:00:00Z',
+          agents_truncated: false,
+          agents: [],
+        },
+      ],
+    }
+    const leaderboard = {
+      generated_at: '2026-07-23T00:00:00Z',
+      count: 1,
+      current_bench_version: 7,
+      active_bench_version: 7,
+      desired_bench_version: 7,
+      available_bench_versions: [7],
+      selection_mode: 'authoritative',
+      entries: [
+        {
+          rank: 1,
+          finalized: true,
+          score_count: 3,
+          score_quorum: 3,
+          agent_id: agentId,
+          agent_name: 'apex-agent',
+          agent_version: 4,
+          miner_hotkey: '5TopMiner',
+          miner_uid: 12,
+          registered: true,
+          emission_eligible: true,
+          composite: 0.957,
+          tool_mean: 0.981,
+          memory_mean: 0.933,
+          first_seen: '2026-07-01T00:00:00Z',
+          eligible: true,
+          bench_version: 7,
+        },
+      ],
+      emissions: null,
+    }
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      void init
+      return Promise.resolve(
+        String(url).includes('/public/leaderboard')
+          ? Response.json(leaderboard)
+          : Response.json(footprint),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // No artifact scope and no write scope: coldkey is identity metadata.
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_miner_owner_footprint',
+      arguments: { key: '5TopMiner' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      identifier_kind: 'miner_hotkey',
+      ownership_basis: 'evaluation_payment_records',
+      hotkey_count: 2,
+      ranked_hotkey_count: 1,
+      expansion_complete: true,
+      hotkeys: [
+        { miner_hotkey: '5TopMiner', leaderboard: { rank: 1, emission_eligible: true } },
+        { miner_hotkey: '5Sibling', leaderboard: null },
+      ],
+    })
+
+    // Linkage rides the admin token; standings stay on the public ledger.
+    const [linkageUrl, linkageInit] = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes('/admin/miner-owners/'),
+    )!
+    expect(String(linkageUrl)).toContain('depth=1')
+    expect(
+      (linkageInit as { headers: Record<string, string> }).headers,
+    ).toHaveProperty('Authorization')
+    const boardCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes('/public/leaderboard'),
+    )!
+    expect(
+      (boardCall[1] as { headers: Record<string, string> }).headers,
+    ).not.toHaveProperty('Authorization')
+
+    await client.close()
+    await server.close()
+  })
+})

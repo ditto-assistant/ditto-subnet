@@ -38,6 +38,8 @@ import {
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
   updateSubmissionSettings,
+  fetchBurnSettings,
+  setBurnSettings,
   fetchContinualRetestSettings,
   setContinualRetestSettings,
   fetchQueuePolicySettings,
@@ -814,6 +816,125 @@ describe('submission cooldown administration', () => {
         }),
       }),
     )
+  })
+})
+
+describe('emission burn administration', () => {
+  const control = (burn_share: number, revision = 0) => ({
+    current: revision === 0 ? [] : [
+      {
+        revision,
+        parent_revision: revision - 1,
+        scope: '*',
+        settings: { burn_share },
+        reason: 'owner-approved emission burn change',
+        actor: 'operator@omniaura.ai',
+        created_at: '2026-08-08T12:00:00Z',
+        checksum: 'ab'.repeat(32),
+      },
+    ],
+    history: [],
+    default: { burn_share: 0 },
+    effective: {
+      revision,
+      scope: '*',
+      settings: { burn_share },
+      checksum: revision === 0 ? '' : 'ab'.repeat(32),
+      source: revision === 0 ? 'default' : 'revision',
+      max_age_seconds: 5,
+      miner_emission_share: 1 - burn_share,
+      min_burn_share: 0,
+      max_burn_share: 1,
+      live_validator_count: 3,
+    },
+  })
+
+  it('reads the policy and appends a revision, returning the refreshed read', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const before = control(0)
+    const after = control(0.4, 1)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(before))
+      .mockResolvedValueOnce(Response.json(after.current[0]))
+      .mockResolvedValueOnce(Response.json(after))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchBurnSettings()).resolves.toEqual(before)
+    await expect(
+      setBurnSettings(
+        {
+          expectedRevision: 0,
+          settings: { burn_share: 0.4 },
+          reason: 'owner-approved emission burn change',
+          confirmation: 'APPLY BURN SETTINGS',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).resolves.toEqual(after)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://platform-api.heyditto.ai/api/v1/admin/burn-settings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          scope: '*',
+          expected_revision: 0,
+          settings: { burn_share: 0.4 },
+          reason: 'owner-approved emission burn change',
+          actor: 'operator@omniaura.ai',
+          confirmation: 'APPLY BURN SETTINGS',
+        }),
+      }),
+    )
+  })
+
+  it('rejects a share outside the unit interval before it reaches the platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setBurnSettings(
+        {
+          expectedRevision: 0,
+          settings: { burn_share: 1.5 },
+          reason: 'owner-approved emission burn change',
+          confirmation: 'APPLY BURN SETTINGS',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('names the recovery when the platform refuses a stale revision', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(
+        Response.json(
+          {
+            message:
+              'burn settings changed; refresh before applying (expected 0, current 2)',
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    await expect(
+      setBurnSettings(
+        {
+          expectedRevision: 0,
+          settings: { burn_share: 0.4 },
+          reason: 'owner-approved emission burn change',
+          confirmation: 'APPLY BURN SETTINGS',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(/Nothing was applied: re-read get_burn_settings/)
   })
 })
 

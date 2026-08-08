@@ -1251,6 +1251,26 @@ class LedgerResponse(BaseModel):
         int,
         Field(default=0, ge=0, description="Age of the served snapshot in seconds."),
     ] = 0
+    burn_share: Annotated[
+        float,
+        Field(
+            default=0.0,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Share of miner emission this fold must route to the subnet "
+                "owner's burn hotkey; the remainder is normalized across the "
+                "eligible miner weights. Operator-owned on the platform and "
+                "served already-resolved, so the whole fleet folds one decided "
+                "scalar rather than each validator evaluating a schedule against "
+                "its own clock. Absent (an older platform) reads as ``0.0``, "
+                "which is what the frozen MINER_EMISSION_SHARE of 1.0 already "
+                "does — omission is therefore never a change. A stale "
+                "last-known-good ledger carries the share that was current when "
+                "the platform took the snapshot, not a defaulted zero."
+            ),
+        ),
+    ] = 0.0
     continual_retest_cohort_size: Annotated[
         int,
         Field(

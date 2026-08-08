@@ -637,6 +637,78 @@ export type EfficiencyBonusSettingsControl = z.infer<
   typeof efficiencyBonusSettingsControlSchema
 >
 
+// SN118 emission burn.
+//
+// `burn_share` is the fraction of miner emission the validator weight fold
+// routes to the subnet owner's burn hotkey; `1 - burn_share` is normalized
+// across the eligible miner weights, so this scales the competitive vector
+// without re-ordering it. It reaches validators on the scoring ledger, which
+// they read before every weight submission — but a validator that has already
+// submitted this epoch keeps its vector until the next one, so the subnet-wide
+// effect lands over roughly an epoch rather than at once.
+export const BURN_SETTINGS_SCOPE = '*'
+export const BURN_CONFIRMATION = 'APPLY BURN SETTINGS'
+// Bounds mirror the platform's. `1.0` is a real setting rather than a footgun
+// to forbid: it is the same all-to-burn vector the fold already submits when no
+// agent holds a positive score.
+export const MIN_BURN_SHARE = 0
+export const MAX_BURN_SHARE = 1
+
+const burnSettingsBaseSchema = z.object({
+  burn_share: z.number().min(MIN_BURN_SHARE).max(MAX_BURN_SHARE),
+})
+
+export const burnSettingsSchema = burnSettingsBaseSchema
+export const burnSettingsWriteSchema = burnSettingsBaseSchema
+
+export const burnSettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: burnSettingsSchema,
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export const effectiveBurnSettingsSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: burnSettingsSchema,
+  checksum: z.string().regex(/^(?:[0-9a-f]{64})?$/),
+  source: z.enum(['revision', 'default']),
+  max_age_seconds: z.number().nonnegative(),
+  // What the fold actually takes. Derived by the platform from the same value,
+  // so it is reported rather than recomputed here and the two cannot disagree.
+  miner_emission_share: z.number().min(0).max(1),
+  // Bounds come from the platform so this page cannot offer a share it refuses.
+  min_burn_share: z.number().min(0).max(1).default(MIN_BURN_SHARE),
+  max_burn_share: z.number().min(0).max(1).default(MAX_BURN_SHARE),
+  // Zero live validators means the dial is not attached to anything, which is
+  // worth seeing before rather than after applying a burn.
+  live_validator_count: z.number().int().nonnegative().nullable().default(null),
+})
+
+export const burnSettingsControlSchema = z.object({
+  current: z.array(burnSettingsRevisionSchema),
+  history: z.array(burnSettingsRevisionSchema),
+  default: burnSettingsSchema,
+  effective: effectiveBurnSettingsSchema,
+})
+
+export const setBurnSettingsInputSchema = z.object({
+  scope: z.literal(BURN_SETTINGS_SCOPE).default(BURN_SETTINGS_SCOPE),
+  expectedRevision: z.number().int().nonnegative(),
+  settings: burnSettingsWriteSchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(BURN_CONFIRMATION),
+})
+
+export type BurnSettings = z.infer<typeof burnSettingsSchema>
+export type BurnSettingsWrite = z.infer<typeof burnSettingsWriteSchema>
+export type BurnSettingsControl = z.infer<typeof burnSettingsControlSchema>
+
 export const CONTINUAL_RETEST_SETTINGS_SCOPE = '*'
 export const CONTINUAL_RETEST_CONFIRMATION = 'APPLY CONTINUAL RETEST SETTINGS'
 

@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import ditto
+from ditto.api_server.burn_settings import BurnSettingsResolver
 from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
@@ -34,6 +35,7 @@ from ditto.api_server.endpoints import (
     admin_artifact_release_settings_router,
     admin_attestation_router,
     admin_benchmark_rollout_router,
+    admin_burn_settings_router,
     admin_continual_retest_settings_router,
     admin_copy_review_router,
     admin_efficiency_bonus_settings_router,
@@ -283,6 +285,10 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         config.efficiency_bonus,
         ttl_seconds=_efficiency_settings_ttl_seconds(),
     )
+    # Operator-owned share of miner emission routed to the owner burn hotkey.
+    # Served on the scoring ledger, so a change reaches the fleet on its next
+    # poll instead of on a validator release.
+    app.state.burn_settings = BurnSettingsResolver()
     app.state.continual_retest_settings = ContinualRetestSettingsResolver()
     app.state.queue_policy_settings = QueuePolicySettingsResolver()
     app.state.inference_concurrency_settings = InferenceConcurrencySettingsResolver()
@@ -349,6 +355,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
+    app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
 
     # Serve the public dashboard SPA same-origin at ``/`` so the platform is the
