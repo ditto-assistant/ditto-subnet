@@ -144,7 +144,9 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   intentionally returns `emissions: null`. In the default view, `emissions` is a
   public-safe, read-only projection of the validator's frozen first-seen KOTH
   fold over finalized authoritative entries: the fixed 0.007 composite-point
-  incumbent hysteresis, the
+  incumbent hysteresis (decayed from Bench v6 at high scores, and from v8 held
+  under `saturation_headroom_fraction` of the incumbent's remaining headroom so
+  a saturated board stays contestable), the
   statistical band, and the 65% / 14% / 10% / 7% / 4% ranked distribution. It is
   `null` when no eligible entry exists. Validators still compute and submit their
   own authoritative weight vectors. The provenance block (`models` =

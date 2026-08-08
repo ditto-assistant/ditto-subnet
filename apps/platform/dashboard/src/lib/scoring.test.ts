@@ -40,6 +40,7 @@ import {
   rankEntries,
   rolloutQuorum,
   rolloutSettledView,
+  saturationCap,
   scoreClass,
   scoreQuorum,
   showsCompositeErrBand,
@@ -49,6 +50,16 @@ import {
   vectorChampion,
 } from "./scoring";
 import type { CompositeBreakdown } from "../types";
+
+/** The live SN118 fold constants, as served on the saturated v8 board. */
+const SATURATED_EMISSIONS = {
+  margin: 0.007,
+  band_decay_min_bench_version: 6,
+  band_decay_start_composite: 0.6,
+  band_decay_rate: 2,
+  saturation_min_bench_version: 8,
+  saturation_headroom_fraction: 0.25,
+};
 
 describe("rolloutSettledView", () => {
   it("is true only for an authoritative view with an open active < desired rollout", () => {
@@ -192,6 +203,52 @@ describe("dethroneFloor", () => {
     const champion = { composite: 0.95, settled_composite: 0.9 };
     expect(dethroneFloor({ margin: 0.02 }, champion, true)?.champComposite).toBe(0.9);
     expect(dethroneFloor({ margin: 0.02 }, champion, false)?.champComposite).toBe(0.95);
+  });
+
+  it("publishes the capped margin on a saturated board", () => {
+    // The live fold on 2026-08-08: champion at 0.997012, where the decayed
+    // margin (0.00316) is wider than the whole remaining headroom, so the cap
+    // is what a challenger actually has to clear.
+    const result = dethroneFloor(SATURATED_EMISSIONS, { composite: 0.997012, bench_version: 8 });
+    const cap = 0.25 * (1 - 0.997012);
+    expect(result?.saturated).toBe(true);
+    expect(result?.effectiveMargin).toBeCloseTo(cap, 12);
+    expect(result?.floor).toBeCloseTo(0.997012 + cap, 12);
+    // The decay curve alone would have asked for more than remains to be won.
+    expect(0.007 * (result?.scale as number)).toBeGreaterThan(1 - 0.997012);
+  });
+
+  it("keeps the decayed margin when the cap does not bind", () => {
+    const result = dethroneFloor(SATURATED_EMISSIONS, { composite: 0.9, bench_version: 8 });
+    expect(result?.saturated).toBe(false);
+    expect(result?.effectiveMargin).toBeCloseTo(0.007 * Math.exp(-2 * (0.9 - 0.6)), 12);
+  });
+});
+
+describe("saturationCap", () => {
+  it("is a fraction of the champion's remaining headroom", () => {
+    expect(saturationCap(SATURATED_EMISSIONS, { bench_version: 8 }, 0.99)).toBeCloseTo(
+      0.25 * 0.01,
+      12,
+    );
+  });
+
+  it("is null below the saturation bench version, on either side", () => {
+    expect(saturationCap(SATURATED_EMISSIONS, { bench_version: 7 }, 0.99)).toBeNull();
+    expect(
+      saturationCap(SATURATED_EMISSIONS, { bench_version: 8 }, 0.99, { bench_version: 7 }),
+    ).toBeNull();
+  });
+
+  it("is null when an older payload omits the fields", () => {
+    expect(
+      saturationCap({ band_decay_start_composite: 0.6 }, { bench_version: 8 }, 0.99),
+    ).toBeNull();
+    expect(saturationCap(null, { bench_version: 8 }, 0.99)).toBeNull();
+  });
+
+  it("never goes negative past a perfect score", () => {
+    expect(saturationCap(SATURATED_EMISSIONS, { bench_version: 8 }, 1.2)).toBe(0);
   });
 });
 

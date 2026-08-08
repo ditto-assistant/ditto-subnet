@@ -11722,6 +11722,16 @@ export interface components {
             raw_leader_miner_hotkey: string;
             /** Recipients */
             recipients?: components["schemas"]["PublicEmissionRecipient"][];
+            /**
+             * Saturation Headroom Fraction
+             * @description Ceiling on the hysteresis term as a fraction of the incumbent's remaining headroom (1 - composite), so a saturated board stays contestable.
+             */
+            saturation_headroom_fraction: number;
+            /**
+             * Saturation Min Bench Version
+             * @description First benchmark version capping the band at the ceiling.
+             */
+            saturation_min_bench_version: number;
             /** Tail Size */
             tail_size: number;
         };

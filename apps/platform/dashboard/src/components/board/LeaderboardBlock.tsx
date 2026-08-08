@@ -21,6 +21,7 @@ import {
   isEligible,
   isFinalized,
   rolloutQuorum,
+  saturationCap,
 } from "../../lib/scoring";
 import type { BandDecayParams } from "../../lib/scoring";
 import { Tip } from "../ui/Tooltip";
@@ -402,16 +403,29 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
     const champion = championEntry();
     const rawLeader = rawLeaderEntry();
     const marginLabel = marginText(e.margin);
+    const championComposite = champion ? displayComposite(champion, store.settledView()) : NaN;
     const bandScale = dethroneBandScale(
       // The band-decay fields ride on the fold but predate the shared wire
       // type; the read stays structural exactly like the original's.
       e as BandDecayParams,
       champion,
-      champion ? displayComposite(champion, store.settledView()) : NaN,
+      championComposite,
       rawLeader,
     );
-    const effectiveBandNote =
-      bandScale < 1
+    const cap = saturationCap(e as BandDecayParams, champion, championComposite, rawLeader);
+    const margin = e.margin;
+    const capBinds =
+      cap != null &&
+      typeof margin === "number" &&
+      Number.isFinite(margin) &&
+      cap < margin * bandScale;
+    const effectiveBandNote = capBinds
+      ? " With the champion at " +
+        fx(championComposite) +
+        " the board is saturated: the hysteresis term is capped at " +
+        fx(cap as number) +
+        ", a fraction of the headroom that is left, so the crown stays winnable by a real gain."
+      : bandScale < 1
         ? " Bench v" +
           Number((champion && champion.bench_version) || 0) +
           " applies the high-score curve, scaling the whole band to " +
@@ -461,22 +475,34 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
   const floorText = (): string => {
     const f = floor();
     if (!f) return "";
+    const statTerm = f.z != null ? num(f.z) + " × √(challenger SE² + champion SE²)" : "";
     const band =
       f.z != null
-        ? " The band is " +
-          (f.scale < 1 ? num(f.scale) + "× the larger" : "the larger") +
-          " of that base margin and " +
-          num(f.z) +
-          " × √(challenger SE² + champion SE²), so a challenger with noisier scores may have to clear more than " +
+        ? (f.saturated
+            ? " The band is the larger of that capped hysteresis and " +
+              statTerm +
+              " at full width — near the ceiling the uncertainty band is what protects the crown"
+            : " The band is " +
+              (f.scale < 1 ? num(f.scale) + "× the larger" : "the larger") +
+              " of that base margin and " +
+              statTerm) +
+          ", so a challenger with noisier scores may have to clear more than " +
           fx(f.floor) +
           ", this is a floor, not a guarantee."
         : " This is a floor: the fold takes the larger of the margin and the statistical uncertainty band.";
+    const hysteresisLabel = f.saturated
+      ? " effective hysteresis, capped at a fraction of the " +
+        fx(1 - f.champComposite) +
+        " of headroom the champion has left."
+      : f.scale < 1
+        ? " effective v6+ hysteresis."
+        : " fixed hysteresis.";
     return (
       "The champion holds " +
       fx(f.champComposite) +
       ", and a challenger must exceed it by more than the " +
       marginText(f.effectiveMargin) +
-      (f.scale < 1 ? " effective v6+ hysteresis." : " fixed hysteresis.") +
+      hysteresisLabel +
       band +
       " A lead inside the band is not rejected: both agents are re-scored on shared confirmation seeds and the next fold decides on the paired comparison."
     );

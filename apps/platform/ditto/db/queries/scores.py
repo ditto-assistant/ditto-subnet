@@ -111,23 +111,33 @@ def _crown_band(
     the per-row standard errors, which move under every retest and would make a
     lineage's provenance wobble with measurement noise rather than with what it
     actually achieved.
+
+    From ``KOTH_SATURATION_MIN_BENCH_VERSION`` the flat term also carries the
+    fold's saturation cap (``KOTH_SATURATION_HEADROOM_FRACTION`` of the
+    incumbent's remaining headroom). That keeps this the fold's floor in the
+    saturated regime too: a band left uncapped here would call rows the fold now
+    ranks apart "the same score", and hand seniority to a lineage that no longer
+    holds the crown.
     """
     from ditto.api_server.koth import (
         KOTH_BAND_DECAY_MIN_BENCH_VERSION,
         KOTH_BAND_DECAY_RATE,
         KOTH_BAND_DECAY_START_COMPOSITE,
         KOTH_MARGIN,
+        KOTH_SATURATION_HEADROOM_FRACTION,
+        KOTH_SATURATION_MIN_BENCH_VERSION,
     )
 
     bounded = func.least(func.greatest(top_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
+    decayed = KOTH_MARGIN * func.exp(
+        -KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE)
+    )
     return case(
         (
-            bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION,
-            KOTH_MARGIN
-            * func.exp(
-                -KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE)
-            ),
+            bench_version >= KOTH_SATURATION_MIN_BENCH_VERSION,
+            func.least(decayed, KOTH_SATURATION_HEADROOM_FRACTION * (1.0 - bounded)),
         ),
+        (bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION, decayed),
         else_=KOTH_MARGIN,
     )
 

@@ -18,6 +18,7 @@ import pytest
 from ditto.validator.crn import confirmation_seeds
 from ditto.validator.weights import (
     _beats,
+    _dethrone_band,
     _dethrone_band_scale,
     _effective_composite,
     _efficiency_stderr_scale,
@@ -209,6 +210,212 @@ class TestVersionedHighScoreBandDecay:
         assert _dethrone_band_scale(challenger, champion, 1.2) == pytest.approx(
             math.exp(-2.0 * (1.0 - 0.60))
         )
+
+
+class TestSaturationCap:
+    """Bench v8+ holds the hysteresis term under a fraction of the headroom.
+
+    The numbers here are the live SN118 board on 2026-08-08: six agents tied at
+    a composite of 0.997012, where the top of the leaderboard is a perfect tool
+    score and 249 of 251 memory cases. The finest improvement the benchmark can
+    express there is one memory case, ``0.5 / 251`` = 0.00199 composite points,
+    while the v6 decay still asked for 0.00316 — so *no* real gain could take
+    the crown and the board locked. That is the defect this cap removes.
+    """
+
+    LIVE_CHAMPION = 0.997012
+    ONE_MEMORY_CASE = 0.5 / 251
+
+    def test_decayed_band_exceeded_the_whole_remaining_headroom(self) -> None:
+        decayed = 0.007 * math.exp(-2.0 * (self.LIVE_CHAMPION - 0.60))
+
+        assert decayed == pytest.approx(0.00316, abs=1e-5)
+        assert decayed > 1.0 - self.LIVE_CHAMPION
+        assert decayed > self.ONE_MEMORY_CASE
+
+    def test_pre_v8_keeps_the_legacy_band_at_the_ceiling(self) -> None:
+        champion = _e("champ", self.LIVE_CHAMPION, bench_version=7)
+        challenger = _e(
+            "chall",
+            self.LIVE_CHAMPION + self.ONE_MEMORY_CASE,
+            bench_version=7,
+            minutes=1,
+        )
+        band = _dethrone_band(
+            challenger, champion, self.LIVE_CHAMPION, margin=0.007, statistical=0.0
+        )
+
+        assert band == pytest.approx(
+            0.007 * _dethrone_band_scale(challenger, champion, self.LIVE_CHAMPION)
+        )
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is False
+
+    def test_v8_lets_one_benchmark_case_take_the_crown(self) -> None:
+        champion = _e("champ", self.LIVE_CHAMPION, bench_version=8)
+        challenger = _e(
+            "chall",
+            self.LIVE_CHAMPION + self.ONE_MEMORY_CASE,
+            bench_version=8,
+            minutes=1,
+        )
+        band = _dethrone_band(
+            challenger, champion, self.LIVE_CHAMPION, margin=0.007, statistical=0.0
+        )
+
+        assert band == pytest.approx(0.25 * (1.0 - self.LIVE_CHAMPION))
+        assert band < self.ONE_MEMORY_CASE
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is True
+
+    def test_mixed_version_comparison_keeps_the_legacy_band(self) -> None:
+        champion = _e("champ", self.LIVE_CHAMPION, bench_version=8)
+        challenger = _e(
+            "chall",
+            self.LIVE_CHAMPION + self.ONE_MEMORY_CASE,
+            bench_version=7,
+            minutes=1,
+        )
+
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is False
+
+    @pytest.mark.parametrize("champion_composite", [0.60, 0.75, 0.90, 0.95, 0.98])
+    def test_cap_is_inert_away_from_the_ceiling(
+        self, champion_composite: float
+    ) -> None:
+        """Below saturation the decay curve still governs, so v7 and v8 agree."""
+        legacy_champion = _e("champ", champion_composite, bench_version=7)
+        legacy_challenger = _e("chall", champion_composite, bench_version=7, minutes=1)
+        champion = _e("champ", champion_composite, bench_version=8)
+        challenger = _e("chall", champion_composite, bench_version=8, minutes=1)
+
+        assert _dethrone_band(
+            challenger, champion, champion_composite, margin=0.007, statistical=0.0
+        ) == pytest.approx(
+            _dethrone_band(
+                legacy_challenger,
+                legacy_champion,
+                champion_composite,
+                margin=0.007,
+                statistical=0.0,
+            )
+        )
+
+    def test_the_noise_floor_keeps_its_full_width_under_the_cap(self) -> None:
+        """The cap frees the hysteresis term, not the evidence requirement."""
+        champion = _e("champ", self.LIVE_CHAMPION, stderr=0.0017, bench_version=8)
+        challenger = _e(
+            "chall",
+            self.LIVE_CHAMPION + self.ONE_MEMORY_CASE,
+            stderr=0.0017,
+            bench_version=8,
+            minutes=1,
+        )
+        statistical = 1.64 * math.sqrt(2 * 0.0017**2)
+        band = _dethrone_band(
+            challenger,
+            champion,
+            self.LIVE_CHAMPION,
+            margin=0.007,
+            statistical=statistical,
+        )
+
+        assert band == pytest.approx(statistical)
+        assert statistical > self.ONE_MEMORY_CASE
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=1.64) is False
+
+    def test_shared_seed_evidence_settles_the_saturated_contest(self) -> None:
+        """What the noise floor asks for is separation on shared seeds.
+
+        The champion and challenger hold the same 0.997012 median, but the
+        challenger wins the one case that separates them on every shared seed.
+        Pairing cancels per-seed difficulty, so the difference is exact and the
+        crown moves — under the legacy band the identical evidence would not
+        have been enough.
+        """
+        seeds = [11, 22, 33, 44]
+        champion_seed_scores = [0.997012] * 4
+        challenger_seed_scores = [
+            c + self.ONE_MEMORY_CASE for c in champion_seed_scores
+        ]
+        champion = _e(
+            "champ",
+            0.997012,
+            bench_version=8,
+            confirmations=champion_seed_scores,
+            seeds=seeds,
+        )
+        challenger = _e(
+            "chall",
+            0.997012 + self.ONE_MEMORY_CASE,
+            bench_version=8,
+            confirmations=challenger_seed_scores,
+            seeds=seeds,
+            minutes=1,
+        )
+        legacy_champion = _e(
+            "champ",
+            0.997012,
+            bench_version=7,
+            confirmations=champion_seed_scores,
+            seeds=seeds,
+        )
+        legacy_challenger = _e(
+            "chall",
+            0.997012 + self.ONE_MEMORY_CASE,
+            bench_version=7,
+            confirmations=challenger_seed_scores,
+            seeds=seeds,
+            minutes=1,
+        )
+
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=1.64) is True
+        assert (
+            _beats(legacy_challenger, legacy_champion, margin=0.007, dethrone_z=1.64)
+            is False
+        )
+
+    def test_a_saturated_contest_is_still_scheduled_for_shared_seeds(self) -> None:
+        """The evidence trigger must not narrow with the deciding band.
+
+        The cap makes the decision cheap to clear; the noise floor then decides
+        it. A pair that the fold would refuse for want of paired evidence has to
+        stay in :func:`contested_confirmation_set`, or it holds the crown on
+        exactly the seed luck the confirmation lane exists to cancel.
+        """
+        champion = _e("champ", self.LIVE_CHAMPION, stderr=0.0017, bench_version=8)
+        challenger = _e(
+            "chall",
+            self.LIVE_CHAMPION + self.ONE_MEMORY_CASE,
+            stderr=0.0017,
+            bench_version=8,
+            minutes=1,
+        )
+        contested = contested_confirmation_set(
+            [champion, challenger], current_version=8, margin=0.007, dethrone_z=1.64
+        )
+
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=1.64) is False
+        assert [e.miner_hotkey for e in contested] == ["champ", "chall"]
+
+    def test_cap_never_goes_negative_at_or_past_a_perfect_score(self) -> None:
+        champion = _e("champ", 1.2, bench_version=8)
+        challenger = _e("chall", 1.3, bench_version=8, minutes=1)
+        band = _dethrone_band(challenger, champion, 1.2, margin=0.007, statistical=0.0)
+
+        assert band == 0.0
+        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is True
+
+    def test_band_shrinks_monotonically_as_the_champion_climbs(self) -> None:
+        champion = _e("champ", 0.99, bench_version=8)
+        challenger = _e("chall", 0.995, bench_version=8, minutes=1)
+        bands = [
+            _dethrone_band(
+                challenger, champion, composite, margin=0.007, statistical=0.0
+            )
+            for composite in (0.90, 0.95, 0.98, 0.99, 0.995, 0.999)
+        ]
+
+        assert bands == sorted(bands, reverse=True)
+        assert all(band >= 0.0 for band in bands)
 
 
 class TestTop5ConfirmationSet:

@@ -239,6 +239,17 @@ result.
   band shrinks smoothly once the incumbent exceeds 0.60, keeping the crown
   contestable as scores approach the benchmark ceiling. A near-miss is settled
   by re-scoring both agents on shared seeds rather than dataset luck.
+- From Bench v8 onward the hysteresis term is additionally capped at a quarter
+  of the incumbent's remaining headroom (`1 - composite`). On a saturated board
+  a fixed-shape band eventually asks for more than the whole score that is left
+  to win — at an incumbent composite of 0.997 the v6 curve wanted 0.0032 out of
+  0.0030 remaining, so no real improvement could take the crown. Under the cap
+  the ask always stays a fraction of what remains, and the statistical band
+  keeps its full width beneath it: at the ceiling you win the crown by
+  demonstrating a real, repeatable separation on shared seeds, not by clearing
+  an arbitrary constant. The live values are published on
+  `/public/leaderboard` as `saturation_min_bench_version` and
+  `saturation_headroom_fraction` — read them there rather than hardcoding.
 - Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
   and next four distinct miners, respectively. The competitive vector receives
   100% of available miner emission by default — nothing is burned while eligible

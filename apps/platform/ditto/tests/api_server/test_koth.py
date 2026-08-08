@@ -240,6 +240,90 @@ def test_high_score_band_decay_applies_from_v6_forward(bench_version: int) -> No
     assert projection.champion == challenger
 
 
+# The live SN118 board on 2026-08-08: six agents tied at this composite, a
+# perfect tool score and 249 of 251 memory cases each. One memory case is the
+# finest gain the benchmark can express there, and it is smaller than the v6
+# decayed band (0.00316) — so the crown had become unwinnable.
+_SATURATED_COMPOSITE = 0.997012
+_ONE_MEMORY_CASE = 0.5 / 251
+
+
+def test_saturation_cap_lets_one_case_dethrone_from_v8() -> None:
+    incumbent = _entry(2, _SATURATED_COMPOSITE, minutes=0, bench_version=8)
+    challenger = _entry(
+        1, _SATURATED_COMPOSITE + _ONE_MEMORY_CASE, minutes=1, bench_version=8
+    )
+
+    projection = project_koth([challenger, incumbent])
+
+    assert projection is not None
+    assert projection.champion == challenger
+
+
+def test_saturation_cap_is_not_applied_before_v8() -> None:
+    incumbent = _entry(2, _SATURATED_COMPOSITE, minutes=0, bench_version=7)
+    challenger = _entry(
+        1, _SATURATED_COMPOSITE + _ONE_MEMORY_CASE, minutes=1, bench_version=7
+    )
+
+    projection = project_koth([challenger, incumbent])
+
+    assert projection is not None
+    assert projection.champion == incumbent
+    assert projection.raw_leader_decision is not None
+    assert projection.raw_leader_decision.required_lead == pytest.approx(
+        0.007 * math.exp(-2.0 * (_SATURATED_COMPOSITE - 0.60)), rel=1e-9
+    )
+
+
+def test_saturated_required_lead_is_a_fraction_of_remaining_headroom() -> None:
+    incumbent = _entry(2, _SATURATED_COMPOSITE, minutes=0, bench_version=8)
+    challenger = _entry(1, _SATURATED_COMPOSITE, minutes=1, bench_version=8)
+
+    projection = project_koth([challenger, incumbent])
+
+    assert projection is not None
+    decision = _dethrone_decision(challenger, incumbent)
+    assert decision.required_lead == pytest.approx(
+        0.25 * (1.0 - _SATURATED_COMPOSITE), rel=1e-9
+    )
+    assert decision.margin_lead == 0.007
+    assert decision.dethrones is False
+
+
+def test_saturation_leaves_the_uncertainty_band_at_full_width() -> None:
+    """The cap frees the hysteresis term; noise still has to be ruled out."""
+    incumbent = _entry(
+        2, _SATURATED_COMPOSITE, minutes=0, stderr=0.0017, bench_version=8
+    )
+    challenger = _entry(
+        1,
+        _SATURATED_COMPOSITE + _ONE_MEMORY_CASE,
+        minutes=1,
+        stderr=0.0017,
+        bench_version=8,
+    )
+
+    decision = _dethrone_decision(challenger, incumbent)
+
+    assert decision.method == "unpaired"
+    assert decision.statistical_lead is not None
+    assert decision.required_lead == pytest.approx(decision.statistical_lead)
+    assert decision.dethrones is False
+
+
+def test_saturation_cap_is_inert_away_from_the_ceiling() -> None:
+    incumbent_v7 = _entry(2, 0.95, minutes=0, bench_version=7)
+    challenger_v7 = _entry(1, 0.95, minutes=1, bench_version=7)
+    incumbent_v8 = _entry(4, 0.95, minutes=0, bench_version=8)
+    challenger_v8 = _entry(3, 0.95, minutes=1, bench_version=8)
+
+    legacy = _dethrone_decision(challenger_v7, incumbent_v7)
+    saturated = _dethrone_decision(challenger_v8, incumbent_v8)
+
+    assert saturated.required_lead == pytest.approx(legacy.required_lead)
+
+
 def test_pre_v6_and_mixed_version_comparisons_keep_legacy_band() -> None:
     incumbent_v5 = _entry(2, 0.95, minutes=0, bench_version=5)
     challenger_v5 = _entry(1, 0.954, minutes=1, bench_version=5)
