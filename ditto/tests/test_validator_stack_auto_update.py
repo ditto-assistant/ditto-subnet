@@ -812,6 +812,30 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
     return env, state_path, state_dir, env_file
 
 
+@pytest.mark.parametrize(
+    "dittobench_source",
+    [
+        "https://github.com/ditto-assistant/dittobench-api",
+        "https://github.com/ditto-assistant/ditto-subnet",
+    ],
+)
+def test_adoption_accepts_standalone_and_monorepo_dittobench_identity(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    dittobench_source: str,
+) -> None:
+    env, state_path, _, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    image = _images()["DITTOBENCH_API_IMAGE"]
+    state["descriptor_labels"][image]["org.opencontainers.image.source"] = (
+        dittobench_source
+    )
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+
+    assert result.returncode == 0, result.stderr
+
+
 def _run_updater(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(UPDATER), *args],
@@ -1066,8 +1090,19 @@ def test_waits_for_busy_validator_before_replacing_stack(
     assert any("up" in call for call in state["compose_calls"])
 
 
+@pytest.mark.parametrize(
+    "relay_source",
+    [
+        "https://github.com/ditto-assistant/dittobench-api",
+        (
+            f"https://github.com/ditto-assistant/ditto-subnet/tree/{REVISION}"
+            "/services/dittobench-api/compat/model-relay"
+        ),
+    ],
+)
 def test_four_service_candidate_can_roll_back_to_legacy_six_service_release(
     stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    relay_source: str,
 ) -> None:
     env, state_path, state_dir, env_file = stack_updater_env
     state = json.loads(state_path.read_text())
@@ -1087,9 +1122,7 @@ def test_four_service_candidate_can_roll_back_to_legacy_six_service_release(
             "health": "healthy",
         }
     state["descriptor_labels"][relay] = {
-        "org.opencontainers.image.source": (
-            "https://github.com/ditto-assistant/dittobench-api"
-        ),
+        "org.opencontainers.image.source": relay_source,
         "org.opencontainers.image.revision": REVISION,
         "org.opencontainers.image.version": "0.10.0",
     }
