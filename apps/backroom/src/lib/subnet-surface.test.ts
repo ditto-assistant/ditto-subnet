@@ -90,4 +90,18 @@ describe('public subnet Backroom boundary', () => {
     expect(source).toContain('BACKROOM_ADMIN_EMAILS')
     expect(source).toContain('DITTO_PLATFORM_API_BASE_URL')
   })
+
+  // This repository is public and the OAuth KV namespace holds live operator
+  // grants plus the access and refresh tokens of everyone with backroom:write.
+  // The id is not itself a credential, but committing it turns "holds some
+  // token for this account" into "is one command from the production token
+  // store", and points a stray `wrangler dev --remote` at real grants. It is
+  // injected at deploy time instead, like the Cloudflare account id and token.
+  it('never commits a real Cloudflare namespace id', () => {
+    const runtime = readFileSync(join(appRoot, 'wrangler.jsonc'), 'utf8')
+
+    expect(runtime).toContain('OAUTH_KV_NAMESPACE_ID_INJECTED_AT_DEPLOY')
+    // Cloudflare namespace ids are 32 lowercase hex characters.
+    expect(runtime).not.toMatch(/\b[0-9a-f]{32}\b/)
+  })
 })

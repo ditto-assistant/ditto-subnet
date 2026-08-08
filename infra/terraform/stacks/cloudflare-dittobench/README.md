@@ -17,3 +17,9 @@ Required protected-environment configuration:
 
 The Cloudflare token is supplied only at plan/apply time and is never stored in
 the repository.
+
+This stack also owns the Backroom MCP OAuth KV namespace. Its
+`backroom_oauth_kv_namespace_id` output is consumed by the Worker deploy as the
+`prod` environment variable `BACKROOM_OAUTH_KV_ID`, never by committing the id:
+the namespace holds live operator grants and tokens, and this repository is
+public. Recreating the namespace revokes every operator's MCP connection.

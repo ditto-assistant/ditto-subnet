@@ -47,9 +47,15 @@ operator authorizes again.
 Beyond the console's own secrets (`docs/oauth.md`), the MCP needs:
 
 - `OAUTH_KV` — registered clients, grants, and issued tokens. Terraform owns the
-  namespace (`infra/terraform/stacks/cloudflare-dittobench`); paste its
-  `backroom_oauth_kv_namespace_id` output into `wrangler.jsonc`. Deleting this
-  namespace revokes every operator's MCP connection.
+  namespace (`infra/terraform/stacks/cloudflare-dittobench`) and exports
+  `backroom_oauth_kv_namespace_id`. That value belongs in the `prod` environment
+  as the `BACKROOM_OAUTH_KV_ID` variable, **not** in `wrangler.jsonc`: this
+  repository is public and the namespace holds live operator grants and tokens.
+  `scripts/inject-oauth-kv.mjs` binds it immediately before `wrangler deploy`,
+  and the committed placeholder is not a valid id, so a deploy that skips that
+  step fails at Cloudflare rather than shipping a Worker that cannot persist a
+  grant. `subnet-surface.test.ts` fails if a real id is ever committed.
+  Deleting the namespace revokes every operator's MCP connection.
 - The hourly cron trigger, which purges expired grants and tokens.
 
 ## Adding a tool

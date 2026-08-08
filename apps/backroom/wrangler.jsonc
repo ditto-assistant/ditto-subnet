@@ -12,13 +12,21 @@
     "DITTO_PLATFORM_API_BASE_URL": "https://platform-api.heyditto.ai",
   },
   // OAuth grants, registered MCP clients, and issued tokens for the /mcp
-  // endpoint. Terraform owns the namespace in the cloudflare-dittobench stack;
-  // this id must match its output, and a deploy without it fails closed because
-  // the OAuth provider has nowhere to persist a grant.
+  // endpoint. Terraform owns the namespace in the cloudflare-dittobench stack
+  // and exports its id; `scripts/inject-oauth-kv.mjs` binds it from the prod
+  // BACKROOM_OAUTH_KV_ID variable immediately before `wrangler deploy`.
+  //
+  // The placeholder is deliberate and must stay committed. This repository is
+  // public and this namespace holds live operator grants and tokens, so the id
+  // is supplied at deploy time like the Cloudflare account id and API token.
+  // Because the placeholder is not a valid namespace id, a deploy that skips
+  // the injection step fails at Cloudflare instead of shipping a Worker whose
+  // OAuth provider has nowhere to persist a grant, and a local
+  // `wrangler dev --remote` cannot reach production state.
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",
-      "id": "REPLACE_WITH_TERRAFORM_OAUTH_KV_ID",
+      "id": "OAUTH_KV_NAMESPACE_ID_INJECTED_AT_DEPLOY",
     },
   ],
   // Purges expired OAuth grants and tokens. Hourly is well inside the 7-day
