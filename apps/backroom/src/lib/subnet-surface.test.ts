@@ -7,9 +7,13 @@ const appRoot = join(import.meta.dirname, '..', '..')
 describe('public subnet Backroom boundary', () => {
   it('does not ship Ditto product-control routes', () => {
     const routes = readdirSync(join(appRoot, 'src', 'routes', '_authenticated'))
+    // agent-access.tsx is deliberately NOT on this list. It is the MCP connect
+    // page, and it was excluded from the original port only because the MCP
+    // itself was; now that SN118 is operated from here, the page that tells an
+    // operator how to connect a client belongs here too.
+    expect(routes).toContain('agent-access.tsx')
     expect(routes).not.toEqual(
       expect.arrayContaining([
-        'agent-access.tsx',
         'airdrop.tsx',
         'app-reviews.tsx',
         'feature-flags.tsx',

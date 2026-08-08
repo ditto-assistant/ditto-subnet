@@ -28,6 +28,7 @@ import { Route as AuthenticatedContinualRetestsRouteImport } from './routes/_aut
 import { Route as AuthenticatedBurnRouteImport } from './routes/_authenticated/burn'
 import { Route as AuthenticatedBenchmarkRolloutRouteImport } from './routes/_authenticated/benchmark-rollout'
 import { Route as AuthenticatedArtifactReleaseRouteImport } from './routes/_authenticated/artifact-release'
+import { Route as AuthenticatedAgentAccessRouteImport } from './routes/_authenticated/agent-access'
 import { Route as AuthenticatedScreeningQuarantineIndexRouteImport } from './routes/_authenticated/screening-quarantine.index'
 import { Route as AuthenticatedScreeningQuarantineHistoryRouteImport } from './routes/_authenticated/screening-quarantine.history'
 import { Route as AuthenticatedScreeningQuarantineDisputesRouteImport } from './routes/_authenticated/screening-quarantine.disputes'
@@ -137,6 +138,12 @@ const AuthenticatedArtifactReleaseRoute =
     path: '/artifact-release',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedAgentAccessRoute =
+  AuthenticatedAgentAccessRouteImport.update({
+    id: '/agent-access',
+    path: '/agent-access',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedScreeningQuarantineIndexRoute =
   AuthenticatedScreeningQuarantineIndexRouteImport.update({
     id: '/',
@@ -159,6 +166,7 @@ const AuthenticatedScreeningQuarantineDisputesRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/agent-access': typeof AuthenticatedAgentAccessRoute
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/burn': typeof AuthenticatedBurnRoute
@@ -182,6 +190,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/agent-access': typeof AuthenticatedAgentAccessRoute
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/burn': typeof AuthenticatedBurnRoute
@@ -206,6 +215,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
+  '/_authenticated/agent-access': typeof AuthenticatedAgentAccessRoute
   '/_authenticated/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/_authenticated/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/_authenticated/burn': typeof AuthenticatedBurnRoute
@@ -231,6 +241,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/agent-access'
     | '/artifact-release'
     | '/benchmark-rollout'
     | '/burn'
@@ -254,6 +265,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/login'
+    | '/agent-access'
     | '/artifact-release'
     | '/benchmark-rollout'
     | '/burn'
@@ -277,6 +289,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_authenticated'
     | '/login'
+    | '/_authenticated/agent-access'
     | '/_authenticated/artifact-release'
     | '/_authenticated/benchmark-rollout'
     | '/_authenticated/burn'
@@ -441,6 +454,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedArtifactReleaseRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/agent-access': {
+      id: '/_authenticated/agent-access'
+      path: '/agent-access'
+      fullPath: '/agent-access'
+      preLoaderRoute: typeof AuthenticatedAgentAccessRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/screening-quarantine/': {
       id: '/_authenticated/screening-quarantine/'
       path: '/'
@@ -487,6 +507,7 @@ const AuthenticatedScreeningQuarantineRouteWithChildren =
   )
 
 interface AuthenticatedRouteChildren {
+  AuthenticatedAgentAccessRoute: typeof AuthenticatedAgentAccessRoute
   AuthenticatedArtifactReleaseRoute: typeof AuthenticatedArtifactReleaseRoute
   AuthenticatedBenchmarkRolloutRoute: typeof AuthenticatedBenchmarkRolloutRoute
   AuthenticatedBurnRoute: typeof AuthenticatedBurnRoute
@@ -504,6 +525,7 @@ interface AuthenticatedRouteChildren {
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedAgentAccessRoute: AuthenticatedAgentAccessRoute,
   AuthenticatedArtifactReleaseRoute: AuthenticatedArtifactReleaseRoute,
   AuthenticatedBenchmarkRolloutRoute: AuthenticatedBenchmarkRolloutRoute,
   AuthenticatedBurnRoute: AuthenticatedBurnRoute,

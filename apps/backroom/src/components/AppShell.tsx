@@ -3,6 +3,7 @@ import { useServerFn } from '@tanstack/react-start'
 import { useState } from 'react'
 import {
   Activity,
+  Bot,
   CircleDollarSign,
   Copy,
   Flame,
@@ -36,6 +37,12 @@ const navigation = [
     label: 'Bench rollout',
     description: 'SN118 contract activation',
     icon: Gauge,
+  },
+  {
+    to: '/agent-access' as const,
+    label: 'Agent access',
+    description: 'OAuth MCP connection',
+    icon: Bot,
   },
   {
     to: '/burn' as const,
