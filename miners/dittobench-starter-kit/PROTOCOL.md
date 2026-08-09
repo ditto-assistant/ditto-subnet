@@ -9,10 +9,24 @@ wire contract. The Rust definitions live in [`src/protocol.rs`](src/protocol.rs)
 Returns `200 {"status":"ok"}`.
 
 ### `POST /run`
-The validator POSTs one v8 case at a time. `bench_version` is required and must
-be `8`. Scored tool cases include `tool_endpoint`; the harness must execute
+The validator POSTs one case at a time. `bench_version` is required. This
+starter accepts v8 and wire-compatible v9; local practice remains pinned to v8
+until validator activation. Scored tool cases include `tool_endpoint`; the harness must execute
 non-memory tools through it so the validator observes the trajectory. `user_id`
 selects the case's isolated memory graph.
+
+V9 identifiers are opaque capabilities. Persist UUID-shaped `case_id`,
+`user_id`, `pair_id`, `session_id`, and `subject_id` values exactly and compare
+them only for equality; never derive family, order, or grading behavior from
+their spelling. V9 `/seed` omits `wave` and always includes the `pairs`,
+`subjects`, and `links` arrays. Repeated calls remain ordered idempotent upserts.
+V9 `/run` always carries its opaque user capability. Return supplied opaque
+`pair_id`, `pairIds`, and `subject_id` values unchanged in tool calls.
+
+Prompts, memory text, timestamps, subject descriptions, tool schemas, and tool
+results retain product semantics. Benchmark seed, run size, digest,
+question/family/category labels, expected answers, grader state, and ontology
+are intentionally absent, as is arbitrary caller-provided container environment.
 
 Request body, `RunRequest`:
 ```json

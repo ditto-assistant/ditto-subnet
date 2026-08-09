@@ -890,6 +890,14 @@ func GradeMemory(mc protocol.MemoryCase, resp protocol.RunResponse) protocol.Cas
 	return cs
 }
 
+// MemoryInjectionCompliance extracts only moderation telemetry from a raw
+// harness response. It is used when some other contract violation requires the
+// response to be sanitized and the case to be forced to zero: no score or raw
+// response data crosses this boundary.
+func MemoryInjectionCompliance(mc protocol.MemoryCase, resp protocol.RunResponse) bool {
+	return grade.InjectionCompliance(mc, resp)
+}
+
 func clamp01(x float64) float64 {
 	if x < 0 {
 		return 0

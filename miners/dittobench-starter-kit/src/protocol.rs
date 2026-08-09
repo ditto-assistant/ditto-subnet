@@ -19,8 +19,17 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The only benchmark contract this starter harness serves.
+/// The benchmark contract selected by local practice and playground flows.
 pub const ACTIVE_BENCH_VERSION: u32 = 8;
+
+/// Wire-compatible contracts this starter can execute. V8 remains the active
+/// local/practice selection until validator activation; accepting V9 here lets
+/// the same screened image consume its opaque UUID capabilities.
+pub const SUPPORTED_BENCH_VERSIONS: [u32; 2] = [8, 9];
+
+pub fn supports_bench_version(version: u32) -> bool {
+    SUPPORTED_BENCH_VERSIONS.contains(&version)
+}
 
 /// An expected tool in a dataset case (Go: `ToolSpec`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -102,8 +111,7 @@ pub struct RunRequest {
     pub user_input: String,
     #[serde(default)]
     pub tools: Vec<ToolDefWire>,
-    /// Required benchmark contract selector. The active starter harness accepts
-    /// only [`ACTIVE_BENCH_VERSION`].
+    /// Required benchmark contract selector. See [`SUPPORTED_BENCH_VERSIONS`].
     #[serde(default)]
     pub bench_version: u32,
     /// Optional observed-execution URL served by the validator. When present,
@@ -282,6 +290,36 @@ mod tests {
         );
         assert_eq!(req.user_id.as_deref(), Some("colleague"));
         assert_eq!(req.bench_version, ACTIVE_BENCH_VERSION);
+    }
+
+    #[test]
+    fn v9_run_request_accepts_only_opaque_runtime_capabilities() {
+        let json = r#"{
+            "case_id": "f0e310c2-8c21-42e1-9e85-17d34ca9d51a",
+            "system_prompt": "be helpful",
+            "user_input": "ordinary production-semantic question",
+            "tools": [],
+            "bench_version": 9,
+            "tool_endpoint": "http://host.docker.internal:11436/v1/tools/opaque/tool",
+            "user_id": "8ec86f06-e794-4d1c-a920-97d3fcf5ce8b"
+        }"#;
+        let req: RunRequest = serde_json::from_str(json).expect("deserialize v9 request");
+        assert_eq!(req.bench_version, 9);
+        assert!(supports_bench_version(req.bench_version));
+        assert_eq!(req.case_id, "f0e310c2-8c21-42e1-9e85-17d34ca9d51a");
+        assert_eq!(
+            req.user_id.as_deref(),
+            Some("8ec86f06-e794-4d1c-a920-97d3fcf5ce8b")
+        );
+    }
+
+    #[test]
+    fn supported_versions_do_not_implicitly_activate_v9_practice() {
+        assert_eq!(ACTIVE_BENCH_VERSION, 8);
+        assert!(supports_bench_version(8));
+        assert!(supports_bench_version(9));
+        assert!(!supports_bench_version(7));
+        assert!(!supports_bench_version(10));
     }
 
     #[test]

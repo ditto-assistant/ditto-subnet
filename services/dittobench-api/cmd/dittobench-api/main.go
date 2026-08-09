@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1250,9 +1251,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// back the mock endpoint stood up below). The hashed artifact — assembled by
 	// gen.BuildArtifact so the run path and the generate service produce identical
 	// bytes for a seed — recomputes the fixture digests from the same (seed, case).
-	toolFixtures := make([]toolexec.Fixture, len(toolCases))
-	for i, c := range toolCases {
-		toolFixtures[i] = toolexec.BuildFixture(seed, c)
+	toolFixtureByInternalID := make(map[string]toolexec.Fixture, len(toolCases))
+	for _, c := range toolCases {
+		toolFixtureByInternalID[c.ID] = toolexec.BuildFixture(seed, c)
 	}
 	// The hashed artifact covers the secondary isolation graph too (when present),
 	// so a dispute re-scores the exact multi-graph seeding.
@@ -1283,6 +1284,30 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	if dir := strings.TrimSpace(os.Getenv("DITTOBENCH_ARTIFACT_DIR")); dir != "" && artifactBytes != nil {
 		if err := os.WriteFile(filepath.Join(dir, runID+".json"), artifactBytes, 0o644); err != nil {
 			log.Printf("run %s: artifact persist failed: %v", runID, err)
+		}
+	}
+
+	// V9 projects canonical dataset identities into per-run opaque capabilities
+	// only after the canonical dataset artifact is complete. The grader and report restore
+	// canonical IDs; the harness sees only this projected view.
+	var harnessProjection *gen.HarnessProjection
+	if req.BenchVersion == protocol.BenchVersionV9 {
+		blindingKey := make([]byte, sha256.Size)
+		if _, artifactErr = cryptorand.Read(blindingKey); artifactErr != nil {
+			s.store.Fail(runID, "v9 harness projection entropy unavailable")
+			return
+		}
+		harnessProjection, artifactErr = gen.BuildHarnessProjection(seed, blindingKey, req.BenchVersion, toolCases, memSuite.Cases, memWaves)
+		if artifactErr != nil {
+			s.store.Fail(runID, "v9 harness projection failed")
+			return
+		}
+		primaryWaveCount := len(memSuite.Waves)
+		toolCases = harnessProjection.ToolCases
+		memSuite.Cases = harnessProjection.MemoryCases
+		memSuite.Waves = harnessProjection.Waves[:primaryWaveCount]
+		if len(harnessProjection.Waves) > primaryWaveCount {
+			iso.SecondaryWave = harnessProjection.Waves[primaryWaveCount]
 		}
 	}
 
@@ -1439,11 +1464,29 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// Registered for every case (tool + memory) so a harness may route any
 	// non-memory call through it during any case.
 	toolSrv := toolexec.NewServer()
-	for i, c := range toolCases {
-		toolSrv.Register(c.ID, toolFixtures[i])
+	for _, c := range toolCases {
+		internalID := c.ID
+		if harnessProjection != nil {
+			var reverseErr error
+			internalID, reverseErr = harnessProjection.InternalCaseID(c.ID)
+			if reverseErr != nil {
+				s.store.Fail(runID, "v9 tool capability reverse mapping failed")
+				return
+			}
+		}
+		toolSrv.Register(c.ID, toolFixtureByInternalID[internalID])
 	}
 	for _, sc := range memSuite.Cases {
-		toolSrv.Register(sc.Case.ID, toolexec.BuildFixture(seed, protocol.ToolCase{ID: sc.Case.ID}))
+		internalID := sc.Case.ID
+		if harnessProjection != nil {
+			var reverseErr error
+			internalID, reverseErr = harnessProjection.InternalCaseID(sc.Case.ID)
+			if reverseErr != nil {
+				s.store.Fail(runID, "v9 memory capability reverse mapping failed")
+				return
+			}
+		}
+		toolSrv.Register(sc.Case.ID, toolexec.BuildFixture(seed, protocol.ToolCase{ID: internalID}))
 	}
 	toolSourceIP := ""
 	if handle != nil {
@@ -1483,6 +1526,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			return
 		}
 		if len(prerequisites.Pairs) > 0 {
+			if harnessProjection != nil {
+				prerequisites.UserID = harnessProjection.WireUserID(gen.PrimaryUser)
+			}
 			s.store.SetStage(runID, store.StatusSeeding, 0, total)
 			if _, err := runner.SeedForVersion(ctx, harnessURL, prerequisites, req.BenchVersion); err != nil {
 				s.failV7Seeding(runID, "seeding v8 tool routing state failed: ", err)
@@ -1491,6 +1537,14 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 	}
 	effectiveCaseConcurrency := activeCaseConcurrency()
+	toolRunUserID := ""
+	if harnessProjection != nil {
+		toolRunUserID = harnessProjection.WireUserID(gen.PrimaryUser)
+		if toolRunUserID == "" {
+			s.store.Fail(runID, "v9 primary user capability projection failed")
+			return
+		}
+	}
 
 	// 4. tool cases — share V8's already-seeded world but remain independent of
 	//    each other, so run with bounded per-case concurrency. Results are
@@ -1502,12 +1556,27 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	toolWasObserved := make([]bool, len(toolCases))
 	toolWasCapped := make([]bool, len(toolCases))
 	toolTranscripts := make([]transcriptCase, len(toolCases))
+	var projectionFailure error
+	var projectionFailureOnce sync.Once
+	recordProjectionFailure := func(err error) {
+		if err != nil {
+			projectionFailureOnce.Do(func() { projectionFailure = err })
+		}
+	}
 	runBounded(ctx, len(toolCases), effectiveCaseConcurrency, func(i int) {
 		c := toolCases[i]
-		resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: toolEndpoint, BenchVersion: req.BenchVersion})
+		resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: toolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
 		observed := toolSrv.Observed(c.ID)
-		toolTranscripts[i] = transcriptCase{CaseID: c.ID, Kind: protocol.KindTool, Response: resp, Observed: observed, Execution: execution}
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
+		fixture := toolFixtureByInternalID[c.ID]
+		if harnessProjection != nil {
+			internalID, reverseErr := harnessProjection.InternalCaseID(c.ID)
+			if reverseErr != nil {
+				recordProjectionFailure(reverseErr)
+				return
+			}
+			fixture = toolFixtureByInternalID[internalID]
+		}
 		if datagen.IsResultUsage(c.Category) {
 			// Result-usage: trajectory + whether the answer carried the served
 			// needle value (a fabricated value only the executed tool could
@@ -1516,7 +1585,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			// Under v7 the composition is multiplicative and a decoy zeroes the
 			// whole case (ComposeResultUsageForVersion).
 			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, resp.FinalText,
-				toolFixtures[i].NeedleValue(), toolFixtures[i].DecoyValue())
+				fixture.NeedleValue(), fixture.DecoyValue())
 		} else {
 			cs = scorer.FinishTool(cs)
 		}
@@ -1533,6 +1602,25 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			cs = scorer.CapUnobservedForVersion(cs, scope, req.BenchVersion)
 			toolWasCapped[i] = true
 		}
+		transcriptID := c.ID
+		transcriptObserved := observed
+		transcriptResponse := resp
+		if harnessProjection != nil {
+			var reverseErr error
+			transcriptID, reverseErr = harnessProjection.InternalCaseID(c.ID)
+			if reverseErr != nil {
+				recordProjectionFailure(reverseErr)
+				return
+			}
+			projected := projectHarnessCase(harnessProjection, resp, observed)
+			transcriptObserved = projected.Observed
+			transcriptResponse = projected.Response
+			if projected.Invalid {
+				cs = zeroInvalidV9CapabilityScore(cs, len(observed) > 0, false)
+			}
+			cs.CaseID = transcriptID
+		}
+		toolTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindTool, Response: transcriptResponse, Observed: transcriptObserved, Execution: execution}
 		toolResults[i] = cs
 		s.store.AppendPartial(runID, cs) // store append is mutex-guarded
 	})
@@ -1541,6 +1629,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// has already failed the run, so just abandon it.
 	if ctx.Err() != nil {
 		log.Printf("run %s: cancelled during tool cases; abandoning without a report", runID)
+		return
+	}
+	if projectionFailure != nil {
+		s.store.Fail(runID, "v9 tool capability reverse mapping failed")
 		return
 	}
 	for i, cs := range toolResults {
@@ -1627,8 +1719,13 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: toolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
 			observedCalls := toolSrv.Observed(mc.ID)
 			resp = withObservedTrajectory(resp, observedCalls)
-			waveTranscripts[i] = transcriptCase{CaseID: mc.ID, Kind: protocol.KindMemory, UserID: uid, Response: resp, Observed: observedCalls, Execution: execution}
-			cs := scorer.GradeMemory(mc, resp)
+			gradedResp := resp
+			projected := projectedHarnessCase{Response: resp, Observed: observedCalls}
+			if harnessProjection != nil {
+				projected = projectHarnessCase(harnessProjection, resp, observedCalls)
+				gradedResp = projected.Response
+			}
+			cs := gradeProjectedMemoryCase(mc, resp, projected, len(observedCalls) > 0)
 			if runErr != nil {
 				// The case still scores 0 on its own accuracy (an empty response
 				// grades 0); this only tells the group metrics to drop it, so a
@@ -1645,6 +1742,25 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				cs.Observed = true
 				cs.Notes = append(cs.Notes, "called reflects the validator-observed trajectory")
 			}
+			transcriptID, transcriptUser := mc.ID, uid
+			transcriptObserved := projected.Observed
+			transcriptResponse := gradedResp
+			if harnessProjection != nil {
+				var reverseErr error
+				transcriptID, reverseErr = harnessProjection.InternalCaseID(mc.ID)
+				if reverseErr == nil {
+					transcriptUser, reverseErr = harnessProjection.InternalUserID(uid)
+				}
+				if reverseErr != nil {
+					recordProjectionFailure(reverseErr)
+					return
+				}
+				// User graph provenance is already pinned in the private dataset and
+				// projection artifacts; do not publish role labels in the transcript.
+				transcriptUser = ""
+				cs.CaseID = transcriptID
+			}
+			waveTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindMemory, UserID: transcriptUser, Response: transcriptResponse, Observed: transcriptObserved, Execution: execution}
 			waveResults[i] = cs
 			s.store.AppendPartial(runID, cs) // store append is mutex-guarded
 		})
@@ -1652,6 +1768,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		// not fold half-empty results into a report.
 		if ctx.Err() != nil {
 			log.Printf("run %s: cancelled during memory wave %d; abandoning without a report", runID, w)
+			return
+		}
+		if projectionFailure != nil {
+			s.store.Fail(runID, "v9 memory capability reverse mapping failed")
 			return
 		}
 		perCase = append(perCase, waveResults...)
@@ -1708,12 +1828,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	report := scorer.AggregateForVersion(runID, perCase, req.BenchVersion)
 	report.Seed = seed
 	report.StructuralFingerprint = structuralFP
-	injections := 0
-	for _, cs := range perCase {
-		if cs.Injection {
-			injections++
-		}
-	}
+	injections := injectionAttemptCount(perCase)
 	report.Details = &protocol.RunDetails{
 		BenchVersion:      req.BenchVersion,
 		RunSize:           req.RunSize,
@@ -1786,6 +1901,19 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		DatasetSHA256: datasetHash,
 		Cases:         transcripts,
 		ModelRelay:    relayExecution,
+	}
+	if harnessProjection != nil {
+		projectionSHA, projectionBody, projectionErr := projectionReplayArtifact(harnessProjection.Manifest)
+		if projectionErr != nil {
+			s.store.Fail(runID, "v9 private projection artifact encoding failed")
+			return
+		}
+		tArtifact.ProjectionSHA256 = projectionSHA
+		privateDir := strings.TrimSpace(os.Getenv("DITTOBENCH_PRIVATE_ARTIFACT_DIR"))
+		if err := writePrivateProjectionArtifact(privateDir, runID, projectionBody); err != nil {
+			s.store.Fail(runID, "v9 private projection artifact persistence failed")
+			return
+		}
 	}
 	if tSHA, tBody, tErr := tArtifact.canonicalBytes(); tErr != nil {
 		log.Printf("run %s: transcript hashing failed: %v", runID, tErr)
@@ -2329,11 +2457,13 @@ func harnessSandboxEnvForProvider(reqEnv map[string]string, benchVersion int, pr
 		embeddingGateway = "http://host.docker.internal:" + strconv.Itoa(brokerPort)
 	}
 	env := map[string]string{}
-	for k, v := range sandboxRuntimeEnv(reqEnv) {
-		if lockedEnvKeys[k] {
-			continue // the lock owns these; callers cannot set them
+	if benchVersion != protocol.BenchVersionV9 {
+		for k, v := range sandboxRuntimeEnv(reqEnv) {
+			if lockedEnvKeys[k] {
+				continue // the lock owns these; callers cannot set them
+			}
+			env[k] = v
 		}
-		env[k] = v
 	}
 	// The lock is applied last so it wins over caller env. No platform credential
 	// enters the sandbox; the source-bound broker route is the capability.

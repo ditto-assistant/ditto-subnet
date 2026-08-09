@@ -141,6 +141,115 @@ func TestSeed(t *testing.T) {
 	}
 }
 
+func TestMarshalSeedRequestV9HasExactHostileWireShape(t *testing.T) {
+	req := protocol.SeedRequest{UserID: "8ec86f06-e794-4d1c-a920-97d3fcf5ce8b", Wave: 41}
+	body, err := marshalSeedRequest(req, protocol.BenchVersionV9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"user_id":"8ec86f06-e794-4d1c-a920-97d3fcf5ce8b","pairs":[],"subjects":[],"links":[]}`
+	if string(body) != want {
+		t.Fatalf("v9 seed bytes:\n got %s\nwant %s", body, want)
+	}
+	for _, forbidden := range []string{"wave", "seed", "run_size", "question_type", "dataset"} {
+		if strings.Contains(string(body), forbidden) {
+			t.Fatalf("v9 seed body exposed %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestMarshalSeedRequestV8RemainsCanonicalProtocolJSON(t *testing.T) {
+	req := protocol.SeedRequest{
+		UserID: "miner", Wave: 3,
+		Pairs: []protocol.MemoryPair{{PairID: "project-04-origin", SessionID: "project-04", Prompt: "p", Response: "r"}},
+	}
+	want, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := marshalSeedRequest(req, protocol.BenchVersionV8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("v8 seed bytes changed:\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestV9HostileHarnessCapturesExactRequestBytesAndHeaders(t *testing.T) {
+	type capture struct {
+		method string
+		target string
+		header http.Header
+		body   []byte
+	}
+	captures := make(chan capture, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read %s: %v", r.URL.Path, err)
+		}
+		captures <- capture{method: r.Method, target: r.RequestURI, header: r.Header.Clone(), body: body}
+		if r.URL.Path == "/seed" {
+			_, _ = io.WriteString(w, `{"pairs":1,"subjects":0,"links":0}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"final_text":"ok","tool_calls":[],"prompt_tokens":1,"output_tokens":1,"latency_ms":999}`)
+	}))
+	defer srv.Close()
+
+	const userID = "8ec86f06-e794-4d1c-a920-97d3fcf5ce8b"
+	const pairID = "f493ee76-36e6-49da-b842-03378db9d35c"
+	const sessionID = "4d86aa61-8bde-444e-88a0-6e4346ee8fb2"
+	const caseID = "f0e310c2-8c21-42e1-9e85-17d34ca9d51a"
+	seed := protocol.SeedRequest{UserID: userID, Wave: 27, Pairs: []protocol.MemoryPair{{PairID: pairID, SessionID: sessionID, Timestamp: "2026-01-01T00:00:00Z", Prompt: "hello", Response: "world"}}}
+	if _, err := SeedForVersion(sandboxContext(), srv.URL, seed, protocol.BenchVersionV9); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := RunCase(sandboxContext(), srv.URL, caseID, "ordinary production-semantic question", []protocol.ToolDefinition{{Name: "search_web", Description: "Search"}}, CaseOptions{BenchVersion: protocol.BenchVersionV9, UserID: userID, ToolEndpoint: "http://host.docker.internal:11436/v1/tools/opaque/tool"}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	seedCapture, runCapture := <-captures, <-captures
+	if seedCapture.method != http.MethodPost || seedCapture.target != "/seed" {
+		t.Fatalf("seed request line = %s %s", seedCapture.method, seedCapture.target)
+	}
+	if runCapture.method != http.MethodPost || runCapture.target != "/run" {
+		t.Fatalf("run request line = %s %s", runCapture.method, runCapture.target)
+	}
+	for _, got := range []capture{seedCapture, runCapture} {
+		if got.header.Get("Content-Type") != "application/json" {
+			t.Errorf("%s content-type = %q", got.target, got.header.Get("Content-Type"))
+		}
+		var complete strings.Builder
+		complete.WriteString(got.method)
+		complete.WriteString(got.target)
+		for key, values := range got.header {
+			complete.WriteString(key)
+			complete.WriteString(strings.Join(values, ","))
+		}
+		complete.Write(got.body)
+		for _, forbidden := range []string{"project-04", "trip-01", "story-02", "memory-canary", "run_size", "question_type", "expected_answer", "dataset_sha256", "778899001122334455"} {
+			if strings.Contains(complete.String(), forbidden) {
+				t.Errorf("%s leaked %q in complete capture: %s", got.target, forbidden, complete.String())
+			}
+		}
+	}
+	if strings.Contains(string(seedCapture.body), `"wave"`) {
+		t.Fatalf("v9 /seed exposed wave: %s", seedCapture.body)
+	}
+	for _, required := range []string{`"user_id":"` + userID + `"`, `"pair_id":"` + pairID + `"`, `"session_id":"` + sessionID + `"`, `"subjects":[]`, `"links":[]`} {
+		if !strings.Contains(string(seedCapture.body), required) {
+			t.Errorf("v9 /seed missing %s: %s", required, seedCapture.body)
+		}
+	}
+	for _, required := range []string{`"case_id":"` + caseID + `"`, `"bench_version":9`, `"user_id":"` + userID + `"`, `"user_input":"ordinary production-semantic question"`} {
+		if !strings.Contains(string(runCapture.body), required) {
+			t.Errorf("v9 /run missing %s: %s", required, runCapture.body)
+		}
+	}
+}
+
 func TestHarnessWireDoesNotExposeDatasetSeed(t *testing.T) {
 	// The validator needs the dataset seed to regenerate and score a run, but the
 	// miner-controlled harness receives only the derived memories and questions.

@@ -4,10 +4,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
+	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
 )
 
 // transcriptCase is one graded case's full graded inputs: the RunResponse
@@ -88,6 +95,104 @@ type transcriptArtifact struct {
 	Cases         []transcriptCase      `json:"cases"`
 	Execution     executionSummary      `json:"execution"`
 	ModelRelay    relayExecutionSummary `json:"model_relay"`
+	// ProjectionSHA256 binds this public, canonicalized transcript to the
+	// validator-private V9 replay manifest without publishing aliases or key.
+	ProjectionSHA256 string `json:"projection_sha256,omitempty"`
+}
+
+func projectionReplayArtifact(manifest gen.HarnessProjectionManifest) (string, []byte, error) {
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		return "", nil, err
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:]), body, nil
+}
+
+func writePrivateProjectionArtifact(dir, runID string, body []byte) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("private projection directory must be absolute")
+	}
+	parsedRunID, err := uuid.Parse(runID)
+	if err != nil || parsedRunID.String() != runID {
+		return fmt.Errorf("invalid projection run id")
+	}
+	dir = filepath.Clean(dir)
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		if mkdirErr := os.Mkdir(dir, 0o700); mkdirErr != nil && !os.IsExist(mkdirErr) {
+			return fmt.Errorf("create private projection directory: %w", mkdirErr)
+		}
+		info, err = os.Lstat(dir)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect private projection directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("private projection directory must be a real directory")
+	}
+	if info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("private projection directory permissions must be 0700")
+	}
+
+	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open private projection directory: %w", err)
+	}
+	defer unix.Close(dirFD)
+	var stat unix.Stat_t
+	if err := unix.Fstat(dirFD, &stat); err != nil {
+		return fmt.Errorf("verify private projection directory: %w", err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Mode&0o777 != 0o700 {
+		return fmt.Errorf("private projection directory changed during verification")
+	}
+
+	name := runID + ".projection.json"
+	fileFD, err := unix.Openat(dirFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("create private projection artifact: %w", err)
+	}
+	file := os.NewFile(uintptr(fileFD), name)
+	if file == nil {
+		unix.Close(fileFD)
+		return fmt.Errorf("create private projection artifact file handle")
+	}
+	keep := false
+	defer func() {
+		_ = file.Close()
+		if !keep {
+			_ = unix.Unlinkat(dirFD, name, 0)
+		}
+	}()
+	if err := writeAll(file, body); err != nil {
+		return fmt.Errorf("write private projection artifact: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync private projection artifact: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close private projection artifact: %w", err)
+	}
+	if err := unix.Fsync(dirFD); err != nil {
+		return fmt.Errorf("sync private projection directory: %w", err)
+	}
+	keep = true
+	return nil
+}
+
+func writeAll(writer io.Writer, body []byte) error {
+	for len(body) > 0 {
+		n, err := writer.Write(body)
+		if err != nil {
+			return err
+		}
+		if n <= 0 || n > len(body) {
+			return io.ErrShortWrite
+		}
+		body = body[n:]
+	}
+	return nil
 }
 
 // canonicalBytes returns the artifact's canonical JSON encoding and its

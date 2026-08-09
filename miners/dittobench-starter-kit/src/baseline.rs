@@ -972,10 +972,9 @@ impl Baseline {
         let started = Instant::now();
 
         anyhow::ensure!(
-            req.bench_version == protocol::ACTIVE_BENCH_VERSION,
-            "unsupported benchmark version {}; this harness serves v{} only",
+            protocol::supports_bench_version(req.bench_version),
+            "unsupported benchmark version {}",
             req.bench_version,
-            protocol::ACTIVE_BENCH_VERSION,
         );
 
         // Observed execution: the case may be scoped to a specific memory graph (multi-graph

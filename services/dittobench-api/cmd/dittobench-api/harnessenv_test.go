@@ -91,6 +91,52 @@ func TestV8CompatibilityEnvironmentRoutesEveryAliasToBroker(t *testing.T) {
 	}
 }
 
+func TestV9HarnessEnvironmentIsAnExactAllowlist(t *testing.T) {
+	hostile := map[string]string{
+		"BENIGN":                         "still-not-allowed",
+		"DATASET_SEED":                   "778899001122334455",
+		"RUN_SIZE":                       "full",
+		"QUESTION_TYPE":                  "canary",
+		"EXPECTED_ANSWER":                "oracle",
+		"PATH":                           "/attacker/bin",
+		"HOME":                           "/attacker/home",
+		"AWS_SECRET_ACCESS_KEY":          "attacker",
+		"GOOGLE_APPLICATION_CREDENTIALS": "/attacker/key.json",
+	}
+	env := harnessSandboxEnv(hostile, protocol.BenchVersionV9, "session-route")
+	wantKeys := map[string]bool{
+		"DITTOBENCH_PROVIDER": true, "DITTOBENCH_INFERENCE_BASE_URL": true,
+		"CHUTES_BASE_URL": true, "CHUTES_API_KEY": true,
+		"OPENAI_BASE_URL": true, "OPENAI_API_BASE": true,
+		"OPENROUTER_BASE_URL": true, "OPENAI_API_KEY": true,
+		"OPENROUTER_API_KEY": true, "DITTOBENCH_MODEL": true,
+		"OLLAMA_BASE_URL": true, "DITTOBENCH_DB": true,
+	}
+	if len(env) != len(wantKeys) {
+		t.Fatalf("v9 env has %d entries, exact allowlist has %d: %#v", len(env), len(wantKeys), env)
+	}
+	for key, value := range env {
+		if !wantKeys[key] {
+			t.Errorf("v9 env contains non-allowlisted key %q", key)
+		}
+		for _, forbidden := range []string{"778899001122334455", "full", "canary", "oracle", "attacker", "session-route"} {
+			if strings.Contains(value, forbidden) {
+				t.Errorf("v9 env %s leaks %q through value %q", key, forbidden, value)
+			}
+		}
+	}
+	if env["DITTOBENCH_MODEL"] != llm.HarnessModelForVersion(protocol.BenchVersionV9) {
+		t.Fatalf("v9 locked model = %q", env["DITTOBENCH_MODEL"])
+	}
+}
+
+func TestV8EnvironmentStillPreservesArbitraryCallerKeys(t *testing.T) {
+	env := harnessSandboxEnv(map[string]string{"BENIGN": "legacy-value", "PATH": "/legacy/bin"}, protocol.BenchVersionV8)
+	if env["BENIGN"] != "legacy-value" || env["PATH"] != "/legacy/bin" {
+		t.Fatalf("v8 caller env compatibility changed: %#v", env)
+	}
+}
+
 func TestSandboxRuntimeEnvOnlyLocksWritableDatabase(t *testing.T) {
 	env := sandboxRuntimeEnv(map[string]string{
 		"DITTOBENCH_DB":      "/app/read-only.db",

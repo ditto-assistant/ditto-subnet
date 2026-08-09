@@ -185,7 +185,7 @@ func SeedForVersion(ctx context.Context, harnessURL string, req protocol.SeedReq
 	ctx, cancel := context.WithTimeout(ctx, seedTimeoutFor(benchVersion))
 	defer cancel()
 
-	buf, err := json.Marshal(req)
+	buf, err := marshalSeedRequest(req, benchVersion)
 	if err != nil {
 		return protocol.SeedResponse{}, fmt.Errorf("marshal seed request: %w", err)
 	}
@@ -213,6 +213,31 @@ func SeedForVersion(ctx context.Context, harnessURL string, req protocol.SeedReq
 		return protocol.SeedResponse{}, fmt.Errorf("decode /seed response: %w", err)
 	}
 	return out, nil
+}
+
+// marshalSeedRequest keeps every historical request byte-identical while V9
+// removes wave metadata and makes all collection fields explicit arrays. This
+// is a wire-only shape; the canonical SeedRequest remains the artifact model.
+func marshalSeedRequest(req protocol.SeedRequest, benchVersion int) ([]byte, error) {
+	if benchVersion != protocol.BenchVersionV9 {
+		return json.Marshal(req)
+	}
+	type v9SeedRequest struct {
+		UserID   string                 `json:"user_id"`
+		Pairs    []protocol.MemoryPair  `json:"pairs"`
+		Subjects []protocol.Subject     `json:"subjects"`
+		Links    []protocol.SubjectLink `json:"links"`
+	}
+	if req.Pairs == nil {
+		req.Pairs = []protocol.MemoryPair{}
+	}
+	if req.Subjects == nil {
+		req.Subjects = []protocol.Subject{}
+	}
+	if req.Links == nil {
+		req.Links = []protocol.SubjectLink{}
+	}
+	return json.Marshal(v9SeedRequest{UserID: req.UserID, Pairs: req.Pairs, Subjects: req.Subjects, Links: req.Links})
 }
 
 // CaseOptions carries the optional observed-execution per-case wire fields: a

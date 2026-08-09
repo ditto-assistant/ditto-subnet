@@ -35,6 +35,35 @@ it must not silently advance to the current version. Version 3 has its own
 seed-domain and pinned deterministic vectors, while version 2 retains its
 existing byte goldens and scoring behavior.
 
+### V9 hostile-harness projection
+
+For `bench_version: 9`, the API treats the miner process as a hostile observer.
+It sends production-semantic content plus opaque runtime capabilities, never
+benchmark provenance. A fresh 256-bit blinding key is generated independently
+for every run; the dataset seed alone cannot predict aliases. Key material,
+alias mappings, and order are written only beneath
+`DITTOBENCH_PRIVATE_ARTIFACT_DIR`. The public transcript publishes a one-way
+`projection_sha256` commitment and canonicalized cases; it contains no key,
+wire aliases, mapping entries, or graph-role labels.
+[Retention and secure persistence details](../../research/dittobench-datagen/docs/v9-harness-projection.md)
+define the private artifact lifecycle; `projection_sha256` is a commitment only.
+
+| Field or channel | V9 contract |
+| --- | --- |
+| Case, user, pair, session, subject, and link references | Per-run UUID-shaped aliases, rewritten even inside prompts and nested arguments. User-graph scoping prevents equal labels in different graphs from correlating. |
+| `/seed.wave` | Omitted. `pairs`, `subjects`, and `links` are always arrays, including when empty. |
+| `/run.user_id` | Always the opaque capability used by `/seed`. |
+| Seed-bound `pair_id`, `pairIds`, and `subject_id` arguments | Opaque on the wire; unknown capabilities fail closed and known values are restored before scoring/report persistence. |
+| Prompt/memory text, timestamps, subject descriptions, catalog/schema, and served results | Kept as production semantics, after embedded identifier rewriting. |
+| Dataset seed, compatibility seed, run size, digest, question type, expected answer/provenance, family/category, grader state, and ontology | Absent from request target, headers, bodies, errors, and environment. |
+| Sandbox environment | Exact validator-owned provider, broker, model, embedding, and database allowlist; submission environment is ignored. |
+
+Tool cases get a final independent keyed permutation. Memory cases are
+permuted within unlock waves; the wave barrier is preserved. Seed session
+blocks are permuted with chronological order retained inside a session, while
+subjects and links use separate domains. V7 and V8 do not use this path and
+retain exact historical bytes and environment behavior.
+
 ## Dataset
 
 The validator generates a `Dataset` of tool-calling cases. The harness never

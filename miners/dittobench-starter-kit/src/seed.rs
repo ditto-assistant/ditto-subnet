@@ -227,3 +227,56 @@ pub async fn seed_from_request(store: &Store, req: SeedRequest) -> anyhow::Resul
         links: stats.links,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v9_seed_accepts_uuid_capabilities_without_wave() {
+        let req: SeedRequest = serde_json::from_str(
+            r#"{
+                "user_id":"8ec86f06-e794-4d1c-a920-97d3fcf5ce8b",
+                "pairs":[{
+                    "pair_id":"f493ee76-36e6-49da-b842-03378db9d35c",
+                    "session_id":"4d86aa61-8bde-444e-88a0-6e4346ee8fb2",
+                    "timestamp":"2026-01-01T00:00:00Z",
+                    "prompt":"hello",
+                    "response":"world"
+                }],
+                "subjects":[],
+                "links":[]
+            }"#,
+        )
+        .expect("deserialize v9 seed");
+        assert_eq!(req.wave, 0);
+        assert_eq!(
+            req.user_id.as_deref(),
+            Some("8ec86f06-e794-4d1c-a920-97d3fcf5ce8b")
+        );
+        assert_eq!(req.pairs[0].pair_id, "f493ee76-36e6-49da-b842-03378db9d35c");
+        assert_eq!(
+            req.pairs[0].session_id,
+            "4d86aa61-8bde-444e-88a0-6e4346ee8fb2"
+        );
+    }
+
+    #[test]
+    fn v9_seed_accepts_explicit_empty_collections() {
+        let req: SeedRequest = serde_json::from_str(
+            r#"{"user_id":"8ec86f06-e794-4d1c-a920-97d3fcf5ce8b","pairs":[],"subjects":[],"links":[]}"#,
+        )
+        .expect("deserialize empty v9 seed");
+        assert!(req.pairs.is_empty());
+        assert!(req.subjects.is_empty());
+        assert!(req.links.is_empty());
+    }
+
+    #[test]
+    fn legacy_wave_remains_additive_compatible() {
+        let req: SeedRequest = serde_json::from_str(r#"{"user_id":"miner","wave":3}"#)
+            .expect("deserialize legacy seed");
+        assert_eq!(req.wave, 3);
+        assert!(req.pairs.is_empty());
+    }
+}
