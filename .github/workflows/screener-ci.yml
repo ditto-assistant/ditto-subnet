@@ -21,6 +21,37 @@ defaults:
     working-directory: workers/screener
 
 jobs:
+  protocol-minimum-pydantic:
+    name: Protocol / Pydantic ${{ matrix.pydantic-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pydantic-version: ["2.12.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.11
+      - name: Exercise protocol at the declared Pydantic floor
+        working-directory: .
+        env:
+          PYDANTIC_VERSION: ${{ matrix.pydantic-version }}
+        run: |
+          uv run --isolated --python 3.11 \
+            --project packages/ditto-screening-protocol \
+            --with "pydantic==$PYDANTIC_VERSION" --with "pytest>=8" \
+            python -c 'import os, pydantic; assert pydantic.__version__ == os.environ["PYDANTIC_VERSION"]'
+          uv run --isolated --python 3.11 \
+            --project packages/ditto-screening-protocol \
+            --with "pydantic==$PYDANTIC_VERSION" --with "pytest>=8" \
+            python -m pytest packages/ditto-screening-protocol/tests -q
+
   lint-and-test:
     runs-on: ubuntu-latest
     strategy:

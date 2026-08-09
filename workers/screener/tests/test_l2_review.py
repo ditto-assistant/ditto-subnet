@@ -118,8 +118,8 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v28"
-    assert L2_CAUSE_PROMPT_REVISION == "l3-sol-violation-cause-v22"
+    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v30"
+    assert L2_CAUSE_PROMPT_REVISION == "l3-sol-violation-cause-v24"
     assert L2_CAUSE_TIEBREAKER_PROMPT_REVISION == ("l3-sol-cause-disagreement-v5")
     assert "Generator mirroring is earlier and therefore" in _VIOLATION_CAUSE_TASK
     assert "without those copied input-construction" in _VIOLATION_CAUSE_TASK
@@ -167,6 +167,21 @@ def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() 
     assert "retrieval innovation" in _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK
     submit_tool = next(tool for tool in _TOOLS if tool["name"] == "submit_l2_review")
     assert "generator_components" in submit_tool["parameters"]["required"]  # type: ignore[index]
+    assert "causal_evidence" in submit_tool["parameters"]["required"]  # type: ignore[index]
+    causal_schema = submit_tool["parameters"]["properties"]["causal_evidence"]  # type: ignore[index]
+    causal_object = causal_schema["anyOf"][1]  # type: ignore[index]
+    assert "scorer_visible_effect" in causal_object["required"]
+    assert set(causal_object["properties"]["scorer_visible_effect"]["enum"]) == {
+        "final_text",
+        "answer",
+        "abstain",
+        "tool_calls",
+        "validator_observed_trajectory",
+        "graded_outcome",
+    }
+    assert "served_trigger" in _SYSTEM_PROMPT
+    assert "authority_bypass" in _VIOLATION_CAUSE_TASK
+    assert "genuine model or tool execution" in _SAFETY_ADJUDICATOR_TASK
 
 
 def test_scorer_attention_is_independent_of_l1_category() -> None:
@@ -214,7 +229,7 @@ def test_l1_mechanism_narrowed_away_by_kimi_still_requires_sol() -> None:
 
 
 def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
-    assert L2_CRITIC_PROMPT_REVISION == "l3-sol-adversarial-critic-v16"
+    assert L2_CRITIC_PROMPT_REVISION == "l3-sol-adversarial-critic-v18"
     assert L2_SAFETY_PROMPT_REVISION == "l3-sol-safety-adjudicator-v21"
     assert "Request-local memoization of an identical invocation" in _SYSTEM_PROMPT
     assert "deduplication is not fabricated telemetry" in _SYSTEM_PROMPT
@@ -1726,6 +1741,14 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     )
     assert all(record["dossier_revision"] == L2_DOSSIER_REVISION for record in records)
     assert all(record["harness_revision"] == L2_HARNESS_REVISION for record in records)
+    assert all(record["evidence_schema_version"] == 1 for record in records)
+    assert all(record["authority_transition"] is None for record in records)
+    assert all(record["scorer_visible_effect"] is None for record in records)
+    assert all(record["causal_role_complete"] is True for record in records)
+    assert all(
+        record["causal_verification_reason"] == "causal-evidence-not-required"
+        for record in records
+    )
     assert all(len(record["starter_revisions"]) == 4 for record in records)
     assert all(record["budgets"]["max_cost_usd"] == 1.5 for record in records)
     assert all(record["budgets"]["max_analyzer_calls"] == 24 for record in records)

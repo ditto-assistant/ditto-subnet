@@ -608,6 +608,50 @@ export function QuarantineEvidencePanel({
               </span>
             ))}
           </div>
+          {finding.causal_evidence ? (
+            <section aria-label="Causal authority evidence" className="mt-4 rounded-lg border border-[var(--line)] bg-black/10 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="inline-flex items-center gap-1.5 text-[11px] font-medium text-white">
+                  <ShieldCheck className="h-3.5 w-3.5 text-[var(--acid)]" />
+                  Causal authority proof
+                </p>
+                <span className="rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[10px] text-[var(--muted)]">
+                  schema v{finding.causal_evidence.schema_version}
+                </span>
+              </div>
+              <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="min-w-0">
+                  <dt className="text-[10px] text-[var(--muted)]">Authority transition</dt>
+                  <dd className="mt-0.5 break-words text-[11px] font-medium capitalize text-[var(--muted-strong)]">
+                    {humanize(finding.causal_evidence.authority_transition)}
+                  </dd>
+                </div>
+                <div className="min-w-0">
+                  <dt className="text-[10px] text-[var(--muted)]">Scorer-visible effect</dt>
+                  <dd className="mt-0.5 break-words text-[11px] font-medium capitalize text-[var(--muted-strong)]">
+                    {humanize(finding.causal_evidence.scorer_visible_effect)}
+                  </dd>
+                </div>
+              </dl>
+              <p className="mt-3 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">Bound source roles</p>
+              <ul className="mt-2 space-y-1">
+                {finding.causal_evidence.role_bindings.map((binding) => {
+                  const role = humanize(binding.role)
+                  return (
+                    <li key={`${binding.path}:${binding.line}:${binding.category}:${binding.role}`} className="flex min-h-9 min-w-0 items-center gap-2 rounded-lg border border-[var(--line)] px-3 text-[11px]">
+                      <FileCode2 className="h-3.5 w-3.5 shrink-0 text-[var(--muted-strong)]" />
+                      <span className="min-w-0 flex-1 truncate font-mono text-[var(--muted-strong)]" title={`${binding.path}:${binding.line}`}>
+                        {binding.path}:{binding.line}
+                      </span>
+                      <span className="max-w-[45%] shrink-0 truncate capitalize text-[var(--muted)]" title={`${humanize(binding.category)} · ${role}`}>
+                        {humanize(binding.category)} · {role}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </section>
+          ) : null}
           {finding.evidence.length > 0 ? (
             <div className="mt-4">
               <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">

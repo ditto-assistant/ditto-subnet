@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   auditReasonSchema,
   CEILING_DISABLED,
@@ -63,7 +64,10 @@ import {
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
+  sourceReviewFindingSchema,
 } from './admin.schemas'
+
+type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 
 describe('admin API schemas', () => {
   it('preserves the fenced multi-provider capacity contract', () => {
@@ -352,6 +356,67 @@ describe('admin API schemas', () => {
         reason: 'short',
       }),
     ).toThrow()
+  })
+})
+
+describe('source review causal evidence schema', () => {
+  const generatedFinding = {
+    artifact_sha256: 'a'.repeat(64),
+    prompt_revision: 'source-review-v2',
+    risk_level: 'high',
+    confidence: 0.97,
+    categories: ['benchmark_emulation'],
+    evidence: [
+      { path: 'src/serve.ts', line: 42, category: 'benchmark_emulation' },
+      { path: 'src/score.ts', line: 87, category: 'benchmark_emulation' },
+    ],
+    summary: 'A served trigger routes around the model and rewrites the graded answer.',
+    causal_evidence: {
+      schema_version: 2,
+      authority_transition: 'model_output_overwritten',
+      scorer_visible_effect: 'answer',
+      role_bindings: [
+        { path: 'src/serve.ts', line: 42, category: 'benchmark_emulation', role: 'served_trigger' },
+        { path: 'src/score.ts', line: 87, category: 'benchmark_emulation', role: 'scorer_visible_effect' },
+      ],
+    },
+  } satisfies GeneratedSourceReviewFinding
+
+  it('parses the generated v2 finding shape without stripping causal proof', () => {
+    const parsed = sourceReviewFindingSchema.parse(generatedFinding)
+    expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
+  })
+
+  it('rejects unknown, duplicate, incompatible, and unbound causal proof', () => {
+    expect(() => sourceReviewFindingSchema.parse({
+      ...generatedFinding,
+      causal_evidence: { ...generatedFinding.causal_evidence, private_prompt: 'hidden' },
+    })).toThrow(/Unrecognized key/)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...generatedFinding,
+      causal_evidence: {
+        ...generatedFinding.causal_evidence,
+        role_bindings: [
+          generatedFinding.causal_evidence.role_bindings[0],
+          generatedFinding.causal_evidence.role_bindings[0],
+        ],
+      },
+    })).toThrow(/unique/)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...generatedFinding,
+      causal_evidence: {
+        ...generatedFinding.causal_evidence,
+        authority_transition: 'tool_execution_bypassed',
+        scorer_visible_effect: 'answer',
+      },
+    })).toThrow(/incompatible/)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...generatedFinding,
+      causal_evidence: {
+        ...generatedFinding.causal_evidence,
+        role_bindings: [{ ...generatedFinding.causal_evidence.role_bindings[0], line: 999 }],
+      },
+    })).toThrow(/does not reference/)
   })
 })
 

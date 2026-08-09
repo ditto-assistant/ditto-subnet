@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from uuid import UUID
 
+from ditto_screener.causal_evidence import causal_audit_fields
 from ditto_screener.l2_review import (
     L2_CAUSE_PROMPT_REVISION,
     L2_CAUSE_TIEBREAKER_PROMPT_REVISION,
@@ -246,6 +247,7 @@ async def _main() -> None:
                 "response_providers": response_providers,
                 "usage": usage.__dict__,
                 "error_code": observation.error_code,
+                **causal_audit_fields(observation.finding),
                 "disposition_match": disposition == item["expected_disposition"],
                 "basis_match": result.resolution_basis
                 == item["expected_resolution_basis"],

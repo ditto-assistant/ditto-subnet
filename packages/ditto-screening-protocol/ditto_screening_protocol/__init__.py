@@ -20,8 +20,13 @@ from ditto_screening_protocol.models import (
     ScreenResultRequest,
     ScreenResultResponse,
     ScreenReviewAudit,
+    SourceReviewAuthorityTransition,
+    SourceReviewCausalEvidence,
+    SourceReviewCausalRoleBinding,
     SourceReviewEvidenceItem,
+    SourceReviewEvidenceRole,
     SourceReviewFinding,
+    SourceReviewScorerVisibleEffect,
 )
 from ditto_screening_protocol.signing import verdict_signing_message
 
@@ -45,7 +50,12 @@ __all__ = [
     "ScreenReviewAudit",
     "ScreenResultResponse",
     "ScreenResultOutcome",
+    "SourceReviewAuthorityTransition",
+    "SourceReviewCausalEvidence",
+    "SourceReviewCausalRoleBinding",
     "SourceReviewEvidenceItem",
+    "SourceReviewEvidenceRole",
     "SourceReviewFinding",
+    "SourceReviewScorerVisibleEffect",
     "verdict_signing_message",
 ]

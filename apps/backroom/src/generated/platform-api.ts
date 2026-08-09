@@ -13243,6 +13243,41 @@ export interface components {
          */
         SourceDisclosure: "public" | "never";
         /**
+         * SourceReviewAuthorityTransition
+         * @description Bounded ways served code can make genuine model/tool output non-authoritative.
+         * @enum {string}
+         */
+        SourceReviewAuthorityTransition: "model_skipped" | "model_output_overwritten" | "tool_execution_bypassed" | "tool_trajectory_fabricated" | "selective_model_disablement" | "scorer_field_rewritten";
+        /**
+         * SourceReviewCausalEvidence
+         * @description Opt-in v2 causal evidence carried alongside the legacy location list.
+         */
+        SourceReviewCausalEvidence: {
+            authority_transition: components["schemas"]["SourceReviewAuthorityTransition"];
+            /** Role Bindings */
+            role_bindings: components["schemas"]["SourceReviewCausalRoleBinding"][];
+            /**
+             * Schema Version
+             * @default 2
+             * @constant
+             */
+            schema_version: 2;
+            scorer_visible_effect: components["schemas"]["SourceReviewScorerVisibleEffect"];
+        };
+        /**
+         * SourceReviewCausalRoleBinding
+         * @description One role assigned to an existing public-safe finding location.
+         */
+        SourceReviewCausalRoleBinding: {
+            /** Category */
+            category: string;
+            /** Line */
+            line: number;
+            /** Path */
+            path: string;
+            role: components["schemas"]["SourceReviewEvidenceRole"];
+        };
+        /**
          * SourceReviewEvidenceItem
          * @description One flagged source location from the read-only source review.
          */
@@ -13254,6 +13289,12 @@ export interface components {
             /** Path */
             path: string;
         };
+        /**
+         * SourceReviewEvidenceRole
+         * @description Causal role proved by one artifact-bound source location.
+         * @enum {string}
+         */
+        SourceReviewEvidenceRole: "served_trigger" | "authority_bypass" | "scorer_visible_effect" | "reachability_link";
         /**
          * SourceReviewFinding
          * @description Bounded source-review finding whose canonical JSON is digest-bound.
@@ -13267,6 +13308,8 @@ export interface components {
             artifact_sha256: string;
             /** Categories */
             categories: string[];
+            /** @description Optional v2 role bindings. Absence is the historical v1 schema and retains its exact canonical payload. */
+            causal_evidence?: components["schemas"]["SourceReviewCausalEvidence"] | null;
             /** Confidence */
             confidence: number;
             /** Evidence */
@@ -13281,6 +13324,12 @@ export interface components {
             /** Summary */
             summary: string;
         };
+        /**
+         * SourceReviewScorerVisibleEffect
+         * @description Concrete graded field or validator-owned outcome changed by a transition.
+         * @enum {string}
+         */
+        SourceReviewScorerVisibleEffect: "final_text" | "answer" | "abstain" | "tool_calls" | "validator_observed_trajectory" | "graded_outcome";
         /** SubmissionSettingsRevision */
         SubmissionSettingsRevision: {
             /** Actor */

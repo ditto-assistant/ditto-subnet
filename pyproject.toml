@@ -20,7 +20,7 @@ dependencies = [
     "bittensor-pylon-client",
     "async-substrate-interface",
     "httpx>=0.27",
-    "pydantic>=2",
+    "pydantic>=2.12",
     "psutil>=5.9",
     "ditto-screening-protocol==0.13.0",
 ]

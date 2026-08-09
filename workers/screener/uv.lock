@@ -436,7 +436,7 @@ requires-dist = [
     { name = "ditto-screening-protocol", directory = "../../packages/ditto-screening-protocol" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "psutil", specifier = ">=6" },
-    { name = "pydantic", specifier = ">=2" },
+    { name = "pydantic", specifier = ">=2.12" },
 ]
 
 [package.metadata.requires-dev]
@@ -460,7 +460,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2" }]
+requires-dist = [{ name = "pydantic", specifier = ">=2.12" }]
 
 [[package]]
 name = "fastapi"

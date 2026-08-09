@@ -19,6 +19,15 @@ violations use a bounded SOL cause adjudicator before retaining quarantine.
 Reachable generator-shaped or review-adaptive model routing cannot be released
 by model agreement alone; a location-bound deterministic hold preserves
 quarantine without becoming a terminal rejection.
+For `benchmark_emulation` and `scorer_contract_manipulation`, L2 evidence v2
+also requires artifact-bound `served_trigger`, `authority_bypass`,
+`scorer_visible_effect`, and `reachability_link` roles plus the exact changed
+field or outcome (`final_text`, `answer`, `abstain`, `tool_calls`, the
+validator-observed trajectory, or the graded outcome). `off` retains the L1
+finding without running L2, `shadow` records the v2 candidate while returning
+the exact L1 finding, and `enforce` accepts only a role-complete,
+transition-compatible v2 finding. Missing, opaque, or budget-limited causal
+proof is inconclusive and never becomes an unsupported quarantine finding.
 Medium- and high-risk results are
 quarantined for operator review, never automatically rejected. The default
 manifest never calls `POST /run`. It never reads or writes the platform database.

@@ -1800,21 +1800,88 @@ export const screeningEvidenceItemSchema = z.object({
   digest: z.string().nullish().default(null),
 })
 
-export const sourceReviewEvidenceItemSchema = z.object({
-  path: z.string(),
+export const sourceReviewEvidenceItemSchema = z.strictObject({
+  path: z.string().min(1).max(240),
   line: z.number().int().positive(),
-  category: z.string(),
+  category: z.string().min(1).max(64),
 })
 
-export const sourceReviewFindingSchema = z.object({
-  artifact_sha256: z.string(),
-  prompt_revision: z.string(),
-  risk_level: z.enum(['low', 'medium', 'high']),
-  confidence: z.number().min(0).max(1),
-  categories: z.array(z.string()),
-  evidence: z.array(sourceReviewEvidenceItemSchema).default([]),
-  summary: z.string(),
+const sourceReviewEvidenceRoleSchema = z.enum([
+  'served_trigger', 'authority_bypass', 'scorer_visible_effect', 'reachability_link',
+])
+const sourceReviewAuthorityTransitionSchema = z.enum([
+  'model_skipped', 'model_output_overwritten', 'tool_execution_bypassed',
+  'tool_trajectory_fabricated', 'selective_model_disablement', 'scorer_field_rewritten',
+])
+const sourceReviewScorerVisibleEffectSchema = z.enum([
+  'final_text', 'answer', 'abstain', 'tool_calls', 'validator_observed_trajectory',
+  'graded_outcome',
+])
+const scorerEffectsByTransition: Record<
+  z.infer<typeof sourceReviewAuthorityTransitionSchema>,
+  ReadonlySet<z.infer<typeof sourceReviewScorerVisibleEffectSchema>>
+> = {
+  model_skipped: new Set(['final_text', 'answer', 'abstain', 'graded_outcome']),
+  model_output_overwritten: new Set(['final_text', 'answer', 'abstain', 'graded_outcome']),
+  tool_execution_bypassed: new Set(['validator_observed_trajectory', 'graded_outcome']),
+  tool_trajectory_fabricated: new Set(['tool_calls', 'graded_outcome']),
+  selective_model_disablement: new Set(['final_text', 'answer', 'abstain', 'graded_outcome']),
+  scorer_field_rewritten: new Set(['final_text', 'answer', 'abstain', 'tool_calls', 'graded_outcome']),
+}
+const sourceReviewCausalRoleBindingSchema = z.strictObject({
+  path: z.string().min(1).max(240),
+  line: z.number().int().positive(),
+  category: z.string().min(1).max(64),
+  role: sourceReviewEvidenceRoleSchema,
 })
+
+export const sourceReviewCausalEvidenceSchema = z
+  .strictObject({
+    schema_version: z.literal(2),
+    authority_transition: sourceReviewAuthorityTransitionSchema,
+    scorer_visible_effect: sourceReviewScorerVisibleEffectSchema,
+    role_bindings: z.array(sourceReviewCausalRoleBindingSchema).min(1).max(32),
+  })
+  .superRefine((causal, context) => {
+    const bindings = causal.role_bindings.map((binding) =>
+      [binding.path, binding.line, binding.category, binding.role].join('\u0000'))
+    if (new Set(bindings).size !== bindings.length) {
+      context.addIssue({ code: 'custom', message: 'causal role bindings must be unique' })
+    }
+    if (!scorerEffectsByTransition[causal.authority_transition].has(causal.scorer_visible_effect)) {
+      context.addIssue({
+        code: 'custom', message: 'scorer-visible effect is incompatible with authority transition',
+      })
+    }
+  })
+
+export const sourceReviewFindingSchema = z
+  .strictObject({
+    artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    prompt_revision: z.string().min(1).max(64),
+    risk_level: z.enum(['low', 'medium', 'high']),
+    confidence: z.number().min(0).max(1),
+    categories: z.array(z.string().min(1).max(64)).min(1).max(8),
+    evidence: z.array(sourceReviewEvidenceItemSchema).max(16).default([]),
+    summary: z.string().min(1).max(240),
+    causal_evidence: sourceReviewCausalEvidenceSchema.nullish(),
+  })
+  .superRefine((finding, context) => {
+    if (!finding.causal_evidence) return
+    const categories = new Set(finding.categories)
+    const locations = new Set(finding.evidence.map((item) =>
+      [item.path, item.line, item.category].join('\u0000')))
+    for (const binding of finding.causal_evidence.role_bindings) {
+      if (!categories.has(binding.category)) {
+        context.addIssue({ code: 'custom', message: 'causal role binding category is not in finding' })
+      }
+      if (!locations.has([binding.path, binding.line, binding.category].join('\u0000'))) {
+        context.addIssue({
+          code: 'custom', message: 'causal role binding does not reference finding evidence',
+        })
+      }
+    }
+  })
 
 export const screeningQuarantineSchema = z.object({
   quarantine_id: z.string().uuid(),

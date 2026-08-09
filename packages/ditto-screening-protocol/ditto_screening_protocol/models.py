@@ -6,10 +6,15 @@ import hashlib
 import json
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 SCREENING_POLICY_VERSION = 9
 
@@ -321,6 +326,133 @@ class SourceReviewEvidenceItem(BaseModel):
     category: Annotated[str, Field(min_length=1, max_length=64)]
 
 
+class SourceReviewEvidenceRole(StrEnum):
+    """Causal role proved by one artifact-bound source location."""
+
+    SERVED_TRIGGER = "served_trigger"
+    AUTHORITY_BYPASS = "authority_bypass"
+    SCORER_VISIBLE_EFFECT = "scorer_visible_effect"
+    REACHABILITY_LINK = "reachability_link"
+
+
+class SourceReviewAuthorityTransition(StrEnum):
+    """Bounded ways served code can make genuine model/tool output non-authoritative."""
+
+    MODEL_SKIPPED = "model_skipped"
+    MODEL_OUTPUT_OVERWRITTEN = "model_output_overwritten"
+    TOOL_EXECUTION_BYPASSED = "tool_execution_bypassed"
+    TOOL_TRAJECTORY_FABRICATED = "tool_trajectory_fabricated"
+    SELECTIVE_MODEL_DISABLEMENT = "selective_model_disablement"
+    SCORER_FIELD_REWRITTEN = "scorer_field_rewritten"
+
+
+class SourceReviewScorerVisibleEffect(StrEnum):
+    """Concrete graded field or validator-owned outcome changed by a transition."""
+
+    FINAL_TEXT = "final_text"
+    ANSWER = "answer"
+    ABSTAIN = "abstain"
+    TOOL_CALLS = "tool_calls"
+    VALIDATOR_OBSERVED_TRAJECTORY = "validator_observed_trajectory"
+    GRADED_OUTCOME = "graded_outcome"
+
+
+_SCORER_VISIBLE_EFFECTS_BY_TRANSITION = {
+    SourceReviewAuthorityTransition.MODEL_SKIPPED: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.MODEL_OUTPUT_OVERWRITTEN: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.TOOL_EXECUTION_BYPASSED: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.VALIDATOR_OBSERVED_TRAJECTORY,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.TOOL_TRAJECTORY_FABRICATED: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.TOOL_CALLS,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.SELECTIVE_MODEL_DISABLEMENT: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.SCORER_FIELD_REWRITTEN: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.TOOL_CALLS,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+}
+
+
+class SourceReviewCausalRoleBinding(BaseModel):
+    """One role assigned to an existing public-safe finding location."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: Annotated[str, Field(min_length=1, max_length=240)]
+    line: Annotated[int, Field(ge=1)]
+    category: Annotated[str, Field(min_length=1, max_length=64)]
+    role: SourceReviewEvidenceRole
+
+
+class SourceReviewCausalEvidence(BaseModel):
+    """Opt-in v2 causal evidence carried alongside the legacy location list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[2] = 2
+    authority_transition: SourceReviewAuthorityTransition
+    scorer_visible_effect: SourceReviewScorerVisibleEffect
+    role_bindings: Annotated[
+        list[SourceReviewCausalRoleBinding], Field(min_length=1, max_length=32)
+    ]
+
+    @model_validator(mode="after")
+    def validate_unique_bindings(self) -> Self:
+        keys = [
+            (item.path, item.line, item.category, item.role)
+            for item in self.role_bindings
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("causal role bindings must be unique")
+        if (
+            self.scorer_visible_effect
+            not in _SCORER_VISIBLE_EFFECTS_BY_TRANSITION[self.authority_transition]
+        ):
+            raise ValueError(
+                "scorer-visible effect is incompatible with authority transition"
+            )
+        return self
+
+
+_ROLE_COMPLETE_CATEGORIES = frozenset(
+    {"benchmark_emulation", "scorer_contract_manipulation"}
+)
+_REQUIRED_CAUSAL_ROLES = frozenset(SourceReviewEvidenceRole)
+
+
 class SourceReviewFinding(BaseModel):
     """Bounded source-review finding whose canonical JSON is digest-bound.
 
@@ -343,30 +475,120 @@ class SourceReviewFinding(BaseModel):
         list[SourceReviewEvidenceItem], Field(default_factory=list, max_length=16)
     ]
     summary: Annotated[str, Field(min_length=1, max_length=240)]
+    causal_evidence: SourceReviewCausalEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Optional v2 role bindings. Absence is the historical v1 schema and "
+            "retains its exact canonical payload."
+        ),
+    )
 
-    def canonical_digest(self) -> str:
-        """SHA-256 over the canonical JSON encoding of this finding."""
-        canonical = json.dumps(
-            {
-                "artifact_sha256": self.artifact_sha256,
-                "prompt_revision": self.prompt_revision,
-                "risk_level": self.risk_level,
-                "confidence": self.confidence,
-                "categories": sorted(set(self.categories)),
-                "evidence": [
+    @model_validator(mode="after")
+    def validate_causal_binding_locations(self) -> Self:
+        if self.causal_evidence is None:
+            return self
+        categories = set(self.categories)
+        evidence_locations = {
+            (item.path, item.line, item.category) for item in self.evidence
+        }
+        for binding in self.causal_evidence.role_bindings:
+            if binding.category not in categories:
+                raise ValueError("causal role binding category is not in finding")
+            if (binding.path, binding.line, binding.category) not in evidence_locations:
+                raise ValueError(
+                    "causal role binding does not reference finding evidence"
+                )
+        return self
+
+    @property
+    def evidence_schema_version(self) -> Literal[1, 2]:
+        """Return the effective evidence schema without changing v1 wire JSON."""
+        return 2 if self.causal_evidence is not None else 1
+
+    def require_role_complete_causal_evidence(self) -> Self:
+        """Require v2 role completeness for elevated causal categories.
+
+        Parsing remains backward compatible: callers opt into this stricter
+        policy check when a reviewer revision is ready to enforce v2. This
+        method deliberately does not invalidate historical v1 findings merely
+        because they predate causal role bindings.
+        """
+        required_categories = set(self.categories) & _ROLE_COMPLETE_CATEGORIES
+        if not required_categories:
+            return self
+        if self.causal_evidence is None:
+            raise ValueError("finding requires causal evidence schema v2")
+        bindings_by_category: dict[str, list[SourceReviewCausalRoleBinding]] = {}
+        for binding in self.causal_evidence.role_bindings:
+            bindings_by_category.setdefault(binding.category, []).append(binding)
+        for category in sorted(required_categories):
+            bindings = bindings_by_category.get(category, [])
+            roles = {item.role for item in bindings}
+            missing = _REQUIRED_CAUSAL_ROLES - roles
+            if missing:
+                missing_values = ", ".join(sorted(role.value for role in missing))
+                raise ValueError(
+                    f"source review category {category} is missing causal roles: "
+                    f"{missing_values}"
+                )
+            locations = {(item.path, item.line) for item in bindings}
+            if len(locations) < 2:
+                raise ValueError(
+                    f"source review category {category} requires two causal locations"
+                )
+        return self
+
+    def canonical_bytes(self) -> bytes:
+        """Return the exact versioned canonical JSON bytes for signing."""
+        payload: dict[str, object] = {
+            "artifact_sha256": self.artifact_sha256,
+            "prompt_revision": self.prompt_revision,
+            "risk_level": self.risk_level,
+            "confidence": self.confidence,
+            "categories": sorted(set(self.categories)),
+            "evidence": [
+                {
+                    "path": item.path,
+                    "line": item.line,
+                    "category": item.category,
+                }
+                for item in self.evidence
+            ],
+            "summary": self.summary,
+        }
+        if self.causal_evidence is not None:
+            payload["causal_evidence"] = {
+                "schema_version": self.causal_evidence.schema_version,
+                "authority_transition": (
+                    self.causal_evidence.authority_transition.value
+                ),
+                "scorer_visible_effect": (
+                    self.causal_evidence.scorer_visible_effect.value
+                ),
+                "role_bindings": [
                     {
                         "path": item.path,
                         "line": item.line,
                         "category": item.category,
+                        "role": item.role.value,
                     }
-                    for item in self.evidence
+                    for item in sorted(
+                        self.causal_evidence.role_bindings,
+                        key=lambda binding: (
+                            binding.role.value,
+                            binding.path,
+                            binding.line,
+                            binding.category,
+                        ),
+                    )
                 ],
-                "summary": self.summary,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        return hashlib.sha256(canonical.encode()).hexdigest()
+            }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+    def canonical_digest(self) -> str:
+        """SHA-256 over the canonical JSON encoding of this finding."""
+        return hashlib.sha256(self.canonical_bytes()).hexdigest()
 
 
 class ScreenReviewAudit(BaseModel):

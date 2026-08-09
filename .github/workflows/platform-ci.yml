@@ -5,11 +5,13 @@ on:
   pull_request:
     paths:
       - apps/platform/**
+      - packages/ditto-screening-protocol/**
       - .github/workflows/platform-ci.yml
   push:
     branches: [main]
     paths:
       - apps/platform/**
+      - packages/ditto-screening-protocol/**
       - .github/workflows/platform-ci.yml
 
 permissions:

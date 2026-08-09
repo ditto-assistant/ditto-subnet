@@ -166,6 +166,29 @@ const quarantineContext: ScreeningQuarantineContext = {
   shadow_review: null,
 }
 
+const longCausalPath = `src/${'nested/'.repeat(20)}serve.ts`
+const causalQuarantine: ScreeningQuarantine = {
+  ...quarantine,
+  finding: {
+    ...quarantine.finding!,
+    evidence: [
+      { path: longCausalPath, line: 42, category: 'benchmark_emulation' },
+      { path: 'src/score.ts', line: 87, category: 'benchmark_emulation' },
+    ],
+    causal_evidence: {
+      schema_version: 2,
+      authority_transition: 'model_output_overwritten',
+      scorer_visible_effect: 'answer',
+      role_bindings: [
+        { path: longCausalPath, line: 42, category: 'benchmark_emulation', role: 'served_trigger' },
+        { path: longCausalPath, line: 42, category: 'benchmark_emulation', role: 'authority_bypass' },
+        { path: 'src/score.ts', line: 87, category: 'benchmark_emulation', role: 'scorer_visible_effect' },
+        { path: 'src/score.ts', line: 87, category: 'benchmark_emulation', role: 'reachability_link' },
+      ],
+    },
+  },
+}
+
 const shadowReview: ShadowReviewObservation = {
   attempt_id: quarantine.attempt_id,
   agent_id: quarantine.agent_id,
@@ -742,6 +765,31 @@ describe('ScreeningQuarantinePanel', () => {
     expect(screen.getByText(/No shadow review accompanies this quarantine/)).toBeTruthy()
     expect(screen.queryByText('Shadow source review (L2/L3)')).toBeNull()
     expect(screen.queryByText('Diverges from the quarantine')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Causal authority evidence' })).toBeNull()
+  })
+
+  it('renders complete causal authority proof with long source paths accessibly', async () => {
+    vi.mocked(getScreeningQuarantineContext).mockResolvedValue({
+      ...quarantineContext,
+      quarantine: causalQuarantine,
+    })
+
+    render(
+      <ScreeningQuarantinePanel
+        initialItems={[causalQuarantine]}
+        initialSubmissions={[submission]}
+        readOnly={false}
+      />,
+    )
+
+    const causal = await screen.findByRole('region', { name: 'Causal authority evidence' })
+    expect(causal.textContent).toContain('model output overwritten')
+    expect(causal.textContent).toContain('answer')
+    for (const role of ['served trigger', 'authority bypass', 'scorer visible effect', 'reachability link']) {
+      expect(causal.textContent).toContain(role)
+    }
+    expect(screen.getAllByTitle(`${longCausalPath}:42`)).toHaveLength(2)
+    expect(screen.getByRole('button', { name: new RegExp(`${longCausalPath}:42`) })).toBeTruthy()
   })
 
   it('shows flagged source lines on demand and gates them on write access', async () => {
