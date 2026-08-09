@@ -196,6 +196,27 @@ def filter_eligible(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
     return [e for e in entries if _entry_eligible(e)]
 
 
+def filter_weight_confirmed(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
+    """Keep entries whose score contract is supported by the active fold.
+
+    Bench v9's ordinary quorum proves the base score but this stack layer does
+    not yet expose the separate full-confirmation receipt required to pay it.
+    Exclude those rows individually instead of conflating rollout eligibility
+    with signature verification and rejecting the entire ledger. The duck-typed
+    receipt check deliberately becomes live when the later confirmation layer
+    adds ``LedgerEntry.v9_confirmation``; versions beyond v9 remain fail closed.
+    """
+    return [
+        entry
+        for entry in entries
+        if _entry_version(entry) < 9
+        or (
+            _entry_version(entry) == 9
+            and getattr(entry, "v9_confirmation", None) is not None
+        )
+    ]
+
+
 def filter_to_latest_version(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
     """Return only entries at the maximum version for diagnostic callers.
 

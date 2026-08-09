@@ -100,6 +100,7 @@ from ditto.validator.weights import (
     apply_miner_emission_cap,
     compute_weights,
     contested_confirmation_set,
+    filter_weight_confirmed,
     resolve_miner_emission_share,
     select_champion,
     top5_confirmation_set,
@@ -1500,13 +1501,25 @@ class ValidatorWorker:
                 getattr(ledger, "age_seconds", "?"),
             )
 
+        leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
+        weight_entries = filter_weight_confirmed(ledger.entries)
+        if ledger.entries and not weight_entries:
+            # A non-empty ledger containing only score contracts this layer
+            # cannot yet fold is not an empty scoring pool. Preserve the last
+            # accepted on-chain vector rather than replacing it with full burn.
+            logger.warning(
+                "scoring ledger has no weight-confirmed entries; "
+                "weights unchanged this epoch"
+            )
+            return _WeightOutcome(leaderboard=leaderboard)
+
         # Platform history is intentionally durable across chain deregistration,
         # but only hotkeys that currently have a neuron may participate in the
         # KOTH fold. Pylon also drops missing hotkeys, but doing that *after*
         # champion/tail selection lets an absent miner occupy a paid slot and
         # changes the normalized miner/burn ratio. Filter before the fold so the
         # next registered contender receives the correct role and share.
-        registered_entries = await self._registered_ledger_entries(ledger.entries)
+        registered_entries = await self._registered_ledger_entries(weight_entries)
         if registered_entries is None:
             # Eligibility is a live-chain fact. On an indeterminate read, leave
             # the last accepted vector untouched instead of either paying an
@@ -1516,9 +1529,8 @@ class ValidatorWorker:
             )
 
         # Version-rollout re-scores are ordinary platform-leased jobs. The fold
-        # reads whatever leased scorers have persisted, and compute_weights
-        # ignores stale versions defensively regardless.
-        leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
+        # reads every cryptographically verified contract it supports and skips
+        # unconfirmed future contracts per entry during gradual rollout.
         miner_weights = compute_weights(
             registered_entries,
             margin=self._config.koth_margin,
@@ -1588,14 +1600,14 @@ class ValidatorWorker:
     async def _observe_platform_king(
         self,
     ) -> tuple[bool, tuple[str, UUID, float, int | None] | None]:
-        """Return ``(available, fingerprint)`` from the verified public ledger."""
+        """Return ``(available, fingerprint)`` from the weight-authoritative ledger."""
         try:
             ledger = await self._platform.get_ledger()
         except PlatformError as e:
             logger.warning("event-driven king check failed: %s", e)
             return False, None
         champion = select_champion(
-            ledger.entries,
+            filter_weight_confirmed(ledger.entries),
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
         )
@@ -2766,6 +2778,7 @@ class ValidatorWorker:
         )
         if not isinstance(transcript_sha256, str) or not transcript_sha256:
             transcript_sha256 = None
+        base_evidence_sha256 = report.base_evidence_sha256
         signature = sign_score(
             self._keypair,
             validator_hotkey=self._config.validator_hotkey,
@@ -2776,6 +2789,7 @@ class ValidatorWorker:
             seed=report.seed,
             bench_version=report.bench_version,
             transcript_sha256=transcript_sha256,
+            base_evidence_sha256=base_evidence_sha256,
         )
         await self._platform.submit_score(
             agent_id,

@@ -104,6 +104,7 @@ paths = [
   "services/dittobench-api/internal/**",
   "services/dittobench-api/scripts/**",
   "services/dittobench-api/skills-lock.json",
+  "services/dittobench-api/testdata/**",
 ]
 
 [components.dittobench_datagen]

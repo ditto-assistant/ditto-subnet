@@ -27,6 +27,7 @@ every other payload is verbatim.
 | `agent-top-summary.json` | `/public/agent/<top agent id>/summary` |
 | `agent-top-pipeline.json` | `/public/agent/<top agent id>/pipeline` |
 | `agent-top-scores.json` | `/public/agent/<top agent id>/scores` |
+| `v9-base-public.json` | Allowlisted `v9_base` projection emitted inside public score rows; pinned to the real endpoint serializer by `test_public.py` |
 | `agent-rejected-summary.json` | `/public/agent/<rejected agent id>/summary` |
 | `agent-rejected-pipeline.json` | `/public/agent/<rejected agent id>/pipeline` |
 

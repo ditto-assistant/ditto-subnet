@@ -13,12 +13,15 @@ import bittensor
 import httpx
 import pytest
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.validator import (
     FAILURE_DETAIL_MAX_LENGTH,
     LEGACY_FAILURE_DETAIL_MAX_LENGTH,
     FailJobRequest,
     JobRequest,
     JobResponse,
+    LedgerEntry,
+    LedgerScoreProof,
     ValidatorHeartbeatRequest,
 )
 from ditto.validator.errors import PlatformError, PlatformInfrastructureError
@@ -28,6 +31,7 @@ from ditto.validator.signing import (
     job_fail_signing_message,
     job_signing_message,
     ledger_signing_message,
+    sign_score,
 )
 
 
@@ -529,7 +533,104 @@ async def test_ledger_request_is_fresh_and_signed() -> None:
     assert response.entries == []
 
 
-async def test_ledger_rejects_entry_without_verifiable_quorum_receipts() -> None:
+def _signed_ledger_payload(
+    *, bench_version: int, agent_id: UUID, miner_hotkey: str
+) -> dict[str, object]:
+    deadline = datetime(2026, 8, 10, 12, 30, tzinfo=UTC)
+    keypairs = [
+        bittensor.Keypair.create_from_uri(f"//PlatformLedger{i}") for i in range(3)
+    ]
+    proofs: list[LedgerScoreProof] = []
+    for index, (keypair, composite) in enumerate(
+        zip(keypairs, (0.4, 0.6, 0.8), strict=True)
+    ):
+        run_id = f"run_{index}"
+        transcript = "cd" * 32
+        base_evidence = "ef" * 32 if bench_version == 9 else None
+        signature = sign_score(
+            keypair,
+            validator_hotkey=keypair.ss58_address,
+            agent_id=agent_id,
+            ticket_deadline=deadline,
+            run_id=run_id,
+            composite=composite,
+            seed=index,
+            bench_version=bench_version,
+            transcript_sha256=transcript,
+            base_evidence_sha256=base_evidence,
+        )
+        proofs.append(
+            LedgerScoreProof(
+                validator_hotkey=keypair.ss58_address,
+                run_id=run_id,
+                composite=composite,
+                seed=index,
+                bench_version=bench_version,
+                ticket_deadline=deadline,
+                transcript_sha256=transcript,
+                base_evidence_sha256=base_evidence,
+                signature=signature,
+            )
+        )
+    median = proofs[1]
+    return LedgerEntry(
+        miner_hotkey=miner_hotkey,
+        agent_id=agent_id,
+        composite=median.composite,
+        n=114,
+        first_seen=deadline,
+        sha256="ab" * 32,
+        size_bytes=1024,
+        run_id=median.run_id,
+        seed=median.seed,
+        validator_hotkey=median.validator_hotkey,
+        bench_version=bench_version,
+        signature=median.signature,
+        score_proofs=proofs,
+        status=AgentStatus.SCORED,
+    ).model_dump(mode="json")
+
+
+async def test_ledger_accepts_mixed_verified_v8_and_v9_rows() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    v8_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    v9_id = UUID("650e8400-e29b-41d4-a716-446655440000")
+    entries = [
+        _signed_ledger_payload(
+            bench_version=8, agent_id=v8_id, miner_hotkey="5MinerV8" + "x" * 40
+        ),
+        _signed_ledger_payload(
+            bench_version=9, agent_id=v9_id, miner_hotkey="5MinerV9" + "x" * 40
+        ),
+    ]
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "entries": entries,
+                "count": len(entries),
+                "generated_at": datetime.now(UTC).isoformat(),
+                "stale": False,
+                "age_seconds": 0,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        ledger = await PlatformClient(config, http, keypair).get_ledger()  # type: ignore[arg-type]
+
+    assert [entry.agent_id for entry in ledger.entries] == [v8_id, v9_id]
+    assert [entry.bench_version for entry in ledger.entries] == [8, 9]
+
+
+@pytest.mark.parametrize("bench_version", [7, 9])
+async def test_ledger_rejects_entry_without_verifiable_quorum_receipts(
+    bench_version: int,
+) -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
 
@@ -549,7 +650,7 @@ async def test_ledger_rejects_entry_without_verifiable_quorum_receipts() -> None
                         "run_id": "run_1",
                         "seed": 42,
                         "validator_hotkey": keypair.ss58_address,
-                        "bench_version": 7,
+                        "bench_version": bench_version,
                         "signature": "cd" * 64,
                         "score_proofs": [],
                         "status": "scored",

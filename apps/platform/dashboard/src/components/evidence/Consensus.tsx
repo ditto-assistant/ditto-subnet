@@ -25,6 +25,7 @@ import { Stat } from "../EntityPanel";
 import { benchmarkVersionLabel } from "../pipeline/status";
 import { CopyButton } from "../shell/CopyButton";
 import { CasesSection } from "./Cases";
+import { V9GateEvidence } from "./V9GateEvidence";
 import { consensusCohortSummary, consensusCohorts } from "./cohorts";
 import type { ConsensusCohort } from "./cohorts";
 
@@ -61,6 +62,9 @@ function ConsensusRow(props: {
             {text()}
           </div>
         )}
+      </Show>
+      <Show when={props.score.v9_base}>
+        {(evidence) => <V9GateEvidence evidence={evidence()} />}
       </Show>
       <CasesSection caseResults={props.score.case_results} glossary={props.glossary} />
     </div>

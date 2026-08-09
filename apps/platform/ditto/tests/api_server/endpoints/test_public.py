@@ -15,6 +15,7 @@ import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -95,7 +96,7 @@ from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
     MIN_SCOREABLE_BENCH_VERSION,
 )
-from ditto.db.queries.scores import upsert_score
+from ditto.db.queries.scores import LedgerRow, upsert_score
 from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
@@ -411,6 +412,53 @@ def test_composite_breakdown_shows_no_token_penalty_when_within_budget() -> None
     )
     assert breakdown.token_efficiency_multiplier == 1.0
     assert breakdown.token_penalty == 0.0
+
+
+def test_v9_effective_composite_fails_closed_while_signed_gate_is_shadow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A signed shadow root is telemetry and cannot authorize ranking."""
+    monkeypatch.setattr(public_endpoint, "model_use_factor", lambda *_a, **_kw: 0.0)
+
+    def row(bench_version: int) -> LedgerRow:
+        return LedgerRow(
+            miner_hotkey=_MINER_A,
+            agent_id=UUID(int=1),
+            composite=0.8,
+            tool_mean=0.8,
+            memory_mean=0.8,
+            first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+            sha256="ab" * 32,
+            size_bytes=123,
+            run_id=f"run-v{bench_version}",
+            seed=42,
+            validator_hotkey=_VALIDATOR_C,
+            signature=None,
+            status=AgentStatus.SCORED,
+            bench_version=bench_version,
+            n=280,
+            eligible=True,
+        )
+
+    v9 = public_endpoint._public_entry(
+        1,
+        row(9),
+        "v9-agent",
+        1,
+        efficiency_bonus=0.1,
+        pre_efficiency_composite=0.8,
+    )
+    legacy = public_endpoint._public_entry(
+        1,
+        row(8),
+        "v8-agent",
+        1,
+        efficiency_bonus=0.1,
+        pre_efficiency_composite=0.8,
+    )
+
+    assert v9.effective_composite == 0.0
+    assert legacy.effective_composite == 0.0
 
 
 # The generator release each bench version pins, and the version flag that
@@ -7445,6 +7493,56 @@ class TestPublicSubmissionScores:
             _ERA,
             _NEXT_ERA,
         ]
+
+    async def test_v9_gate_evidence_reaches_public_score_consumers_redacted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        repo_root = Path(__file__).resolve().parents[6]
+        vector = json.loads(
+            (
+                repo_root
+                / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+            ).read_text()
+        )["vectors"][0]["details"]
+        dashboard_fixture = json.loads(
+            (
+                repo_root / "apps/platform/dashboard/fixtures/v9-base-public.json"
+            ).read_text()
+        )
+        agent_id = await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.812345, 0.812345, 0.812345],
+            details={"bench_version": 9, "v9_base": vector},
+        )
+        _install_db(app, session_maker)
+
+        scores = (await client.get(f"/api/v1/public/agent/{agent_id}/scores")).json()[
+            "scores"
+        ]
+        pipeline_scores = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        ).json()["provisional_scores"]
+
+        assert [score["v9_base"] for score in scores] == [dashboard_fixture] * 3
+        assert [score["v9_base"] for score in pipeline_scores] == [
+            dashboard_fixture
+        ] * 3
+        public_json = json.dumps(dashboard_fixture)
+        for private_field in (
+            "artifact_sha256",
+            "dataset_sha256",
+            "transcript_sha256",
+            "score_contract",
+            "threshold_profile",
+            "prompt_tokens",
+            "completion_tokens",
+            "excluded",
+        ):
+            assert private_field not in public_json
 
     async def test_detail_exposes_redacted_per_case_breakdown(
         self,

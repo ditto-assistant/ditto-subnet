@@ -479,6 +479,22 @@ func TestV8RejectsACompleteUnusedChatLaneAsAgentFailure(t *testing.T) {
 	}
 }
 
+func TestV9AllowsACompleteUnusedChatLaneToReachSignedGate(t *testing.T) {
+	unused := protocol.TokenUsage{
+		Status:            "complete",
+		AccountingVersion: 2,
+		Provider:          "openrouter",
+		ProfileRevision:   "openrouter-route-0123456789abcdef-v1",
+		Model:             llm.V7HarnessModel,
+	}
+	if err := requireCompleteV7Usage(protocol.BenchVersionV9, unused, relayExecutionSummary{}); err != nil {
+		t.Fatalf("v9 healthy zero use must reach signed zero-factor gate: %v", err)
+	}
+	if err := requireCompleteV7Usage(protocol.BenchVersionV8, unused, relayExecutionSummary{}); !errors.Is(err, errAgentModelUseMissing) {
+		t.Fatalf("v8 behavior changed: %v", err)
+	}
+}
+
 func TestV8ZeroUsageStillFailsClosedAfterAChatAttempt(t *testing.T) {
 	unused := protocol.TokenUsage{
 		Status:            "complete",

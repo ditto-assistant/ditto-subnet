@@ -1,0 +1,30 @@
+{
+  "bench_version": 9,
+  "score_gates": {
+    "rollout_mode": "shadow",
+    "model_use": {
+      "administered_cases": 4,
+      "eligible_cases": 3,
+      "successful_inference_cases": 2,
+      "missing_inference_cases": 1,
+      "observed_requests": 5,
+      "successful_requests": 4,
+      "request_coverage_bps": 10000,
+      "coverage_bps": 6666,
+      "threshold_bps": 1,
+      "result": "passed",
+      "factor_bps": 10000
+    },
+    "authoritative_tool": {
+      "expected_executions": 3,
+      "matched_executions": 2,
+      "missing_executions": 1,
+      "unexpected_executions": 1,
+      "observed_executions": 3,
+      "coverage_bps": 6666,
+      "threshold_bps": 1,
+      "result": "passed",
+      "factor_bps": 10000
+    }
+  }
+}

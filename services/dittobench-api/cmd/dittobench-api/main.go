@@ -1916,8 +1916,19 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 	}
 	if tSHA, tBody, tErr := tArtifact.canonicalBytes(); tErr != nil {
+		if req.BenchVersion == protocol.BenchVersionV9 {
+			s.store.Fail(runID, "v9 transcript evidence hashing failed")
+			return
+		}
 		log.Printf("run %s: transcript hashing failed: %v", runID, tErr)
 	} else {
+		if req.BenchVersion == protocol.BenchVersionV9 {
+			report, tErr = applyV9BaseEvidence(report, req, perCase, tokenUsage, relayExecution, tSHA)
+			if tErr != nil {
+				s.store.Fail(runID, tErr.Error())
+				return
+			}
+		}
 		s.store.SetTranscript(runID, tSHA, tBody)
 		if dir := strings.TrimSpace(os.Getenv("DITTOBENCH_ARTIFACT_DIR")); dir != "" {
 			if err := os.WriteFile(filepath.Join(dir, runID+".transcript.json"), tBody, 0o644); err != nil {

@@ -21,6 +21,58 @@
   text-align: right;
 }
 
+/* Typed, privacy-safe Bench v9 gate evidence. It sits inside an individual
+   validator score so readers can connect the binary verdict to its exact
+   trusted counts without exposing prompts or answer content. */
+.v9-gate-evidence {
+  margin: 10px 0 4px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--bg-elev) 68%, transparent);
+}
+.v9-gate-heading,
+.v9-gate-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.v9-gate-heading {
+  color: var(--text);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.v9-gate-heading > span {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.v9-gate-row {
+  padding: 7px 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 54%, transparent);
+}
+.v9-gate-title {
+  color: var(--text);
+  font-size: 11.5px;
+}
+.v9-gate-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  margin-top: 5px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.v9-gate-evidence > p {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
 /* Drawer: redacted per-case results (collapsible). */
 details.cases {
   margin-top: 14px;

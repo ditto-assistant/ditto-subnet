@@ -55,6 +55,7 @@ import { CasesSection } from "./Cases";
 import { ScreeningDispute } from "./DisputeForm";
 import { ScreeningReview } from "./ScreeningReview";
 import { TelemetryLoader } from "./Telemetry";
+import { V9GateEvidence } from "./V9GateEvidence";
 import {
   benchmarkCohorts,
   cohortProgressSummary,
@@ -427,6 +428,7 @@ function AcceptedScoreView(props: {
             </For>
           </div>
         </Show>
+        <Show when={score().v9_base}>{(evidence) => <V9GateEvidence evidence={evidence()} />}</Show>
       </div>
       <CasesSection caseResults={score().case_results} glossary={props.glossary} />
     </div>

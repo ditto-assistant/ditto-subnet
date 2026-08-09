@@ -3,7 +3,7 @@
 // /public/agent/{id}/pipeline, and the digest-verified transcript telemetry
 // sidecar).
 
-import type { CaseResult } from "./leaderboard";
+import type { CaseResult, V9BaseEvidence } from "./leaderboard";
 
 // ── Activity / submissions (/public/activity) ────────────────
 
@@ -202,6 +202,7 @@ export interface AcceptedScore {
   verification_command?: string | null;
   dataset_sha256?: string | null;
   transcript_sha256?: string | null;
+  v9_base?: V9BaseEvidence | null;
   case_results?: CaseResult[];
 }
 

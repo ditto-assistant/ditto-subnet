@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call
 from uuid import UUID, uuid4
 
@@ -423,18 +423,42 @@ def _score_payload(
         f"{hotkey}:{agent_id}:{lease}:{run_id}:{report['composite']!r}:{report['seed']}"
     )
     # CANONICAL ORDER, mirroring _score_signing_message and ditto-subnet:
-    #   base : bench_version? : transcript_sha256?
+    #   base : bench_version? : transcript_sha256? : base_evidence_sha256(v9)?
     if report.get("bench_version") is not None:
         signed += f":{report['bench_version']}"
     details = report.get("details")
     transcript = details.get("transcript_sha256") if isinstance(details, dict) else None
     if isinstance(transcript, str) and transcript:
         signed += f":{transcript}"
+    base_evidence = report.get("base_evidence_sha256")
+    if isinstance(base_evidence, str) and base_evidence:
+        signed += f":{base_evidence}"
     return {
         "validator_hotkey": hotkey,
         "ticket_deadline": ticket_deadline.isoformat(),
         "signature": keypair.sign(signed.encode()).hex(),
         "report": report,
+    }
+
+
+def _v9_score_overrides() -> dict[str, Any]:
+    vector_path = (
+        Path(__file__).resolve().parents[6]
+        / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+    )
+    vector = json.loads(vector_path.read_text())["vectors"][0]
+    evidence = vector["details"]
+    return {
+        "bench_version": 9,
+        "base_evidence_sha256": vector["base_evidence_sha256"],
+        "composite": evidence["effective_composite_micros"] / 1_000_000,
+        "composite_stderr": evidence["effective_stderr_micros"] / 1_000_000,
+        "n": evidence["score_gates"]["model_use"]["administered_cases"],
+        "details": {
+            "dataset_sha256": evidence["dataset_sha256"],
+            "transcript_sha256": evidence["transcript_sha256"],
+            "v9_base": evidence,
+        },
     }
 
 
@@ -6363,6 +6387,131 @@ class TestFailJob:
 
 
 class TestSubmitScore:
+    async def test_accepts_digest_verified_v9_base_evidence_without_double_gate(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        overrides = _v9_score_overrides()
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="a" * 64,
+            dataset_version=9,
+        )
+        await _seed_ticket(session_maker, agent_id, bench_version=9)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.post(
+            f"/api/v1/validator/agent/{agent_id}/score",
+            json=_score_payload(agent_id, run_id="run-v9-vector", **overrides),
+        )
+        assert response.status_code == 200, response.text
+
+        async with session_maker() as session:
+            score = await session.get(Score, (agent_id, 9, _VALIDATOR_HOTKEY))
+            assert score is not None
+            assert score.details is not None
+            assert (
+                score.details["base_evidence_sha256"]
+                == overrides["base_evidence_sha256"]
+            )
+            assert "platform_model_use_reconciliation" in score.details
+            assert "model_use" not in score.details
+
+    async def test_v9_base_evidence_must_bind_the_agent_artifact(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="f" * 64,
+            dataset_version=9,
+        )
+        await _seed_ticket(session_maker, agent_id, bench_version=9)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.post(
+            f"/api/v1/validator/agent/{agent_id}/score",
+            json=_score_payload(
+                agent_id, run_id="run-v9-vector", **_v9_score_overrides()
+            ),
+        )
+        assert response.status_code == 409
+        assert "artifact digest" in response.text
+
+    async def test_v9_base_evidence_tamper_fails_before_signature_verification(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="a" * 64,
+            dataset_version=9,
+        )
+        await _seed_ticket(session_maker, agent_id, bench_version=9)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        payload = _score_payload(
+            agent_id, run_id="run-v9-vector", **_v9_score_overrides()
+        )
+        payload["report"]["details"]["v9_base"]["score_gates"]["model_use"][
+            "successful_inference_cases"
+        ] = 3
+
+        response = await client.post(
+            f"/api/v1/validator/agent/{agent_id}/score", json=payload
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize(
+        ("path", "value"),
+        [
+            (("run_id",), "different-run"),
+            (("details", "dataset_sha256"), "0" * 64),
+            (("details", "transcript_sha256"), "1" * 64),
+            (("composite",), 0.7),
+        ],
+    )
+    async def test_authoritative_v9_submit_rejects_root_identity_tampering(
+        self,
+        path: tuple[str, ...],
+        value: object,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="a" * 64,
+            dataset_version=9,
+        )
+        await _seed_ticket(session_maker, agent_id, bench_version=9)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        payload = _score_payload(
+            agent_id, run_id="run-v9-vector", **_v9_score_overrides()
+        )
+        target = payload["report"]
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+
+        response = await client.post(
+            f"/api/v1/validator/agent/{agent_id}/score", json=payload
+        )
+        assert response.status_code == 422
+
     @pytest.mark.parametrize(
         "purpose",
         [TicketPurpose.CONTINUAL_RETEST, TicketPurpose.LEGACY_UNCLASSIFIED],

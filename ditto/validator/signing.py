@@ -83,13 +83,15 @@ def score_signing_message(
     seed: int,
     bench_version: int | None = None,
     transcript_sha256: str | None = None,
+    base_evidence_sha256: str | None = None,
 ) -> bytes:
     """Build the canonical bytes a score signature is computed over.
 
     ``{validator_hotkey}:{agent_id}:{ticket_deadline}:{run_id}:``
     ``{composite!r}:{seed}`` — then optional ``:{bench_version}``, followed by
     optional ``:{transcript_sha256}`` when the report declares a transcript
-    digest (``details["transcript_sha256"]``), so
+    digest (``details["transcript_sha256"]``). Benchmark v9 requires that
+    digest and then appends ``:{base_evidence_sha256}``, so
     the published transcript artifact cannot be swapped without breaking the
     signature. The platform derives presence from the same report field, so a
     report without a transcript keeps the previous format. The exact ticket
@@ -106,8 +108,18 @@ def score_signing_message(
     message = f"{validator_hotkey}:{agent_id}:{lease}:{run_id}:{composite!r}:{seed}"
     if bench_version is not None:
         message += f":{bench_version}"
+    if bench_version == 9:
+        if not transcript_sha256 or not base_evidence_sha256:
+            raise ValueError(
+                "benchmark v9 score signatures require transcript and "
+                "base evidence digests"
+            )
+    elif base_evidence_sha256 is not None:
+        raise ValueError("base evidence digest is only valid for benchmark v9")
     if transcript_sha256:
         message += f":{transcript_sha256}"
+    if base_evidence_sha256:
+        message += f":{base_evidence_sha256}"
     return message.encode()
 
 
@@ -122,6 +134,7 @@ def sign_score(
     seed: int,
     bench_version: int | None = None,
     transcript_sha256: str | None = None,
+    base_evidence_sha256: str | None = None,
 ) -> str:
     """Return the hex sr25519 signature over the canonical score payload."""
     message = score_signing_message(
@@ -133,6 +146,7 @@ def sign_score(
         seed=seed,
         bench_version=bench_version,
         transcript_sha256=transcript_sha256,
+        base_evidence_sha256=base_evidence_sha256,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()
@@ -156,6 +170,7 @@ def verify_score_proof(*, agent_id: UUID, proof: LedgerScoreProof) -> bool:
             seed=proof.seed,
             bench_version=proof.bench_version,
             transcript_sha256=proof.transcript_sha256,
+            base_evidence_sha256=proof.base_evidence_sha256,
         )
         return bool(verifier.verify(message, signature))
     except (TypeError, ValueError):
@@ -167,7 +182,9 @@ def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
 
     The platform is a transport/indexer here, not a score authority: every
     receipt must verify, validator hotkeys must be unique, and the ledger row
-    must exactly match the deterministic lower-median receipt.
+    must exactly match the deterministic lower-median receipt. This function
+    answers only that cryptographic question; whether a verified score contract
+    is ready for the active weight fold is a separate rollout decision.
     """
     # Historical v2-v6 ledger rows predate quorum receipts. Keep them readable
     # and weightable during the v7 fleet cutover; v7 is the first contract that

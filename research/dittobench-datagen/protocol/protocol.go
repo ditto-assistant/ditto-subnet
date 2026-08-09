@@ -402,6 +402,12 @@ type CaseScore struct {
 	// scores 0 on its own accuracy; only the SIBLING COMPARISON is suppressed.
 	// Polarity is negative so an absent field means delivered. Additive-optional.
 	Undelivered bool `json:"undelivered,omitempty"`
+	// ValidatorFault marks a v9 case excluded because trusted validator-owned
+	// execution failed independently of the harness. Current ordinary runs fail
+	// the whole attempt on such infrastructure failures; the additive marker
+	// gives future bounded per-case recovery an unambiguous gate exclusion
+	// without overloading Undelivered. It is never miner supplied.
+	ValidatorFault bool `json:"validator_fault,omitempty"`
 	// AllowExtraTools echoes the case's ToolCase.AllowExtraTools so aggregate
 	// factors can tell a case that REQUIRES extra calls (the serving layer forces
 	// the first content-tool call to fail, so a correct harness must retry) from
@@ -532,6 +538,9 @@ type RunDetails struct {
 	// The weight fold only compares entries of the max bench_version present, so a
 	// bump makes new scores non-comparable to old until a re-score.
 	BenchVersion int `json:"bench_version"`
+	// V9Base is the typed, signature-bound ordinary-score evidence for Bench v9.
+	// It is nil for every historical contract, preserving their report bytes.
+	V9Base *V9BaseDetails `json:"v9_base,omitempty"`
 	// RunSize is the immutable generator profile (small, medium, or full). It is
 	// required to select a like-for-like starter-kit token baseline.
 	RunSize string `json:"run_size,omitempty"`
@@ -745,6 +754,9 @@ type ScoreReport struct {
 	Seed        int64   `json:"seed"` // dataset seed (anti-overfit reproducibility)
 	GeneratedAt string  `json:"generated_at"`
 	Composite   float64 `json:"composite"` // final composite in [0,1]; v5 may apply a bounded waste penalty
+	// BaseEvidenceSHA256 binds the complete typed details.v9_base payload into
+	// Bench v9 score signatures. It is absent for every historical contract.
+	BaseEvidenceSHA256 string `json:"base_evidence_sha256,omitempty"`
 	// RawComposite is the pre-efficiency quality score. It is emitted for v5 and
 	// omitted for frozen v2-v4 reports, whose Composite is already raw quality.
 	RawComposite float64 `json:"raw_composite,omitempty"`

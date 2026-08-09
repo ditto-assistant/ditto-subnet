@@ -11,13 +11,14 @@
 //
 // Frozen clock 2026-07-31T14:00:00Z, the golden renderer's instant.
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import type { components as PlatformComponents } from "../../../../../backroom/src/generated/platform-api";
 import { rankEntries } from "../../lib/scoring";
 import { syncFromLocation } from "../../stores/routeStore";
 import { FIXTURE_TOP_AGENT_ID, installFixtureFetch, loadFixture } from "../../test-fixtures";
 import type { OperationsPayload } from "../../types/fleet";
-import type { LeaderboardPayload, ScoresPayload } from "../../types/leaderboard";
+import type { LeaderboardPayload, ScoresPayload, V9BaseEvidence } from "../../types/leaderboard";
 import { EntityPanel } from "../EntityPanel";
 import { Consensus } from "./Consensus";
 
@@ -25,6 +26,10 @@ const glossary = loadFixture("bench-glossary");
 const recorded = loadFixture<ScoresPayload>("agent-top-scores");
 const leaderboard = loadFixture<LeaderboardPayload>("leaderboard");
 const operations = loadFixture<OperationsPayload>("operations");
+
+type GeneratedPublicV9BaseEvidence = NonNullable<
+  PlatformComponents["schemas"]["PublicValidatorScore"]["v9_base"]
+>;
 
 const AGENT = "44444444-dddd-4ddd-8ddd-dddddddddddd";
 const V1 = "5Cg3DiRfrgzB1XzN7VuqQNchTgZ8PzPbphMKmVvHobWSL118";
@@ -272,6 +277,41 @@ describe("Consensus · cohort ordering and the multi-version rule", () => {
 });
 
 describe("Consensus · per-row absences", () => {
+  it("accepts the generated Platform public score contract without a hand-shaped adapter", () => {
+    expectTypeOf<V9BaseEvidence>().toEqualTypeOf<GeneratedPublicV9BaseEvidence>();
+  });
+
+  it("renders the Platform serializer's v9 evidence without private content", async () => {
+    const v9Base = loadFixture<V9BaseEvidence>("v9-base-public");
+    serve({
+      quorum: 3,
+      scores: [
+        {
+          validator_hotkey: V1,
+          composite: 0.5,
+          bench_version: 9,
+          v9_base: v9Base,
+        },
+      ],
+    });
+    const privateMarker = "private prompt must never render";
+    mount();
+    const scope = await block();
+    const evidence = scope.querySelector<HTMLElement>(".v9-gate-evidence");
+    expect(evidence).toBeTruthy();
+    expect(evidence?.textContent).toContain("Trusted Bench 9 score gates");
+    expect(evidence?.textContent).toContain("Shadow");
+    expect(evidence?.textContent).toContain("Coverage 66.7% · threshold 0.01%");
+    expect(evidence?.textContent).toContain("2 of 3 eligible cases");
+    expect(evidence?.textContent).toContain("4 of 5 relay requests succeeded");
+    expect(evidence?.textContent).toContain("2 of 3 expected executions matched");
+    expect(evidence?.textContent).toContain("3 observed · 1 unexpected");
+    expect(evidence?.textContent).toContain(
+      "Prompts, responses, and answer content are not included",
+    );
+    expect(evidence?.textContent).not.toContain(privateMarker);
+  });
+
   it("omits the equation for a score with no breakdown", async () => {
     serve({ quorum: 3, scores: [{ validator_hotkey: V1, composite: 0.5, bench_version: 7 }] });
     mount();

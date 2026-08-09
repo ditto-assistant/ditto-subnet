@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import UUID
 
 import bittensor
+import pytest
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
@@ -43,6 +44,7 @@ from ditto.validator.signing import (
     top5_confirmation_job_signing_message,
     top5_confirmation_score_signing_message,
     verify_ledger_entry,
+    verify_score_proof,
 )
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -494,6 +496,208 @@ def test_score_signature_optional_suffix_order_golden() -> None:
         )
 
 
+def test_v8_score_signature_bytes_remain_exact() -> None:
+    """The v9 suffix must not alter the complete current-v8 payload."""
+    transcript = "cd" * 32
+    assert (
+        score_signing_message(
+            validator_hotkey=_HOTKEY,
+            agent_id=_AGENT,
+            ticket_deadline=_DEADLINE,
+            run_id="run-v8-golden",
+            composite=0.812345,
+            seed=-42,
+            bench_version=8,
+            transcript_sha256=transcript,
+        )
+        == (
+            f"{_HOTKEY}:{_AGENT}:2026-07-09T12:30:00.000000+00:00:"
+            f"run-v8-golden:0.812345:-42:8:{transcript}"
+        ).encode()
+    )
+
+
+def test_v8_signing_and_public_proof_json_combined_golden() -> None:
+    """Freeze both reconstructed signature bytes and the published proof body."""
+    transcript = "cd" * 32
+    signature = "ab" * 64
+    message = score_signing_message(
+        validator_hotkey=_HOTKEY,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="run-v8-golden",
+        composite=0.812345,
+        seed=-42,
+        bench_version=8,
+        transcript_sha256=transcript,
+    )
+    proof = LedgerScoreProof(
+        validator_hotkey=_HOTKEY,
+        run_id="run-v8-golden",
+        composite=0.812345,
+        seed=-42,
+        bench_version=8,
+        ticket_deadline=_DEADLINE,
+        transcript_sha256=transcript,
+        signature=signature,
+    )
+    assert (
+        message
+        == (
+            f"{_HOTKEY}:{_AGENT}:2026-07-09T12:30:00.000000+00:00:"
+            f"run-v8-golden:0.812345:-42:8:{transcript}"
+        ).encode()
+    )
+    assert proof.model_dump_json() == (
+        f'{{"validator_hotkey":"{_HOTKEY}","run_id":"run-v8-golden",'
+        '"composite":0.812345,"seed":-42,"bench_version":8,'
+        '"ticket_deadline":"2026-07-09T12:30:00Z",'
+        f'"transcript_sha256":"{transcript}","signature":"{signature}"}}'
+    )
+
+
+def test_v9_score_signature_appends_base_evidence_after_transcript() -> None:
+    transcript = "cd" * 32
+    base_evidence = "ef" * 32
+    assert (
+        score_signing_message(
+            validator_hotkey=_HOTKEY,
+            agent_id=_AGENT,
+            ticket_deadline=_DEADLINE,
+            run_id="run-v9",
+            composite=0.75,
+            seed=42,
+            bench_version=9,
+            transcript_sha256=transcript,
+            base_evidence_sha256=base_evidence,
+        )
+        == (
+            f"{_HOTKEY}:{_AGENT}:2026-07-09T12:30:00.000000+00:00:"
+            f"run-v9:0.75:42:9:{transcript}:{base_evidence}"
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize(
+    ("transcript", "base_evidence"),
+    [(None, None), ("cd" * 32, None), (None, "ef" * 32)],
+)
+def test_v9_score_signature_requires_both_evidence_digests(
+    transcript: str | None, base_evidence: str | None
+) -> None:
+    with pytest.raises(ValueError, match="require transcript and base evidence"):
+        score_signing_message(
+            validator_hotkey=_HOTKEY,
+            agent_id=_AGENT,
+            run_id="run-v9",
+            composite=0.75,
+            seed=42,
+            bench_version=9,
+            transcript_sha256=transcript,
+            base_evidence_sha256=base_evidence,
+        )
+
+
+def test_pre_v9_score_signature_rejects_base_evidence_suffix() -> None:
+    with pytest.raises(ValueError, match="only valid for benchmark v9"):
+        score_signing_message(
+            validator_hotkey=_HOTKEY,
+            agent_id=_AGENT,
+            run_id="run-v8",
+            composite=0.75,
+            seed=42,
+            bench_version=8,
+            transcript_sha256="cd" * 32,
+            base_evidence_sha256="ef" * 32,
+        )
+
+
+def test_swapped_v9_base_evidence_digest_breaks_signature() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    transcript = "cd" * 32
+    signature = sign_score(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="run-v9",
+        composite=0.75,
+        seed=42,
+        bench_version=9,
+        transcript_sha256=transcript,
+        base_evidence_sha256="ef" * 32,
+    )
+    tampered = score_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="run-v9",
+        composite=0.75,
+        seed=42,
+        bench_version=9,
+        transcript_sha256=transcript,
+        base_evidence_sha256="ab" * 32,
+    )
+    assert not keypair.verify(tampered, bytes.fromhex(signature))
+
+
+def test_v9_public_score_proof_verifies_and_detects_evidence_tamper() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    transcript = "cd" * 32
+    base_evidence = "ef" * 32
+    signature = sign_score(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="run-v9",
+        composite=0.75,
+        seed=42,
+        bench_version=9,
+        transcript_sha256=transcript,
+        base_evidence_sha256=base_evidence,
+    )
+    proof = LedgerScoreProof(
+        validator_hotkey=keypair.ss58_address,
+        run_id="run-v9",
+        composite=0.75,
+        seed=42,
+        bench_version=9,
+        ticket_deadline=_DEADLINE,
+        transcript_sha256=transcript,
+        base_evidence_sha256=base_evidence,
+        signature=signature,
+    )
+    assert verify_score_proof(agent_id=_AGENT, proof=proof)
+    assert not verify_score_proof(
+        agent_id=_AGENT,
+        proof=proof.model_copy(update={"base_evidence_sha256": "ab" * 32}),
+    )
+
+
+@pytest.mark.parametrize(
+    ("bench_version", "transcript", "base_evidence"),
+    [
+        (9, None, "ef" * 32),
+        (9, "cd" * 32, None),
+        (8, "cd" * 32, "ef" * 32),
+    ],
+)
+def test_ledger_proof_rejects_invalid_v9_evidence_presence(
+    bench_version: int, transcript: str | None, base_evidence: str | None
+) -> None:
+    with pytest.raises(ValueError):
+        LedgerScoreProof(
+            validator_hotkey=_HOTKEY,
+            run_id="run",
+            composite=0.5,
+            seed=42,
+            bench_version=bench_version,
+            transcript_sha256=transcript,
+            base_evidence_sha256=base_evidence,
+        )
+
+
 def test_protocol_v3_heartbeat_signature_binds_system_metrics() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     metrics = SystemMetrics(
@@ -888,7 +1092,9 @@ def test_protocol_v11_heartbeat_uses_the_platform_v11_domain() -> None:
     assert b":11:" in message
 
 
-def _signed_ledger_entry(*, tamper_median: bool = False) -> LedgerEntry:
+def _signed_ledger_entry(
+    *, bench_version: int = 7, tamper_median: bool = False
+) -> LedgerEntry:
     keypairs = [bittensor.Keypair.create_from_uri(f"//Ledger{i}") for i in range(3)]
     composites = [0.4, 0.6, 0.8]
     proofs: list[LedgerScoreProof] = []
@@ -902,8 +1108,9 @@ def _signed_ledger_entry(*, tamper_median: bool = False) -> LedgerEntry:
             run_id=run_id,
             composite=composite,
             seed=i,
-            bench_version=7,
+            bench_version=bench_version,
             transcript_sha256="cd" * 32,
+            base_evidence_sha256="ef" * 32 if bench_version == 9 else None,
         )
         proofs.append(
             LedgerScoreProof(
@@ -911,9 +1118,10 @@ def _signed_ledger_entry(*, tamper_median: bool = False) -> LedgerEntry:
                 run_id=run_id,
                 composite=composite,
                 seed=i,
-                bench_version=7,
+                bench_version=bench_version,
                 ticket_deadline=_DEADLINE,
                 transcript_sha256="cd" * 32,
+                base_evidence_sha256="ef" * 32 if bench_version == 9 else None,
                 signature=signature,
             )
         )
@@ -929,7 +1137,7 @@ def _signed_ledger_entry(*, tamper_median: bool = False) -> LedgerEntry:
         run_id=median.run_id,
         seed=median.seed,
         validator_hotkey=median.validator_hotkey,
-        bench_version=7,
+        bench_version=bench_version,
         signature=median.signature,
         score_proofs=proofs,
         status=AgentStatus.SCORED,
@@ -948,6 +1156,19 @@ def test_ledger_entry_rejects_tampered_receipt() -> None:
     entry = _signed_ledger_entry()
     proofs = list(entry.score_proofs)
     proofs[0] = proofs[0].model_copy(update={"composite": 0.41})
+    assert not verify_ledger_entry(entry.model_copy(update={"score_proofs": proofs}))
+
+
+def test_v9_ledger_entry_verifies_ordinary_signed_quorum() -> None:
+    """Rollout eligibility must not make a valid v9 signature look invalid."""
+    assert verify_ledger_entry(_signed_ledger_entry(bench_version=9))
+
+
+def test_v9_ledger_entry_rejects_tampered_signed_quorum() -> None:
+    entry = _signed_ledger_entry(bench_version=9)
+    proofs = list(entry.score_proofs)
+    proofs[0] = proofs[0].model_copy(update={"base_evidence_sha256": "aa" * 32})
+
     assert not verify_ledger_entry(entry.model_copy(update={"score_proofs": proofs}))
 
 

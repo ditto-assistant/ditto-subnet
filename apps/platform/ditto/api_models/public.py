@@ -258,6 +258,66 @@ class PublicModelUse(BaseModel):
     min_prompt_tokens_per_call: Annotated[float | None, Field(default=None, ge=0.0)]
 
 
+PublicV9GateResult = Literal[
+    "passed",
+    "below_threshold",
+    "zero_inference",
+    "insufficient_evidence",
+    "not_applicable",
+]
+
+
+class PublicV9ModelUseGate(BaseModel):
+    """Allowlisted trusted-relay counts behind the v9 model-use gate.
+
+    The full signature-bound root also carries token counts, exclusion reasons,
+    contract digests, and artifact identities. Those stay out of the public
+    dashboard payload: this view contains only the aggregate counts and frozen
+    threshold needed to explain the displayed gate result.
+    """
+
+    administered_cases: Annotated[int, Field(ge=0)]
+    eligible_cases: Annotated[int, Field(ge=0)]
+    successful_inference_cases: Annotated[int, Field(ge=0)]
+    missing_inference_cases: Annotated[int, Field(ge=0)]
+    observed_requests: Annotated[int, Field(ge=0)]
+    successful_requests: Annotated[int, Field(ge=0)]
+    request_coverage_bps: Annotated[int, Field(ge=0, le=10_000)]
+    coverage_bps: Annotated[int, Field(ge=0, le=10_000)]
+    threshold_bps: Annotated[int, Field(ge=1, le=10_000)]
+    result: PublicV9GateResult
+    factor_bps: Literal[0, 10000]
+
+
+class PublicV9AuthoritativeToolGate(BaseModel):
+    """Allowlisted trusted tool-server counts behind the v9 tool gate."""
+
+    expected_executions: Annotated[int, Field(ge=0)]
+    matched_executions: Annotated[int, Field(ge=0)]
+    missing_executions: Annotated[int, Field(ge=0)]
+    unexpected_executions: Annotated[int, Field(ge=0)]
+    observed_executions: Annotated[int, Field(ge=0)]
+    coverage_bps: Annotated[int, Field(ge=0, le=10_000)]
+    threshold_bps: Annotated[int, Field(ge=1, le=10_000)]
+    result: PublicV9GateResult
+    factor_bps: Literal[0, 10000]
+
+
+class PublicV9ScoreGateEvidence(BaseModel):
+    """Privacy-safe public projection of the signed v9 score gates."""
+
+    rollout_mode: Literal["shadow", "enforce"]
+    model_use: PublicV9ModelUseGate
+    authoritative_tool: PublicV9AuthoritativeToolGate
+
+
+class PublicV9BaseEvidence(BaseModel):
+    """Public v9 evidence consumed by the dashboard's score drill-downs."""
+
+    bench_version: Literal[9]
+    score_gates: PublicV9ScoreGateEvidence
+
+
 class PublicTokenEfficiency(BaseModel):
     """Auditable v5 relay-token waste penalty."""
 
@@ -1503,6 +1563,7 @@ class PublicValidatorScore(BaseModel):
     model_use: PublicModelUse | None = None
     token_efficiency: PublicTokenEfficiency | None = None
     composite_breakdown: PublicCompositeBreakdown | None = None
+    v9_base: PublicV9BaseEvidence | None = None
     median_ms: Annotated[int, Field(ge=0, description="Median per-case latency (ms).")]
     n: Annotated[int, Field(ge=0, description="Number of cases scored.")]
     bench_version: Annotated[
@@ -2293,6 +2354,7 @@ class PublicProvisionalScore(BaseModel):
     model_use: PublicModelUse | None = None
     token_efficiency: PublicTokenEfficiency | None = None
     composite_breakdown: PublicCompositeBreakdown | None = None
+    v9_base: PublicV9BaseEvidence | None = None
     calibration_brier: Annotated[
         float | None,
         Field(default=None, ge=0.0, le=1.0, description="Advisory Brier score."),

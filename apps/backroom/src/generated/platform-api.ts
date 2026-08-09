@@ -8190,6 +8190,11 @@ export interface components {
          * @description One validator-signed score receipt backing a ledger median.
          */
         LedgerScoreProof: {
+            /**
+             * Base Evidence Sha256
+             * @description Signature-bound canonical v9 base-evidence digest.
+             */
+            base_evidence_sha256?: string | null;
             /** Bench Version */
             bench_version?: number | null;
             /** Composite */
@@ -10773,6 +10778,7 @@ export interface components {
              * @description SHA-256 of this run's published transcript artifact (the graded per-case inputs), bound into the validator's score signature. The bytes live content-addressed in the public bucket at ``transcripts/{sha256}.json``; regenerating the dataset from the seed and re-running the public grader over the transcript reproduces this composite offline. Null when the validator published no transcript.
              */
             transcript_sha256?: string | null;
+            v9_base?: components["schemas"]["PublicV9BaseEvidence"] | null;
             /**
              * Verification Command
              * @description Copyable command that prints the regenerated dataset hash.
@@ -11470,6 +11476,100 @@ export interface components {
             usage_unavailable: number;
         };
         /**
+         * PublicV9AuthoritativeToolGate
+         * @description Allowlisted trusted tool-server counts behind the v9 tool gate.
+         */
+        PublicV9AuthoritativeToolGate: {
+            /** Coverage Bps */
+            coverage_bps: number;
+            /** Expected Executions */
+            expected_executions: number;
+            /**
+             * Factor Bps
+             * @enum {integer}
+             */
+            factor_bps: 0 | 10000;
+            /** Matched Executions */
+            matched_executions: number;
+            /** Missing Executions */
+            missing_executions: number;
+            /** Observed Executions */
+            observed_executions: number;
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable";
+            /** Threshold Bps */
+            threshold_bps: number;
+            /** Unexpected Executions */
+            unexpected_executions: number;
+        };
+        /**
+         * PublicV9BaseEvidence
+         * @description Public v9 evidence consumed by the dashboard's score drill-downs.
+         */
+        PublicV9BaseEvidence: {
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 9;
+            score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
+        };
+        /**
+         * PublicV9ModelUseGate
+         * @description Allowlisted trusted-relay counts behind the v9 model-use gate.
+         *
+         *     The full signature-bound root also carries token counts, exclusion reasons,
+         *     contract digests, and artifact identities. Those stay out of the public
+         *     dashboard payload: this view contains only the aggregate counts and frozen
+         *     threshold needed to explain the displayed gate result.
+         */
+        PublicV9ModelUseGate: {
+            /** Administered Cases */
+            administered_cases: number;
+            /** Coverage Bps */
+            coverage_bps: number;
+            /** Eligible Cases */
+            eligible_cases: number;
+            /**
+             * Factor Bps
+             * @enum {integer}
+             */
+            factor_bps: 0 | 10000;
+            /** Missing Inference Cases */
+            missing_inference_cases: number;
+            /** Observed Requests */
+            observed_requests: number;
+            /** Request Coverage Bps */
+            request_coverage_bps: number;
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable";
+            /** Successful Inference Cases */
+            successful_inference_cases: number;
+            /** Successful Requests */
+            successful_requests: number;
+            /** Threshold Bps */
+            threshold_bps: number;
+        };
+        /**
+         * PublicV9ScoreGateEvidence
+         * @description Privacy-safe public projection of the signed v9 score gates.
+         */
+        PublicV9ScoreGateEvidence: {
+            authoritative_tool: components["schemas"]["PublicV9AuthoritativeToolGate"];
+            model_use: components["schemas"]["PublicV9ModelUseGate"];
+            /**
+             * Rollout Mode
+             * @enum {string}
+             */
+            rollout_mode: "shadow" | "enforce";
+        };
+        /**
          * PublicValidationAttempt
          * @description One validator ticket for either quorum scoring or continual retesting.
          *
@@ -11790,6 +11890,7 @@ export interface components {
              * @description Reproduce-under-transform audit result: the fraction of audit pairs this run answered consistently. A share of every run's cases is re-asked under a rephrasing (or a shift that moves the answer) derived from the block-hash-seeded dataset seed, which postdates the submission's commit -- so the miner could not have pre-handled it. What a low value measures is SURFACE BRITTLENESS (right on the phrasing the harness was built for, wrong on one it was not) or MEMORIZATION; it is not evidence about a harness that genuinely recomputes the answer, which scores the same under the transform. Both the selection and the transforms are pure functions of the published seed, so anyone can regenerate the audit set and recheck this number. Null for a run that carried no audit pairs or predates the audit.
              */
             transform_robustness?: number | null;
+            v9_base?: components["schemas"]["PublicV9BaseEvidence"] | null;
             /**
              * Validator Hotkey
              * @description Scoring validator's hotkey.
@@ -12001,6 +12102,11 @@ export interface components {
          *     what the daemon reports).
          */
         ScoreReport: {
+            /**
+             * Base Evidence Sha256
+             * @description SHA-256 of the canonical typed details.v9_base root. Required exactly for benchmark v9 and covered by the score signature.
+             */
+            base_evidence_sha256?: string | null;
             /**
              * Bench Version
              * @description Version bound into new score signatures. Omission is accepted only for legacy benchmark-v2 leases.

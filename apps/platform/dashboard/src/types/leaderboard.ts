@@ -171,6 +171,49 @@ export interface LeaderboardEntry {
   _chainWeight?: ChainWeightInfo | null;
 }
 
+export type V9GateResult =
+  | "passed"
+  | "below_threshold"
+  | "zero_inference"
+  | "insufficient_evidence"
+  | "not_applicable";
+
+export interface V9ModelUseGate {
+  administered_cases: number;
+  eligible_cases: number;
+  successful_inference_cases: number;
+  missing_inference_cases: number;
+  observed_requests: number;
+  successful_requests: number;
+  request_coverage_bps: number;
+  coverage_bps: number;
+  threshold_bps: number;
+  result: V9GateResult;
+  factor_bps: 0 | 10000;
+}
+
+export interface V9AuthoritativeToolGate {
+  expected_executions: number;
+  matched_executions: number;
+  missing_executions: number;
+  unexpected_executions: number;
+  observed_executions: number;
+  coverage_bps: number;
+  threshold_bps: number;
+  result: V9GateResult;
+  factor_bps: 0 | 10000;
+}
+
+/** Privacy-safe subset of the signature-bound v9 base evidence. */
+export interface V9BaseEvidence {
+  bench_version: 9;
+  score_gates: {
+    rollout_mode: "shadow" | "enforce";
+    model_use: V9ModelUseGate;
+    authoritative_tool: V9AuthoritativeToolGate;
+  };
+}
+
 export interface LeaderboardPayload {
   entries?: LeaderboardEntry[];
   available_bench_versions?: number[];
@@ -234,6 +277,7 @@ export interface ConsensusScore {
   composite: number;
   bench_version?: number | null;
   composite_breakdown?: CompositeBreakdown | null;
+  v9_base?: V9BaseEvidence | null;
   case_results?: CaseResult[];
 }
 

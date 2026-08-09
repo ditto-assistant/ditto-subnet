@@ -126,6 +126,7 @@ def _score_proof(score: Score) -> LedgerScoreProof:
     except ValueError:
         parsed_deadline = None
     transcript = details.get("transcript_sha256")
+    base_evidence = details.get("base_evidence_sha256")
     return LedgerScoreProof(
         validator_hotkey=score.validator_hotkey,
         run_id=score.run_id,
@@ -134,6 +135,9 @@ def _score_proof(score: Score) -> LedgerScoreProof:
         bench_version=score.bench_version,
         ticket_deadline=parsed_deadline,
         transcript_sha256=transcript if isinstance(transcript, str) else None,
+        base_evidence_sha256=(
+            base_evidence if isinstance(base_evidence, str) else None
+        ),
         signature=score.signature,
     )
 

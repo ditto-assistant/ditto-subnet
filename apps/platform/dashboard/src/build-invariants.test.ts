@@ -92,7 +92,10 @@ describe("scoring transparency (rows 35/36)", () => {
 describe("bench versions never literal in explainer copy", () => {
   it("keeps version digits out of the built explainer strings", () => {
     expect(distText).not.toMatch(/What DittoBench v\d/);
-    expect(distText).not.toMatch(/measures and the frozen scoring setup[^<]*v\d/);
+    // Inspect the explainer string itself. A scan to the next HTML tag is not
+    // meaningful in a minified JS bundle (there may be no ``<`` for hundreds
+    // of symbols), and falsely treats unrelated v9 wire-field names as copy.
+    expect(distText).not.toMatch(/measures and the frozen scoring setup.{0,32}v\d/);
   });
 
   // Row 7: the memory timeline window is count-based ("No version literal

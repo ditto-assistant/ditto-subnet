@@ -1,0 +1,84 @@
+{
+  "vectors": [
+    {
+      "name": "attributed-shadow-pass",
+      "details": {
+        "schema_version": 1,
+        "bench_version": 9,
+        "score_contract": {
+          "revision": "v9-base-shadow-calibration-v1",
+          "manifest_sha256": "5adfbae18c2af63f39d5d087414ae4f1484db0b192ea6da205e2cb9166507bd1"
+        },
+        "run_id": "run-v9-vector",
+        "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dataset_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "transcript_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "ordinary_composite_micros": 812345,
+        "ordinary_stderr_micros": 23456,
+        "score_gates": {
+          "schema_version": 1,
+          "bench_version": 9,
+          "rollout_mode": "shadow",
+          "threshold_profile": {
+            "id": "v9-base-shadow-calibration-v1",
+            "manifest_sha256": "5adfbae18c2af63f39d5d087414ae4f1484db0b192ea6da205e2cb9166507bd1"
+          },
+          "model_use": {
+            "administered_cases": 4,
+            "eligible_cases": 3,
+            "successful_inference_cases": 2,
+            "missing_inference_cases": 1,
+            "observed_requests": 5,
+            "successful_requests": 4,
+            "prompt_tokens": 1200,
+            "completion_tokens": 240,
+            "excluded": {
+              "preflight": 0,
+              "ablation": 0,
+              "undelivered": 1,
+              "validator_fault": 0
+            },
+            "case_attribution_complete": true,
+            "request_coverage_bps": 10000,
+            "coverage_bps": 6666,
+            "threshold_bps": 1,
+            "result": "passed",
+            "factor_bps": 10000
+          },
+          "authoritative_tool": {
+            "expected_executions": 3,
+            "matched_executions": 2,
+            "missing_executions": 1,
+            "unexpected_executions": 1,
+            "observed_executions": 3,
+            "coverage_bps": 6666,
+            "threshold_bps": 1,
+            "result": "passed",
+            "factor_bps": 10000
+          }
+        },
+        "score_gates_sha256": "5b8a065952838eb072a38808a338e07f9eb3080ecd0cc620812e19c5ab29cf9e",
+        "semantic_gate_factor_bps": 10000,
+        "applied_gate_factor_bps": 10000,
+        "effective_composite_micros": 812345,
+        "effective_stderr_micros": 23456
+      },
+      "score_gates_canonical": "ditto-score-gates-v1\nschema_version=1\nbench_version=9\nrollout_mode=shadow\nthreshold_profile.id=v9-base-shadow-calibration-v1\nthreshold_profile.manifest_sha256=5adfbae18c2af63f39d5d087414ae4f1484db0b192ea6da205e2cb9166507bd1\nmodel.administered_cases=4\nmodel.eligible_cases=3\nmodel.successful_inference_cases=2\nmodel.missing_inference_cases=1\nmodel.observed_requests=5\nmodel.successful_requests=4\nmodel.prompt_tokens=1200\nmodel.completion_tokens=240\nmodel.excluded.preflight=0\nmodel.excluded.ablation=0\nmodel.excluded.undelivered=1\nmodel.excluded.validator_fault=0\nmodel.case_attribution_complete=true\nmodel.request_coverage_bps=10000\nmodel.coverage_bps=6666\nmodel.threshold_bps=1\nmodel.result=passed\nmodel.factor_bps=10000\ntool.expected_executions=3\ntool.matched_executions=2\ntool.missing_executions=1\ntool.unexpected_executions=1\ntool.observed_executions=3\ntool.coverage_bps=6666\ntool.threshold_bps=1\ntool.result=passed\ntool.factor_bps=10000\n",
+      "score_gates_sha256": "5b8a065952838eb072a38808a338e07f9eb3080ecd0cc620812e19c5ab29cf9e",
+      "base_canonical": "ditto-v9-base-v1\nschema_version=1\nbench_version=9\nscore_contract.revision=v9-base-shadow-calibration-v1\nscore_contract.manifest_sha256=5adfbae18c2af63f39d5d087414ae4f1484db0b192ea6da205e2cb9166507bd1\nrun_id=run-v9-vector\nartifact_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ndataset_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\ntranscript_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\nordinary_composite_micros=812345\nordinary_stderr_micros=23456\nscore_gates_sha256=5b8a065952838eb072a38808a338e07f9eb3080ecd0cc620812e19c5ab29cf9e\nsemantic_gate_factor_bps=10000\napplied_gate_factor_bps=10000\neffective_composite_micros=812345\neffective_stderr_micros=23456\n",
+      "base_evidence_sha256": "bb3e471f477ffc47f329293ec086771cf4ee738e740a3df6d5a568e4728146da",
+      "signing": {
+        "validator_hotkey": "5Fvalidator",
+        "agent_id": "11111111-2222-3333-4444-555555555555",
+        "ticket_deadline": "2026-08-08T12:34:56.123456+00:00",
+        "run_id": "run-v9-vector",
+        "composite": 0.812345,
+        "seed": 42,
+        "bench_version": 9,
+        "transcript_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "base_evidence_sha256": "bb3e471f477ffc47f329293ec086771cf4ee738e740a3df6d5a568e4728146da",
+        "message": "5Fvalidator:11111111-2222-3333-4444-555555555555:2026-08-08T12:34:56.123456+00:00:run-v9-vector:0.812345:42:9:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:bb3e471f477ffc47f329293ec086771cf4ee738e740a3df6d5a568e4728146da"
+      }
+    }
+  ]
+}

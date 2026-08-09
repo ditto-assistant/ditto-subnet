@@ -96,7 +96,7 @@ from ditto.api_models.system_health import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.upload import _SS58_PATTERN
-from ditto.api_models.validator import ConfirmationDatasetPin, HeldLease
+from ditto.api_models.validator import ConfirmationDatasetPin, HeldLease, V9BaseEvidence
 from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
@@ -1642,6 +1642,17 @@ def _reported_dataset_sha256(report: ScoreReport) -> str | None:
     return None
 
 
+def _reported_v9_base_evidence(report: ScoreReport) -> V9BaseEvidence | None:
+    """Return the already model-validated v9 base root, when applicable."""
+    if report.bench_version != 9:
+        return None
+    details = report.details if isinstance(report.details, dict) else {}
+    # ScoreReport's model validator has already checked this exact object and
+    # its digest. Re-parse into the typed model so later identity comparisons do
+    # not read authoritative v9 fields from an opaque dictionary.
+    return V9BaseEvidence.model_validate(details["v9_base"])
+
+
 def _score_details(
     report: ScoreReport, *, ticket_deadline: datetime, bench_version: int
 ) -> dict[str, Any]:
@@ -1657,6 +1668,8 @@ def _score_details(
         details["confirmation_composites"] = report.confirmation_composites
     if report.confirmation_seeds is not None:
         details["confirmation_seeds"] = report.confirmation_seeds
+    if report.base_evidence_sha256 is not None:
+        details["base_evidence_sha256"] = report.base_evidence_sha256
     if report.per_case:
         details["per_case"] = [item.model_dump(mode="json") for item in report.per_case]
     return details
@@ -1677,6 +1690,7 @@ def _retry_details_match(
         return not reported
     comparable = dict(stored)
     comparable.pop("model_use", None)
+    comparable.pop("platform_model_use_reconciliation", None)
     return comparable == reported
 
 
@@ -1704,7 +1718,7 @@ def _score_signing_message(
     # conditional suffix here, so the order is fixed deliberately rather than
     # left to whichever merged first:
     #
-    #   base : bench_version? : transcript_sha256?
+    #   base : bench_version? : transcript_sha256? : base_evidence_sha256(v9)?
     #
     # bench_version sits next to seed because it QUALIFIES the seed -- the same
     # seed is a different dataset under a different contract -- so the "what was
@@ -1720,6 +1734,8 @@ def _score_signing_message(
     transcript = _reported_transcript_sha256(report)
     if transcript:
         msg += f":{transcript}"
+    if report.base_evidence_sha256:
+        msg += f":{report.base_evidence_sha256}"
     return msg.encode()
 
 
@@ -4830,6 +4846,7 @@ async def submit_score(
     """
     response.headers["Cache-Control"] = "no-store"
     report = payload.report
+    v9_base = _reported_v9_base_evidence(report)
 
     # 1. Signature proves the reporting validator owns the hotkey and binds the
     #    agent + score contents (anti-replay / anti-tamper). CPU-only, no I/O.
@@ -4882,6 +4899,11 @@ async def submit_score(
         )
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
+        if v9_base is not None and v9_base.artifact_sha256 != agent.sha256:
+            raise HTTPException(
+                status_code=409,
+                detail="v9 base evidence artifact digest does not match the agent",
+            )
         if payload.ticket_deadline is None:
             raise HTTPException(
                 status_code=409,
@@ -5086,6 +5108,11 @@ async def submit_score(
                             if isinstance(existing_score.details, dict)
                             else None
                         ),
+                        "base_evidence_sha256": (
+                            existing_score.details.get("base_evidence_sha256")
+                            if isinstance(existing_score.details, dict)
+                            else None
+                        ),
                         "signature": existing_score.signature,
                         "generated_at": existing_score.generated_at.isoformat(),
                     },
@@ -5106,11 +5133,19 @@ async def submit_score(
         # The verdict is stamped alongside the raw counters so a miner can see
         # not just the numbers but the finding and its reason. In SHADOW (the
         # default) this records what enforcement *would* have done and changes
-        # no score -- ditto-platform#506 invariant 5.
+        # no score -- ditto-platform#506 invariant 5. For v9 this remains a
+        # platform-owned reconciliation annotation only: the typed, signed
+        # ``v9_base.score_gates`` evidence is authoritative and this legacy
+        # annotation must never apply a second factor.
         model_use = evaluate_model_use(
             model_usage, cases=report.n, policy=model_use_policy()
         )
-        score_details["model_use"] = model_use.as_public_dict()
+        model_use_key = (
+            "platform_model_use_reconciliation"
+            if ticket.bench_version == 9
+            else "model_use"
+        )
+        score_details[model_use_key] = model_use.as_public_dict()
         await upsert_score(
             session,
             agent_id=agent_id,
@@ -5157,6 +5192,8 @@ async def submit_score(
                 "n": report.n,
                 "bench_version": ticket.bench_version,
                 "ticket_deadline": _lease_token(payload.ticket_deadline),
+                "transcript_sha256": _reported_transcript_sha256(report),
+                "base_evidence_sha256": report.base_evidence_sha256,
                 "signature": payload.signature,
                 "generated_at": report.generated_at.isoformat(),
             },
@@ -5727,6 +5764,11 @@ async def _publish_finalized_run(
                 # scores whose validator published no transcript.
                 "transcript_sha256": digest,
                 "transcript_key": transcript_object_key(digest) if digest else None,
+                "base_evidence_sha256": (
+                    sc.details.get("base_evidence_sha256")
+                    if isinstance(sc.details, dict)
+                    else None
+                ),
                 "details": sc.details,
             }
             for sc, digest in (

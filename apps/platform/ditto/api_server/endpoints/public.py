@@ -121,6 +121,10 @@ from ditto.api_models import (
     PublicSystemMetrics,
     PublicTokenEfficiency,
     PublicTokenUsage,
+    PublicV9AuthoritativeToolGate,
+    PublicV9BaseEvidence,
+    PublicV9ModelUseGate,
+    PublicV9ScoreGateEvidence,
     PublicValidationAttempt,
     PublicValidatorHeartbeat,
     PublicValidatorHeartbeatsResponse,
@@ -152,7 +156,7 @@ from ditto.api_models.screener import (
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import SystemMetrics
 from ditto.api_models.ticket_status import TicketStatus
-from ditto.api_models.validator import ValidatorRuntimeState
+from ditto.api_models.validator import V9BaseEvidence, ValidatorRuntimeState
 from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
@@ -1532,6 +1536,59 @@ def _safe_model_use(details: dict) -> PublicModelUse | None:
         return None
 
 
+def _safe_v9_base(details: dict) -> V9BaseEvidence | None:
+    """Read only a complete typed v9 root; malformed telemetry disappears."""
+
+    raw = details.get("v9_base")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return V9BaseEvidence.model_validate(raw)
+    except ValidationError:
+        return None
+
+
+def _safe_public_v9_base(details: dict) -> PublicV9BaseEvidence | None:
+    """Project a valid signed v9 root onto the public dashboard allowlist."""
+
+    evidence = _safe_v9_base(details)
+    if evidence is None:
+        return None
+    gates = evidence.score_gates
+    model = gates.model_use
+    tool = gates.authoritative_tool
+    return PublicV9BaseEvidence(
+        bench_version=evidence.bench_version,
+        score_gates=PublicV9ScoreGateEvidence(
+            rollout_mode=gates.rollout_mode,
+            model_use=PublicV9ModelUseGate(
+                administered_cases=model.administered_cases,
+                eligible_cases=model.eligible_cases,
+                successful_inference_cases=model.successful_inference_cases,
+                missing_inference_cases=model.missing_inference_cases,
+                observed_requests=model.observed_requests,
+                successful_requests=model.successful_requests,
+                request_coverage_bps=model.request_coverage_bps,
+                coverage_bps=model.coverage_bps,
+                threshold_bps=model.threshold_bps,
+                result=model.result,
+                factor_bps=model.factor_bps,
+            ),
+            authoritative_tool=PublicV9AuthoritativeToolGate(
+                expected_executions=tool.expected_executions,
+                matched_executions=tool.matched_executions,
+                missing_executions=tool.missing_executions,
+                unexpected_executions=tool.unexpected_executions,
+                observed_executions=tool.observed_executions,
+                coverage_bps=tool.coverage_bps,
+                threshold_bps=tool.threshold_bps,
+                result=tool.result,
+                factor_bps=tool.factor_bps,
+            ),
+        ),
+    )
+
+
 def _safe_token_efficiency(details: dict) -> PublicTokenEfficiency | None:
     raw = details.get("token_efficiency")
     if not isinstance(raw, dict):
@@ -1742,6 +1799,20 @@ def _public_entry(
         ModelUseVerdict(public_model_use.verdict) if public_model_use else None
     )
     bench_version = r.bench_version
+    v9_base = _safe_v9_base(details) if bench_version == 9 else None
+    # A shadow gate is diagnostic, not score authority. Keep every v9 public
+    # projection fail-closed until the signed root itself says the frozen gate
+    # is in enforce mode; validators independently impose the same condition on
+    # base-only v9 ledger rows.
+    platform_model_use_factor = (
+        (
+            v9_base.applied_gate_factor_bps / 10_000
+            if v9_base is not None and v9_base.score_gates.rollout_mode == "enforce"
+            else 0.0
+        )
+        if bench_version == 9
+        else model_use_factor(model_use_verdict, mode=model_use_policy().mode)
+    )
     dataset_sha256 = details.get("dataset_sha256")
     raw_tokens = details.get("tokens")
     tokens = (
@@ -1817,7 +1888,7 @@ def _public_entry(
                 ),
                 efficiency_bonus,
             )
-            * model_use_factor(model_use_verdict, mode=model_use_policy().mode)
+            * platform_model_use_factor
             if efficiency_bonus is not None
             else None
         ),
@@ -3408,6 +3479,7 @@ def _public_validator_score(s) -> PublicValidatorScore:
     details = s.details if isinstance(s.details, dict) else {}
     robustness, audit_pairs = _safe_transform_robustness(details)
     public_model_use = _safe_model_use(details)
+    bench_version = _score_bench_version(s)
     return PublicValidatorScore(
         validator_hotkey=s.validator_hotkey,
         composite=s.composite,
@@ -3423,9 +3495,10 @@ def _public_validator_score(s) -> PublicValidatorScore:
             final_composite=s.composite,
             details=details,
         ),
+        v9_base=(_safe_public_v9_base(details) if bench_version == 9 else None),
         median_ms=s.median_ms,
         n=s.n,
-        bench_version=_score_bench_version(s),
+        bench_version=bench_version,
         seed=s.seed,
         run_id=s.run_id,
         ticket_deadline=_ticket_deadline(s),
@@ -4827,6 +4900,12 @@ async def agent_pipeline(
                     memory_mean=score.memory_mean,
                     final_composite=score.composite,
                     details=(score.details if isinstance(score.details, dict) else {}),
+                ),
+                v9_base=(
+                    _safe_public_v9_base(score.details)
+                    if _score_bench_version(score) == 9
+                    and isinstance(score.details, dict)
+                    else None
                 ),
                 calibration_brier=_safe_calibration(
                     score.details if isinstance(score.details, dict) else {}

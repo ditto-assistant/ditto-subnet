@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -28,7 +30,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
 from ditto.chain.models import NeuronInfo
-from ditto.db.models import Agent, BenchmarkRollout, ValidatorHeartbeat
+from ditto.db.models import Agent, BenchmarkRollout, Score, ValidatorHeartbeat
 from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
     append_confirmation_scores,
@@ -138,6 +140,50 @@ def _install_chain(app: FastAPI, *, permitted: bool = True) -> None:
         return c
 
     app.dependency_overrides[get_chain_client] = _chain
+
+
+def test_v9_score_proof_publishes_signature_bound_base_evidence_digest() -> None:
+    proof = scoring_mod._score_proof(
+        cast(
+            Score,
+            SimpleNamespace(
+                validator_hotkey=_VALIDATOR_HOTKEY,
+                run_id="run-v9",
+                composite=0.75,
+                seed=42,
+                bench_version=9,
+                signature="ab" * 64,
+                details={
+                    "ticket_deadline": "2026-08-08T12:00:00+00:00",
+                    "transcript_sha256": "cd" * 32,
+                    "base_evidence_sha256": "ef" * 32,
+                },
+            ),
+        )
+    )
+    assert proof.transcript_sha256 == "cd" * 32
+    assert proof.base_evidence_sha256 == "ef" * 32
+
+
+def test_v8_score_proof_omits_v9_base_evidence_field() -> None:
+    proof = scoring_mod._score_proof(
+        cast(
+            Score,
+            SimpleNamespace(
+                validator_hotkey=_VALIDATOR_HOTKEY,
+                run_id="run-v8",
+                composite=0.75,
+                seed=42,
+                bench_version=8,
+                signature="ab" * 64,
+                details={
+                    "ticket_deadline": "2026-08-08T12:00:00+00:00",
+                    "transcript_sha256": "cd" * 32,
+                },
+            ),
+        )
+    )
+    assert proof.base_evidence_sha256 is None
 
 
 async def _seed_scored(

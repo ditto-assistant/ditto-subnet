@@ -279,6 +279,12 @@ func requireCompleteV7Usage(benchVersion int, usage protocol.TokenUsage, executi
 		return nil
 	}
 	if unusedV8ChatLane(benchVersion, usage, execution) {
+		if benchVersion == protocol.BenchVersionV9 {
+			// A complete, healthy zero-request interval is a provable agent
+			// outcome in v9. The signed model-use gate publishes zero_inference
+			// with factor zero; retrying would let the agent fish for a free run.
+			return nil
+		}
 		return fmt.Errorf(
 			"%w: benchmark v8 requires at least one authoritative model call",
 			errAgentModelUseMissing,

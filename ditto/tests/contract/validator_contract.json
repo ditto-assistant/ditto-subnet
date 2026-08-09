@@ -335,6 +335,18 @@
       },
       "LedgerScoreProof": {
         "properties": {
+          "base_evidence_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "bench_version": {
             "anyOf": [
               {
@@ -384,6 +396,7 @@
           "transcript_sha256": {
             "anyOf": [
               {
+                "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
               },
               {
@@ -832,6 +845,18 @@
       },
       "LedgerScoreProof": {
         "properties": {
+          "base_evidence_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "bench_version": {
             "anyOf": [
               {
@@ -881,6 +906,7 @@
           "transcript_sha256": {
             "anyOf": [
               {
+                "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
               },
               {
@@ -1106,6 +1132,18 @@
       }
     },
     "properties": {
+      "base_evidence_sha256": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "bench_version": {
         "anyOf": [
           {
@@ -1416,6 +1454,18 @@
       },
       "ScoreReport": {
         "properties": {
+          "base_evidence_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "bench_version": {
             "anyOf": [
               {
