@@ -7,7 +7,7 @@ hydrate into typed objects. Models and migrations must stay in sync.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -16,6 +16,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     Enum,
     Float,
     ForeignKeyConstraint,
@@ -4196,4 +4197,593 @@ class OwnerAttestation(Base):
         # symmetric so neither side is privileged.
         Index("owner_attestations_lo_idx", "netuid", "hotkey_lo"),
         Index("owner_attestations_hi_idx", "netuid", "hotkey_hi"),
+    )
+
+
+class ConfirmationBundleSettingsRevision(Base):
+    """Append-only global policy for the bounded v9 confirmation lane."""
+
+    __tablename__ = "confirmation_bundle_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="confirmation_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="confirmation_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "parent_revision >= 0", name="confirmation_settings_parent_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="confirmation_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="confirmation_settings_actor_check",
+        ),
+        Index(
+            "confirmation_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope", "parent_revision", name="confirmation_settings_parent_key"
+        ),
+        UniqueConstraint(
+            "revision", "checksum", name="confirmation_settings_revision_checksum_key"
+        ),
+    )
+
+
+class ConfirmationRetestAuthorization(Base):
+    """Append-only operator authority for one new immutable bundle generation."""
+
+    __tablename__ = "confirmation_retest_authorizations"
+
+    authorization_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True
+    )
+    source_bundle_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    profile_revision: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    from_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    authorized_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["source_bundle_id"],
+            ["confirmation_bundles.bundle_id"],
+            name="confirmation_retest_source_bundle_fkey",
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64", name="confirmation_retest_sha_check"
+        ),
+        CheckConstraint("bench_version = 9", name="confirmation_retest_version_check"),
+        CheckConstraint(
+            "length(profile_revision) BETWEEN 1 AND 128",
+            name="confirmation_retest_profile_revision_check",
+        ),
+        CheckConstraint(
+            "length(profile_checksum) = 64",
+            name="confirmation_retest_profile_checksum_check",
+        ),
+        CheckConstraint(
+            "from_generation >= 0 AND authorized_generation = from_generation + 1",
+            name="confirmation_retest_generation_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="confirmation_retest_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="confirmation_retest_actor_check",
+        ),
+        UniqueConstraint(
+            "artifact_sha256",
+            "bench_version",
+            "profile_revision",
+            "profile_checksum",
+            "authorized_generation",
+            name="confirmation_retest_generation_key",
+        ),
+        UniqueConstraint(
+            "authorization_id",
+            "artifact_sha256",
+            "bench_version",
+            "profile_revision",
+            "profile_checksum",
+            "authorized_generation",
+            name="confirmation_retest_bundle_fkey_target",
+        ),
+    )
+
+
+class ConfirmationBundle(Base):
+    """One digest/profile/generation-deduplicated expensive v9 bundle."""
+
+    __tablename__ = "confirmation_bundles"
+
+    bundle_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    profile_revision: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    retest_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retest_authorization_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    generation_reason: Mapped[str] = mapped_column(
+        Text, nullable=False, default="initial"
+    )
+    source_bundle_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    qualification_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completion_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completion_ticket_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    evidence_root: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    evidence_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reporter_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bundle_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["settings_revision", "settings_checksum"],
+            [
+                "confirmation_bundle_settings_revisions.revision",
+                "confirmation_bundle_settings_revisions.checksum",
+            ],
+            name="confirmation_bundles_settings_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["completion_ticket_id", "bundle_id"],
+            [
+                "confirmation_bundle_tickets.ticket_id",
+                "confirmation_bundle_tickets.bundle_id",
+            ],
+            name="confirmation_bundles_completion_ticket_fkey",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            [
+                "retest_authorization_id",
+                "artifact_sha256",
+                "bench_version",
+                "profile_revision",
+                "profile_checksum",
+                "retest_generation",
+            ],
+            [
+                "confirmation_retest_authorizations.authorization_id",
+                "confirmation_retest_authorizations.artifact_sha256",
+                "confirmation_retest_authorizations.bench_version",
+                "confirmation_retest_authorizations.profile_revision",
+                "confirmation_retest_authorizations.profile_checksum",
+                "confirmation_retest_authorizations.authorized_generation",
+            ],
+            name="confirmation_bundles_retest_auth_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["source_bundle_id"],
+            ["confirmation_bundles.bundle_id"],
+            name="confirmation_bundles_source_fkey",
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64", name="confirmation_bundles_sha_check"
+        ),
+        CheckConstraint("bench_version = 9", name="confirmation_bundles_version_check"),
+        CheckConstraint(
+            "length(profile_revision) BETWEEN 1 AND 128",
+            name="confirmation_bundles_profile_revision_check",
+        ),
+        CheckConstraint(
+            "length(profile_checksum) = 64",
+            name="confirmation_bundles_profile_checksum_check",
+        ),
+        CheckConstraint(
+            "length(settings_checksum) = 64",
+            name="confirmation_bundles_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "(generation_reason = 'initial' AND retest_generation = 0 "
+            "AND retest_authorization_id IS NULL AND source_bundle_id IS NULL) OR "
+            "(generation_reason = 'operator_retest' AND retest_generation > 0 "
+            "AND retest_authorization_id IS NOT NULL "
+            "AND source_bundle_id IS NOT NULL) OR "
+            "(generation_reason = 'settings_supersession' "
+            "AND retest_generation > 0 AND retest_authorization_id IS NULL "
+            "AND source_bundle_id IS NOT NULL)",
+            name="confirmation_bundles_generation_auth_check",
+        ),
+        CheckConstraint(
+            "state IN ('blocked_budget', 'pending', 'leased', 'failed', "
+            "'completed', 'superseded')",
+            name="confirmation_bundles_state_check",
+        ),
+        CheckConstraint(
+            "(state NOT IN ('completed', 'superseded') "
+            "AND qualification_status IS NULL AND completion_mode IS NULL "
+            "AND completion_ticket_id IS NULL AND evidence_root IS NULL "
+            "AND evidence_sha256 IS NULL AND reporter_hotkey IS NULL "
+            "AND bundle_signature IS NULL AND verified_at IS NULL "
+            "AND completed_at IS NULL) OR "
+            "(state IN ('completed', 'superseded') "
+            "AND qualification_status IN ('qualified', 'unqualified') "
+            "AND completion_mode IN ('shadow', 'enforce') "
+            "AND completion_ticket_id IS NOT NULL AND evidence_root IS NOT NULL "
+            "AND length(evidence_sha256) = 64 "
+            "AND length(trim(reporter_hotkey)) > 0 "
+            "AND length(bundle_signature) BETWEEN 2 AND 512 "
+            "AND verified_at IS NOT NULL AND completed_at IS NOT NULL) OR "
+            "(state = 'superseded' AND qualification_status IS NULL "
+            "AND completion_mode IS NULL AND completion_ticket_id IS NULL "
+            "AND evidence_root IS NULL AND evidence_sha256 IS NULL "
+            "AND reporter_hotkey IS NULL AND bundle_signature IS NULL "
+            "AND verified_at IS NULL AND completed_at IS NULL)",
+            name="confirmation_bundles_completion_check",
+        ),
+        UniqueConstraint(
+            "artifact_sha256",
+            "bench_version",
+            "profile_revision",
+            "profile_checksum",
+            "retest_generation",
+            name="confirmation_bundles_identity_key",
+        ),
+        UniqueConstraint(
+            "retest_authorization_id", name="confirmation_bundles_retest_auth_key"
+        ),
+        UniqueConstraint("source_bundle_id", name="confirmation_bundles_source_key"),
+        Index("confirmation_bundles_state_created_idx", "state", "created_at"),
+    )
+
+
+class ConfirmationBundleSubject(Base):
+    """Per-agent base/full contract state, separate from shared evidence."""
+
+    __tablename__ = "confirmation_bundle_subjects"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bundle_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    result_status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="base_only"
+    )
+    base_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    base_quality_micros: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_stderr_micros: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_model_factor_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_tool_factor_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    full_quality_micros: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    full_stderr_micros: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    semantic_factor_bps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    applied_factor_bps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    full_effective_micros: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id", "bench_version", name="confirmation_bundle_subjects_pkey"
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="confirmation_subjects_agent_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["bundle_id"],
+            ["confirmation_bundles.bundle_id"],
+            name="confirmation_subjects_bundle_fkey",
+        ),
+        CheckConstraint(
+            "bench_version = 9", name="confirmation_subjects_version_check"
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64", name="confirmation_subjects_sha_check"
+        ),
+        CheckConstraint(
+            "length(base_evidence_sha256) = 64",
+            name="confirmation_subjects_base_evidence_sha_check",
+        ),
+        CheckConstraint(
+            "base_quality_micros BETWEEN 0 AND 1000000 "
+            "AND base_stderr_micros BETWEEN 0 AND 1000000",
+            name="confirmation_subjects_base_score_check",
+        ),
+        CheckConstraint(
+            "base_model_factor_bps IN (0, 10000) "
+            "AND base_tool_factor_bps IN (0, 10000)",
+            name="confirmation_subjects_base_factor_check",
+        ),
+        CheckConstraint(
+            "(full_quality_micros IS NULL AND full_stderr_micros IS NULL "
+            "AND semantic_factor_bps IS NULL AND applied_factor_bps IS NULL "
+            "AND full_effective_micros IS NULL) OR "
+            "(full_quality_micros BETWEEN 0 AND 1000000 "
+            "AND full_stderr_micros BETWEEN 0 AND 1000000 "
+            "AND semantic_factor_bps IN (0, 10000) "
+            "AND applied_factor_bps IN (0, 10000) "
+            "AND full_effective_micros BETWEEN 0 AND 1000000)",
+            name="confirmation_subjects_full_projection_check",
+        ),
+        CheckConstraint(
+            "(result_status = 'base_only' AND bundle_id IS NULL "
+            "AND full_quality_micros IS NULL) OR "
+            "(result_status = 'provisional' AND bundle_id IS NOT NULL) OR "
+            "(result_status = 'full_confirmed' AND bundle_id IS NOT NULL "
+            "AND full_quality_micros IS NOT NULL)",
+            name="confirmation_subjects_status_bundle_check",
+        ),
+        Index("confirmation_subjects_bundle_idx", "bundle_id"),
+        Index("confirmation_subjects_status_idx", "result_status"),
+    )
+
+
+class ConfirmationBundleTicket(Base):
+    """Append-only 90-minute lease attempt for one confirmation bundle."""
+
+    __tablename__ = "confirmation_bundle_tickets"
+
+    ticket_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    bundle_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    slot_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="issued")
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    deadline: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["bundle_id"],
+            ["confirmation_bundles.bundle_id"],
+            name="confirmation_tickets_bundle_fkey",
+        ),
+        CheckConstraint(
+            "status IN ('issued', 'scored', 'expired')",
+            name="confirmation_tickets_status_check",
+        ),
+        CheckConstraint("attempt > 0", name="confirmation_tickets_attempt_check"),
+        CheckConstraint(
+            "deadline > issued_at", name="confirmation_tickets_deadline_check"
+        ),
+        CheckConstraint(
+            "(status = 'expired') OR (failure_reason IS NULL AND failed_at IS NULL)",
+            name="confirmation_tickets_failure_state_check",
+        ),
+        CheckConstraint(
+            "(failure_reason IS NULL) = (failed_at IS NULL)",
+            name="confirmation_tickets_failure_pair_check",
+        ),
+        UniqueConstraint(
+            "bundle_id", "attempt", name="confirmation_tickets_attempt_key"
+        ),
+        UniqueConstraint(
+            "ticket_id", "bundle_id", name="confirmation_tickets_id_bundle_key"
+        ),
+        Index(
+            "confirmation_tickets_one_live_bundle_idx",
+            "bundle_id",
+            unique=True,
+            postgresql_where=text("status = 'issued'"),
+        ),
+        Index(
+            "confirmation_tickets_open_deadline_idx",
+            "deadline",
+            postgresql_where=text("status = 'issued'"),
+        ),
+    )
+
+
+class ConfirmationDimensionEvidence(Base):
+    """Immutable typed evidence envelope for one shared bundle dimension."""
+
+    __tablename__ = "confirmation_dimension_evidence"
+
+    bundle_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    dimension: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    request_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    provider_cost_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    synthetic: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "bundle_id", "dimension", name="confirmation_dimension_evidence_pkey"
+        ),
+        ForeignKeyConstraint(
+            ["bundle_id"],
+            ["confirmation_bundles.bundle_id"],
+            name="confirmation_evidence_bundle_fkey",
+        ),
+        CheckConstraint(
+            "dimension IN ('longmemeval', 'inference_ablation', 'embedding_ablation')",
+            name="confirmation_evidence_dimension_check",
+        ),
+        CheckConstraint(
+            "status IN ('completed', 'not_run', 'unavailable')",
+            name="confirmation_evidence_status_check",
+        ),
+        CheckConstraint(
+            "request_count >= 0 AND input_tokens >= 0 AND output_tokens >= 0 "
+            "AND provider_cost_microusd >= 0 AND latency_ms >= 0",
+            name="confirmation_evidence_nonnegative_check",
+        ),
+        CheckConstraint(
+            "(dimension = 'longmemeval' AND status = 'completed' "
+            "AND synthetic = false) OR "
+            "(dimension IN ('inference_ablation', 'embedding_ablation') "
+            "AND synthetic = true AND request_count = 0 AND input_tokens = 0 "
+            "AND output_tokens = 0 AND provider_cost_microusd = 0)",
+            name="confirmation_evidence_synthetic_cost_check",
+        ),
+        CheckConstraint(
+            "length(evidence_sha256) = 64",
+            name="confirmation_evidence_sha_check",
+        ),
+    )
+
+
+class ConfirmationBudgetDay(Base):
+    """CAS-serialized accounting for new issuance on one UTC day."""
+
+    __tablename__ = "confirmation_budget_days"
+
+    utc_day: Mapped[date] = mapped_column(Date, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    issued_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    outstanding_reserved_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    settled_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "revision >= 0 AND issued_attempts >= 0 "
+            "AND outstanding_reserved_microusd >= 0 AND settled_microusd >= 0",
+            name="confirmation_budget_nonnegative_check",
+        ),
+    )
+
+
+class ConfirmationBudgetReservation(Base):
+    """One immutable issuance charge, settled against its original UTC day."""
+
+    __tablename__ = "confirmation_budget_reservations"
+
+    reservation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    bundle_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    utc_day: Mapped[date] = mapped_column(Date, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserved_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, default="reserved")
+    actual_microusd: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    failed_attempt: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["bundle_id"],
+            ["confirmation_bundles.bundle_id"],
+            name="confirmation_reservations_bundle_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["utc_day"],
+            ["confirmation_budget_days.utc_day"],
+            name="confirmation_reservations_day_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["settings_revision"],
+            ["confirmation_bundle_settings_revisions.revision"],
+            name="confirmation_reservations_settings_fkey",
+        ),
+        CheckConstraint(
+            "attempt > 0 AND reserved_microusd > 0",
+            name="confirmation_reservations_positive_check",
+        ),
+        CheckConstraint(
+            "state IN ('reserved', 'settled')",
+            name="confirmation_reservations_state_check",
+        ),
+        CheckConstraint(
+            "(state = 'reserved' AND actual_microusd IS NULL "
+            "AND failed_attempt IS NULL AND settled_at IS NULL) OR "
+            "(state = 'settled' AND actual_microusd >= 0 "
+            "AND failed_attempt IS NOT NULL AND settled_at IS NOT NULL)",
+            name="confirmation_reservations_settlement_check",
+        ),
+        UniqueConstraint(
+            "bundle_id", "attempt", name="confirmation_reservations_attempt_key"
+        ),
+        Index(
+            "confirmation_reservations_one_open_bundle_idx",
+            "bundle_id",
+            unique=True,
+            postgresql_where=text("state = 'reserved'"),
+        ),
+        Index("confirmation_reservations_day_idx", "utc_day"),
     )

@@ -3,23 +3,26 @@
 Guidance for Claude Code (and humans) working in **ditto-platform** — the API
 server for Bittensor Subnet 118. Read this before making changes.
 
-## What this repo is
+## What this component is
 
-The platform/API service only. Miner CLI and the validator daemon live in
-[`ditto-subnet`](https://github.com/ditto-assistant/ditto-subnet); the reference
-memory harness lives in [`ditto-harness`](https://github.com/ditto-assistant/ditto-harness).
-This service talks to clients over HTTP; the **OpenAPI schema is the contract**
-(there is no shared package between repos).
+The Platform/API component of the ditto-subnet monorepo. Miner CLI and validator
+daemon code live at the repository root, and shared Python wire contracts live
+under `packages/`. HTTP clients still treat the **OpenAPI schema as the public
+contract**; same-language components should import canonical shared models when
+their wire semantics must remain identical.
 
 **Validator boundary (server side lives here):** this repo owns the
 validator-*facing* API — the `/validator/*` endpoints (`endpoints/validator.py`),
-their wire models (`api_models/validator.py`), the score ledger in `ditto/db`,
-and the `4xxx` validator error codes. The validator **worker/process itself does
-not live here** — it runs in `ditto-subnet` (`ditto/validator/`), is stateless
-(no DB), and reaches this service only over HTTP. Do not add a `ditto/validator/`
-package or any weight-setting / dittobench-scoring code to this repo; that is the
-subnet's job. The two `api_models/validator.py` copies are kept in sync via the
-OpenAPI contract, not a shared import.
+their Platform-owned wire models (`api_models/validator.py`), the score ledger
+in `ditto/db`, and the `4xxx` validator error codes. The validator
+**worker/process itself does not live here** — it lives at the monorepo root
+under `ditto/validator/`, is stateless (no DB), and reaches this service only
+over HTTP. Do not add a `ditto/validator/` package here or any weight-setting /
+dittobench-scoring code to this component. Signature-bound Bench v9 gate models
+and private confirmation transport/profile models come from
+`packages/ditto-screening-protocol`; compatibility modules in Platform and the
+validator re-export the same classes. Monorepo identity and contract tests guard
+those exports and their stable HTTP schemas.
 
 ## Architecture in one paragraph
 

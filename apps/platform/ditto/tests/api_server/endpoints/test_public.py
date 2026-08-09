@@ -31,6 +31,10 @@ from sqlalchemy.ext.asyncio import (
 
 from ditto.api_models import bench_glossary as bench_glossary_data
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.confirmation_bundles import (
+    ConfirmationBundleMode,
+    ConfirmationBundleSettings,
+)
 from ditto.api_models.public import PublicBenchmarkProgress, PublicSystemMetrics
 from ditto.api_models.screener import (
     SCREENING_POLICY_VERSION,
@@ -96,7 +100,14 @@ from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
     MIN_SCOREABLE_BENCH_VERSION,
 )
-from ditto.db.queries.scores import LedgerRow, upsert_score
+from ditto.db.queries.confirmation_bundles import (
+    insert_confirmation_bundle_settings_revision,
+)
+from ditto.db.queries.scores import (
+    LedgerRow,
+    V9ConfirmationPublicProjection,
+    upsert_score,
+)
 from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
@@ -459,6 +470,106 @@ def test_v9_effective_composite_fails_closed_while_signed_gate_is_shadow(
 
     assert v9.effective_composite == 0.0
     assert legacy.effective_composite == 0.0
+
+
+@pytest.mark.parametrize(
+    ("projection", "expected_status", "expected_full"),
+    [
+        (None, "base_only", None),
+        (
+            V9ConfirmationPublicProjection(result_status="provisional"),
+            "provisional",
+            None,
+        ),
+        (
+            V9ConfirmationPublicProjection(
+                result_status="full_confirmed",
+                full_confirmed_composite=0.65,
+                evidence_sha256="ab" * 32,
+            ),
+            "full_confirmed",
+            0.65,
+        ),
+    ],
+)
+def test_public_leaderboard_serializes_unambiguous_v9_confirmation_state(
+    projection: V9ConfirmationPublicProjection | None,
+    expected_status: str,
+    expected_full: float | None,
+) -> None:
+    row = LedgerRow(
+        miner_hotkey=_MINER_A,
+        agent_id=UUID(int=9),
+        composite=0.75,
+        tool_mean=0.75,
+        memory_mean=0.75,
+        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id="v9-public-projection",
+        seed=42,
+        validator_hotkey=_VALIDATOR_C,
+        signature=None,
+        status=AgentStatus.SCORED,
+        bench_version=9,
+        n=280,
+        eligible=True,
+    )
+
+    payload = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        finalized=expected_status == "full_confirmed",
+        v9_confirmation=projection,
+    ).model_dump(mode="json")
+
+    assert payload["v9_confirmation_status"] == expected_status
+    assert payload.get("v9_full_confirmed_composite") == expected_full
+    assert payload["finalized"] is (expected_status == "full_confirmed")
+    assert payload["rank"] == (1 if expected_status == "full_confirmed" else None)
+
+
+def test_public_v9_base_projection_is_typed_and_fails_closed() -> None:
+    vector_path = (
+        Path(__file__).resolve().parents[6]
+        / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+    )
+    details = json.loads(vector_path.read_text())["vectors"][0]["details"]
+
+    projected = public_endpoint._safe_v9_base({"v9_base": details})
+
+    assert projected is not None
+    assert projected.score_gates.model_use.result == "passed"
+    assert projected.score_gates.authoritative_tool.result == "passed"
+    assert public_endpoint._safe_v9_base({"v9_base": {"bench_version": 9}}) is None
+
+    score = public_endpoint._public_validator_score(
+        SimpleNamespace(
+            validator_hotkey=_VALIDATOR_C,
+            composite=details["effective_composite_micros"] / 1_000_000,
+            tool_mean=0.8,
+            memory_mean=0.7,
+            median_ms=500,
+            n=114,
+            seed=42,
+            run_id=details["run_id"],
+            signature="ab" * 64,
+            generated_at=datetime(2026, 8, 8, tzinfo=UTC),
+            details={
+                "bench_version": 9,
+                "dataset_sha256": details["dataset_sha256"],
+                "transcript_sha256": details["transcript_sha256"],
+                "v9_base": details,
+            },
+        )
+    )
+    assert score.v9_base is not None
+    assert (
+        score.model_dump(mode="json")["v9_base"]["score_gates"]["model_use"]["result"]
+        == "passed"
+    )
 
 
 # The generator release each bench version pins, and the version flag that
@@ -1276,6 +1387,69 @@ class TestPublicBenchmarkTimeline:
 
 
 class TestPublicLeaderboard:
+    async def test_leaderboard_publishes_only_authoritative_confirmation_mode(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The public marker mirrors the fail-closed validator ledger contract."""
+        _install_db(app, session_maker)
+
+        assert (await client.get("/api/v1/public/leaderboard")).json()[
+            "v9_confirmation_mode"
+        ] is None
+
+        enforce = ConfirmationBundleSettings(
+            mode=ConfirmationBundleMode.ENFORCE,
+            top_n=5,
+            daily_bundle_cap=2,
+            daily_dollar_cap_microusd=100_000,
+            per_bundle_request_cap=20,
+            per_bundle_token_cap=2_000,
+            profile_revision="public-mode-test-v1",
+            profile_checksum="ab" * 32,
+        )
+
+        def checksum(settings: ConfirmationBundleSettings) -> str:
+            encoded = json.dumps(
+                settings.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            return hashlib.sha256(encoded).hexdigest()
+
+        async with session_maker() as session, session.begin():
+            await insert_confirmation_bundle_settings_revision(
+                session,
+                parent_revision=0,
+                scope="*",
+                settings=enforce.model_dump(mode="json"),
+                checksum=checksum(enforce),
+                reason="exercise public confirmation mode contract",
+                actor="test",
+            )
+
+        assert (await client.get("/api/v1/public/leaderboard")).json()[
+            "v9_confirmation_mode"
+        ] == "enforce"
+
+        shadow = enforce.model_copy(update={"mode": ConfirmationBundleMode.SHADOW})
+        async with session_maker() as session, session.begin():
+            await insert_confirmation_bundle_settings_revision(
+                session,
+                parent_revision=1,
+                scope="*",
+                settings=shadow.model_dump(mode="json"),
+                checksum=checksum(shadow),
+                reason="exercise non-authoritative public confirmation mode",
+                actor="test",
+            )
+
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        assert body["v9_confirmation_mode"] is None
+        assert "shadow" not in json.dumps(body)
+
     async def test_leaderboard_reports_average_settled_run_cost(
         self,
         app: FastAPI,

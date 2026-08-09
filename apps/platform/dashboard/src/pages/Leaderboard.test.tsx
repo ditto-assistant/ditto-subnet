@@ -270,6 +270,79 @@ describe("board filter (row 4)", () => {
 
 // ── Row 1 (page slice): sort, tabs, pager, and rank vocabulary ──
 describe("board view controls (row 1 slice)", () => {
+  it("labels all v9 confirmation states and suppresses pending rows in enforce mode", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          v9_confirmation_mode: "enforce",
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index < 3
+              ? {
+                  ...entry,
+                  bench_version: 9,
+                  eligible: true,
+                  finalized: true,
+                  v9_confirmation_status: ["base_only", "provisional", "full_confirmed"][
+                    index
+                  ] as LeaderboardEntry["v9_confirmation_status"],
+                }
+              : entry,
+          ),
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelectorAll(".v9-confirmation-chip")).toHaveLength(3));
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("#rows tr[data-i]"));
+    for (const label of ["Bench 9 base only", "Bench 9 confirmation pending"]) {
+      const row = rows.find((candidate) => candidate.textContent?.includes(label));
+      expect(row).toBeTruthy();
+      expect(row?.querySelector(".rank")?.textContent).toBe("–");
+      expect(row?.querySelector(".emission-badge")).toBeNull();
+    }
+    const full = rows.find((candidate) =>
+      candidate.textContent?.includes("Bench 9 full confirmed"),
+    );
+    expect(full).toBeTruthy();
+    expect(full?.querySelector(".rank")?.textContent).not.toBe("–");
+  });
+
+  it("trusts authoritative rank and emissions when confirmation enforcement is null", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          v9_confirmation_mode: null,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index < 2
+              ? {
+                  ...entry,
+                  bench_version: 9,
+                  eligible: true,
+                  finalized: true,
+                  v9_confirmation_status: index === 0 ? "base_only" : "provisional",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelectorAll(".v9-confirmation-chip")).toHaveLength(2));
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("#rows tr[data-i]"));
+    for (const label of ["Bench 9 base only", "Bench 9 confirmation pending"]) {
+      const row = rows.find((candidate) => candidate.textContent?.includes(label));
+      expect(row).toBeTruthy();
+      expect(row?.querySelector(".rank")?.textContent).not.toBe("–");
+      expect(row?.querySelector(".emission-badge")).toBeTruthy();
+    }
+  });
+
   it("defaults to the Scored tab with live counts (provisional is pre-quorum feedback)", async () => {
     renderPage();
     await waitForBoard();

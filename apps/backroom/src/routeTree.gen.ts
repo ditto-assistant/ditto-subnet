@@ -25,6 +25,7 @@ import { Route as AuthenticatedInferenceRoutingRouteImport } from './routes/_aut
 import { Route as AuthenticatedInferenceConcurrencyRouteImport } from './routes/_authenticated/inference-concurrency'
 import { Route as AuthenticatedCopyReviewRouteImport } from './routes/_authenticated/copy-review'
 import { Route as AuthenticatedContinualRetestsRouteImport } from './routes/_authenticated/continual-retests'
+import { Route as AuthenticatedConfirmationBundlesRouteImport } from './routes/_authenticated/confirmation-bundles'
 import { Route as AuthenticatedBurnRouteImport } from './routes/_authenticated/burn'
 import { Route as AuthenticatedBenchmarkRolloutRouteImport } from './routes/_authenticated/benchmark-rollout'
 import { Route as AuthenticatedArtifactReleaseRouteImport } from './routes/_authenticated/artifact-release'
@@ -121,6 +122,12 @@ const AuthenticatedContinualRetestsRoute =
     path: '/continual-retests',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedConfirmationBundlesRoute =
+  AuthenticatedConfirmationBundlesRouteImport.update({
+    id: '/confirmation-bundles',
+    path: '/confirmation-bundles',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedBurnRoute = AuthenticatedBurnRouteImport.update({
   id: '/burn',
   path: '/burn',
@@ -170,6 +177,7 @@ export interface FileRoutesByFullPath {
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/burn': typeof AuthenticatedBurnRoute
+  '/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
   '/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
@@ -194,6 +202,7 @@ export interface FileRoutesByTo {
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/burn': typeof AuthenticatedBurnRoute
+  '/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
   '/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
@@ -219,6 +228,7 @@ export interface FileRoutesById {
   '/_authenticated/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/_authenticated/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/_authenticated/burn': typeof AuthenticatedBurnRoute
+  '/_authenticated/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/_authenticated/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/_authenticated/copy-review': typeof AuthenticatedCopyReviewRoute
   '/_authenticated/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
@@ -245,6 +255,7 @@ export interface FileRouteTypes {
     | '/artifact-release'
     | '/benchmark-rollout'
     | '/burn'
+    | '/confirmation-bundles'
     | '/continual-retests'
     | '/copy-review'
     | '/inference-concurrency'
@@ -269,6 +280,7 @@ export interface FileRouteTypes {
     | '/artifact-release'
     | '/benchmark-rollout'
     | '/burn'
+    | '/confirmation-bundles'
     | '/continual-retests'
     | '/copy-review'
     | '/inference-concurrency'
@@ -293,6 +305,7 @@ export interface FileRouteTypes {
     | '/_authenticated/artifact-release'
     | '/_authenticated/benchmark-rollout'
     | '/_authenticated/burn'
+    | '/_authenticated/confirmation-bundles'
     | '/_authenticated/continual-retests'
     | '/_authenticated/copy-review'
     | '/_authenticated/inference-concurrency'
@@ -433,6 +446,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedContinualRetestsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/confirmation-bundles': {
+      id: '/_authenticated/confirmation-bundles'
+      path: '/confirmation-bundles'
+      fullPath: '/confirmation-bundles'
+      preLoaderRoute: typeof AuthenticatedConfirmationBundlesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/burn': {
       id: '/_authenticated/burn'
       path: '/burn'
@@ -511,6 +531,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedArtifactReleaseRoute: typeof AuthenticatedArtifactReleaseRoute
   AuthenticatedBenchmarkRolloutRoute: typeof AuthenticatedBenchmarkRolloutRoute
   AuthenticatedBurnRoute: typeof AuthenticatedBurnRoute
+  AuthenticatedConfirmationBundlesRoute: typeof AuthenticatedConfirmationBundlesRoute
   AuthenticatedContinualRetestsRoute: typeof AuthenticatedContinualRetestsRoute
   AuthenticatedCopyReviewRoute: typeof AuthenticatedCopyReviewRoute
   AuthenticatedInferenceConcurrencyRoute: typeof AuthenticatedInferenceConcurrencyRoute
@@ -529,6 +550,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedArtifactReleaseRoute: AuthenticatedArtifactReleaseRoute,
   AuthenticatedBenchmarkRolloutRoute: AuthenticatedBenchmarkRolloutRoute,
   AuthenticatedBurnRoute: AuthenticatedBurnRoute,
+  AuthenticatedConfirmationBundlesRoute: AuthenticatedConfirmationBundlesRoute,
   AuthenticatedContinualRetestsRoute: AuthenticatedContinualRetestsRoute,
   AuthenticatedCopyReviewRoute: AuthenticatedCopyReviewRoute,
   AuthenticatedInferenceConcurrencyRoute:

@@ -1,4 +1,22 @@
 import { z } from 'zod'
+import type { components as PlatformComponents } from '../generated/platform-api'
+
+// Every Platform response field must have an explicit Backroom validator. Making
+// optional OpenAPI properties required in this mapped shape is deliberate: it
+// catches newly-added optional fields too, which z.strictObject would otherwise
+// reject at runtime without any compile-time warning. Each validator's output
+// must also remain assignable to the generated field type.
+type PlatformResponseShape<Response extends object> = {
+  [Field in keyof Response]-?: z.ZodType<Response[Field]>
+}
+
+type GeneratedConfirmationBundleView =
+  PlatformComponents['schemas']['ConfirmationBundleView']
+type GeneratedConfirmationBundleList =
+  PlatformComponents['schemas']['AdminConfirmationBundleListResponse']
+type GeneratedSourceReviewCausalEvidence =
+  PlatformComponents['schemas']['SourceReviewCausalEvidence']
+type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 
 export const auditReasonSchema = (minimum: 3 | 8) =>
   z.string().trim().min(minimum)
@@ -1513,6 +1531,814 @@ export type InferenceConcurrencySettingsControl = z.infer<
   typeof inferenceConcurrencySettingsControlSchema
 >
 
+// Bench v9 confirmation bundles are a bounded, append-only control plane. The
+// Platform owns issuance and ranking; Backroom may only append a complete
+// settings revision, inspect signed evidence, or authorize one explicit retest.
+// Keep these response schemas strict: accepting an unmodelled evidence field in
+// an operator console makes that field effectively invisible during rollout.
+export const CONFIRMATION_BUNDLE_SCOPE = '*'
+export const CONFIRMATION_BUNDLE_RETEST_CONFIRMATION =
+  'AUTHORIZE CONFIRMATION BUNDLE RETEST'
+export const confirmationBundleModeSchema = z.enum(['off', 'shadow', 'enforce'])
+export const confirmationBundleStateSchema = z.enum([
+  'blocked_budget',
+  'pending',
+  'leased',
+  'failed',
+  'completed',
+  'superseded',
+])
+
+const confirmationSha256Schema = z.string().regex(/^[0-9a-f]{64}$/)
+const confirmationUsageCountSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+const confirmationPositiveUsageCountSchema = confirmationUsageCountSchema.min(1)
+const confirmationScoreMicrosSchema = z.number().int().min(0).max(1_000_000)
+const confirmationFactorSchema = z.union([z.literal(0), z.literal(10_000)])
+const confirmationTimestampSchema = z.string().datetime({ offset: true })
+
+export const confirmationBundleSettingsSchema = z
+  .strictObject({
+    mode: confirmationBundleModeSchema,
+    top_n: z.number().int().min(1).max(10),
+    daily_bundle_cap: z.number().int().min(0).max(1_000),
+    daily_dollar_cap_microusd: z.number().int().min(0).max(1_000_000_000),
+    per_bundle_request_cap: z.number().int().min(0).max(100_000),
+    per_bundle_token_cap: z.number().int().min(0).max(100_000_000),
+    profile_revision: z.string().min(1).max(128).nullable(),
+    profile_checksum: confirmationSha256Schema.nullable(),
+    challenger_z: z.number().min(0).max(3),
+  })
+  .superRefine((settings, context) => {
+    if ((settings.profile_revision === null) !== (settings.profile_checksum === null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'profile_revision and profile_checksum must be configured together',
+        path: ['profile_revision'],
+      })
+    }
+    if (settings.mode === 'off') return
+    for (const key of [
+      'daily_bundle_cap',
+      'daily_dollar_cap_microusd',
+      'per_bundle_request_cap',
+      'per_bundle_token_cap',
+    ] as const) {
+      if (settings[key] === 0) {
+        context.addIssue({
+          code: 'custom',
+          message: `${key} must be positive in ${settings.mode} mode`,
+          path: [key],
+        })
+      }
+    }
+    if (settings.profile_revision === null) {
+      context.addIssue({
+        code: 'custom',
+        message: 'an immutable confirmation profile is required in active modes',
+        path: ['profile_revision'],
+      })
+    }
+  })
+
+export function confirmationBundleSettingsConfirmation(
+  mode: z.infer<typeof confirmationBundleModeSchema>,
+) {
+  return `APPLY V9 CONFIRMATION MODE ${mode.toUpperCase()}`
+}
+
+export const confirmationBundleSettingsRevisionSchema = z.strictObject({
+  revision: z.number().int().positive(),
+  parent_revision: z.number().int().nonnegative(),
+  scope: z.literal(CONFIRMATION_BUNDLE_SCOPE),
+  settings: confirmationBundleSettingsSchema,
+  checksum: confirmationSha256Schema,
+  reason: z.string().min(1),
+  actor: z.string().min(1),
+  created_at: confirmationTimestampSchema,
+})
+
+export const effectiveConfirmationBundleSettingsSchema = z.strictObject({
+  revision: z.number().int().nonnegative(),
+  scope: z.literal(CONFIRMATION_BUNDLE_SCOPE),
+  settings: confirmationBundleSettingsSchema,
+  checksum: confirmationSha256Schema.nullable(),
+  source: z.enum(['default', 'revision']),
+  configured: z.boolean(),
+  issuance_active: z.boolean(),
+  max_top_n: z.literal(10),
+  max_daily_bundle_cap: z.literal(1_000),
+  max_daily_dollar_microusd: z.literal(1_000_000_000),
+  max_bundle_request_cap: z.literal(100_000),
+  max_bundle_token_cap: z.literal(100_000_000),
+})
+
+export const confirmationBundleSettingsControlSchema = z
+  .strictObject({
+    current: z.array(confirmationBundleSettingsRevisionSchema),
+    history: z.array(confirmationBundleSettingsRevisionSchema),
+    default: confirmationBundleSettingsSchema,
+    effective: effectiveConfirmationBundleSettingsSchema,
+  })
+  .superRefine((control, context) => {
+    if (control.default.mode !== 'off') {
+      context.addIssue({
+        code: 'custom',
+        message: 'the shipped confirmation default must remain off',
+        path: ['default', 'mode'],
+      })
+    }
+    const expectedConfigured =
+      control.effective.settings.profile_revision !== null &&
+      control.effective.settings.profile_checksum !== null
+    if (control.effective.configured !== expectedConfigured) {
+      context.addIssue({
+        code: 'custom',
+        message: 'configured contradicts the immutable profile identity',
+        path: ['effective', 'configured'],
+      })
+    }
+    const expectedActive =
+      control.effective.settings.mode !== 'off' && expectedConfigured
+    if (control.effective.issuance_active !== expectedActive) {
+      context.addIssue({
+        code: 'custom',
+        message: 'issuance_active contradicts the effective mode and profile',
+        path: ['effective', 'issuance_active'],
+      })
+    }
+  })
+
+export const setConfirmationBundleSettingsInputSchema = z
+  .strictObject({
+    scope: z.literal(CONFIRMATION_BUNDLE_SCOPE),
+    expectedRevision: z.number().int().nonnegative(),
+    settings: confirmationBundleSettingsSchema,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = confirmationBundleSettingsConfirmation(input.settings.mode)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+const longMemCapabilitySchema = z.enum([
+  'extraction',
+  'multi_session_reasoning',
+  'temporal_reasoning',
+  'knowledge_update',
+  'preference',
+  'abstention',
+])
+const longMemCapabilityOrder = longMemCapabilitySchema.options
+
+const longMemCapabilityScoreSchema = z
+  .strictObject({
+    capability: longMemCapabilitySchema,
+    correct: confirmationUsageCountSchema,
+    count: confirmationPositiveUsageCountSchema,
+    mean_micros: confirmationScoreMicrosSchema,
+  })
+  .superRefine((score, context) => {
+    if (score.correct > score.count) {
+      context.addIssue({ code: 'custom', message: 'correct cannot exceed count' })
+    }
+    if (score.mean_micros !== Math.round((score.correct / score.count) * 1_000_000)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'mean_micros must be derived from correct and count',
+        path: ['mean_micros'],
+      })
+    }
+  })
+
+const longMemProviderLaneSchema = z
+  .strictObject({
+    lane: z.enum(['reader', 'judge']),
+    cost_source: z.literal('provider_receipt_v1'),
+    currency: z.literal('USD'),
+    provider: z.string().min(1).max(128),
+    profile_revision: z.string().min(1).max(128),
+    model: z.string().min(1).max(256),
+    fallback_used: z.literal(false),
+    requests: confirmationPositiveUsageCountSchema,
+    successes: confirmationPositiveUsageCountSchema,
+    receipted_requests: confirmationPositiveUsageCountSchema,
+    prompt_tokens: confirmationUsageCountSchema,
+    completion_tokens: confirmationUsageCountSchema,
+    total_tokens: confirmationUsageCountSchema,
+    cost_usd_micros: confirmationUsageCountSchema,
+    receipt_set_sha256: confirmationSha256Schema,
+  })
+  .superRefine((lane, context) => {
+    if (lane.successes > lane.requests) {
+      context.addIssue({ code: 'custom', message: 'successes cannot exceed requests' })
+    }
+    if (lane.receipted_requests !== lane.requests) {
+      context.addIssue({ code: 'custom', message: 'every provider request must be receipted' })
+    }
+    if (lane.total_tokens !== lane.prompt_tokens + lane.completion_tokens) {
+      context.addIssue({
+        code: 'custom',
+        message: 'total_tokens must equal prompt_tokens plus completion_tokens',
+      })
+    }
+  })
+
+const longMemEvidenceSchema = z
+  .strictObject({
+    schema_version: z.literal(2),
+    artifact_sha256: confirmationSha256Schema,
+    bench_version: z.literal(9),
+    profile_checksum: confirmationSha256Schema,
+    case_set_digest: confirmationSha256Schema,
+    dataset_revision: z.string().min(1).max(128),
+    dataset_sha256: confirmationSha256Schema,
+    score: z.strictObject({
+      longmem_mean_micros: confirmationScoreMicrosSchema,
+      longmem_stderr_micros: confirmationScoreMicrosSchema,
+      case_count: confirmationPositiveUsageCountSchema,
+      per_capability: z.array(longMemCapabilityScoreSchema).length(6),
+    }),
+    provider_evidence: z.array(longMemProviderLaneSchema).length(2),
+  })
+  .superRefine((evidence, context) => {
+    const capabilities = evidence.score.per_capability.map((row) => row.capability)
+    if (capabilities.some((capability, index) => capability !== longMemCapabilityOrder[index])) {
+      context.addIssue({
+        code: 'custom',
+        message: 'per_capability must contain the six capabilities in canonical order',
+        path: ['score', 'per_capability'],
+      })
+    }
+    if (
+      evidence.score.per_capability.reduce((total, row) => total + row.count, 0) !==
+      evidence.score.case_count
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'case_count must equal the capability counts',
+        path: ['score', 'case_count'],
+      })
+    }
+    const lanes = evidence.provider_evidence.map((lane) => lane.lane)
+    if (lanes[0] !== 'judge' || lanes[1] !== 'reader') {
+      context.addIssue({
+        code: 'custom',
+        message: 'provider_evidence must contain judge then reader in canonical order',
+        path: ['provider_evidence'],
+      })
+    }
+  })
+
+const ablationBudgetSchema = z.strictObject({
+  max_chat_requests: confirmationUsageCountSchema,
+  max_chat_input_bytes: confirmationUsageCountSchema,
+  max_embedding_requests: confirmationUsageCountSchema,
+  max_embedding_inputs: confirmationUsageCountSchema,
+  max_embedding_input_bytes: confirmationUsageCountSchema,
+})
+
+const ablationSyntheticUsageSchema = z
+  .strictObject({
+    synthetic: z.literal(true),
+    intervention: z.enum(['inference', 'embedding']),
+    budget: ablationBudgetSchema,
+    chat_attempts: confirmationUsageCountSchema,
+    chat_applied: confirmationUsageCountSchema,
+    chat_input_bytes: confirmationUsageCountSchema,
+    embedding_attempts: confirmationUsageCountSchema,
+    embedding_applied: confirmationUsageCountSchema,
+    embedding_inputs: confirmationUsageCountSchema,
+    embedding_input_bytes: confirmationUsageCountSchema,
+    rejected_requests: confirmationUsageCountSchema,
+    budget_exhausted: z.boolean(),
+    upstream_requests: z.literal(0),
+    upstream_input_tokens: z.literal(0),
+    upstream_output_tokens: z.literal(0),
+    upstream_provider_cost_microusd: z.literal(0),
+  })
+  .superRefine((usage, context) => {
+    if (usage.chat_applied > usage.chat_attempts) {
+      context.addIssue({ code: 'custom', message: 'chat_applied cannot exceed chat_attempts' })
+    }
+    if (usage.embedding_applied > usage.embedding_attempts) {
+      context.addIssue({ code: 'custom', message: 'embedding_applied cannot exceed embedding_attempts' })
+    }
+    if ((usage.rejected_requests > 0) !== usage.budget_exhausted) {
+      context.addIssue({
+        code: 'custom',
+        message: 'budget_exhausted must agree with rejected_requests',
+      })
+    }
+    if (usage.intervention === 'inference') {
+      if (
+        usage.embedding_attempts !== 0 ||
+        usage.embedding_applied !== 0 ||
+        usage.embedding_inputs !== 0 ||
+        usage.embedding_input_bytes !== 0 ||
+        usage.chat_attempts !== usage.chat_applied + usage.rejected_requests ||
+        usage.chat_attempts > usage.budget.max_chat_requests ||
+        usage.chat_input_bytes > usage.budget.max_chat_input_bytes
+      ) {
+        context.addIssue({ code: 'custom', message: 'invalid inference synthetic accounting' })
+      }
+    } else if (
+      usage.chat_attempts !== 0 ||
+      usage.chat_applied !== 0 ||
+      usage.chat_input_bytes !== 0 ||
+      usage.embedding_attempts !== usage.embedding_applied + usage.rejected_requests ||
+      usage.embedding_attempts > usage.budget.max_embedding_requests ||
+      usage.embedding_inputs > usage.budget.max_embedding_inputs ||
+      usage.embedding_input_bytes > usage.budget.max_embedding_input_bytes
+    ) {
+      context.addIssue({ code: 'custom', message: 'invalid embedding synthetic accounting' })
+    }
+  })
+
+const ablationEvidenceSchema = z
+  .strictObject({
+    contract_version: z.string().min(1).max(128),
+    bench_version: z.literal(9),
+    artifact_sha256: confirmationSha256Schema,
+    intervention: z.enum(['inference', 'embedding']),
+    mode: z.enum(['off', 'shadow', 'enforce']),
+    status: z.enum(['not_run', 'passed', 'failed', 'unavailable']),
+    reason: z.string().min(1),
+    profile_revision: z.string().min(1).max(128),
+    profile_checksum: confirmationSha256Schema,
+    threshold_manifest_sha256: confirmationSha256Schema,
+    coordinator_sha256: confirmationSha256Schema,
+    dataset_sha256: confirmationSha256Schema,
+    case_set_sha256: confirmationSha256Schema,
+    baseline_scores_sha256: confirmationSha256Schema.nullable(),
+    ablated_scores_sha256: confirmationSha256Schema.nullable(),
+    baseline_mean_micros: confirmationScoreMicrosSchema.nullable(),
+    ablated_mean_micros: confirmationScoreMicrosSchema.nullable(),
+    delta_micros: z.number().int().min(-1_000_000).max(1_000_000).nullable(),
+    threshold_micros: confirmationScoreMicrosSchema,
+    sample_count: confirmationUsageCountSchema,
+    affected_call_count: confirmationUsageCountSchema,
+    semantic_factor_bps: confirmationFactorSchema.nullable(),
+    applied_factor_bps: confirmationFactorSchema.nullable(),
+    synthetic_usage: ablationSyntheticUsageSchema,
+  })
+  .superRefine((evidence, context) => {
+    if (evidence.intervention !== evidence.synthetic_usage.intervention) {
+      context.addIssue({ code: 'custom', message: 'synthetic intervention mismatch' })
+    }
+    const numeric = [
+      evidence.baseline_scores_sha256,
+      evidence.ablated_scores_sha256,
+      evidence.baseline_mean_micros,
+      evidence.ablated_mean_micros,
+      evidence.delta_micros,
+      evidence.semantic_factor_bps,
+      evidence.applied_factor_bps,
+    ]
+    if (evidence.status === 'passed' || evidence.status === 'failed') {
+      if (numeric.some((value) => value === null) || evidence.sample_count === 0) {
+        context.addIssue({ code: 'custom', message: 'completed ablation evidence is incomplete' })
+        return
+      }
+      const delta = evidence.baseline_mean_micros! - evidence.ablated_mean_micros!
+      const passed = delta >= evidence.threshold_micros
+      const semantic = passed ? 10_000 : 0
+      const applied = evidence.mode === 'shadow' ? 10_000 : semantic
+      if (
+        evidence.delta_micros !== delta ||
+        (evidence.status === 'passed') !== passed ||
+        evidence.semantic_factor_bps !== semantic ||
+        evidence.applied_factor_bps !== applied
+      ) {
+        context.addIssue({ code: 'custom', message: 'ablation result fields contradict one another' })
+      }
+    } else if (numeric.some((value) => value !== null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'not-run or unavailable ablation cannot carry a numeric gate',
+      })
+    }
+  })
+
+const longMemDimensionEnvelopeSchema = z.strictObject({
+  status: z.literal('completed'),
+  evidence_sha256: confirmationSha256Schema,
+  latency_ms: confirmationUsageCountSchema,
+  request_count: confirmationUsageCountSchema,
+  input_tokens: confirmationUsageCountSchema,
+  output_tokens: confirmationUsageCountSchema,
+  provider_cost_microusd: confirmationUsageCountSchema,
+  synthetic: z.literal(false),
+  evidence: longMemEvidenceSchema,
+}).superRefine((envelope, context) => {
+  const totals = envelope.evidence.provider_evidence.reduce(
+    (sum, lane) => ({
+      requests: sum.requests + lane.requests,
+      input: sum.input + lane.prompt_tokens,
+      output: sum.output + lane.completion_tokens,
+      cost: sum.cost + lane.cost_usd_micros,
+    }),
+    { requests: 0, input: 0, output: 0, cost: 0 },
+  )
+  if (
+    envelope.request_count !== totals.requests ||
+    envelope.input_tokens !== totals.input ||
+    envelope.output_tokens !== totals.output ||
+    envelope.provider_cost_microusd !== totals.cost
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: 'LongMem envelope usage must equal its provider receipt lanes',
+    })
+  }
+})
+
+const ablationDimensionEnvelopeSchema = z
+  .strictObject({
+    status: z.enum(['completed', 'not_run', 'unavailable']),
+    evidence_sha256: confirmationSha256Schema,
+    latency_ms: confirmationUsageCountSchema,
+    request_count: z.literal(0),
+    input_tokens: z.literal(0),
+    output_tokens: z.literal(0),
+    provider_cost_microusd: z.literal(0),
+    synthetic: z.literal(true),
+    evidence: ablationEvidenceSchema,
+  })
+  .superRefine((envelope, context) => {
+    const expected =
+      envelope.evidence.status === 'passed' || envelope.evidence.status === 'failed'
+        ? 'completed'
+        : envelope.evidence.status
+    if (envelope.status !== expected) {
+      context.addIssue({ code: 'custom', message: 'envelope status contradicts evidence status' })
+    }
+  })
+
+const confirmationUsageTotalsSchema = z.strictObject({
+  request_count: confirmationUsageCountSchema,
+  input_tokens: confirmationUsageCountSchema,
+  output_tokens: confirmationUsageCountSchema,
+  provider_cost_microusd: confirmationUsageCountSchema,
+  latency_ms: confirmationUsageCountSchema,
+})
+
+const confirmationCompositePolicySchema = z
+  .strictObject({
+    schema_version: z.literal(1),
+    revision: z.string().min(1).max(128),
+    formula_revision: z.literal('weighted-quality-gates-v1'),
+    base_weight_bps: z.number().int().positive().max(9_999),
+    longmem_weight_bps: z.number().int().positive().max(9_999),
+    checksum: confirmationSha256Schema,
+  })
+  .superRefine((policy, context) => {
+    if (policy.base_weight_bps + policy.longmem_weight_bps !== 10_000) {
+      context.addIssue({ code: 'custom', message: 'composite weights must sum to 10000' })
+    }
+  })
+
+const confirmationEvidenceRootSchema = z
+  .strictObject({
+    schema_version: z.literal(1),
+    artifact_sha256: confirmationSha256Schema,
+    bench_version: z.literal(9),
+    confirmation_profile_revision: z.string().min(1).max(128),
+    confirmation_profile_checksum: confirmationSha256Schema,
+    settings_revision: z.number().int().positive(),
+    settings_checksum: confirmationSha256Schema,
+    retest_generation: z.number().int().nonnegative(),
+    ablation_coordinator_latency_ms: confirmationUsageCountSchema,
+    composite_policy: confirmationCompositePolicySchema,
+    longmemeval: longMemDimensionEnvelopeSchema,
+    inference_ablation: ablationDimensionEnvelopeSchema,
+    embedding_ablation: ablationDimensionEnvelopeSchema,
+    totals: confirmationUsageTotalsSchema,
+  })
+  .superRefine((root, context) => {
+    if (
+      root.totals.request_count !== root.longmemeval.request_count ||
+      root.totals.input_tokens !== root.longmemeval.input_tokens ||
+      root.totals.output_tokens !== root.longmemeval.output_tokens ||
+      root.totals.provider_cost_microusd !== root.longmemeval.provider_cost_microusd ||
+      root.totals.latency_ms !==
+        root.longmemeval.latency_ms + root.ablation_coordinator_latency_ms
+    ) {
+      context.addIssue({ code: 'custom', message: 'root totals do not match trusted dimensions' })
+    }
+    if (
+      root.inference_ablation.evidence.coordinator_sha256 !==
+      root.embedding_ablation.evidence.coordinator_sha256
+    ) {
+      context.addIssue({ code: 'custom', message: 'ablations must share one coordinator digest' })
+    }
+  })
+
+const confirmationDimensionEvidenceSchema = z
+  .strictObject({
+    dimension: z.enum(['longmemeval', 'inference_ablation', 'embedding_ablation']),
+    status: z.enum(['completed', 'not_run', 'unavailable']),
+    evidence_sha256: confirmationSha256Schema,
+    request_count: confirmationUsageCountSchema,
+    input_tokens: confirmationUsageCountSchema,
+    output_tokens: confirmationUsageCountSchema,
+    provider_cost_microusd: confirmationUsageCountSchema,
+    latency_ms: confirmationUsageCountSchema,
+    synthetic: z.boolean(),
+    evidence: z.union([longMemEvidenceSchema, ablationEvidenceSchema]),
+    created_at: confirmationTimestampSchema,
+  })
+  .superRefine((dimension, context) => {
+    if (dimension.dimension === 'longmemeval') {
+      if (dimension.synthetic || dimension.evidence.bench_version !== 9 || !('score' in dimension.evidence)) {
+        context.addIssue({ code: 'custom', message: 'longmemeval requires non-synthetic LongMem evidence' })
+      }
+      return
+    }
+    const intervention = dimension.dimension === 'inference_ablation' ? 'inference' : 'embedding'
+    if (!dimension.synthetic || !('intervention' in dimension.evidence) || dimension.evidence.intervention !== intervention) {
+      context.addIssue({ code: 'custom', message: `${dimension.dimension} evidence mismatch` })
+    }
+  })
+
+const confirmationBundleSubjectSchema = z.strictObject({
+  agent_id: z.string().uuid(),
+  bench_version: z.literal(9),
+  artifact_sha256: confirmationSha256Schema,
+  result_status: z.enum(['base_only', 'provisional', 'full_confirmed']),
+  base_evidence_sha256: confirmationSha256Schema,
+  base_quality_micros: confirmationScoreMicrosSchema,
+  base_stderr_micros: confirmationScoreMicrosSchema,
+  base_model_factor_bps: confirmationFactorSchema,
+  base_tool_factor_bps: confirmationFactorSchema,
+  full_quality_micros: confirmationScoreMicrosSchema.nullable(),
+  full_stderr_micros: confirmationScoreMicrosSchema.nullable(),
+  semantic_factor_bps: confirmationFactorSchema.nullable(),
+  applied_factor_bps: confirmationFactorSchema.nullable(),
+  full_effective_micros: confirmationScoreMicrosSchema.nullable(),
+  bundle_id: z.string().uuid().nullable(),
+  created_at: confirmationTimestampSchema,
+  updated_at: confirmationTimestampSchema,
+})
+
+const confirmationBundleTicketSchema = z.strictObject({
+  ticket_id: z.string().uuid(),
+  validator_hotkey: z.string().min(1),
+  slot_id: z.string().min(1),
+  status: z.enum(['issued', 'scored', 'expired']),
+  attempt: z.number().int().positive(),
+  issued_at: confirmationTimestampSchema,
+  deadline: confirmationTimestampSchema,
+  failure_reason: z.string().nullable(),
+  failed_at: confirmationTimestampSchema.nullable(),
+})
+
+export const confirmationBundleViewSchema = z
+  .strictObject({
+    bundle_id: z.string().uuid(),
+    artifact_sha256: confirmationSha256Schema,
+    bench_version: z.literal(9),
+    profile_revision: z.string().min(1).max(128),
+    profile_checksum: confirmationSha256Schema,
+    retest_generation: z.number().int().nonnegative(),
+    generation_reason: z.enum(['initial', 'operator_retest', 'settings_supersession']),
+    source_bundle_id: z.string().uuid().nullable(),
+    state: confirmationBundleStateSchema,
+    settings_revision: z.number().int().positive(),
+    settings_checksum: confirmationSha256Schema,
+    qualification_status: z.enum(['qualified', 'unqualified']).nullable(),
+    completion_mode: z.enum(['shadow', 'enforce']).nullable(),
+    completion_ticket_id: z.string().uuid().nullable(),
+    evidence_sha256: confirmationSha256Schema.nullable(),
+    reporter_hotkey: z.string().min(1).nullable(),
+    bundle_signature: z.string().regex(/^[0-9a-f]{2,512}$/).nullable(),
+    evidence_root: confirmationEvidenceRootSchema.nullable(),
+    verified_at: confirmationTimestampSchema.nullable(),
+    completed_at: confirmationTimestampSchema.nullable(),
+    created_at: confirmationTimestampSchema,
+    updated_at: confirmationTimestampSchema,
+    subjects: z.array(confirmationBundleSubjectSchema),
+    dimensions: z.array(confirmationDimensionEvidenceSchema),
+    tickets: z.array(confirmationBundleTicketSchema),
+  } satisfies PlatformResponseShape<GeneratedConfirmationBundleView>)
+  .superRefine((bundle, context) => {
+    const initialGeneration = bundle.generation_reason === 'initial'
+    const validGenerationLineage = initialGeneration
+      ? bundle.retest_generation === 0 && bundle.source_bundle_id === null
+      : bundle.retest_generation > 0 && bundle.source_bundle_id !== null
+    if (!validGenerationLineage) {
+      context.addIssue({ code: 'custom', message: 'bundle generation lineage is inconsistent' })
+    }
+    const completion = [
+      bundle.qualification_status,
+      bundle.completion_mode,
+      bundle.completion_ticket_id,
+      bundle.evidence_sha256,
+      bundle.reporter_hotkey,
+      bundle.bundle_signature,
+      bundle.evidence_root,
+      bundle.verified_at,
+      bundle.completed_at,
+    ]
+    const hasCompletedEvidence = completion.every((value) => value !== null)
+    const hasNoCompletedEvidence = completion.every((value) => value === null)
+    if (!hasCompletedEvidence && !hasNoCompletedEvidence) {
+      context.addIssue({ code: 'custom', message: 'bundle completion fields are inconsistent' })
+    }
+    if (bundle.state === 'completed' && !hasCompletedEvidence) {
+      context.addIssue({ code: 'custom', message: 'completed bundle requires completion evidence' })
+    }
+    if (
+      bundle.state !== 'completed' &&
+      bundle.state !== 'superseded' &&
+      !hasNoCompletedEvidence
+    ) {
+      context.addIssue({ code: 'custom', message: 'unfinished bundle cannot publish completion evidence' })
+    }
+    if (!hasCompletedEvidence && bundle.dimensions.length > 0) {
+      context.addIssue({ code: 'custom', message: 'bundle without completion evidence cannot publish dimensions' })
+    }
+    if (bundle.evidence_root) {
+      const root = bundle.evidence_root
+      if (
+        root.artifact_sha256 !== bundle.artifact_sha256 ||
+        root.confirmation_profile_revision !== bundle.profile_revision ||
+        root.confirmation_profile_checksum !== bundle.profile_checksum ||
+        root.retest_generation !== bundle.retest_generation ||
+        root.settings_revision !== bundle.settings_revision ||
+        root.settings_checksum !== bundle.settings_checksum
+      ) {
+        context.addIssue({ code: 'custom', message: 'evidence root does not bind this bundle' })
+      }
+      if (
+        bundle.completion_mode === null ||
+        root.inference_ablation.evidence.mode !== bundle.completion_mode ||
+        root.embedding_ablation.evidence.mode !== bundle.completion_mode
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'completion_mode does not match the signed ablation evidence',
+        })
+      }
+    }
+    if (
+      bundle.completion_ticket_id !== null &&
+      !bundle.tickets.some(
+        (ticket) =>
+          ticket.ticket_id === bundle.completion_ticket_id && ticket.status === 'scored',
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'completion_ticket_id must identify a scored ticket in this bundle',
+      })
+    }
+    if (
+      bundle.completion_mode === 'shadow' &&
+      bundle.subjects.some((subject) => subject.result_status === 'full_confirmed')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'shadow completion cannot make a subject fully confirmed',
+      })
+    }
+    if (new Set(bundle.dimensions.map((row) => row.dimension)).size !== bundle.dimensions.length) {
+      context.addIssue({ code: 'custom', message: 'dimension rows must be unique' })
+    }
+    if (
+      hasCompletedEvidence &&
+      bundle.dimensions.map((row) => row.dimension).sort().join(',') !==
+        'embedding_ablation,inference_ablation,longmemeval'
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'completed bundles must publish all three dimension rows',
+      })
+    }
+  })
+
+export const confirmationShadowCalibrationSchema = z
+  .strictObject({
+    observed_from_utc_day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    observed_through_utc_day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    observation_days: z.number().int().nonnegative(),
+    confirmation_profile_revision: z.string().min(1).max(128).nullable(),
+    confirmation_profile_checksum: confirmationSha256Schema.nullable(),
+    base_run_count: z.number().int().nonnegative(),
+    measured_base_cost_microusd: z.number().int().nonnegative().nullable(),
+    confirmation_bundle_count: z.number().int().nonnegative(),
+    measured_bundle_cost_microusd: z.number().int().nonnegative().nullable(),
+    completed_bundle_count: z.number().int().nonnegative(),
+    qualified_bundle_count: z.number().int().nonnegative(),
+    promotion_rate_bps: z.number().int().min(0).max(10_000).nullable(),
+    projected_daily_spend_microusd: z.number().int().nonnegative().nullable(),
+    epoch_duration_seconds: z.number().int().positive().nullable(),
+    projected_epoch_spend_microusd: z.number().int().nonnegative().nullable(),
+    epoch_projection_unavailable_reason: z.string().min(1).nullable(),
+  })
+  .superRefine((calibration, context) => {
+    if (
+      (calibration.confirmation_profile_revision === null) !==
+      (calibration.confirmation_profile_checksum === null)
+    ) {
+      context.addIssue({ code: 'custom', message: 'confirmation profile identity must be complete' })
+    }
+    if (calibration.qualified_bundle_count > calibration.completed_bundle_count) {
+      context.addIssue({ code: 'custom', message: 'qualified count cannot exceed completed count' })
+    }
+    if ((calibration.base_run_count === 0) !== (calibration.measured_base_cost_microusd === null)) {
+      context.addIssue({ code: 'custom', message: 'base cost availability must match its sample count' })
+    }
+    if (
+      (calibration.confirmation_bundle_count === 0) !==
+      (calibration.measured_bundle_cost_microusd === null)
+    ) {
+      context.addIssue({ code: 'custom', message: 'bundle cost availability must match its sample count' })
+    }
+    if ((calibration.completed_bundle_count === 0) !== (calibration.promotion_rate_bps === null)) {
+      context.addIssue({ code: 'custom', message: 'promotion rate availability must match its sample count' })
+    }
+    const dailyAvailable = calibration.observation_days > 0
+    if (
+      dailyAvailable !== (calibration.observed_from_utc_day !== null) ||
+      dailyAvailable !== (calibration.observed_through_utc_day !== null) ||
+      dailyAvailable !== (calibration.projected_daily_spend_microusd !== null)
+    ) {
+      context.addIssue({ code: 'custom', message: 'daily projection requires a complete observation window' })
+    } else if (dailyAvailable) {
+      const from = Date.parse(`${calibration.observed_from_utc_day}T00:00:00Z`)
+      const through = Date.parse(`${calibration.observed_through_utc_day}T00:00:00Z`)
+      const inclusiveDays = Math.round((through - from) / 86_400_000) + 1
+      if (calibration.observation_days !== inclusiveDays) {
+        context.addIssue({ code: 'custom', message: 'observation days must match the UTC date window' })
+      }
+    }
+    const epochAvailable = calibration.epoch_duration_seconds !== null
+    if (
+      epochAvailable !== (calibration.projected_epoch_spend_microusd !== null) ||
+      epochAvailable === (calibration.epoch_projection_unavailable_reason !== null)
+    ) {
+      context.addIssue({ code: 'custom', message: 'epoch projection must expose exactly one availability state' })
+    }
+  })
+
+export const confirmationBundleListSchema = z
+  .strictObject({
+    items: z.array(confirmationBundleViewSchema),
+    count: z.number().int().nonnegative(),
+    budget: z.strictObject({
+      utc_day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      revision: z.number().int().nonnegative(),
+      issued_attempts: z.number().int().nonnegative(),
+      outstanding_reserved_microusd: z.number().int().nonnegative(),
+      settled_microusd: z.number().int().nonnegative(),
+    }),
+    shadow_calibration: confirmationShadowCalibrationSchema,
+  } satisfies PlatformResponseShape<GeneratedConfirmationBundleList>)
+  .superRefine((response, context) => {
+    if (response.count < response.items.length) {
+      context.addIssue({ code: 'custom', message: 'count cannot be smaller than returned bundle rows' })
+    }
+  })
+
+export const confirmationBundleListInputSchema = z.strictObject({
+  state: confirmationBundleStateSchema.optional(),
+  limit: z.number().int().min(1).max(200).default(100),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const confirmationBundleDetailInputSchema = z.strictObject({
+  bundleId: z.string().uuid(),
+})
+
+export const authorizeConfirmationBundleRetestInputSchema = z.strictObject({
+  bundleId: z.string().uuid(),
+  requestId: z.string().uuid(),
+  expectedGeneration: z.number().int().nonnegative(),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(CONFIRMATION_BUNDLE_RETEST_CONFIRMATION),
+})
+
+export const confirmationBundleRetestResponseSchema = z.strictObject({
+  authorization_id: z.string().uuid(),
+  superseded_bundle_id: z.string().uuid(),
+  bundle: confirmationBundleViewSchema,
+  replayed: z.boolean(),
+})
+
+export type ConfirmationBundleSettings = z.infer<typeof confirmationBundleSettingsSchema>
+export type ConfirmationBundleSettingsControl = z.infer<
+  typeof confirmationBundleSettingsControlSchema
+>
+export type ConfirmationBundleView = z.infer<typeof confirmationBundleViewSchema>
+export type ConfirmationBundleList = z.infer<typeof confirmationBundleListSchema>
+
 // SN118 validator slot policy.
 //
 // How many concurrent benchmark slots the platform will issue live tickets for
@@ -1841,7 +2667,7 @@ export const sourceReviewCausalEvidenceSchema = z
     authority_transition: sourceReviewAuthorityTransitionSchema,
     scorer_visible_effect: sourceReviewScorerVisibleEffectSchema,
     role_bindings: z.array(sourceReviewCausalRoleBindingSchema).min(1).max(32),
-  })
+  } satisfies PlatformResponseShape<GeneratedSourceReviewCausalEvidence>)
   .superRefine((causal, context) => {
     const bindings = causal.role_bindings.map((binding) =>
       [binding.path, binding.line, binding.category, binding.role].join('\u0000'))
@@ -1865,7 +2691,7 @@ export const sourceReviewFindingSchema = z
     evidence: z.array(sourceReviewEvidenceItemSchema).max(16).default([]),
     summary: z.string().min(1).max(240),
     causal_evidence: sourceReviewCausalEvidenceSchema.nullish(),
-  })
+  } satisfies PlatformResponseShape<GeneratedSourceReviewFinding>)
   .superRefine((finding, context) => {
     if (!finding.causal_evidence) return
     const categories = new Set(finding.categories)

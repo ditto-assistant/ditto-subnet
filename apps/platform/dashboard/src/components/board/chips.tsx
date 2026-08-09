@@ -224,6 +224,47 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
   );
 }
 
+/** Reward-authority state for Bench v9's separate confirmation composite. */
+export function V9ConfirmationChip(props: { entry: BoardEntry }): JSX.Element {
+  const status = () => props.entry.v9_confirmation_status;
+  const state = (): { label: string; class: string; tip: string } | null => {
+    switch (status()) {
+      case "full_confirmed":
+        return {
+          label: "Bench " + props.entry.bench_version + " full confirmed",
+          class: "settled",
+          tip: "Independent confirmation is complete. The verified full composite is authoritative for ranking and emissions.",
+        };
+      case "provisional":
+        return {
+          label: "Bench " + props.entry.bench_version + " confirmation pending",
+          class: "partial",
+          tip: "Confirmation evidence is in progress. This base score remains visible but is not ranked and cannot earn emissions in enforce mode.",
+        };
+      case "base_only":
+        return {
+          label: "Bench " + props.entry.bench_version + " base only",
+          class: "pending",
+          tip: "Only the ordinary base score is available. It remains unranked and cannot earn emissions until full confirmation succeeds.",
+        };
+      default:
+        return null;
+    }
+  };
+  return (
+    <Show when={state()}>
+      {(value) => (
+        <ChipTip
+          class={"rollout-chip v9-confirmation-chip tip-chip " + value().class}
+          text={value().tip}
+        >
+          {value().label}
+        </ChipTip>
+      )}
+    </Show>
+  );
+}
+
 /**
  * Mid-rollout settlement state for the row (rolloutChip, 5662–5680): the
  * agent's median on the incoming benchmark version so far and how many of

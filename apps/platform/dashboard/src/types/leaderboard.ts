@@ -119,6 +119,11 @@ export interface LeaderboardEntry {
   /** Settled leases included in average_run_cost_microusd. */
   inference_run_count?: number;
   composite: number;
+  /** Bench v9 confirmation phase. Only full_confirmed can rank in enforce mode. */
+  v9_confirmation_status?: "base_only" | "provisional" | "full_confirmed" | null;
+  /** Independently verified full v9 composite; absent before confirmation. */
+  v9_full_confirmed_composite?: number | null;
+  v9_confirmation_evidence_sha256?: string | null;
   /** Score after continual aggregation and any active efficiency fold. */
   official_composite?: number | null;
   /** Score after continual aggregation but before relative efficiency. */
@@ -216,6 +221,8 @@ export interface V9BaseEvidence {
 
 export interface LeaderboardPayload {
   entries?: LeaderboardEntry[];
+  /** Fail-closed marker from the public API; null unless confirmation is authoritative. */
+  v9_confirmation_mode?: "enforce" | null;
   available_bench_versions?: number[];
   active_bench_version?: number | null;
   desired_bench_version?: number | null;

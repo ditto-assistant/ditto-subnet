@@ -294,6 +294,43 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(read)).toEqual([])
   })
 
+  it('scopes confirmation policy and retest mutations without scoping audit reads', async () => {
+    for (const name of [
+      'set_confirmation_bundle_settings',
+      'authorize_confirmation_bundle_retest',
+    ]) {
+      const request = new Request('https://backroom.dittobench.ai/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name, arguments: {} },
+        }),
+      })
+      expect(await callsWriteTool(request)).toBe(true)
+      expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
+    }
+
+    for (const name of [
+      'get_confirmation_bundle_settings',
+      'list_confirmation_bundles',
+      'get_confirmation_bundle',
+    ]) {
+      const request = new Request('https://backroom.dittobench.ai/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name, arguments: {} },
+        }),
+      })
+      expect(await callsWriteTool(request)).toBe(false)
+      expect(await requiredScopesForRequest(request)).toEqual([])
+    }
+  })
+
   it('keeps the efficiency bonus policy read unscoped beyond backroom:read', async () => {
     const request = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',

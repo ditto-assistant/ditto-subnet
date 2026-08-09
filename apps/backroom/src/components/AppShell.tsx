@@ -7,6 +7,7 @@ import {
   CircleDollarSign,
   Copy,
   Flame,
+  FlaskConical,
   Gauge,
   Layers,
   LogOut,
@@ -55,6 +56,12 @@ const navigation = [
     label: 'Continual retests',
     description: 'Top-five wave controls',
     icon: RotateCw,
+  },
+  {
+    to: '/confirmation-bundles' as const,
+    label: 'V9 confirmation',
+    description: 'Qualification evidence & spend',
+    icon: FlaskConical,
   },
   {
     to: '/validator-slots' as const,

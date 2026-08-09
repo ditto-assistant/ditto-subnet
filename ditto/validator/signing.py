@@ -16,8 +16,11 @@ the key.
 
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -43,9 +46,19 @@ from ditto.api_models.validator_capabilities import (
     validator_identity_signing_token,
 )
 from ditto.validator.errors import ValidatorConfigError
+from ditto_screening_protocol.confirmation import canonical_json
+from ditto_screening_protocol.confirmation_wire import (
+    ConfirmationWireError,
+    completion_report_from_go_dimensions,
+)
 
 if TYPE_CHECKING:
     from ditto.api_models.validator import LedgerEntry, LedgerScoreProof
+    from ditto.api_models.validator_confirmation import (
+        V9ConfirmationJobResponse,
+        V9ConfirmationPreparedReport,
+        V9ConfirmationScorerResult,
+    )
     from ditto.validator.config import ValidatorConfig
 
 
@@ -177,6 +190,238 @@ def verify_score_proof(*, agent_id: UUID, proof: LedgerScoreProof) -> bool:
         return False
 
 
+def _confirmation_round_ratio(numerator: int, denominator: int) -> int:
+    if numerator < 0 or denominator <= 0:
+        raise ValueError("invalid confirmation score ratio")
+    quotient, remainder = divmod(numerator, denominator)
+    return quotient + int(remainder * 2 >= denominator)
+
+
+def _strict_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("confirmation evidence value is not an integer")
+    return value
+
+
+def rebuild_v9_confirmation_evidence_root(
+    job: V9ConfirmationJobResponse,
+    scorer_result: V9ConfirmationScorerResult,
+    prepared: V9ConfirmationPreparedReport,
+) -> tuple[object, str]:
+    """Independently rebuild the Platform-prepared root before signing it.
+
+    The prepare endpoint is an untrusted transport from the validator's point
+    of view.  Signing its digest directly would let a compromised Platform bind
+    this validator to arbitrary normalized evidence.  Rebuilding from the
+    signed lease identity, frozen execution profile, and the normalized typed
+    envelopes keeps the signing key authoritative for the exact evidence it
+    observed.
+    """
+    from ditto.api_models.validator import V9ConfirmationEvidenceRoot
+
+    if prepared.bundle_id != job.bundle_id or prepared.ticket_id != job.ticket_id:
+        raise ValueError("prepared confirmation identity does not match its lease")
+
+    longmem_native = scorer_result.longmemeval.model_dump(mode="json")
+    inference_native = scorer_result.inference_ablation.model_dump(mode="json")
+    embedding_native = scorer_result.embedding_ablation.model_dump(mode="json")
+    native_wire_sha256 = v9_confirmation_prepare_wire_sha256(
+        ablation_coordinator_latency_ms=(scorer_result.ablation_coordinator_latency_ms),
+        longmemeval=longmem_native,
+        inference_ablation=inference_native,
+        embedding_ablation=embedding_native,
+    )
+    if native_wire_sha256 != scorer_result.evidence_sha256:
+        raise ValueError("scorer confirmation native wire digest mismatch")
+    try:
+        normalized = completion_report_from_go_dimensions(
+            ablation_coordinator_latency_ms=(
+                scorer_result.ablation_coordinator_latency_ms
+            ),
+            longmemeval=longmem_native,
+            inference_ablation=inference_native,
+            embedding_ablation=embedding_native,
+        )
+    except ConfirmationWireError as error:
+        raise ValueError("scorer confirmation native evidence is invalid") from error
+
+    latency = _strict_int(scorer_result.ablation_coordinator_latency_ms)
+    if (
+        prepared.ablation_coordinator_latency_ms != latency
+        or prepared.longmemeval != normalized.longmemeval
+        or prepared.inference_ablation != normalized.inference_ablation
+        or prepared.embedding_ablation != normalized.embedding_ablation
+    ):
+        raise ValueError(
+            "Platform-prepared confirmation envelopes do not match native evidence"
+        )
+    longmem = normalized.longmemeval
+    inference = normalized.inference_ablation
+    embedding = normalized.embedding_ablation
+    totals = {
+        "request_count": _strict_int(longmem.request_count),
+        "input_tokens": _strict_int(longmem.input_tokens),
+        "output_tokens": _strict_int(longmem.output_tokens),
+        "provider_cost_microusd": _strict_int(longmem.provider_cost_microusd),
+        "latency_ms": _strict_int(longmem.latency_ms) + latency,
+    }
+    root = V9ConfirmationEvidenceRoot.model_validate(
+        {
+            "schema_version": 1,
+            "artifact_sha256": job.artifact_sha256,
+            "bench_version": 9,
+            "confirmation_profile_revision": job.execution_profile.revision,
+            "confirmation_profile_checksum": job.execution_profile.checksum,
+            "settings_revision": job.settings_revision,
+            "settings_checksum": job.settings_checksum,
+            "retest_generation": job.retest_generation,
+            "ablation_coordinator_latency_ms": latency,
+            "composite_policy": job.execution_profile.composite.model_dump(mode="json"),
+            "longmemeval": longmem,
+            "inference_ablation": inference,
+            "embedding_ablation": embedding,
+            "totals": totals,
+        }
+    )
+    digest = hashlib.sha256(canonical_json(root)).hexdigest()
+    if digest != prepared.evidence_sha256:
+        raise ValueError("Platform-prepared confirmation evidence digest mismatch")
+    return root, digest
+
+
+def verify_v9_confirmation_receipt(entry: LedgerEntry) -> bool:
+    """Verify and replay the separate full v9 confirmation receipt.
+
+    The ordinary score quorum proves the base root.  The bundle signature proves
+    the shared confirmation evidence plus its exact composite policy.  This
+    function joins those two roots and recomputes quality, gates, uncertainty,
+    and the effective score without trusting Platform-carried derived scalars.
+    """
+
+    receipt = getattr(entry, "v9_confirmation", None)
+    if entry.bench_version != 9 or receipt is None:
+        return False
+    try:
+        root = receipt.evidence_root
+        root_payload = root.model_dump(mode="json")
+        evidence_sha256 = hashlib.sha256(
+            json.dumps(root_payload, ensure_ascii=False, separators=(",", ":")).encode()
+        ).hexdigest()
+        if evidence_sha256 != receipt.evidence_sha256:
+            return False
+        if root.artifact_sha256 != entry.sha256:
+            return False
+        message = v9_confirmation_bundle_signing_message(
+            reporter_hotkey=receipt.reporter_hotkey,
+            bundle_id=receipt.bundle_id,
+            ticket_id=receipt.ticket_id,
+            deadline=receipt.ticket_deadline,
+            artifact_sha256=root.artifact_sha256,
+            profile_revision=root.confirmation_profile_revision,
+            profile_checksum=root.confirmation_profile_checksum,
+            settings_revision=root.settings_revision,
+            settings_checksum=root.settings_checksum,
+            retest_generation=root.retest_generation,
+            evidence_sha256=receipt.evidence_sha256,
+        )
+        import bittensor
+
+        verifier = bittensor.Keypair(ss58_address=receipt.reporter_hotkey)
+        if not verifier.verify(message, bytes.fromhex(receipt.bundle_signature)):
+            return False
+
+        policy = root.composite_policy
+        policy_payload = {
+            "schema_version": policy.schema_version,
+            "revision": policy.revision,
+            "formula_revision": policy.formula_revision,
+            "base_weight_bps": policy.base_weight_bps,
+            "longmem_weight_bps": policy.longmem_weight_bps,
+        }
+        policy_checksum = hashlib.sha256(
+            json.dumps(
+                policy_payload, ensure_ascii=False, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        if policy_checksum != policy.checksum:
+            return False
+
+        proofs = sorted(
+            entry.score_proofs,
+            key=lambda proof: (proof.composite, proof.validator_hotkey),
+        )
+        base_proof = proofs[(len(proofs) - 1) // 2]
+        base = base_proof.base_evidence
+        if base is None:
+            return False
+        if (
+            base_proof.base_evidence_sha256 != receipt.base_evidence_sha256
+            or base.artifact_sha256 != root.artifact_sha256
+            or base.ordinary_composite_micros != receipt.base_quality_micros
+            or base.ordinary_stderr_micros != receipt.base_stderr_micros
+            or base.score_gates.model_use.factor_bps != receipt.base_model_factor_bps
+            or base.score_gates.authoritative_tool.factor_bps
+            != receipt.base_tool_factor_bps
+        ):
+            return False
+
+        if root.longmemeval.status != "completed":
+            return False
+        longmem_score = root.longmemeval.evidence.score
+        longmem_mean = _strict_int(longmem_score.longmem_mean_micros)
+        longmem_stderr = _strict_int(longmem_score.longmem_stderr_micros)
+        factors = [receipt.base_model_factor_bps, receipt.base_tool_factor_bps]
+        for envelope in (root.inference_ablation, root.embedding_ablation):
+            if envelope.status != "completed":
+                return False
+            evidence = envelope.evidence
+            if evidence.mode != "enforce":
+                return False
+            semantic = _strict_int(evidence.semantic_factor_bps)
+            applied = _strict_int(evidence.applied_factor_bps)
+            if semantic not in {0, 10_000} or applied != semantic:
+                return False
+            factors.append(semantic)
+        semantic_factor = 0 if 0 in factors else 10_000
+        quality = _confirmation_round_ratio(
+            policy.base_weight_bps * receipt.base_quality_micros
+            + policy.longmem_weight_bps * longmem_mean,
+            10_000,
+        )
+        with localcontext() as context:
+            context.prec = 50
+            base_component = (
+                Decimal(policy.base_weight_bps)
+                * Decimal(receipt.base_stderr_micros)
+                / Decimal(10_000)
+            )
+            longmem_component = (
+                Decimal(policy.longmem_weight_bps)
+                * Decimal(longmem_stderr)
+                / Decimal(10_000)
+            )
+            stderr = int(
+                (base_component**2 + longmem_component**2)
+                .sqrt()
+                .quantize(Decimal(1), rounding=ROUND_HALF_UP)
+            )
+        effective = _confirmation_round_ratio(quality * semantic_factor, 10_000)
+        effective_stderr = _confirmation_round_ratio(stderr * semantic_factor, 10_000)
+        return (
+            receipt.mode == "enforce"
+            and receipt.result_status == "full_confirmed"
+            and receipt.qualification_status == "qualified"
+            and receipt.semantic_factor_bps == semantic_factor
+            and receipt.applied_factor_bps == semantic_factor
+            and receipt.full_quality_micros == quality
+            and receipt.full_stderr_micros == effective_stderr
+            and receipt.full_effective_micros == effective
+            and entry.composite_stderr == effective_stderr / 1_000_000
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
     """Verify the quorum receipts and platform-selected lower median.
 
@@ -204,7 +449,7 @@ def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
 
     ordered = sorted(proofs, key=lambda p: (p.composite, p.validator_hotkey))
     median = ordered[(len(ordered) - 1) // 2]
-    return (
+    ordinary_valid = (
         median.composite == entry.composite
         and median.validator_hotkey == entry.validator_hotkey
         and median.run_id == entry.run_id
@@ -212,6 +457,23 @@ def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
         and median.bench_version == entry.bench_version
         and median.signature == entry.signature
     )
+    if not ordinary_valid:
+        return False
+    if entry.bench_version == 9 and entry.v9_confirmation is not None:
+        # The v9 receipt replaces every legacy continual-score projection. A
+        # Platform must not be able to attach unsigned paired evidence and make
+        # the KOTH fold bypass the verified full-confirmed composite.
+        if any(
+            getattr(entry, field, None)
+            for field in (
+                "confirmation_history",
+                "confirmation_seeds",
+                "confirmation_composites",
+            )
+        ):
+            return False
+        return verify_v9_confirmation_receipt(entry)
+    return entry.v9_confirmation is None
 
 
 def job_signing_message(
@@ -248,6 +510,287 @@ def sign_job_request(
         )
     )
     return signature.hex()
+
+
+def v9_confirmation_claim_signing_message(
+    *,
+    validator_hotkey: str,
+    slot_id: str,
+    profile_revision: str,
+    profile_checksum: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    """Bind one internal claim to a slot and exact frozen profile."""
+    if requested_at.tzinfo is None:
+        raise ValueError("confirmation claim timestamp must include a timezone")
+    requested = (
+        requested_at.astimezone(UTC)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+    return (
+        "validator-v9-confirmation-claim:v1:"
+        f"{validator_hotkey}:{slot_id}:{profile_revision}:{profile_checksum}:"
+        f"{nonce}:{requested}"
+    ).encode()
+
+
+def sign_v9_confirmation_claim(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    slot_id: str,
+    profile_revision: str,
+    profile_checksum: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    return keypair.sign(
+        v9_confirmation_claim_signing_message(
+            validator_hotkey=validator_hotkey,
+            slot_id=slot_id,
+            profile_revision=profile_revision,
+            profile_checksum=profile_checksum,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    ).hex()
+
+
+def v9_confirmation_artifact_signing_message(
+    *,
+    validator_hotkey: str,
+    bundle_id: UUID,
+    ticket_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    if requested_at.tzinfo is None:
+        raise ValueError("confirmation artifact timestamp must include a timezone")
+    requested = (
+        requested_at.astimezone(UTC)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+    return (
+        "validator-v9-confirmation-artifact:v1:"
+        f"{validator_hotkey}:{bundle_id}:{ticket_id}:{nonce}:{requested}"
+    ).encode()
+
+
+def sign_v9_confirmation_artifact_request(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    bundle_id: UUID,
+    ticket_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    return keypair.sign(
+        v9_confirmation_artifact_signing_message(
+            validator_hotkey=validator_hotkey,
+            bundle_id=bundle_id,
+            ticket_id=ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    ).hex()
+
+
+def v9_confirmation_prepare_wire_sha256(
+    *,
+    ablation_coordinator_latency_ms: int,
+    longmemeval: Mapping[str, object],
+    inference_ablation: Mapping[str, object],
+    embedding_ablation: Mapping[str, object],
+) -> str:
+    """Bind producer digests and measured latency without JSON float drift."""
+    if (
+        isinstance(ablation_coordinator_latency_ms, bool)
+        or not isinstance(ablation_coordinator_latency_ms, int)
+        or ablation_coordinator_latency_ms < 0
+    ):
+        raise ValueError("confirmation coordinator latency must be non-negative")
+
+    def terms(name: str, dimension: Mapping[str, object]) -> str:
+        digest = dimension.get("go_evidence_sha256")
+        latency = dimension.get("latency_ms")
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or digest != digest.lower()
+            or isinstance(latency, bool)
+            or not isinstance(latency, int)
+            or latency < 0
+        ):
+            raise ValueError(f"confirmation {name} native identity is invalid")
+        try:
+            bytes.fromhex(digest)
+        except ValueError as error:
+            raise ValueError(f"confirmation {name} native digest is invalid") from error
+        return f"{digest}:{latency}"
+
+    encoded = (
+        "validator-v9-confirmation-native-wire:v1:"
+        f"{ablation_coordinator_latency_ms}:"
+        f"{terms('longmemeval', longmemeval)}:"
+        f"{terms('inference', inference_ablation)}:"
+        f"{terms('embedding', embedding_ablation)}"
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def v9_confirmation_prepare_signing_message(
+    *,
+    validator_hotkey: str,
+    bundle_id: UUID,
+    ticket_id: UUID,
+    wire_sha256: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    if requested_at.tzinfo is None:
+        raise ValueError("confirmation prepare timestamp must include a timezone")
+    requested = (
+        requested_at.astimezone(UTC)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+    return (
+        "validator-v9-confirmation-prepare:v1:"
+        f"{validator_hotkey}:{bundle_id}:{ticket_id}:{wire_sha256}:"
+        f"{nonce}:{requested}"
+    ).encode()
+
+
+def sign_v9_confirmation_prepare(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    bundle_id: UUID,
+    ticket_id: UUID,
+    wire_sha256: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    return keypair.sign(
+        v9_confirmation_prepare_signing_message(
+            validator_hotkey=validator_hotkey,
+            bundle_id=bundle_id,
+            ticket_id=ticket_id,
+            wire_sha256=wire_sha256,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    ).hex()
+
+
+def v9_confirmation_fail_signing_message(
+    *,
+    validator_hotkey: str,
+    bundle_id: UUID,
+    ticket_id: UUID,
+    reason: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    if requested_at.tzinfo is None:
+        raise ValueError("confirmation failure timestamp must include a timezone")
+    requested = (
+        requested_at.astimezone(UTC)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+    return (
+        "validator-v9-confirmation-fail:v1:"
+        f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:{nonce}:{requested}"
+    ).encode()
+
+
+def sign_v9_confirmation_fail(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    bundle_id: UUID,
+    ticket_id: UUID,
+    reason: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    return keypair.sign(
+        v9_confirmation_fail_signing_message(
+            validator_hotkey=validator_hotkey,
+            bundle_id=bundle_id,
+            ticket_id=ticket_id,
+            reason=reason,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    ).hex()
+
+
+def v9_confirmation_bundle_signing_message(
+    *,
+    reporter_hotkey: str,
+    bundle_id: UUID,
+    ticket_id: UUID,
+    deadline: datetime,
+    artifact_sha256: str,
+    profile_revision: str,
+    profile_checksum: str,
+    settings_revision: int,
+    settings_checksum: str,
+    retest_generation: int,
+    evidence_sha256: str,
+) -> bytes:
+    if deadline.tzinfo is None:
+        raise ValueError("confirmation ticket deadline must include a timezone")
+    rendered_deadline = (
+        deadline.astimezone(UTC)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+    return (
+        "validator-v9-confirmation:v1:"
+        f"{reporter_hotkey}:{bundle_id}:{ticket_id}:{rendered_deadline}:"
+        f"{artifact_sha256}:9:{profile_revision}:{profile_checksum}:"
+        f"{settings_revision}:{settings_checksum}:{retest_generation}:"
+        f"{evidence_sha256}"
+    ).encode()
+
+
+def sign_v9_confirmation_bundle(
+    keypair: Any,
+    *,
+    reporter_hotkey: str,
+    bundle_id: UUID,
+    ticket_id: UUID,
+    deadline: datetime,
+    artifact_sha256: str,
+    profile_revision: str,
+    profile_checksum: str,
+    settings_revision: int,
+    settings_checksum: str,
+    retest_generation: int,
+    evidence_sha256: str,
+) -> str:
+    return keypair.sign(
+        v9_confirmation_bundle_signing_message(
+            reporter_hotkey=reporter_hotkey,
+            bundle_id=bundle_id,
+            ticket_id=ticket_id,
+            deadline=deadline,
+            artifact_sha256=artifact_sha256,
+            profile_revision=profile_revision,
+            profile_checksum=profile_checksum,
+            settings_revision=settings_revision,
+            settings_checksum=settings_checksum,
+            retest_generation=retest_generation,
+            evidence_sha256=evidence_sha256,
+        )
+    ).hex()
 
 
 def inference_exchange_signing_message(

@@ -196,6 +196,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/confirmation-bundle-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Confirmation Bundle Settings */
+        get: operations["get_confirmation_bundle_settings_api_v1_admin_confirmation_bundle_settings_get"];
+        put?: never;
+        /** Create Confirmation Bundle Settings Revision */
+        post: operations["create_confirmation_bundle_settings_revision_api_v1_admin_confirmation_bundle_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/confirmation-bundles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Confirmation Bundles */
+        get: operations["get_confirmation_bundles_api_v1_admin_confirmation_bundles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/confirmation-bundles/{bundle_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Confirmation Bundle */
+        get: operations["get_confirmation_bundle_api_v1_admin_confirmation_bundles__bundle_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/confirmation-bundles/{bundle_id}/authorize-retest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Authorize Confirmation Retest */
+        post: operations["authorize_confirmation_retest_api_v1_admin_confirmation_bundles__bundle_id__authorize_retest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/continual-retest-settings": {
         parameters: {
             query?: never;
@@ -3133,10 +3202,285 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/v9-confirmation/bundle/{bundle_id}/artifact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get V9 Confirmation Artifact
+         * @description Fetch source only for the exact live internal confirmation ticket.
+         */
+        get: operations["get_v9_confirmation_artifact_api_v1_validator_v9_confirmation_bundle__bundle_id__artifact_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/v9-confirmation/bundle/{bundle_id}/fail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fail V9 Confirmation Job
+         * @description Hand back failed work and settle unknown partial spend pessimistically.
+         */
+        post: operations["fail_v9_confirmation_job_api_v1_validator_v9_confirmation_bundle__bundle_id__fail_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/v9-confirmation/bundle/{bundle_id}/prepare-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare V9 Confirmation Report
+         * @description Normalize native Go evidence and rebuild the root without persisting it.
+         *
+         *     This phase grants no authority. The validator must sign the returned root
+         *     digest and submit the exact typed dimensions to the final endpoint, which
+         *     independently rebuilds everything again inside the settlement transaction.
+         */
+        post: operations["prepare_v9_confirmation_report_api_v1_validator_v9_confirmation_bundle__bundle_id__prepare_report_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/v9-confirmation/bundle/{bundle_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit V9 Confirmation Report
+         * @description Settle server-derived cost and complete one signed bundle atomically.
+         */
+        post: operations["submit_v9_confirmation_report_api_v1_validator_v9_confirmation_bundle__bundle_id__report_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/v9-confirmation/job": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request V9 Confirmation Job
+         * @description Claim one artifact/profile-deduplicated internal confirmation bundle.
+         */
+        post: operations["request_v9_confirmation_job_api_v1_validator_v9_confirmation_job_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AblationBudget */
+        AblationBudget: {
+            /** Max Chat Input Bytes */
+            max_chat_input_bytes: number;
+            /** Max Chat Requests */
+            max_chat_requests: number;
+            /** Max Embedding Input Bytes */
+            max_embedding_input_bytes: number;
+            /** Max Embedding Inputs */
+            max_embedding_inputs: number;
+            /** Max Embedding Requests */
+            max_embedding_requests: number;
+        };
+        /** AblationDimensionEnvelope */
+        AblationDimensionEnvelope: {
+            evidence: components["schemas"]["AblationEvidence"];
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /**
+             * Input Tokens
+             * @constant
+             */
+            input_tokens: 0;
+            /** Latency Ms */
+            latency_ms: number;
+            /**
+             * Output Tokens
+             * @constant
+             */
+            output_tokens: 0;
+            /**
+             * Provider Cost Microusd
+             * @constant
+             */
+            provider_cost_microusd: 0;
+            /**
+             * Request Count
+             * @constant
+             */
+            request_count: 0;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "not_run" | "unavailable";
+            /**
+             * Synthetic
+             * @constant
+             */
+            synthetic: true;
+        };
+        /**
+         * AblationEvidence
+         * @description One binary semantic gate; it is never a weighted score dimension.
+         */
+        AblationEvidence: {
+            /** Ablated Mean Micros */
+            ablated_mean_micros: number | null;
+            /** Ablated Scores Sha256 */
+            ablated_scores_sha256: string | null;
+            /** Affected Call Count */
+            affected_call_count: number;
+            /** Applied Factor Bps */
+            applied_factor_bps: number | null;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Baseline Mean Micros */
+            baseline_mean_micros: number | null;
+            /** Baseline Scores Sha256 */
+            baseline_scores_sha256: string | null;
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 9;
+            /** Case Set Sha256 */
+            case_set_sha256: string;
+            /** Contract Version */
+            contract_version: string;
+            /** Coordinator Sha256 */
+            coordinator_sha256: string;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /** Delta Micros */
+            delta_micros: number | null;
+            /**
+             * Intervention
+             * @enum {string}
+             */
+            intervention: "inference" | "embedding";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Profile Checksum */
+            profile_checksum: string;
+            /** Profile Revision */
+            profile_revision: string;
+            /** Reason */
+            reason: string;
+            /** Sample Count */
+            sample_count: number;
+            /** Semantic Factor Bps */
+            semantic_factor_bps: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_run" | "passed" | "failed" | "unavailable";
+            synthetic_usage: components["schemas"]["AblationSyntheticUsage"];
+            /** Threshold Manifest Sha256 */
+            threshold_manifest_sha256: string;
+            /** Threshold Micros */
+            threshold_micros: number;
+        };
+        /**
+         * AblationSyntheticUsage
+         * @description Provider-free intervention accounting; upstream use is always zero.
+         */
+        AblationSyntheticUsage: {
+            budget: components["schemas"]["AblationBudget"];
+            /** Budget Exhausted */
+            budget_exhausted: boolean;
+            /** Chat Applied */
+            chat_applied: number;
+            /** Chat Attempts */
+            chat_attempts: number;
+            /** Chat Input Bytes */
+            chat_input_bytes: number;
+            /** Embedding Applied */
+            embedding_applied: number;
+            /** Embedding Attempts */
+            embedding_attempts: number;
+            /** Embedding Input Bytes */
+            embedding_input_bytes: number;
+            /** Embedding Inputs */
+            embedding_inputs: number;
+            /**
+             * Intervention
+             * @enum {string}
+             */
+            intervention: "inference" | "embedding";
+            /** Rejected Requests */
+            rejected_requests: number;
+            /**
+             * Synthetic
+             * @constant
+             */
+            synthetic: true;
+            /**
+             * Upstream Input Tokens
+             * @constant
+             */
+            upstream_input_tokens: 0;
+            /**
+             * Upstream Output Tokens
+             * @constant
+             */
+            upstream_output_tokens: 0;
+            /**
+             * Upstream Provider Cost Microusd
+             * @constant
+             */
+            upstream_provider_cost_microusd: 0;
+            /**
+             * Upstream Requests
+             * @constant
+             */
+            upstream_requests: 0;
+        };
         /**
          * ActiveBenchmarkSlot
          * @description One active, ticket-bound benchmark execution slot.
@@ -3631,6 +3975,79 @@ export interface components {
             effective: components["schemas"]["EffectiveBurnSettings"];
             /** History */
             history: components["schemas"]["BurnSettingsRevision"][];
+        };
+        /** AdminConfirmationBundleListResponse */
+        AdminConfirmationBundleListResponse: {
+            budget: components["schemas"]["ConfirmationDailyBudgetView"];
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["ConfirmationBundleView"][];
+            shadow_calibration: components["schemas"]["ConfirmationShadowCalibrationView"];
+        };
+        /** AdminConfirmationBundleRetestRequest */
+        AdminConfirmationBundleRetestRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Generation */
+            expected_generation: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+        };
+        /** AdminConfirmationBundleRetestResponse */
+        AdminConfirmationBundleRetestResponse: {
+            /**
+             * Authorization Id
+             * Format: uuid
+             */
+            authorization_id: string;
+            bundle: components["schemas"]["ConfirmationBundleView"];
+            /** Replayed */
+            replayed: boolean;
+            /**
+             * Superseded Bundle Id
+             * Format: uuid
+             */
+            superseded_bundle_id: string;
+        };
+        /** AdminConfirmationBundleSettingsRequest */
+        AdminConfirmationBundleSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["ConfirmationBundleSettings"];
+        };
+        /** AdminConfirmationBundleSettingsResponse */
+        AdminConfirmationBundleSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["ConfirmationBundleSettingsRevision"][];
+            default: components["schemas"]["ConfirmationBundleSettings"];
+            effective: components["schemas"]["EffectiveConfirmationBundleSettings"];
+            /** History */
+            history: components["schemas"]["ConfirmationBundleSettingsRevision"][];
         };
         /** AdminContinualRetestSettingsRequest */
         AdminContinualRetestSettingsRequest: {
@@ -6986,6 +7403,327 @@ export interface components {
              */
             v: number;
         };
+        /** ConfirmationAblationCoordinatorProfile */
+        ConfirmationAblationCoordinatorProfile: {
+            /** Max Attempts */
+            max_attempts: number;
+            /** Max Requests */
+            max_requests: number;
+            /** Request Timeout Milliseconds */
+            request_timeout_milliseconds: number;
+            /** Sample Size */
+            sample_size: number;
+            /** Total Timeout Milliseconds */
+            total_timeout_milliseconds: number;
+        };
+        /** ConfirmationAblationProfile */
+        ConfirmationAblationProfile: {
+            budget: components["schemas"]["AblationBudget"];
+            /** Contract Version */
+            contract_version: string;
+            /**
+             * Intervention
+             * @enum {string}
+             */
+            intervention: "inference" | "embedding";
+            /** Threshold Micros */
+            threshold_micros: number;
+        };
+        /**
+         * ConfirmationBundleMode
+         * @description Whether bundle issuance is disabled, measured, or ranking-authoritative.
+         * @enum {string}
+         */
+        ConfirmationBundleMode: "off" | "shadow" | "enforce";
+        /**
+         * ConfirmationBundleSettings
+         * @description Complete audited policy for issuing one bounded confirmation bundle.
+         *
+         *     The shipped default is intentionally unconfigured and off.  No profile or
+         *     checksum is guessed in source.  Shadow/enforce revisions must provide every
+         *     cap and a frozen profile identity before the API accepts them.
+         */
+        ConfirmationBundleSettings: {
+            /**
+             * Challenger Z
+             * @default 1.64
+             */
+            challenger_z: number;
+            /**
+             * Daily Bundle Cap
+             * @default 0
+             */
+            daily_bundle_cap: number;
+            /**
+             * Daily Dollar Cap Microusd
+             * @default 0
+             */
+            daily_dollar_cap_microusd: number;
+            /** @default off */
+            mode: components["schemas"]["ConfirmationBundleMode"];
+            /**
+             * Per Bundle Request Cap
+             * @default 0
+             */
+            per_bundle_request_cap: number;
+            /**
+             * Per Bundle Token Cap
+             * @default 0
+             */
+            per_bundle_token_cap: number;
+            /** Profile Checksum */
+            profile_checksum?: string | null;
+            /** Profile Revision */
+            profile_revision?: string | null;
+            /**
+             * Top N
+             * @default 5
+             */
+            top_n: number;
+        };
+        /** ConfirmationBundleSettingsRevision */
+        ConfirmationBundleSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["ConfirmationBundleSettings"];
+        };
+        /**
+         * ConfirmationBundleState
+         * @description Durable evidence lifecycle, separate from ordinary validator tickets.
+         * @enum {string}
+         */
+        ConfirmationBundleState: "blocked_budget" | "pending" | "leased" | "failed" | "completed" | "superseded";
+        /** ConfirmationBundleSubjectView */
+        ConfirmationBundleSubjectView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Applied Factor Bps */
+            applied_factor_bps: number | null;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Base Evidence Sha256 */
+            base_evidence_sha256: string;
+            /** Base Model Factor Bps */
+            base_model_factor_bps: number;
+            /** Base Quality Micros */
+            base_quality_micros: number;
+            /** Base Stderr Micros */
+            base_stderr_micros: number;
+            /** Base Tool Factor Bps */
+            base_tool_factor_bps: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Bundle Id */
+            bundle_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Full Effective Micros */
+            full_effective_micros: number | null;
+            /** Full Quality Micros */
+            full_quality_micros: number | null;
+            /** Full Stderr Micros */
+            full_stderr_micros: number | null;
+            result_status: components["schemas"]["ConfirmationResultStatus"];
+            /** Semantic Factor Bps */
+            semantic_factor_bps: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ConfirmationBundleTicketView */
+        ConfirmationBundleTicketView: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Failed At */
+            failed_at: string | null;
+            /** Failure Reason */
+            failure_reason: string | null;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Slot Id */
+            slot_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "issued" | "scored" | "expired";
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** ConfirmationBundleView */
+        ConfirmationBundleView: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Bundle Id
+             * Format: uuid
+             */
+            bundle_id: string;
+            /** Bundle Signature */
+            bundle_signature: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            completion_mode: components["schemas"]["ConfirmationBundleMode"] | null;
+            /** Completion Ticket Id */
+            completion_ticket_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Dimensions */
+            dimensions?: components["schemas"]["ConfirmationDimensionEvidenceView"][];
+            evidence_root: components["schemas"]["ConfirmationEvidenceRoot"] | null;
+            /** Evidence Sha256 */
+            evidence_sha256: string | null;
+            /**
+             * Generation Reason
+             * @enum {string}
+             */
+            generation_reason: "initial" | "operator_retest" | "settings_supersession";
+            /** Profile Checksum */
+            profile_checksum: string;
+            /** Profile Revision */
+            profile_revision: string;
+            /** Qualification Status */
+            qualification_status: ("qualified" | "unqualified") | null;
+            /** Reporter Hotkey */
+            reporter_hotkey: string | null;
+            /** Retest Generation */
+            retest_generation: number;
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Source Bundle Id */
+            source_bundle_id: string | null;
+            state: components["schemas"]["ConfirmationBundleState"];
+            /** Subjects */
+            subjects?: components["schemas"]["ConfirmationBundleSubjectView"][];
+            /** Tickets */
+            tickets?: components["schemas"]["ConfirmationBundleTicketView"][];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Verified At */
+            verified_at: string | null;
+        };
+        /**
+         * ConfirmationCompletionReport
+         * @description Raw typed evidence plus exactly one signature over the rebuilt root.
+         */
+        ConfirmationCompletionReport: {
+            /** Ablation Coordinator Latency Ms */
+            ablation_coordinator_latency_ms: number;
+            /** Bundle Signature */
+            bundle_signature: string;
+            embedding_ablation: components["schemas"]["AblationDimensionEnvelope"];
+            inference_ablation: components["schemas"]["AblationDimensionEnvelope"];
+            longmemeval: components["schemas"]["LongMemDimensionEnvelope"];
+        };
+        /**
+         * ConfirmationCompositePolicy
+         * @description Frozen arithmetic bound into the signed confirmation evidence root.
+         *
+         *     The outer confirmation-profile checksum commits to this policy, but a
+         *     ledger consumer cannot independently recover the policy from that digest.
+         *     Carrying the exact policy in the signed root lets validators recompute a
+         *     subject's full composite without trusting a Platform-projected scalar.
+         */
+        ConfirmationCompositePolicy: {
+            /** Base Weight Bps */
+            base_weight_bps: number;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Formula Revision
+             * @constant
+             */
+            formula_revision: "weighted-quality-gates-v1";
+            /** Longmem Weight Bps */
+            longmem_weight_bps: number;
+            /** Revision */
+            revision: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /** ConfirmationCompositeProfile */
+        ConfirmationCompositeProfile: {
+            /** Base Weight Bps */
+            base_weight_bps: number;
+            /** Checksum */
+            checksum: string;
+            /** Formula Revision */
+            formula_revision: string;
+            /** Longmem Weight Bps */
+            longmem_weight_bps: number;
+            /** Revision */
+            revision: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /** ConfirmationDailyBudgetView */
+        ConfirmationDailyBudgetView: {
+            /** Issued Attempts */
+            issued_attempts: number;
+            /** Outstanding Reserved Microusd */
+            outstanding_reserved_microusd: number;
+            /** Revision */
+            revision: number;
+            /** Settled Microusd */
+            settled_microusd: number;
+            /**
+             * Utc Day
+             * Format: date
+             */
+            utc_day: string;
+        };
         /**
          * ConfirmationDatasetPin
          * @description One platform-generated dataset used by a continual confirmation lease.
@@ -6998,6 +7736,157 @@ export interface components {
             /** Seed */
             seed: number;
         };
+        /**
+         * ConfirmationDimension
+         * @enum {string}
+         */
+        ConfirmationDimension: "longmemeval" | "inference_ablation" | "embedding_ablation";
+        /** ConfirmationDimensionEvidenceView */
+        ConfirmationDimensionEvidenceView: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            dimension: components["schemas"]["ConfirmationDimension"];
+            /** Evidence */
+            evidence: components["schemas"]["LongMemEvidence"] | components["schemas"]["AblationEvidence"];
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Latency Ms */
+            latency_ms: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Provider Cost Microusd */
+            provider_cost_microusd: number;
+            /** Request Count */
+            request_count: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "not_run" | "unavailable";
+            /** Synthetic */
+            synthetic: boolean;
+        };
+        /**
+         * ConfirmationEvidenceRoot
+         * @description Server-rebuilt shared bundle evidence; never owns subject quality.
+         */
+        ConfirmationEvidenceRoot: {
+            /** Ablation Coordinator Latency Ms */
+            ablation_coordinator_latency_ms: number;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 9;
+            composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
+            /** Confirmation Profile Checksum */
+            confirmation_profile_checksum: string;
+            /** Confirmation Profile Revision */
+            confirmation_profile_revision: string;
+            embedding_ablation: components["schemas"]["AblationDimensionEnvelope"];
+            inference_ablation: components["schemas"]["AblationDimensionEnvelope"];
+            longmemeval: components["schemas"]["LongMemDimensionEnvelope"];
+            /** Retest Generation */
+            retest_generation: number;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
+            totals: components["schemas"]["ConfirmationUsageTotals"];
+        };
+        /**
+         * ConfirmationExecutionProfile
+         * @description Complete non-secret profile needed by the trusted local executor.
+         */
+        ConfirmationExecutionProfile: {
+            ablation_coordinator_policy: components["schemas"]["ConfirmationAblationCoordinatorProfile"];
+            /** Ablation Dataset Sha256 */
+            ablation_dataset_sha256: string;
+            /** Ablation Profile Checksum */
+            ablation_profile_checksum: string;
+            /** Ablation Profile Revision */
+            ablation_profile_revision: string;
+            /** Ablation Projection Key Sha256 */
+            ablation_projection_key_sha256: string;
+            /** Ablation Selection Key Sha256 */
+            ablation_selection_key_sha256: string;
+            /** Ablation Threshold Manifest Sha256 */
+            ablation_threshold_manifest_sha256: string;
+            /** Checksum */
+            checksum: string;
+            composite: components["schemas"]["ConfirmationCompositeProfile"];
+            embedding_ablation: components["schemas"]["ConfirmationAblationProfile"];
+            inference_ablation: components["schemas"]["ConfirmationAblationProfile"];
+            /** Longmem Cases Per Capability */
+            longmem_cases_per_capability: number;
+            /** Longmem Dataset Revision */
+            longmem_dataset_revision: string;
+            /** Longmem Dataset Sha256 */
+            longmem_dataset_sha256: string;
+            /** Longmem Profile Checksum */
+            longmem_profile_checksum: string;
+            /** Longmem Profile Revision */
+            longmem_profile_revision: string;
+            /** Longmem Projection Key Sha256 */
+            longmem_projection_key_sha256: string;
+            /** Longmem Seed Batch Pairs */
+            longmem_seed_batch_pairs: number;
+            /** Longmem Selection Seed */
+            longmem_selection_seed: number;
+            /**
+             * Longmem Selector Revision
+             * @constant
+             */
+            longmem_selector_revision: "longmemeval-s-stratified-sha256-v1";
+            /** Provider Lanes */
+            provider_lanes: components["schemas"]["ConfirmationProviderLaneProfile"][];
+            /** Revision */
+            revision: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /** ConfirmationProviderLaneProfile */
+        ConfirmationProviderLaneProfile: {
+            /** Lane */
+            lane: string;
+            /** Max Completion Tokens */
+            max_completion_tokens: number;
+            /** Max Cost Usd Micros */
+            max_cost_usd_micros: number;
+            /** Max Prompt Tokens */
+            max_prompt_tokens: number;
+            /** Max Requests */
+            max_requests: number;
+            /** Max Total Tokens */
+            max_total_tokens: number;
+            /** Model */
+            model: string;
+            /** Profile Revision */
+            profile_revision: string;
+            /** Provider */
+            provider: string;
+        };
+        /**
+         * ConfirmationResultStatus
+         * @description Which score contract an agent row currently satisfies.
+         * @enum {string}
+         */
+        ConfirmationResultStatus: "base_only" | "provisional" | "full_confirmed";
         /**
          * ConfirmationScoreRecord
          * @description One append-only shared-seed confirmation score for a top-5 agent.
@@ -7037,6 +7926,62 @@ export interface components {
              * @description SS58 hotkey of the validator that scored this seed.
              */
             validator_hotkey: string;
+        };
+        /**
+         * ConfirmationShadowCalibrationView
+         * @description Measured shadow economics derived only from settled Platform rows.
+         *
+         *     The daily projection is the observed cost run-rate across the inclusive
+         *     interval between the first and last settled sample.  Epoch spend remains
+         *     unavailable until an epoch duration is explicitly configured; the API does
+         *     not guess a chain constant.
+         */
+        ConfirmationShadowCalibrationView: {
+            /** Base Run Count */
+            base_run_count: number;
+            /** Completed Bundle Count */
+            completed_bundle_count: number;
+            /** Confirmation Bundle Count */
+            confirmation_bundle_count: number;
+            /** Confirmation Profile Checksum */
+            confirmation_profile_checksum: string | null;
+            /** Confirmation Profile Revision */
+            confirmation_profile_revision: string | null;
+            /** Epoch Duration Seconds */
+            epoch_duration_seconds: number | null;
+            /** Epoch Projection Unavailable Reason */
+            epoch_projection_unavailable_reason: string | null;
+            /** Measured Base Cost Microusd */
+            measured_base_cost_microusd: number | null;
+            /** Measured Bundle Cost Microusd */
+            measured_bundle_cost_microusd: number | null;
+            /** Observation Days */
+            observation_days: number;
+            /** Observed From Utc Day */
+            observed_from_utc_day: string | null;
+            /** Observed Through Utc Day */
+            observed_through_utc_day: string | null;
+            /** Projected Daily Spend Microusd */
+            projected_daily_spend_microusd: number | null;
+            /** Projected Epoch Spend Microusd */
+            projected_epoch_spend_microusd: number | null;
+            /** Promotion Rate Bps */
+            promotion_rate_bps: number | null;
+            /** Qualified Bundle Count */
+            qualified_bundle_count: number;
+        };
+        /** ConfirmationUsageTotals */
+        ConfirmationUsageTotals: {
+            /** Input Tokens */
+            input_tokens: number;
+            /** Latency Ms */
+            latency_ms: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Provider Cost Microusd */
+            provider_cost_microusd: number;
+            /** Request Count */
+            request_count: number;
         };
         /**
          * ContinualRetestSettings
@@ -7205,6 +8150,50 @@ export interface components {
              * @enum {string}
              */
             source: "revision" | "default";
+        };
+        /** EffectiveConfirmationBundleSettings */
+        EffectiveConfirmationBundleSettings: {
+            /** Checksum */
+            checksum: string | null;
+            /** Configured */
+            configured: boolean;
+            /** Issuance Active */
+            issuance_active: boolean;
+            /**
+             * Max Bundle Request Cap
+             * @default 100000
+             */
+            max_bundle_request_cap: number;
+            /**
+             * Max Bundle Token Cap
+             * @default 100000000
+             */
+            max_bundle_token_cap: number;
+            /**
+             * Max Daily Bundle Cap
+             * @default 1000
+             */
+            max_daily_bundle_cap: number;
+            /**
+             * Max Daily Dollar Microusd
+             * @default 1000000000
+             */
+            max_daily_dollar_microusd: number;
+            /**
+             * Max Top N
+             * @default 10
+             */
+            max_top_n: number;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["ConfirmationBundleSettings"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "default" | "revision";
         };
         /** EffectiveContinualRetestSettings */
         EffectiveContinualRetestSettings: {
@@ -8106,6 +9095,8 @@ export interface components {
             size_bytes?: number | null;
             /** @description Agent lifecycle state (always ``scored``). */
             status: components["schemas"]["AgentStatus"];
+            /** @description Separate signed full-confirmation receipt. Present only for fully confirmed Bench v9 rows while enforce mode is active. */
+            v9_confirmation?: components["schemas"]["V9ConfirmationReceipt"] | null;
             /**
              * Validator Hotkey
              * @description SS58 hotkey of the validator that produced the score.
@@ -8184,12 +9175,19 @@ export interface components {
              * @default false
              */
             stale: boolean;
+            /**
+             * V9 Confirmation Mode
+             * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
+             */
+            v9_confirmation_mode?: "enforce" | null;
         };
         /**
          * LedgerScoreProof
          * @description One validator-signed score receipt backing a ledger median.
          */
         LedgerScoreProof: {
+            /** @description Typed v9 base root whose digest is signature-bound. */
+            base_evidence?: components["schemas"]["V9BaseEvidence"] | null;
             /**
              * Base Evidence Sha256
              * @description Signature-bound canonical v9 base-evidence digest.
@@ -8226,6 +9224,134 @@ export interface components {
              * @description Scoring validator hotkey.
              */
             validator_hotkey: string;
+        };
+        /**
+         * LongMemCapabilityScore
+         * @description One member of the frozen six-capability LongMem macro average.
+         */
+        LongMemCapabilityScore: {
+            /**
+             * Capability
+             * @enum {string}
+             */
+            capability: "extraction" | "multi_session_reasoning" | "temporal_reasoning" | "knowledge_update" | "preference" | "abstention";
+            /** Correct */
+            correct: number;
+            /** Count */
+            count: number;
+            /** Mean Micros */
+            mean_micros: number;
+        };
+        /** LongMemDimensionEnvelope */
+        LongMemDimensionEnvelope: {
+            evidence: components["schemas"]["LongMemEvidence"];
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Latency Ms */
+            latency_ms: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Provider Cost Microusd */
+            provider_cost_microusd: number;
+            /** Request Count */
+            request_count: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "completed";
+            /**
+             * Synthetic
+             * @constant
+             */
+            synthetic: false;
+        };
+        /**
+         * LongMemEvidence
+         * @description Typed mirror of the trusted LongMem evidence, with integer scores.
+         */
+        LongMemEvidence: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 9;
+            /** Case Set Digest */
+            case_set_digest: string;
+            /** Dataset Revision */
+            dataset_revision: string;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /** Profile Checksum */
+            profile_checksum: string;
+            /** Provider Evidence */
+            provider_evidence: components["schemas"]["LongMemProviderLaneEvidence"][];
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 2;
+            score: components["schemas"]["LongMemScoreEvidence"];
+        };
+        /**
+         * LongMemProviderLaneEvidence
+         * @description Receipt-derived accounting for one frozen LongMem provider lane.
+         */
+        LongMemProviderLaneEvidence: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /**
+             * Cost Source
+             * @constant
+             */
+            cost_source: "provider_receipt_v1";
+            /** Cost Usd Micros */
+            cost_usd_micros: number;
+            /**
+             * Currency
+             * @constant
+             */
+            currency: "USD";
+            /**
+             * Fallback Used
+             * @constant
+             */
+            fallback_used: false;
+            /** Lane */
+            lane: string;
+            /** Model */
+            model: string;
+            /** Profile Revision */
+            profile_revision: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Receipt Set Sha256 */
+            receipt_set_sha256: string;
+            /** Receipted Requests */
+            receipted_requests: number;
+            /** Requests */
+            requests: number;
+            /** Successes */
+            successes: number;
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** LongMemScoreEvidence */
+        LongMemScoreEvidence: {
+            /** Case Count */
+            case_count: number;
+            /** Longmem Mean Micros */
+            longmem_mean_micros: number;
+            /** Longmem Stderr Micros */
+            longmem_stderr_micros: number;
+            /** Per Capability */
+            per_capability: components["schemas"]["LongMemCapabilityScore"][];
         };
         /** MinerFeeDay */
         MinerFeeDay: {
@@ -10390,9 +11516,9 @@ export interface components {
             pre_efficiency_composite?: number | null;
             /**
              * Rank
-             * @description 1-based rank by ``official_composite`` -- NOT by ``composite``. Sorting this board by ``composite`` reproduces ``rank`` only while every entry is still on the canonical median (``aggregate_method == 'canonical_median'``); once any agent has completed continual cohort waves the two orderings differ, and ``official_composite`` is the one that ranks the board and drives the weight fold. Ties break on ``first_seen`` then ``agent_id``. Provisional (pre-quorum) rows are ranked among themselves and always trail the finalized board.
+             * @description 1-based rank by ``official_composite`` -- NOT by ``composite``. Sorting this board by ``composite`` reproduces ``rank`` only while every entry is still on the canonical median (``aggregate_method == 'canonical_median'``); once any agent has completed continual cohort waves the two orderings differ, and ``official_composite`` is the one that ranks the board and drives the weight fold. Ties break on ``first_seen`` then ``agent_id``. Provisional (pre-quorum) rows are ranked among themselves and always trail the finalized board. Bench v9 base/provisional rows in confirmation enforce mode are null: only full-confirmed rows rank.
              */
-            rank: number;
+            rank?: number | null;
             /**
              * Raw Composite
              * @description Pre-efficiency v5 quality score, when present.
@@ -10452,6 +11578,21 @@ export interface components {
              * @description Mean tool accuracy in [0,1].
              */
             tool_mean: number;
+            /**
+             * V9 Confirmation Evidence Sha256
+             * @description Signed full-confirmation evidence root digest.
+             */
+            v9_confirmation_evidence_sha256?: string | null;
+            /**
+             * V9 Confirmation Status
+             * @description Bench v9 score contract state. Base-only/provisional values are never ranked in enforce mode; full_confirmed is the only reward-authoritative state.
+             */
+            v9_confirmation_status?: ("base_only" | "provisional" | "full_confirmed") | null;
+            /**
+             * V9 Full Confirmed Composite
+             * @description Independently derivable full v9 composite used for this rank. Null for base-only and shadow/provisional rows.
+             */
+            v9_full_confirmed_composite?: number | null;
         };
         /**
          * PublicLeaderboardFamily
@@ -10546,6 +11687,11 @@ export interface components {
              * @enum {string}
              */
             selection_mode: "authoritative" | "historical";
+            /**
+             * V9 Confirmation Mode
+             * @description Fail-closed marker: Bench v9 base-only and provisional rows cannot rank or receive emissions while present. Null when confirmation is not ranking-authoritative.
+             */
+            v9_confirmation_mode?: "enforce" | null;
         };
         /**
          * PublicMetricDoc
@@ -11300,6 +12446,12 @@ export interface components {
              * @description Public status ("scored" or "live").
              */
             status: string;
+            /** @description Signed evidence root and subject projection used to reproduce the reward-authoritative full v9 composite. */
+            v9_confirmation_receipt?: components["schemas"]["V9ConfirmationReceipt"] | null;
+            /** V9 Confirmation Status */
+            v9_confirmation_status?: ("base_only" | "provisional" | "full_confirmed") | null;
+            /** V9 Full Confirmed Composite */
+            v9_full_confirmed_composite?: number | null;
         };
         /**
          * PublicSubmissionSummary
@@ -13846,6 +14998,569 @@ export interface components {
             /** Supported Routes */
             supported_routes: components["schemas"]["InferenceCalibrationRoute"][];
         };
+        /**
+         * V9AuthoritativeToolGate
+         * @description Trusted tool-server evidence for the v9 authoritative-tool gate.
+         */
+        V9AuthoritativeToolGate: {
+            /** Coverage Bps */
+            coverage_bps: number;
+            /** Expected Executions */
+            expected_executions: number;
+            /**
+             * Factor Bps
+             * @enum {integer}
+             */
+            factor_bps: 0 | 10000;
+            /** Matched Executions */
+            matched_executions: number;
+            /** Missing Executions */
+            missing_executions: number;
+            /** Observed Executions */
+            observed_executions: number;
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable";
+            /** Threshold Bps */
+            threshold_bps: number;
+            /** Unexpected Executions */
+            unexpected_executions: number;
+        };
+        /**
+         * V9BaseEvidence
+         * @description Signature-bound ordinary v9 score identity and binary gate evidence.
+         */
+        V9BaseEvidence: {
+            /**
+             * Applied Gate Factor Bps
+             * @enum {integer}
+             */
+            applied_gate_factor_bps: 0 | 10000;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 9;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /** Effective Composite Micros */
+            effective_composite_micros: number;
+            /** Effective Stderr Micros */
+            effective_stderr_micros: number;
+            /** Ordinary Composite Micros */
+            ordinary_composite_micros: number;
+            /** Ordinary Stderr Micros */
+            ordinary_stderr_micros: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            score_contract: components["schemas"]["V9ScoreContract"];
+            score_gates: components["schemas"]["V9ScoreGateEvidence"];
+            /** Score Gates Sha256 */
+            score_gates_sha256: string;
+            /**
+             * Semantic Gate Factor Bps
+             * @enum {integer}
+             */
+            semantic_gate_factor_bps: 0 | 10000;
+            /** Transcript Sha256 */
+            transcript_sha256: string;
+        };
+        /** V9ConfirmationClaimRequest */
+        V9ConfirmationClaimRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /** Profile Checksum */
+            profile_checksum: string;
+            /** Profile Revision */
+            profile_revision: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * V9ConfirmationCompositePolicy
+         * @description Schema-name-compatible shared policy used by public validator receipts.
+         */
+        V9ConfirmationCompositePolicy: {
+            /** Base Weight Bps */
+            base_weight_bps: number;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Formula Revision
+             * @constant
+             */
+            formula_revision: "weighted-quality-gates-v1";
+            /** Longmem Weight Bps */
+            longmem_weight_bps: number;
+            /** Revision */
+            revision: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /**
+         * V9ConfirmationEvidenceRoot
+         * @description Schema-name-compatible shared root used by public validator receipts.
+         *
+         *     The receipt contract predates the private confirmation transport and pins
+         *     its SHA fields as pattern-only JSON Schema nodes.  Keep those public schema
+         *     details while inheriting the canonical root field order and validators.
+         */
+        V9ConfirmationEvidenceRoot: {
+            /** Ablation Coordinator Latency Ms */
+            ablation_coordinator_latency_ms: number;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 9;
+            composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
+            /** Confirmation Profile Checksum */
+            confirmation_profile_checksum: string;
+            /** Confirmation Profile Revision */
+            confirmation_profile_revision: string;
+            embedding_ablation: components["schemas"]["AblationDimensionEnvelope"];
+            inference_ablation: components["schemas"]["AblationDimensionEnvelope"];
+            longmemeval: components["schemas"]["LongMemDimensionEnvelope"];
+            /** Retest Generation */
+            retest_generation: number;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
+            totals: components["schemas"]["ConfirmationUsageTotals"];
+        };
+        /** V9ConfirmationFailRequest */
+        V9ConfirmationFailRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "execution_failed" | "deadline" | "cancelled" | "infrastructure";
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** V9ConfirmationFailResponse */
+        V9ConfirmationFailResponse: {
+            /**
+             * Accepted
+             * @constant
+             */
+            accepted: true;
+            /**
+             * Bundle Id
+             * Format: uuid
+             */
+            bundle_id: string;
+            /** Replayed */
+            replayed: boolean;
+            /** Settled Microusd */
+            settled_microusd: number;
+            /**
+             * State
+             * @constant
+             */
+            state: "failed";
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+        };
+        /** V9ConfirmationJobResponse */
+        V9ConfirmationJobResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 9;
+            /**
+             * Bundle Id
+             * Format: uuid
+             */
+            bundle_id: string;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            execution_profile: components["schemas"]["ConfirmationExecutionProfile"];
+            mode: components["schemas"]["ConfirmationBundleMode"];
+            /** Per Bundle Request Cap */
+            per_bundle_request_cap: number;
+            /** Per Bundle Token Cap */
+            per_bundle_token_cap: number;
+            /**
+             * Purpose
+             * @constant
+             */
+            purpose: "v9_confirmation_bundle";
+            /**
+             * Reservation Id
+             * Format: uuid
+             */
+            reservation_id: string;
+            /** Retest Generation */
+            retest_generation: number;
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Slot Id */
+            slot_id: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+        };
+        /**
+         * V9ConfirmationPrepareRequest
+         * @description Authenticated native Go evidence awaiting Platform normalization.
+         */
+        V9ConfirmationPrepareRequest: {
+            /** Ablation Coordinator Latency Ms */
+            ablation_coordinator_latency_ms: number;
+            embedding_ablation: components["schemas"]["V9ConfirmationRawDimension"];
+            inference_ablation: components["schemas"]["V9ConfirmationRawDimension"];
+            longmemeval: components["schemas"]["V9ConfirmationRawDimension"];
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /** Wire Sha256 */
+            wire_sha256: string;
+        };
+        /** V9ConfirmationPreparedReport */
+        V9ConfirmationPreparedReport: {
+            /** Ablation Coordinator Latency Ms */
+            ablation_coordinator_latency_ms: number;
+            /**
+             * Bundle Id
+             * Format: uuid
+             */
+            bundle_id: string;
+            embedding_ablation: components["schemas"]["AblationDimensionEnvelope"];
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            inference_ablation: components["schemas"]["AblationDimensionEnvelope"];
+            longmemeval: components["schemas"]["LongMemDimensionEnvelope"];
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+        };
+        /**
+         * V9ConfirmationRawDimension
+         * @description One exact native Go evidence wrapper returned by the local scorer.
+         */
+        V9ConfirmationRawDimension: {
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Go Evidence Sha256 */
+            go_evidence_sha256: string;
+            /** Latency Ms */
+            latency_ms: number;
+        };
+        /**
+         * V9ConfirmationReceipt
+         * @description Separate signed evidence and subject projection for v9 rewards.
+         *
+         *     This never replaces :attr:`LedgerEntry.composite`: the ordinary score and
+         *     its quorum receipts stay byte-for-byte intact.  Validators verify this
+         *     bundle signature, replay the typed arithmetic, and only then consume
+         *     ``full_effective_micros`` in the enforce-mode v9 fold.
+         */
+        V9ConfirmationReceipt: {
+            /**
+             * Applied Factor Bps
+             * @enum {integer}
+             */
+            applied_factor_bps: 0 | 10000;
+            /** Base Evidence Sha256 */
+            base_evidence_sha256: string;
+            /**
+             * Base Model Factor Bps
+             * @enum {integer}
+             */
+            base_model_factor_bps: 0 | 10000;
+            /** Base Quality Micros */
+            base_quality_micros: number;
+            /** Base Stderr Micros */
+            base_stderr_micros: number;
+            /**
+             * Base Tool Factor Bps
+             * @enum {integer}
+             */
+            base_tool_factor_bps: 0 | 10000;
+            /**
+             * Bundle Id
+             * Format: uuid
+             */
+            bundle_id: string;
+            /** Bundle Signature */
+            bundle_signature: string;
+            evidence_root: components["schemas"]["V9ConfirmationEvidenceRoot"];
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Full Effective Micros */
+            full_effective_micros: number;
+            /** Full Quality Micros */
+            full_quality_micros: number;
+            /** Full Stderr Micros */
+            full_stderr_micros: number;
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "enforce";
+            /**
+             * Qualification Status
+             * @constant
+             */
+            qualification_status: "qualified";
+            /** Reporter Hotkey */
+            reporter_hotkey: string;
+            /**
+             * Result Status
+             * @constant
+             */
+            result_status: "full_confirmed";
+            /**
+             * Semantic Factor Bps
+             * @enum {integer}
+             */
+            semantic_factor_bps: 0 | 10000;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Verified At
+             * Format: date-time
+             */
+            verified_at: string;
+        };
+        /** V9ConfirmationSubmitRequest */
+        V9ConfirmationSubmitRequest: {
+            report: components["schemas"]["ConfirmationCompletionReport"];
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** V9ConfirmationSubmitResponse */
+        V9ConfirmationSubmitResponse: {
+            /**
+             * Accepted
+             * @constant
+             */
+            accepted: true;
+            /**
+             * Bundle Id
+             * Format: uuid
+             */
+            bundle_id: string;
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /**
+             * Qualification Status
+             * @enum {string}
+             */
+            qualification_status: "qualified" | "unqualified";
+            /** Replayed */
+            replayed: boolean;
+            /**
+             * State
+             * @constant
+             */
+            state: "completed";
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+        };
+        /**
+         * V9GateExclusions
+         * @description Cases excluded from the model-use denominator for trusted reasons.
+         */
+        V9GateExclusions: {
+            /** Ablation */
+            ablation: number;
+            /** Preflight */
+            preflight: number;
+            /** Undelivered */
+            undelivered: number;
+            /** Validator Fault */
+            validator_fault: number;
+        };
+        /**
+         * V9ModelUseGate
+         * @description Trusted relay evidence for the v9 model-use binary gate.
+         */
+        V9ModelUseGate: {
+            /** Administered Cases */
+            administered_cases: number;
+            /** Case Attribution Complete */
+            case_attribution_complete: boolean;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Coverage Bps */
+            coverage_bps: number;
+            /** Eligible Cases */
+            eligible_cases: number;
+            excluded: components["schemas"]["V9GateExclusions"];
+            /**
+             * Factor Bps
+             * @enum {integer}
+             */
+            factor_bps: 0 | 10000;
+            /** Missing Inference Cases */
+            missing_inference_cases: number;
+            /** Observed Requests */
+            observed_requests: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Request Coverage Bps */
+            request_coverage_bps: number;
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable";
+            /** Successful Inference Cases */
+            successful_inference_cases: number;
+            /** Successful Requests */
+            successful_requests: number;
+            /** Threshold Bps */
+            threshold_bps: number;
+        };
+        /**
+         * V9ScoreContract
+         * @description Frozen identity of the ordinary v9 score contract.
+         */
+        V9ScoreContract: {
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Revision */
+            revision: string;
+        };
+        /**
+         * V9ScoreGateEvidence
+         * @description Complete typed mirror of ``internal/scoregates.Evidence``.
+         */
+        V9ScoreGateEvidence: {
+            authoritative_tool: components["schemas"]["V9AuthoritativeToolGate"];
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 9;
+            model_use: components["schemas"]["V9ModelUseGate"];
+            /**
+             * Rollout Mode
+             * @enum {string}
+             */
+            rollout_mode: "shadow" | "enforce";
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            threshold_profile: components["schemas"]["V9ThresholdProfile"];
+        };
+        /**
+         * V9ThresholdProfile
+         * @description Frozen identity of the calibrated v9 gate thresholds.
+         */
+        V9ThresholdProfile: {
+            /** Id */
+            id: string;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -14535,6 +16250,177 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BurnSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_confirmation_bundle_settings_api_v1_admin_confirmation_bundle_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminConfirmationBundleSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_confirmation_bundle_settings_revision_api_v1_admin_confirmation_bundle_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminConfirmationBundleSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmationBundleSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_confirmation_bundles_api_v1_admin_confirmation_bundles_get: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["ConfirmationBundleState"] | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminConfirmationBundleListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_confirmation_bundle_api_v1_admin_confirmation_bundles__bundle_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmationBundleView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    authorize_confirmation_retest_api_v1_admin_confirmation_bundles__bundle_id__authorize_retest_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminConfirmationBundleRetestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminConfirmationBundleRetestResponse"];
                 };
             };
             /** @description Validation Error */
@@ -19553,6 +21439,196 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_v9_confirmation_artifact_api_v1_validator_v9_confirmation_bundle__bundle_id__artifact_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+                "x-confirmation-ticket-id"?: string | null;
+                "x-confirmation-nonce"?: string | null;
+                "x-confirmation-requested-at"?: string | null;
+                "x-confirmation-signature"?: string | null;
+            };
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fail_v9_confirmation_job_api_v1_validator_v9_confirmation_bundle__bundle_id__fail_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V9ConfirmationFailRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V9ConfirmationFailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_v9_confirmation_report_api_v1_validator_v9_confirmation_bundle__bundle_id__prepare_report_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V9ConfirmationPrepareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V9ConfirmationPreparedReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_v9_confirmation_report_api_v1_validator_v9_confirmation_bundle__bundle_id__report_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V9ConfirmationSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V9ConfirmationSubmitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_v9_confirmation_job_api_v1_validator_v9_confirmation_job_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V9ConfirmationClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V9ConfirmationJobResponse"];
+                };
+            };
+            /** @description No exact-profile confirmation work. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

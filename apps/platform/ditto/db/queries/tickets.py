@@ -76,6 +76,10 @@ from ditto.db.queries.similarity_grouping import (
     SimilarityMatch,
     similar_submissions,
 )
+from ditto.db.queries.validator_slot_occupancy import (
+    live_v9_confirmation_slot_ticket,
+    lock_validator_slot,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy import ColumnElement, Select
@@ -397,15 +401,20 @@ async def issue_ticket(
     # No row exists to lock before a validator's first claim. Serialize that
     # gap explicitly on Postgres; the unique partial index remains the durable
     # backstop and SQLite test transactions are already single-writer.
-    if session.get_bind().dialect.name == "postgresql":
-        await session.execute(
-            select(
-                func.pg_advisory_xact_lock(
-                    func.hashtextextended(f"{validator_hotkey}:{slot_id}", 0)
-                )
-            )
-        )
+    await lock_validator_slot(
+        session, validator_hotkey=validator_hotkey, slot_id=slot_id
+    )
     await expire_overdue_tickets(session, now=now)
+    if (
+        await live_v9_confirmation_slot_ticket(
+            session,
+            validator_hotkey=validator_hotkey,
+            slot_id=slot_id,
+            now=now,
+        )
+        is not None
+    ):
+        return None
     if bench_version is None:
         raise ValueError("benchmark version is required for ticket issuance")
     activated_rollout = await activated_rollout_for_version(
@@ -880,15 +889,20 @@ async def issue_confirmation_ticket(
     matters is per-slot, and it is enforced below: one live lease per
     ``(validator, slot)``, which is also the durable unique partial index.
     """
-    if session.get_bind().dialect.name == "postgresql":
-        await session.execute(
-            select(
-                func.pg_advisory_xact_lock(
-                    func.hashtextextended(f"{validator_hotkey}:{slot_id}", 0)
-                )
-            )
-        )
+    await lock_validator_slot(
+        session, validator_hotkey=validator_hotkey, slot_id=slot_id
+    )
     await expire_overdue_tickets(session, now=now)
+    if (
+        await live_v9_confirmation_slot_ticket(
+            session,
+            validator_hotkey=validator_hotkey,
+            slot_id=slot_id,
+            now=now,
+        )
+        is not None
+    ):
+        return None
     # Resume this exact retest wherever it already lives. Looked up before the
     # slot rail so a lease that drifted slots (or predates slot-aware issuance)
     # is handed back rather than being refused as an occupant of its own slot.

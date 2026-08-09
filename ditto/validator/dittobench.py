@@ -20,7 +20,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -29,7 +29,7 @@ from ditto.api_models.benchmark_progress import (
     MAX_BENCHMARK_CHECKS,
     BenchmarkProgressStage,
 )
-from ditto.api_models.validator import ScoreReport
+from ditto.api_models.validator import ArtifactResponse, ScoreReport
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
     ScorerLivenessProbe,
@@ -37,7 +37,18 @@ from ditto.api_models.validator_capabilities import (
     ScorerProbeReason,
     ValidatorStackIdentity,
 )
-from ditto.validator.config import LEASE_REPORT_MARGIN_SECONDS, run_budget_seconds
+from ditto.api_models.validator_confirmation import (
+    ConfirmationBundleMode,
+    V9ConfirmationJobResponse,
+    V9ConfirmationScorerReadiness,
+    V9ConfirmationScorerRequest,
+    V9ConfirmationScorerResult,
+)
+from ditto.validator.config import (
+    LEASE_REPORT_MARGIN_SECONDS,
+    lease_budget_seconds,
+    run_budget_seconds,
+)
 from ditto.validator.errors import (
     DittobenchError,
     LeaseDeadlineError,
@@ -347,6 +358,122 @@ class DittobenchClient:
         """
         token = str(getattr(self._config, "dittobench_control_token", "") or "")
         return {"Authorization": f"Bearer {token}"} if token else {}
+
+    async def v9_confirmation_readiness(
+        self,
+    ) -> V9ConfirmationScorerReadiness | None:
+        """Return the exact internal profile, without advertising benchmark v9."""
+        try:
+            response = await self._client.get(
+                f"{self._config.dittobench_api_url}/v1/confirmation/readiness",
+                headers=self._control_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise ValidatorInfrastructureError(
+                f"v9 confirmation readiness failed: {error}"
+            ) from error
+        if response.status_code == 503:
+            return None
+        if response.status_code != 200:
+            raise ValidatorInfrastructureError(
+                f"v9 confirmation readiness rejected ({response.status_code})"
+            )
+        try:
+            return V9ConfirmationScorerReadiness.model_validate(response.json())
+        except (TypeError, ValueError) as error:
+            raise ValidatorInfrastructureError(
+                "v9 confirmation readiness response was invalid"
+            ) from error
+
+    async def execute_v9_confirmation(
+        self,
+        *,
+        job: V9ConfirmationJobResponse,
+        artifact: ArtifactResponse,
+    ) -> V9ConfirmationScorerResult:
+        """Execute one costly bundle through the protected local control plane."""
+        if (
+            job.purpose != "v9_confirmation_bundle"
+            or job.bench_version != 9
+            or artifact.agent_id != job.agent_id
+            or artifact.sha256 != job.artifact_sha256
+            or artifact.bench_version != 9
+        ):
+            raise DittobenchError("v9 confirmation job/artifact identity mismatch")
+        screened_identity = (
+            artifact.screened_image_url,
+            artifact.screened_image_sha256,
+            artifact.screened_image_size_bytes,
+            artifact.screened_image_id,
+            artifact.screened_image_ref,
+        )
+        if any(value is None for value in screened_identity):
+            raise DittobenchError(
+                "v9 confirmation requires a complete screened image identity"
+            )
+        assert artifact.screened_image_url is not None
+        assert artifact.screened_image_sha256 is not None
+        assert artifact.screened_image_size_bytes is not None
+        assert artifact.screened_image_id is not None
+        assert artifact.screened_image_ref is not None
+        if job.mode is ConfirmationBundleMode.OFF:
+            raise DittobenchError("v9 confirmation execution cannot run in off mode")
+        mode = cast(Literal["shadow", "enforce"], job.mode.value)
+        request = V9ConfirmationScorerRequest(
+            purpose=job.purpose,
+            bundle_id=job.bundle_id,
+            ticket_id=job.ticket_id,
+            agent_id=job.agent_id,
+            slot_id=job.slot_id,
+            artifact_url=artifact.download_url,
+            artifact_sha256=job.artifact_sha256,
+            screened_image_url=artifact.screened_image_url,
+            screened_image_sha256=artifact.screened_image_sha256,
+            screened_image_size_bytes=artifact.screened_image_size_bytes,
+            screened_image_id=artifact.screened_image_id,
+            screened_image_ref=artifact.screened_image_ref,
+            bench_version=9,
+            deadline=job.deadline,
+            profile_revision=job.execution_profile.revision,
+            profile_checksum=job.execution_profile.checksum,
+            settings_revision=job.settings_revision,
+            settings_checksum=job.settings_checksum,
+            retest_generation=job.retest_generation,
+            mode=mode,
+            per_bundle_request_cap=job.per_bundle_request_cap,
+            per_bundle_token_cap=job.per_bundle_token_cap,
+            execution_profile=job.execution_profile,
+        )
+        budget = lease_budget_seconds(job.deadline)
+        if budget <= 0:
+            raise LeaseDeadlineError(
+                "v9 confirmation ticket cannot fund execution while preserving "
+                "its reporting margin"
+            )
+        try:
+            response = await self._client.post(
+                f"{self._config.dittobench_api_url}/v1/confirmation/execute",
+                headers=self._control_headers(),
+                json=request.model_dump(mode="json"),
+                # This protected call owns the complete bounded confirmation
+                # execution.  The client's ordinary short request timeout is
+                # suitable for control calls but would kill a valid LongMem
+                # run, so bind this one call to the ticket-derived budget.
+                timeout=budget,
+            )
+        except httpx.HTTPError as error:
+            raise ValidatorInfrastructureError(
+                f"v9 confirmation execution failed: {error}"
+            ) from error
+        if response.status_code != 200:
+            raise DittobenchError(
+                "v9 confirmation execution rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            return V9ConfirmationScorerResult.model_validate(response.json())
+        except (TypeError, ValueError) as error:
+            raise DittobenchError("v9 confirmation result was invalid") from error
 
     async def prepare_inference_session(self) -> InferenceBrokerSession:
         """Create a trusted memory-only broker key before claiming provider access."""

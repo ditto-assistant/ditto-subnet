@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from ditto.api_models.benchmark_capacity import (
@@ -45,6 +45,10 @@ from ditto.api_models.validator import (
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
     ScorerLivenessProbe,
+)
+from ditto.api_models.validator_confirmation import (
+    V9ConfirmationCompletionReport,
+    V9ConfirmationScorerReadiness,
 )
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
@@ -72,7 +76,12 @@ from ditto.validator.resource_gate import (
     ConstrainedResource,
     ResourceCeilings,
 )
-from ditto.validator.signing import sign_heartbeat, sign_score
+from ditto.validator.signing import (
+    rebuild_v9_confirmation_evidence_root,
+    sign_heartbeat,
+    sign_score,
+    sign_v9_confirmation_bundle,
+)
 from ditto.validator.stack_health import fallback_stack_health
 from ditto.validator.stack_identity import (
     bind_observed_scorer_identity,
@@ -726,6 +735,11 @@ class ValidatorWorker:
                             # slots without duplicate local fanouts.
                             if siblings_running and not idle_retest_dispatch.locked():
                                 async with idle_retest_dispatch:
+                                    await self._run_v9_confirmation_lane(
+                                        stop_requested=stop_requested,
+                                        drain_requested=drain_requested,
+                                        slot_ids=(slot_id,),
+                                    )
                                     await self._run_top5_confirmation_lane(
                                         stop_requested=stop_requested,
                                         drain_requested=drain_requested,
@@ -906,6 +920,10 @@ class ValidatorWorker:
             and self._admission == "accepting"
             and not self._new_work_blocked(stop_requested, drain_requested)
         ):
+            await self._run_v9_confirmation_lane(
+                stop_requested=stop_requested,
+                drain_requested=drain_requested,
+            )
             await self._run_top5_confirmation_lane(
                 stop_requested=stop_requested,
                 drain_requested=drain_requested,
@@ -1666,6 +1684,210 @@ class ValidatorWorker:
                 absent,
             )
         return kept
+
+    async def _run_v9_confirmation_lane(
+        self,
+        *,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
+        slot_ids: Sequence[str] | None = None,
+    ) -> None:
+        """Use only proven spare slots for the private Bench v9 confirmation lane.
+
+        This lane is deliberately independent from both canonical scoring and
+        the v8 continual shared-seed lane.  Its scorer readiness document names
+        the exact calibrated execution profile; without that document no claim
+        is made.  Each candidate slot receives its own signed Platform claim,
+        and a failure on one slot cannot cancel a sibling confirmation.
+
+        Callers enter only after the ordinary queue returned empty.  During a
+        partially busy sweep ``slot_ids`` contains that one just-polled slot;
+        after the canonical gather it defaults to every healthy idle slot.
+        Platform's shared slot-occupancy lock remains the final authority if a
+        canonical claim races this best-effort spare-capacity snapshot.
+        """
+        if self._admission != "accepting" or self._new_work_blocked(
+            stop_requested, drain_requested
+        ):
+            return
+
+        candidates = sorted(
+            slot_id
+            for slot_id in set(
+                slot_ids if slot_ids is not None else self._healthy_slots
+            )
+            if slot_id in self._healthy_slots
+            and slot_id in self._slots
+            and self._slots[slot_id].active_agent_id is None
+        )
+        if not candidates:
+            return
+
+        try:
+            readiness = await self._dittobench.v9_confirmation_readiness()
+        except Exception as error:  # noqa: BLE001 - optional lane stays fail-closed
+            logger.warning(
+                "v9 confirmation readiness failed; no confirmation work claimed: %s",
+                error,
+            )
+            return
+        if readiness is None:
+            return
+        if not isinstance(readiness, V9ConfirmationScorerReadiness):
+            logger.warning(
+                "v9 confirmation readiness returned an untyped profile; "
+                "no confirmation work claimed"
+            )
+            return
+
+        async def run_slot(slot_id: str) -> None:
+            if self._new_work_blocked(stop_requested, drain_requested):
+                return
+            job = None
+
+            async def hand_back(
+                reason: Literal[
+                    "execution_failed", "deadline", "cancelled", "infrastructure"
+                ],
+            ) -> None:
+                if job is None:
+                    return
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(
+                            self._platform.fail_v9_confirmation_job(
+                                job,
+                                reason=reason,
+                            )
+                        ),
+                        timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
+                    )
+                except Exception as hand_back_error:  # noqa: BLE001
+                    logger.warning(
+                        "v9 confirmation failure hand-back did not land "
+                        "bundle=%s ticket=%s: %s",
+                        job.bundle_id,
+                        job.ticket_id,
+                        hand_back_error,
+                    )
+
+            try:
+                job = await self._platform.request_v9_confirmation_job(
+                    slot_id=slot_id,
+                    profile_revision=readiness.profile_revision,
+                    profile_checksum=readiness.profile_checksum,
+                )
+                if job is None:
+                    return
+                if (
+                    job.purpose != "v9_confirmation_bundle"
+                    or job.bench_version != 9
+                    or job.slot_id != slot_id
+                    or job.execution_profile.revision != readiness.profile_revision
+                    or job.execution_profile.checksum != readiness.profile_checksum
+                ):
+                    raise PlatformError(
+                        "v9 confirmation lease did not match the signed "
+                        "slot/profile claim"
+                    )
+                if lease_budget_seconds(job.deadline) <= 0:
+                    raise LeaseDeadlineError(
+                        "v9 confirmation lease cannot preserve its reporting margin"
+                    )
+
+                artifact = await self._platform.get_v9_confirmation_artifact(job)
+                result = await self._dittobench.execute_v9_confirmation(
+                    job=job,
+                    artifact=artifact,
+                )
+                if job.deadline <= datetime.now(UTC):
+                    raise LeaseDeadlineError(
+                        "v9 confirmation execution finished after its ticket deadline"
+                    )
+                prepared = await self._platform.prepare_v9_confirmation_report(
+                    job, result
+                )
+                if job.deadline <= datetime.now(UTC):
+                    raise LeaseDeadlineError(
+                        "v9 confirmation report preparation finished after its "
+                        "ticket deadline"
+                    )
+                _, evidence_sha256 = rebuild_v9_confirmation_evidence_root(
+                    job, result, prepared
+                )
+                report = V9ConfirmationCompletionReport(
+                    longmemeval=prepared.longmemeval,
+                    inference_ablation=prepared.inference_ablation,
+                    embedding_ablation=prepared.embedding_ablation,
+                    ablation_coordinator_latency_ms=(
+                        prepared.ablation_coordinator_latency_ms
+                    ),
+                    bundle_signature=sign_v9_confirmation_bundle(
+                        self._keypair,
+                        reporter_hotkey=self._config.validator_hotkey,
+                        bundle_id=job.bundle_id,
+                        ticket_id=job.ticket_id,
+                        deadline=job.deadline,
+                        artifact_sha256=job.artifact_sha256,
+                        profile_revision=readiness.profile_revision,
+                        profile_checksum=readiness.profile_checksum,
+                        settings_revision=job.settings_revision,
+                        settings_checksum=job.settings_checksum,
+                        retest_generation=job.retest_generation,
+                        evidence_sha256=evidence_sha256,
+                    ),
+                )
+                await self._platform.submit_v9_confirmation_report(job, report)
+            except asyncio.CancelledError:
+                await hand_back("cancelled")
+                raise
+            except LeaseDeadlineError as error:
+                await hand_back("deadline")
+                logger.warning(
+                    "v9 confirmation exhausted its lease on %s: %s",
+                    slot_id,
+                    error,
+                )
+            except (ValidatorInfrastructureError, PlatformInfrastructureError) as error:
+                await hand_back("infrastructure")
+                logger.warning(
+                    "v9 confirmation infrastructure failed on %s: %s",
+                    slot_id,
+                    error,
+                )
+            except Exception as error:  # noqa: BLE001 - isolate optional slot work
+                await hand_back("execution_failed")
+                logger.warning(
+                    "v9 confirmation failed on %s; sibling slots and canonical "
+                    "scoring continue: %s",
+                    slot_id,
+                    error,
+                )
+
+        heartbeat_stop = asyncio.Event()
+
+        async def keep_validator_visible() -> None:
+            # V9 occupancy is intentionally absent from the canonical heartbeat
+            # lease roster.  Still send ordinary liveness while a LongMem run is
+            # active so the validator does not look offline to operators.  The
+            # empty v9 slot stays out of ``benchmark_capacity.active``; Platform
+            # owns its liveness independently in the confirmation ticket table.
+            while not heartbeat_stop.is_set():
+                try:
+                    await asyncio.wait_for(
+                        heartbeat_stop.wait(), timeout=_ACTIVE_HEARTBEAT_SECONDS
+                    )
+                except TimeoutError:
+                    await self._report_heartbeat("polling")
+
+        heartbeat_task = asyncio.create_task(
+            keep_validator_visible(), name="validator-v9-confirmation-heartbeat"
+        )
+        try:
+            await asyncio.gather(*(run_slot(slot_id) for slot_id in candidates))
+        finally:
+            heartbeat_stop.set()
+            await heartbeat_task
 
     async def _run_top5_confirmation_lane(
         self,

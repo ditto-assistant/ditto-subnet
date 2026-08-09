@@ -114,6 +114,9 @@ from ditto.api_server.benchmark_rollout import (
     refresh_rolling_qualification,
 )
 from ditto.api_server.config import ValidatorCompatibilityConfig
+from ditto.api_server.confirmation_candidate_reconciliation import (
+    reconcile_v9_confirmation_candidates,
+)
 from ditto.api_server.continual_retest_settings import (
     ContinualRetestSettingsResolver,
     rollout_standdown_reason,
@@ -5634,6 +5637,42 @@ async def submit_score(
         # normal issuance lock, and admin queue actions activate it directly, so
         # removing this eager handoff delays nothing and leaves one lock owner.
         result_status = agent.status
+
+    # Bench v9's expensive dimensions live on a separate bounded ledger. Once
+    # the canonical score transaction commits, persist its physical
+    # lower-median signed base proof and converge the owner/top-N cohort in a
+    # fresh transaction. This projection is deliberately fail-open: a profile,
+    # migration, or auxiliary-ledger fault must never roll back an accepted
+    # ordinary score or consumed ticket. Pre-claim/settings reconciliation
+    # converges any missed projection before expensive work can start.
+    if report_version == 9:
+        try:
+            async with session.begin():
+                finalized_agent = await get_agent_by_id(
+                    session, agent_id=agent_id, for_update=True
+                )
+                finalized_v9_scores = await list_scores_for_agent(
+                    session, agent_id=agent_id, bench_version=9
+                )
+                if (
+                    finalized_agent is not None
+                    and len(finalized_v9_scores) >= SCORING_QUORUM
+                ):
+                    await reconcile_v9_confirmation_candidates(
+                        session,
+                        verification_profiles=getattr(
+                            request.app.state,
+                            "confirmation_verification_profiles",
+                            {},
+                        ),
+                        finalized_agent=finalized_agent,
+                        finalized_scores=finalized_v9_scores,
+                    )
+        except Exception:
+            logger.exception(
+                "v9 confirmation candidate reconciliation failed for agent %s",
+                agent_id,
+            )
 
     # Both a completed v3 quorum and a newly finalized v2 contender can change
     # the hybrid top five. This is a cheap no-op when no rollout is open.

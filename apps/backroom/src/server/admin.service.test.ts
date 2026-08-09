@@ -51,6 +51,11 @@ import {
   fetchAgentScoreHistory,
   fetchScoreLeaderboard,
   fetchOwnerFootprint,
+  authorizeConfirmationBundleRetest,
+  fetchConfirmationBundle,
+  fetchConfirmationBundles,
+  fetchConfirmationBundleSettings,
+  setConfirmationBundleSettings,
 } from './admin.service'
 import { deriveRequestId } from '../lib/idempotency'
 
@@ -161,6 +166,313 @@ afterEach(() => {
   else process.env.DITTO_ADMIN_API_TOKEN = originalToken
   if (originalBaseUrl === undefined) delete process.env.DITTO_PLATFORM_API_BASE_URL
   else process.env.DITTO_PLATFORM_API_BASE_URL = originalBaseUrl
+})
+
+describe('Bench v9 confirmation bundle administration', () => {
+  const digest = 'a'.repeat(64)
+  const timestamp = '2026-08-08T12:00:00Z'
+  const bundleId = '11111111-1111-4111-8111-111111111111'
+  const requestId = '22222222-2222-4222-8222-222222222222'
+  const nextBundleId = '33333333-3333-4333-8333-333333333333'
+  const actor = 'operator@example.com'
+  const settings = {
+    mode: 'shadow',
+    top_n: 5,
+    daily_bundle_cap: 20,
+    daily_dollar_cap_microusd: 2_000_000,
+    per_bundle_request_cap: 500,
+    per_bundle_token_cap: 2_000_000,
+    profile_revision: 'v9-confirmation-shadow-1',
+    profile_checksum: digest,
+    challenger_z: 1.64,
+  }
+  const offSettings = {
+    mode: 'off',
+    top_n: 5,
+    daily_bundle_cap: 0,
+    daily_dollar_cap_microusd: 0,
+    per_bundle_request_cap: 0,
+    per_bundle_token_cap: 0,
+    profile_revision: null,
+    profile_checksum: null,
+    challenger_z: 1.64,
+  }
+  const revision = {
+    revision: 1,
+    parent_revision: 0,
+    scope: '*',
+    settings,
+    checksum: digest,
+    reason: 'measure confirmation cost before enforcement',
+    actor,
+    created_at: timestamp,
+  }
+  const settingsControl = {
+    current: [revision],
+    history: [revision],
+    default: offSettings,
+    effective: {
+      revision: 1,
+      scope: '*',
+      settings,
+      checksum: digest,
+      source: 'revision',
+      configured: true,
+      issuance_active: true,
+      max_top_n: 10,
+      max_daily_bundle_cap: 1_000,
+      max_daily_dollar_microusd: 1_000_000_000,
+      max_bundle_request_cap: 100_000,
+      max_bundle_token_cap: 100_000_000,
+    },
+  }
+  const pendingBundle = {
+    bundle_id: bundleId,
+    artifact_sha256: digest,
+    bench_version: 9,
+    profile_revision: 'v9-confirmation-shadow-1',
+    profile_checksum: digest,
+    retest_generation: 0,
+    generation_reason: 'initial',
+    source_bundle_id: null,
+    state: 'pending',
+    settings_revision: 1,
+    settings_checksum: digest,
+    qualification_status: null,
+    completion_mode: null,
+    completion_ticket_id: null,
+    evidence_sha256: null,
+    reporter_hotkey: null,
+    bundle_signature: null,
+    evidence_root: null,
+    verified_at: null,
+    completed_at: null,
+    created_at: timestamp,
+    updated_at: timestamp,
+    subjects: [],
+    dimensions: [],
+    tickets: [],
+  }
+  const listResponse = {
+    items: [pendingBundle],
+    count: 1,
+    budget: {
+      utc_day: '2026-08-08',
+      revision: 1,
+      issued_attempts: 1,
+      outstanding_reserved_microusd: 50_000,
+      settled_microusd: 0,
+    },
+    shadow_calibration: {
+      observed_from_utc_day: '2026-08-08',
+      observed_through_utc_day: '2026-08-08',
+      observation_days: 1,
+      confirmation_profile_revision: 'v9-confirmation-shadow-1',
+      confirmation_profile_checksum: digest,
+      base_run_count: 4,
+      measured_base_cost_microusd: 130_000,
+      confirmation_bundle_count: 1,
+      measured_bundle_cost_microusd: 60_000,
+      completed_bundle_count: 1,
+      qualified_bundle_count: 1,
+      promotion_rate_bps: 10_000,
+      projected_daily_spend_microusd: 580_000,
+      epoch_duration_seconds: null,
+      projected_epoch_spend_microusd: null,
+      epoch_projection_unavailable_reason:
+        'Bench v9 has no configured epoch duration; no projection was guessed.',
+    },
+  }
+
+  it('reads the strict settings control from the Platform admin boundary', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(settingsControl))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchConfirmationBundleSettings()).resolves.toEqual(settingsControl)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/confirmation-bundle-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('sends a complete settings revision with exact actor and confirmation, then refreshes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(revision))
+      .mockResolvedValueOnce(Response.json(settingsControl))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setConfirmationBundleSettings(
+        {
+          scope: '*',
+          expectedRevision: 0,
+          settings,
+          reason: revision.reason,
+          confirmation: 'APPLY V9 CONFIRMATION MODE SHADOW',
+        },
+        actor,
+      ),
+    ).resolves.toEqual(settingsControl)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/confirmation-bundle-settings',
+    )
+    expect(init.headers).toEqual(
+      expect.objectContaining({
+        'X-Admin-Actor': actor,
+        Authorization: 'Bearer secret',
+      }),
+    )
+    expect(JSON.parse(String(init.body))).toEqual({
+      scope: '*',
+      expected_revision: 0,
+      settings,
+      reason: revision.reason,
+      actor,
+      confirmation: 'APPLY V9 CONFIRMATION MODE SHADOW',
+    })
+  })
+
+  it('rejects a partial or misconfirmed settings write before contacting Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setConfirmationBundleSettings(
+        {
+          scope: '*',
+          expectedRevision: 0,
+          settings: { ...settings, per_bundle_request_cap: 0 },
+          reason: revision.reason,
+          confirmation: 'APPLY V9 CONFIRMATION MODE SHADOW',
+        },
+        actor,
+      ),
+    ).rejects.toThrow(/per_bundle_request_cap/)
+    await expect(
+      setConfirmationBundleSettings(
+        {
+          scope: '*',
+          expectedRevision: 0,
+          settings,
+          reason: revision.reason,
+          confirmation: 'APPLY V9 CONFIRMATION MODE ENFORCE',
+        },
+        actor,
+      ),
+    ).rejects.toThrow(/confirmation must be exactly/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('lists bounded bundle state without dropping budget or integer evidence fields', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(listResponse))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const parsed = await fetchConfirmationBundles({ state: 'pending', limit: 25 })
+    const requestUrl = new URL((fetchMock.mock.calls[0] as [string])[0])
+    expect(requestUrl.pathname).toBe('/api/v1/admin/confirmation-bundles')
+    expect(requestUrl.searchParams.get('state')).toBe('pending')
+    expect(requestUrl.searchParams.get('limit')).toBe('25')
+    expect(requestUrl.searchParams.get('offset')).toBe('0')
+    expect(parsed.budget.outstanding_reserved_microusd).toBe(50_000)
+    expect(parsed.shadow_calibration.measured_base_cost_microusd).toBe(130_000)
+    expect(parsed.shadow_calibration.projected_epoch_spend_microusd).toBeNull()
+    expect(parsed.items[0].settings_checksum).toBe(digest)
+  })
+
+  it('reads one exact bundle id and fails closed on stale audit visibility', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(pendingBundle))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchConfirmationBundle({ bundleId })).resolves.toEqual(pendingBundle)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `https://platform-api.heyditto.ai/api/v1/admin/confirmation-bundles/${bundleId}`,
+    )
+
+    const { settings_checksum: _removed, ...stale } = pendingBundle
+    fetchMock.mockResolvedValueOnce(Response.json(stale))
+    await expect(fetchConfirmationBundle({ bundleId })).rejects.toThrow(
+      /settings_checksum/,
+    )
+  })
+
+  it('authorizes one generation-bound retest with idempotency, actor, and exact phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const nextBundle = {
+      ...pendingBundle,
+      bundle_id: nextBundleId,
+      retest_generation: 1,
+      generation_reason: 'operator_retest',
+      source_bundle_id: bundleId,
+    }
+    const response = {
+      authorization_id: requestId,
+      superseded_bundle_id: bundleId,
+      bundle: nextBundle,
+      replayed: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(response))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      authorizeConfirmationBundleRetest(
+        {
+          bundleId,
+          requestId,
+          expectedGeneration: 0,
+          reason: 'provider recovered and fresh evidence is required',
+          confirmation: 'AUTHORIZE CONFIRMATION BUNDLE RETEST',
+        },
+        actor,
+      ),
+    ).resolves.toEqual(response)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      `https://platform-api.heyditto.ai/api/v1/admin/confirmation-bundles/${bundleId}/authorize-retest`,
+    )
+    expect(init.headers).toEqual(expect.objectContaining({ 'X-Admin-Actor': actor }))
+    expect(JSON.parse(String(init.body))).toEqual({
+      request_id: requestId,
+      expected_generation: 0,
+      reason: 'provider recovered and fresh evidence is required',
+      actor,
+      confirmation: 'AUTHORIZE CONFIRMATION BUNDLE RETEST',
+    })
+  })
+
+  it('surfaces Platform CAS refusals with the required re-read recovery', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        Response.json(
+          { detail: 'confirmation generation changed concurrently' },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    await expect(
+      authorizeConfirmationBundleRetest(
+        {
+          bundleId,
+          requestId,
+          expectedGeneration: 0,
+          reason: 'provider recovered and fresh evidence is required',
+          confirmation: 'AUTHORIZE CONFIRMATION BUNDLE RETEST',
+        },
+        actor,
+      ),
+    ).rejects.toThrow(/Nothing was applied.*get_confirmation_bundle/s)
+  })
 })
 
 describe('inference route administration', () => {

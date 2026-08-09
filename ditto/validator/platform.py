@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
@@ -37,6 +37,18 @@ from ditto.api_models.validator import (
     ValidatorHeartbeatRequest,
     ValidatorHeartbeatResponse,
 )
+from ditto.api_models.validator_confirmation import (
+    V9ConfirmationClaimRequest,
+    V9ConfirmationCompletionReport,
+    V9ConfirmationFailRequest,
+    V9ConfirmationFailResponse,
+    V9ConfirmationJobResponse,
+    V9ConfirmationPreparedReport,
+    V9ConfirmationPrepareRequest,
+    V9ConfirmationScorerResult,
+    V9ConfirmationSubmitRequest,
+    V9ConfirmationSubmitResponse,
+)
 from ditto.validator.errors import (
     PlatformError,
     PlatformInfrastructureError,
@@ -50,6 +62,11 @@ from ditto.validator.signing import (
     sign_ledger_request,
     sign_top5_confirmation_job_request,
     sign_top5_confirmation_score,
+    sign_v9_confirmation_artifact_request,
+    sign_v9_confirmation_claim,
+    sign_v9_confirmation_fail,
+    sign_v9_confirmation_prepare,
+    v9_confirmation_prepare_wire_sha256,
     verify_ledger_entry,
 )
 
@@ -138,6 +155,294 @@ class PlatformClient:
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return JobResponse.model_validate(resp.json())
+
+    async def request_v9_confirmation_job(
+        self,
+        *,
+        slot_id: str,
+        profile_revision: str,
+        profile_checksum: str,
+    ) -> V9ConfirmationJobResponse | None:
+        """Claim one internal exact-profile bundle; ``None`` means no work."""
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = V9ConfirmationClaimRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            slot_id=slot_id,
+            profile_revision=profile_revision,
+            profile_checksum=profile_checksum,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_v9_confirmation_claim(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                slot_id=slot_id,
+                profile_revision=profile_revision,
+                profile_checksum=profile_checksum,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        url = f"{self._base}{_PREFIX}/v9-confirmation/job"
+        try:
+            response = await self._client.post(
+                url,
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"v9 confirmation claim failed: {error}") from error
+        if response.status_code == 204:
+            return None
+        if response.status_code != 200:
+            raise PlatformError(
+                "v9 confirmation claim rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            job = V9ConfirmationJobResponse.model_validate(response.json())
+        except (ValidationError, ValueError) as error:
+            raise PlatformError("v9 confirmation job response was invalid") from error
+        if (
+            job.slot_id != slot_id
+            or job.execution_profile.revision != profile_revision
+            or job.execution_profile.checksum != profile_checksum
+        ):
+            raise PlatformError(
+                "v9 confirmation job response did not match the signed claim"
+            )
+        return job
+
+    async def get_v9_confirmation_artifact(
+        self, job: V9ConfirmationJobResponse
+    ) -> ArtifactResponse:
+        """Fetch source through the bundle ticket, never a canonical ticket."""
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        headers = {
+            **self._headers,
+            "X-Confirmation-Ticket-Id": str(job.ticket_id),
+            "X-Confirmation-Nonce": str(nonce),
+            "X-Confirmation-Requested-At": requested_at.isoformat(),
+            "X-Confirmation-Signature": sign_v9_confirmation_artifact_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                bundle_id=job.bundle_id,
+                ticket_id=job.ticket_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        url = f"{self._base}{_PREFIX}/v9-confirmation/bundle/{job.bundle_id}/artifact"
+        try:
+            response = await self._client.get(url, headers=headers)
+        except httpx.HTTPError as error:
+            raise PlatformError(
+                f"v9 confirmation artifact fetch failed: {error}"
+            ) from error
+        if response.status_code != 200:
+            raise PlatformError(
+                "v9 confirmation artifact rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            artifact = ArtifactResponse.model_validate(response.json())
+        except (ValidationError, ValueError) as error:
+            raise PlatformError(
+                "v9 confirmation artifact response was invalid"
+            ) from error
+        if (
+            artifact.agent_id != job.agent_id
+            or artifact.sha256 != job.artifact_sha256
+            or artifact.bench_version != 9
+        ):
+            raise PlatformError("v9 confirmation artifact identity mismatch")
+        return artifact
+
+    async def prepare_v9_confirmation_report(
+        self,
+        job: V9ConfirmationJobResponse,
+        result: V9ConfirmationScorerResult,
+    ) -> V9ConfirmationPreparedReport:
+        """Normalize native scorer evidence and derive its Platform-owned root."""
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        longmemeval = result.longmemeval.model_dump(mode="json")
+        inference_ablation = result.inference_ablation.model_dump(mode="json")
+        embedding_ablation = result.embedding_ablation.model_dump(mode="json")
+        wire_sha256 = v9_confirmation_prepare_wire_sha256(
+            ablation_coordinator_latency_ms=result.ablation_coordinator_latency_ms,
+            longmemeval=longmemeval,
+            inference_ablation=inference_ablation,
+            embedding_ablation=embedding_ablation,
+        )
+        if result.evidence_sha256 != wire_sha256:
+            raise PlatformError("v9 confirmation scorer native wire digest was invalid")
+        payload = V9ConfirmationPrepareRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            ticket_id=job.ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            wire_sha256=wire_sha256,
+            ablation_coordinator_latency_ms=result.ablation_coordinator_latency_ms,
+            longmemeval=result.longmemeval,
+            inference_ablation=result.inference_ablation,
+            embedding_ablation=result.embedding_ablation,
+            signature=sign_v9_confirmation_prepare(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                bundle_id=job.bundle_id,
+                ticket_id=job.ticket_id,
+                wire_sha256=wire_sha256,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        url = (
+            f"{self._base}{_PREFIX}/v9-confirmation/"
+            f"bundle/{job.bundle_id}/prepare-report"
+        )
+        try:
+            response = await self._client.post(
+                url,
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(
+                f"v9 confirmation report preparation failed: {error}"
+            ) from error
+        if response.status_code != 200:
+            raise PlatformError(
+                "v9 confirmation report preparation rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            prepared = V9ConfirmationPreparedReport.model_validate(response.json())
+        except (ValidationError, ValueError) as error:
+            raise PlatformError(
+                "v9 confirmation prepared report response was invalid"
+            ) from error
+        if (
+            prepared.bundle_id != job.bundle_id
+            or prepared.ticket_id != job.ticket_id
+            or prepared.ablation_coordinator_latency_ms
+            != result.ablation_coordinator_latency_ms
+        ):
+            raise PlatformError("v9 confirmation prepared report identity mismatch")
+        return prepared
+
+    async def submit_v9_confirmation_report(
+        self,
+        job: V9ConfirmationJobResponse,
+        report: V9ConfirmationCompletionReport,
+    ) -> V9ConfirmationSubmitResponse:
+        payload = V9ConfirmationSubmitRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            ticket_id=job.ticket_id,
+            report=report,
+        )
+        url = f"{self._base}{_PREFIX}/v9-confirmation/bundle/{job.bundle_id}/report"
+        response: httpx.Response | None = None
+        for attempt, delay in enumerate((0.0, 0.25, 1.0)):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                response = await self._client.post(
+                    url,
+                    headers=self._headers,
+                    json=payload.model_dump(mode="json"),
+                )
+            except httpx.HTTPError as error:
+                if attempt < 2:
+                    continue
+                raise PlatformError(
+                    f"v9 confirmation report failed after 3 attempts: {error}"
+                ) from error
+            if response.status_code == 200:
+                break
+            if response.status_code not in {408, 429} and response.status_code < 500:
+                break
+        assert response is not None
+        if response.status_code != 200:
+            raise PlatformError(
+                "v9 confirmation report rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            accepted = V9ConfirmationSubmitResponse.model_validate(response.json())
+        except (ValidationError, ValueError) as error:
+            raise PlatformError(
+                "v9 confirmation submit response was invalid"
+            ) from error
+        if accepted.bundle_id != job.bundle_id or accepted.ticket_id != job.ticket_id:
+            raise PlatformError("v9 confirmation acceptance identity mismatch")
+        return accepted
+
+    async def fail_v9_confirmation_job(
+        self,
+        job: V9ConfirmationJobResponse,
+        *,
+        reason: Literal["execution_failed", "deadline", "cancelled", "infrastructure"],
+    ) -> V9ConfirmationFailResponse:
+        """Close one private v9 lease without touching canonical fail routes."""
+        url = f"{self._base}{_PREFIX}/v9-confirmation/bundle/{job.bundle_id}/fail"
+        last_error: httpx.HTTPError | None = None
+        for delay in (0.0, 0.25, 1.0):
+            if delay:
+                await asyncio.sleep(delay)
+            requested_at = datetime.now(UTC)
+            nonce = uuid4()
+            payload = V9ConfirmationFailRequest(
+                validator_hotkey=self._config.validator_hotkey,
+                ticket_id=job.ticket_id,
+                reason=reason,
+                nonce=nonce,
+                requested_at=requested_at,
+                signature=sign_v9_confirmation_fail(
+                    self._keypair,
+                    validator_hotkey=self._config.validator_hotkey,
+                    bundle_id=job.bundle_id,
+                    ticket_id=job.ticket_id,
+                    reason=reason,
+                    nonce=nonce,
+                    requested_at=requested_at,
+                ),
+            )
+            try:
+                response = await self._client.post(
+                    url,
+                    headers=self._headers,
+                    json=payload.model_dump(mode="json"),
+                )
+            except httpx.HTTPError as error:
+                last_error = error
+                continue
+            if response.status_code == 200:
+                try:
+                    failed = V9ConfirmationFailResponse.model_validate(response.json())
+                except (ValidationError, ValueError) as error:
+                    raise PlatformError(
+                        "v9 confirmation failure response was invalid"
+                    ) from error
+                if (
+                    failed.bundle_id != job.bundle_id
+                    or failed.ticket_id != job.ticket_id
+                ):
+                    raise PlatformError(
+                        "v9 confirmation failure response identity mismatch"
+                    )
+                return failed
+            if response.status_code not in {408, 429} and response.status_code < 500:
+                raise PlatformError(
+                    "v9 confirmation failure rejected "
+                    f"({response.status_code}): {response.text[:200]}"
+                )
+        if last_error is not None:
+            raise PlatformError(
+                f"v9 confirmation failure hand-back failed: {last_error}"
+            ) from last_error
+        raise PlatformError("v9 confirmation failure hand-back exhausted retries")
 
     async def exchange_inference_grant(
         self, grant_id: UUID, broker_public_key: str, exchange_url: str
@@ -411,6 +716,19 @@ class PlatformClient:
                 f"ledger rejected ({resp.status_code}): {resp.text[:200]}"
             )
         ledger = LedgerResponse.model_validate(resp.json())
+        if ledger.v9_confirmation_mode == "enforce" and any(
+            entry.bench_version == 9 and entry.v9_confirmation is None
+            for entry in ledger.entries
+        ):
+            raise PlatformError(
+                "v9 enforce ledger contained a row without full confirmation"
+            )
+        if ledger.v9_confirmation_mode is None and any(
+            entry.v9_confirmation is not None for entry in ledger.entries
+        ):
+            raise PlatformError(
+                "ledger carried v9 confirmation receipts without enforce marker"
+            )
         invalid = [
             entry.agent_id for entry in ledger.entries if not verify_ledger_entry(entry)
         ]

@@ -60,6 +60,7 @@ import {
   RankMove,
   RolloutChip,
   TokenPenaltyChip,
+  V9ConfirmationChip,
 } from "./chips";
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
 
@@ -262,6 +263,7 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
             settledView={props.store.settledView()}
             desiredVersion={props.store.bench().desired ?? props.store.bench().active}
           />
+          <V9ConfirmationChip entry={props.entry} />
           <ContinualScoreChip entry={props.entry} />
           <EfficiencyBonusChip entry={props.entry} />
           <QualityGateChip entry={props.entry} />
@@ -284,11 +286,14 @@ function BoardRow(props: {
   chainRegistrationUnknown: boolean;
 }): JSX.Element {
   const e = (): BoardEntry => props.entry;
-  const elig = (): boolean => isEligible(e());
-  const finalizedEntry = (): boolean => isFinalized(e());
+  const v9ConfirmationSuppressed = (): boolean =>
+    props.store.payload()?.v9_confirmation_mode === "enforce" &&
+    (e().v9_confirmation_status === "base_only" || e().v9_confirmation_status === "provisional");
+  const elig = (): boolean => isEligible(e()) && !v9ConfirmationSuppressed();
+  const finalizedEntry = (): boolean => isFinalized(e()) && !v9ConfirmationSuppressed();
   const registered = (): boolean => isRegistered(e());
   const emission = (): ReturnType<LeaderboardStore["emissionFor"]> =>
-    props.store.emissionFor(e().agent_id);
+    v9ConfirmationSuppressed() ? null : props.store.emissionFor(e().agent_id);
   const chainWeight = (): ReturnType<LeaderboardStore["chainFold"]> extends infer _
     ? unknown
     : never => undefined as never;
@@ -401,7 +406,7 @@ function BoardRow(props: {
                     provisional
                   </ChipTip>
                 </Show>
-                <Show when={!finalizedEntry()}>
+                <Show when={!finalizedEntry() && !v9ConfirmationSuppressed()}>
                   <ChipTip
                     class="quorum-badge tip-chip"
                     text={

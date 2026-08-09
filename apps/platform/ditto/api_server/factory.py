@@ -36,6 +36,7 @@ from ditto.api_server.endpoints import (
     admin_attestation_router,
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
+    admin_confirmation_bundles_router,
     admin_continual_retest_settings_router,
     admin_copy_review_router,
     admin_efficiency_bonus_settings_router,
@@ -62,6 +63,7 @@ from ditto.api_server.endpoints import (
     scoring_router,
     screener_router,
     upload_router,
+    validator_confirmation_router,
     validator_router,
 )
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
@@ -332,6 +334,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
+    app.include_router(validator_confirmation_router, prefix="/api/v1")
     app.include_router(inference_router, prefix="/api/v1")
     app.include_router(screener_router, prefix="/api/v1")
     app.include_router(scoring_router, prefix="/api/v1")
@@ -354,6 +357,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
+    app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")

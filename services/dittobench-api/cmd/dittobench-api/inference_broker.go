@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
@@ -59,6 +60,7 @@ const (
 	embeddingSessionRequests   = 100000
 	embeddingSessionInputs     = 1000000
 	embeddingSessionInputBytes = 1 << 30
+	brokerAblationTraceBytes   = 256 << 20
 )
 
 // ticketTransientMaxAttempts bounds the embedding lane's short retry window.
@@ -98,15 +100,20 @@ type brokerTicketIdentity struct {
 }
 
 type brokerSession struct {
-	mu                    sync.Mutex
-	id                    string
-	activationSecret      string
-	privateKey            ed25519.PrivateKey
-	publicKey             ed25519.PublicKey
-	grantID               string
-	bearer                string
-	proxyURL              string
-	legacyGateway         string
+	mu               sync.Mutex
+	id               string
+	activationSecret string
+	privateKey       ed25519.PrivateKey
+	publicKey        ed25519.PublicKey
+	grantID          string
+	bearer           string
+	proxyURL         string
+	legacyGateway    string
+	// trustedChatHandler is an in-process confirmation reader route. It is
+	// reachable only after this broker has authenticated the sandbox source;
+	// unlike a loopback HTTP listener it cannot be scanned or called by another
+	// host process to spend the server-owned provider session.
+	trustedChatHandler    http.Handler
 	generation            int
 	expiresAt             time.Time
 	expectedSourceIP      string
@@ -120,6 +127,7 @@ type brokerSession struct {
 	ticketDeadline        time.Time
 	boundRunID            string
 	benchVersion          int
+	confirmationSession   bool
 	inFlight              int
 	embeddingPhaseStarted bool
 	embeddingPhaseActive  bool
@@ -179,6 +187,174 @@ type brokerSession struct {
 	callerCancels       uint64
 	upstreamAttempts    uint64
 	cancels             map[string]context.CancelFunc
+	// ablation is installed only for one v9 confirmation case at a time. The
+	// capability is coordinator-created and revocable; the broker merely adapts
+	// the matching HTTP lane to it and replays the paired ordinary response for
+	// the other lane.
+	ablation       *brokerAblationScope
+	ablationTraces map[string]*brokerAblationTrace
+	ablationBytes  uint64
+}
+
+type brokerAblationScope struct {
+	lane                ablation.Lane
+	caseID              string
+	opaqueUserNamespace string
+	responder           ablation.SyntheticResponder
+	trace               *brokerAblationTrace
+	session             *brokerSession
+	chatCursor          int
+	embeddingCursor     int
+}
+
+type brokerAblationCall struct {
+	requestSHA256 string
+	response      []byte
+}
+
+// brokerAblationTrace captures the paid ordinary sample once, then permits
+// exact-response replay for the non-intervened service during both ablation
+// rounds. Consequently an inference intervention synthesizes chat and replays
+// embeddings, while an embedding intervention replays chat and synthesizes
+// embeddings: neither intervention can issue a paid upstream request.
+type brokerAblationTrace struct {
+	mu          sync.Mutex
+	chat        []brokerAblationCall
+	embeddings  []brokerAblationCall
+	storedBytes uint64
+}
+
+func ablationCallSHA256(raw []byte) string {
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
+}
+
+func (scope *brokerAblationScope) reserveOrdinaryCall(chat bool, raw []byte) int {
+	scope.trace.mu.Lock()
+	defer scope.trace.mu.Unlock()
+	calls := &scope.trace.embeddings
+	if chat {
+		calls = &scope.trace.chat
+	}
+	index := len(*calls)
+	*calls = append(*calls, brokerAblationCall{requestSHA256: ablationCallSHA256(raw)})
+	return index
+}
+
+func (scope *brokerAblationScope) completeOrdinaryCall(chat bool, index int, response []byte) bool {
+	if len(response) == 0 || uint64(len(response)) > brokerAblationTraceBytes {
+		return false
+	}
+	scope.session.mu.Lock()
+	defer scope.session.mu.Unlock()
+	scope.trace.mu.Lock()
+	defer scope.trace.mu.Unlock()
+	calls := scope.trace.embeddings
+	if chat {
+		calls = scope.trace.chat
+	}
+	if index < 0 || index >= len(calls) || len(calls[index].response) != 0 ||
+		scope.session.ablationBytes > brokerAblationTraceBytes-uint64(len(response)) {
+		return false
+	}
+	calls[index].response = append([]byte(nil), response...)
+	scope.trace.storedBytes += uint64(len(response))
+	scope.session.ablationBytes += uint64(len(response))
+	return true
+}
+
+func (scope *brokerAblationScope) replayCall(chat bool, raw []byte) ([]byte, error) {
+	scope.trace.mu.Lock()
+	defer scope.trace.mu.Unlock()
+	calls, cursor := scope.trace.embeddings, &scope.embeddingCursor
+	if chat {
+		calls, cursor = scope.trace.chat, &scope.chatCursor
+	}
+	if *cursor >= len(calls) {
+		return nil, fmt.Errorf("ordinary ablation trace is exhausted")
+	}
+	call := calls[*cursor]
+	*cursor++
+	if call.requestSHA256 != ablationCallSHA256(raw) || len(call.response) == 0 {
+		return nil, fmt.Errorf("ordinary ablation trace does not match request")
+	}
+	return append([]byte(nil), call.response...), nil
+}
+
+// brokerAblationLease prevents a scoped responder from surviving the exact
+// RunCase attempt that received it. Close is idempotent and compare-and-clears
+// the scope, so a stale defer cannot revoke a later case.
+type brokerAblationLease struct {
+	once    sync.Once
+	session *brokerSession
+	scope   *brokerAblationScope
+}
+
+func (lease *brokerAblationLease) Close() {
+	if lease == nil {
+		return
+	}
+	lease.once.Do(func() {
+		lease.session.mu.Lock()
+		if lease.session.ablation == lease.scope {
+			lease.session.ablation = nil
+		}
+		lease.session.mu.Unlock()
+	})
+}
+
+// beginAblationCase attaches one coordinator case to an already source-bound
+// v9 confirmation session. The ordinary lane records provider responses. Each
+// intervention receives its revocable responder and the matching ordinary
+// trace, replaying the non-intervened service so no paid request is made during
+// either ablation round.
+func (b *inferenceBroker) beginAblationCase(
+	id, runID string, request ablation.RunRequest,
+) (*brokerAblationLease, error) {
+	if request.CaseID == "" || request.OpaqueUserNamespace == "" ||
+		(request.Lane != ablation.LaneOrdinary && request.Lane != ablation.LaneInference &&
+			request.Lane != ablation.LaneEmbedding) ||
+		(request.Lane == ablation.LaneOrdinary && request.Responder != nil) ||
+		(request.Lane != ablation.LaneOrdinary && request.Responder == nil) {
+		return nil, fmt.Errorf("invalid ablation case scope")
+	}
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return nil, fmt.Errorf("inference session unavailable")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.boundRunID != runID || session.benchVersion != ablation.BenchVersionV9 ||
+		!session.activeLocked(time.Now()) || session.ablation != nil {
+		return nil, fmt.Errorf("inference session is not available for ablation")
+	}
+	if session.ablationTraces == nil {
+		session.ablationTraces = make(map[string]*brokerAblationTrace)
+	}
+	trace := session.ablationTraces[request.CaseID]
+	if request.Lane == ablation.LaneOrdinary {
+		if trace != nil {
+			trace.mu.Lock()
+			released := trace.storedBytes
+			trace.mu.Unlock()
+			if released > session.ablationBytes {
+				return nil, fmt.Errorf("ordinary ablation trace accounting is invalid")
+			}
+			session.ablationBytes -= released
+		}
+		trace = &brokerAblationTrace{}
+		session.ablationTraces[request.CaseID] = trace
+	} else if trace == nil {
+		return nil, fmt.Errorf("ordinary ablation trace is unavailable")
+	}
+	scope := &brokerAblationScope{
+		lane: request.Lane, caseID: request.CaseID,
+		opaqueUserNamespace: request.OpaqueUserNamespace, responder: request.Responder, trace: trace, session: session,
+	}
+	session.ablation = scope
+	return &brokerAblationLease{session: session, scope: scope}, nil
 }
 
 func newInferenceBrokerHTTPServer(addr string, handler http.Handler) *http.Server {
@@ -1159,7 +1335,8 @@ func (b *inferenceBroker) bindSource(id, runID, sourceIP string) bool {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.boundRunID != runID || session.expectedSourceIP != "" ||
-		(session.bearer == "" && session.legacyGateway == "") || !session.expiresAt.After(time.Now()) {
+		(session.bearer == "" && session.legacyGateway == "" && session.trustedChatHandler == nil) ||
+		!session.expiresAt.After(time.Now()) {
 		return false
 	}
 	session.expectedSourceIP = sourceIP
@@ -1180,7 +1357,8 @@ func (b *inferenceBroker) replaceBoundSource(id, runID, oldSourceIP, newSourceIP
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.boundRunID != runID || session.expectedSourceIP != oldSourceIP ||
-		(session.bearer == "" && session.legacyGateway == "") || !session.expiresAt.After(time.Now()) {
+		(session.bearer == "" && session.legacyGateway == "" && session.trustedChatHandler == nil) ||
+		!session.expiresAt.After(time.Now()) {
 		return false
 	}
 	session.expectedSourceIP = newSourceIP
@@ -1202,7 +1380,8 @@ func (session *brokerSession) embeddingLaneLocked() int {
 
 func (session *brokerSession) activeLocked(now time.Time) bool {
 	return session.boundRunID != "" && session.expectedSourceIP != "" &&
-		session.expiresAt.After(now) && (session.bearer != "" || session.legacyGateway != "")
+		session.expiresAt.After(now) &&
+		(session.bearer != "" || session.legacyGateway != "" || session.trustedChatHandler != nil)
 }
 
 func destroyBrokerSession(session *brokerSession) {
@@ -1225,6 +1404,7 @@ func destroyBrokerSession(session *brokerSession) {
 	session.activationSecret = ""
 	session.bearer = ""
 	session.legacyGateway = ""
+	session.trustedChatHandler = nil
 	session.requestModel = ""
 	session.embeddingPhaseActive = false
 	session.mu.Unlock()
@@ -1470,7 +1650,42 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 	session.embeddingInputs += uint64(len(payload.Input))
 	session.embeddingInputBytes += uint64(inputBytes)
 	runID := session.boundRunID
+	ablationScope := session.ablation
+	ordinaryAblationCall := -1
+	if ablationScope != nil && ablationScope.lane == ablation.LaneOrdinary {
+		ordinaryAblationCall = ablationScope.reserveOrdinaryCall(false, body)
+	}
 	session.mu.Unlock()
+
+	// The matching synthetic lane returns before an upstream slot, provider
+	// request, or provider-accounting counter is touched. A revoked responder is
+	// terminal for the attempt and cannot silently degrade into ordinary
+	// embeddings.
+	if ablationScope != nil && requestContext.Err() != nil {
+		writeError(w, http.StatusRequestTimeout, "ablation embedding cancelled")
+		return
+	}
+	if ablationScope != nil && ablationScope.lane == ablation.LaneEmbedding {
+		decoded, responseErr := ablationScope.responder.Embeddings(payload.Input)
+		if responseErr != nil {
+			writeError(w, http.StatusServiceUnavailable, "synthetic embedding unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, decoded)
+		return
+	}
+	if ablationScope != nil && ablationScope.lane == ablation.LaneInference {
+		replayed, replayErr := ablationScope.replayCall(false, body)
+		if replayErr != nil {
+			writeError(w, http.StatusServiceUnavailable, "ordinary embedding replay unavailable")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(replayed)
+		return
+	}
 
 	// The model is a property of the ticket, not of the request -- the same
 	// premise #102 applied to the chat door, now applied to this one.
@@ -1524,7 +1739,13 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 	}
 
 	var decoded embeddingResponse
-	if benchVersion >= 7 {
+	if ablationScope != nil && ablationScope.lane == ablation.LaneOrdinary ||
+		(ablationScope == nil && session.confirmationSession) {
+		// Confirmation uses the existing local, fixed embedding seam for the
+		// paid-free ordinary/reference trace. Both intervention rounds either
+		// replay this response or synthesize the targeted lane above.
+		decoded, err = b.forwardLocalEmbedding(requestContext, payload.Input)
+	} else if benchVersion >= 7 {
 		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input)
 	} else {
 		decoded, err = b.forwardLocalEmbedding(requestContext, payload.Input)
@@ -1593,6 +1814,17 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 				writeError(w, http.StatusBadGateway, "invalid embedding response")
 				return
 			}
+		}
+	}
+	if ordinaryAblationCall >= 0 {
+		responseBody, marshalErr := json.Marshal(decoded)
+		if marshalErr != nil {
+			writeError(w, http.StatusBadGateway, "invalid embedding response")
+			return
+		}
+		if !ablationScope.completeOrdinaryCall(false, ordinaryAblationCall, responseBody) {
+			writeError(w, http.StatusServiceUnavailable, "ordinary embedding trace unavailable")
+			return
 		}
 	}
 	writeJSON(w, http.StatusOK, decoded)
@@ -1881,6 +2113,22 @@ func sourceIP(remote string) string {
 	return host
 }
 
+func callTrustedChatHandler(ctx context.Context, handler http.Handler, body []byte) (*http.Response, error) {
+	if handler == nil {
+		return nil, errors.New("trusted chat handler is unavailable")
+	}
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, "http://confirmation-reader.invalid/v1/chat/completions", bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder.Result(), nil
+}
+
 func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session *brokerSession) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, brokerBodyLimit+1))
 	if err != nil || len(body) > brokerBodyLimit {
@@ -1923,8 +2171,56 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 		}
 		body = rewritten
 	}
+	// A v9 intervention is served before any provider accounting, proof
+	// construction, or HTTP client is reachable. The coordinator's responder is
+	// scoped to this exact case attempt; if it has already been revoked, the
+	// request fails here and is never allowed to fall through to paid inference.
+	ablationScope := session.ablation
+	requestModel := session.requestModel
+	if ablationScope != nil && ablationScope.lane == ablation.LaneInference {
+		responder := ablationScope.responder
+		session.mu.Unlock()
+		if r.Context().Err() != nil {
+			writeError(w, http.StatusRequestTimeout, "synthetic inference cancelled")
+			return
+		}
+		completion, responseErr := responder.Chat(requestModel, uint64(len(body)))
+		if responseErr != nil {
+			writeError(w, http.StatusServiceUnavailable, "synthetic inference unavailable")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, completion)
+		return
+	}
+	if ablationScope != nil && ablationScope.lane == ablation.LaneEmbedding {
+		session.mu.Unlock()
+		if r.Context().Err() != nil {
+			writeError(w, http.StatusRequestTimeout, "ordinary inference replay cancelled")
+			return
+		}
+		replayed, replayErr := ablationScope.replayCall(true, body)
+		if replayErr != nil {
+			writeError(w, http.StatusServiceUnavailable, "ordinary inference replay unavailable")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(replayed)
+		return
+	}
+	ordinaryAblationCall := -1
+	if ablationScope != nil && ablationScope.lane == ablation.LaneOrdinary {
+		ordinaryAblationCall = ablationScope.reserveOrdinaryCall(true, body)
+	}
 	grantID, bearer, proxyURL, generation := session.grantID, session.bearer, session.proxyURL, session.generation
 	legacyGateway := session.legacyGateway
+	trustedChatHandler := session.trustedChatHandler
+	grantDenialRoute := legacyGateway
+	if trustedChatHandler != nil {
+		grantDenialRoute = "trusted-in-process"
+	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	session.requests++
 	session.promptBytes += uint64(len(body))
@@ -1941,7 +2237,9 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 		delete(session.cancels, cancelID)
 		session.mu.Unlock()
 	}()
-	if legacyGateway != "" {
+	if trustedChatHandler != nil {
+		proxyURL = "http://confirmation-reader.invalid/v1/chat/completions"
+	} else if legacyGateway != "" {
 		var routeErr error
 		proxyURL, routeErr = relayURL(legacyGateway, "/v1/chat/completions")
 		if routeErr != nil {
@@ -1960,7 +2258,9 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 	// so v7 keeps a deliberately tiny second line of defence. See
 	// ticketTransientMaxAttempts for why the cap spans the complete backoff window.
 	maxAttempts := ticketChatFastMaxAttempts + ticketRecoveryMaxAttempts
-	if legacyGateway != "" {
+	if trustedChatHandler != nil {
+		maxAttempts = 1
+	} else if legacyGateway != "" {
 		maxAttempts = b.retry.maxAttempts
 	}
 	if maxAttempts < 1 {
@@ -1993,7 +2293,7 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 			break
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if legacyGateway == "" {
+		if legacyGateway == "" && trustedChatHandler == nil {
 			digest := sha256.Sum256(body)
 			message := fmt.Sprintf("ditto-inference:v1:%s:%d:%s:%s:%s", grantID, generation, nonce, requested, hex.EncodeToString(digest[:]))
 			proof := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(message)))
@@ -2008,7 +2308,13 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 		session.upstreamAttempts++
 		session.mu.Unlock()
 		started := time.Now()
-		resp, requestErr := b.client.Do(req)
+		var resp *http.Response
+		var requestErr error
+		if trustedChatHandler != nil {
+			resp, requestErr = callTrustedChatHandler(requestCtx, trustedChatHandler, body)
+		} else {
+			resp, requestErr = b.client.Do(req)
+		}
 		totalLatency += uint64(time.Since(started).Milliseconds())
 		if requestErr != nil {
 			if requestCtx.Err() != nil {
@@ -2016,7 +2322,7 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 			}
 			continue
 		}
-		atCapacity := legacyGateway == "" && platformIsAtCapacity(resp)
+		atCapacity := legacyGateway == "" && trustedChatHandler == nil && platformIsAtCapacity(resp)
 		capacityPause := retryAfterDuration(resp.Header.Get("Retry-After"))
 		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 		_ = resp.Body.Close()
@@ -2060,7 +2366,7 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 		// still consuming a fresh reservation and one more request from a grant
 		// that cannot serve it. Stop immediately -- both terminal reasons want
 		// the same action here, and only the reporting below tells them apart.
-		if platformDeniesGrant(legacyGateway, responseStatus) {
+		if platformDeniesGrant(grantDenialRoute, responseStatus) {
 			break
 		}
 		if responseStatus == http.StatusRequestTimeout || responseStatus == http.StatusTooManyRequests || responseStatus >= 500 {
@@ -2113,7 +2419,7 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 	// still sees the byte-identical 502 it saw before, because this run is going
 	// to be discarded either way and its remaining requests must not observe a
 	// changed gateway contract mid-benchmark.
-	if platformDeniesGrant(legacyGateway, responseStatus) {
+	if platformDeniesGrant(grantDenialRoute, responseStatus) {
 		session.mu.Lock()
 		session.grantDenials++
 		session.providerLatency += totalLatency
@@ -2174,6 +2480,12 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 		session.usageUnavailable++
 	}
 	session.mu.Unlock()
+	if ordinaryAblationCall >= 0 {
+		if !ablationScope.completeOrdinaryCall(true, ordinaryAblationCall, responseBody) {
+			writeError(w, http.StatusServiceUnavailable, "ordinary inference trace unavailable")
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)

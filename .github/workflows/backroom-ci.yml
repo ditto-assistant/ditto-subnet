@@ -9,6 +9,7 @@ on:
       - apps/platform/ditto/api_server/factory.py
       - apps/platform/pyproject.toml
       - apps/platform/uv.lock
+      - packages/ditto-screening-protocol/**
       - .github/workflows/backroom-ci.yml
   push:
     branches: [main]
@@ -19,6 +20,7 @@ on:
       - apps/platform/ditto/api_server/factory.py
       - apps/platform/pyproject.toml
       - apps/platform/uv.lock
+      - packages/ditto-screening-protocol/**
       - .github/workflows/backroom-ci.yml
 
 permissions:

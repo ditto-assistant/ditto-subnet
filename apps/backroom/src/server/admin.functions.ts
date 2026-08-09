@@ -47,6 +47,10 @@ import {
   setValidatorSlotSettingsInputSchema,
   inferenceRouteCalibrationInputSchema,
   inferenceRoutingPolicyInputSchema,
+  setConfirmationBundleSettingsInputSchema,
+  confirmationBundleListInputSchema,
+  confirmationBundleDetailInputSchema,
+  authorizeConfirmationBundleRetestInputSchema,
 } from '../lib/admin.schemas'
 import {
   startBenchmarkRollout as startBenchmarkRolloutService,
@@ -111,8 +115,57 @@ import {
   fetchValidatorFleet,
   setInferenceConcurrencySettings as setInferenceConcurrencySettingsService,
   setValidatorSlotSettings as setValidatorSlotSettingsService,
+  fetchConfirmationBundleSettings,
+  setConfirmationBundleSettings as setConfirmationBundleSettingsService,
+  fetchConfirmationBundles,
+  fetchConfirmationBundle,
+  authorizeConfirmationBundleRetest as authorizeConfirmationBundleRetestService,
 } from './admin.service'
 import { authMiddleware, sameOriginMiddleware, writeAuthMiddleware } from './auth.functions'
+
+export const getConfirmationBundleSettings = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchConfirmationBundleSettings()
+  })
+
+export const updateConfirmationBundleSettings = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(setConfirmationBundleSettingsInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return setConfirmationBundleSettingsService(data, context.session.email)
+  })
+
+export const listConfirmationBundles = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(confirmationBundleListInputSchema)
+  .handler(({ data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchConfirmationBundles(data)
+  })
+
+export const getConfirmationBundle = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(confirmationBundleDetailInputSchema)
+  .handler(({ data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchConfirmationBundle(data)
+  })
+
+export const authorizeConfirmationBundleRetest = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(authorizeConfirmationBundleRetestInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return authorizeConfirmationBundleRetestService(data, context.session.email)
+  })
 
 export const getBenchmarkRolloutControl = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])

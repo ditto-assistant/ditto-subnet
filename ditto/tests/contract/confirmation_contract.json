@@ -1,0 +1,2563 @@
+{
+  "ConfirmationExecutionProfile": {
+    "$defs": {
+      "AblationBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "max_chat_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_chat_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_inputs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_chat_requests",
+          "max_chat_input_bytes",
+          "max_embedding_requests",
+          "max_embedding_inputs",
+          "max_embedding_input_bytes"
+        ],
+        "type": "object"
+      },
+      "ConfirmationAblationCoordinatorProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "max_attempts": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "max_requests": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "request_timeout_milliseconds": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "sample_size": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "total_timeout_milliseconds": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sample_size",
+          "max_attempts",
+          "max_requests",
+          "request_timeout_milliseconds",
+          "total_timeout_milliseconds"
+        ],
+        "type": "object"
+      },
+      "ConfirmationAblationProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "$ref": "#/$defs/AblationBudget"
+          },
+          "contract_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "intervention": {
+            "enum": [
+              "inference",
+              "embedding"
+            ],
+            "type": "string"
+          },
+          "threshold_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "intervention",
+          "contract_version",
+          "threshold_micros",
+          "budget"
+        ],
+        "type": "object"
+      },
+      "ConfirmationCompositeProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "base_weight_bps": {
+            "exclusiveMaximum": 10000,
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "formula_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "longmem_weight_bps": {
+            "exclusiveMaximum": 10000,
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "revision",
+          "formula_revision",
+          "base_weight_bps",
+          "longmem_weight_bps",
+          "checksum"
+        ],
+        "type": "object"
+      },
+      "ConfirmationProviderLaneProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "lane": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "max_completion_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_cost_usd_micros": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_prompt_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_requests": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_total_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane",
+          "provider",
+          "profile_revision",
+          "model",
+          "max_requests",
+          "max_prompt_tokens",
+          "max_completion_tokens",
+          "max_total_tokens",
+          "max_cost_usd_micros"
+        ],
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "ablation_coordinator_policy": {
+        "$ref": "#/$defs/ConfirmationAblationCoordinatorProfile"
+      },
+      "ablation_dataset_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "ablation_profile_checksum": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "ablation_profile_revision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ablation_projection_key_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "ablation_selection_key_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "ablation_threshold_manifest_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "checksum": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "composite": {
+        "$ref": "#/$defs/ConfirmationCompositeProfile"
+      },
+      "embedding_ablation": {
+        "$ref": "#/$defs/ConfirmationAblationProfile"
+      },
+      "inference_ablation": {
+        "$ref": "#/$defs/ConfirmationAblationProfile"
+      },
+      "longmem_cases_per_capability": {
+        "minimum": 2,
+        "type": "integer"
+      },
+      "longmem_dataset_revision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "longmem_dataset_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "longmem_profile_checksum": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "longmem_profile_revision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "longmem_projection_key_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "longmem_seed_batch_pairs": {
+        "exclusiveMinimum": 0,
+        "type": "integer"
+      },
+      "longmem_selection_seed": {
+        "maximum": 18446744073709551615,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "longmem_selector_revision": {
+        "const": "longmemeval-s-stratified-sha256-v1",
+        "type": "string"
+      },
+      "provider_lanes": {
+        "items": {
+          "$ref": "#/$defs/ConfirmationProviderLaneProfile"
+        },
+        "type": "array"
+      },
+      "revision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "schema_version": {
+        "const": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "schema_version",
+      "revision",
+      "checksum",
+      "longmem_profile_revision",
+      "longmem_profile_checksum",
+      "longmem_dataset_revision",
+      "longmem_dataset_sha256",
+      "longmem_selector_revision",
+      "longmem_selection_seed",
+      "longmem_cases_per_capability",
+      "longmem_seed_batch_pairs",
+      "longmem_projection_key_sha256",
+      "provider_lanes",
+      "ablation_profile_revision",
+      "ablation_profile_checksum",
+      "ablation_dataset_sha256",
+      "ablation_threshold_manifest_sha256",
+      "ablation_selection_key_sha256",
+      "ablation_projection_key_sha256",
+      "ablation_coordinator_policy",
+      "inference_ablation",
+      "embedding_ablation",
+      "composite"
+    ],
+    "type": "object"
+  },
+  "V9ConfirmationClaimRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "profile_checksum": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "profile_revision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "maxLength": 512,
+        "minLength": 2,
+        "pattern": "^[0-9a-f]+$",
+        "type": "string"
+      },
+      "slot_id": {
+        "pattern": "^slot-[0-7]$",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "slot_id",
+      "profile_revision",
+      "profile_checksum",
+      "nonce",
+      "requested_at",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "V9ConfirmationFailRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "reason": {
+        "enum": [
+          "execution_failed",
+          "deadline",
+          "cancelled",
+          "infrastructure"
+        ],
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "maxLength": 512,
+        "minLength": 2,
+        "pattern": "^[0-9a-f]+$",
+        "type": "string"
+      },
+      "ticket_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "ticket_id",
+      "reason",
+      "nonce",
+      "requested_at",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "V9ConfirmationFailResponse": {
+    "additionalProperties": false,
+    "properties": {
+      "accepted": {
+        "const": true,
+        "type": "boolean"
+      },
+      "bundle_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "replayed": {
+        "type": "boolean"
+      },
+      "settled_microusd": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "state": {
+        "const": "failed",
+        "type": "string"
+      },
+      "ticket_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "bundle_id",
+      "ticket_id",
+      "accepted",
+      "state",
+      "settled_microusd",
+      "replayed"
+    ],
+    "type": "object"
+  },
+  "V9ConfirmationJobResponse": {
+    "$defs": {
+      "AblationBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "max_chat_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_chat_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_inputs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_chat_requests",
+          "max_chat_input_bytes",
+          "max_embedding_requests",
+          "max_embedding_inputs",
+          "max_embedding_input_bytes"
+        ],
+        "type": "object"
+      },
+      "ConfirmationAblationCoordinatorProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "max_attempts": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "max_requests": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "request_timeout_milliseconds": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "sample_size": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "total_timeout_milliseconds": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sample_size",
+          "max_attempts",
+          "max_requests",
+          "request_timeout_milliseconds",
+          "total_timeout_milliseconds"
+        ],
+        "type": "object"
+      },
+      "ConfirmationAblationProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "$ref": "#/$defs/AblationBudget"
+          },
+          "contract_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "intervention": {
+            "enum": [
+              "inference",
+              "embedding"
+            ],
+            "type": "string"
+          },
+          "threshold_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "intervention",
+          "contract_version",
+          "threshold_micros",
+          "budget"
+        ],
+        "type": "object"
+      },
+      "ConfirmationBundleMode": {
+        "enum": [
+          "off",
+          "shadow",
+          "enforce"
+        ],
+        "type": "string"
+      },
+      "ConfirmationCompositeProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "base_weight_bps": {
+            "exclusiveMaximum": 10000,
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "formula_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "longmem_weight_bps": {
+            "exclusiveMaximum": 10000,
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "revision",
+          "formula_revision",
+          "base_weight_bps",
+          "longmem_weight_bps",
+          "checksum"
+        ],
+        "type": "object"
+      },
+      "ConfirmationExecutionProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "ablation_coordinator_policy": {
+            "$ref": "#/$defs/ConfirmationAblationCoordinatorProfile"
+          },
+          "ablation_dataset_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "ablation_profile_checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "ablation_profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "ablation_projection_key_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "ablation_selection_key_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "ablation_threshold_manifest_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "composite": {
+            "$ref": "#/$defs/ConfirmationCompositeProfile"
+          },
+          "embedding_ablation": {
+            "$ref": "#/$defs/ConfirmationAblationProfile"
+          },
+          "inference_ablation": {
+            "$ref": "#/$defs/ConfirmationAblationProfile"
+          },
+          "longmem_cases_per_capability": {
+            "minimum": 2,
+            "type": "integer"
+          },
+          "longmem_dataset_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "longmem_dataset_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "longmem_profile_checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "longmem_profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "longmem_projection_key_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "longmem_seed_batch_pairs": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "longmem_selection_seed": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "longmem_selector_revision": {
+            "const": "longmemeval-s-stratified-sha256-v1",
+            "type": "string"
+          },
+          "provider_lanes": {
+            "items": {
+              "$ref": "#/$defs/ConfirmationProviderLaneProfile"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "revision",
+          "checksum",
+          "longmem_profile_revision",
+          "longmem_profile_checksum",
+          "longmem_dataset_revision",
+          "longmem_dataset_sha256",
+          "longmem_selector_revision",
+          "longmem_selection_seed",
+          "longmem_cases_per_capability",
+          "longmem_seed_batch_pairs",
+          "longmem_projection_key_sha256",
+          "provider_lanes",
+          "ablation_profile_revision",
+          "ablation_profile_checksum",
+          "ablation_dataset_sha256",
+          "ablation_threshold_manifest_sha256",
+          "ablation_selection_key_sha256",
+          "ablation_projection_key_sha256",
+          "ablation_coordinator_policy",
+          "inference_ablation",
+          "embedding_ablation",
+          "composite"
+        ],
+        "type": "object"
+      },
+      "ConfirmationProviderLaneProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "lane": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "max_completion_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_cost_usd_micros": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_prompt_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_requests": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_total_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane",
+          "provider",
+          "profile_revision",
+          "model",
+          "max_requests",
+          "max_prompt_tokens",
+          "max_completion_tokens",
+          "max_total_tokens",
+          "max_cost_usd_micros"
+        ],
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "artifact_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "bench_version": {
+        "const": 9,
+        "type": "integer"
+      },
+      "bundle_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "execution_profile": {
+        "$ref": "#/$defs/ConfirmationExecutionProfile"
+      },
+      "mode": {
+        "$ref": "#/$defs/ConfirmationBundleMode"
+      },
+      "per_bundle_request_cap": {
+        "maximum": 100000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "per_bundle_token_cap": {
+        "maximum": 100000000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "purpose": {
+        "const": "v9_confirmation_bundle",
+        "type": "string"
+      },
+      "reservation_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "retest_generation": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "settings_checksum": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "settings_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "slot_id": {
+        "pattern": "^slot-[0-7]$",
+        "type": "string"
+      },
+      "ticket_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "purpose",
+      "bundle_id",
+      "ticket_id",
+      "reservation_id",
+      "agent_id",
+      "slot_id",
+      "deadline",
+      "artifact_sha256",
+      "bench_version",
+      "settings_revision",
+      "settings_checksum",
+      "retest_generation",
+      "mode",
+      "per_bundle_request_cap",
+      "per_bundle_token_cap",
+      "execution_profile"
+    ],
+    "type": "object"
+  },
+  "V9ConfirmationPrepareRequest": {
+    "$defs": {
+      "V9ConfirmationRawDimension": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "go_evidence_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "latency_ms": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "go_evidence_sha256",
+          "latency_ms",
+          "evidence"
+        ],
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "ablation_coordinator_latency_ms": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "embedding_ablation": {
+        "$ref": "#/$defs/V9ConfirmationRawDimension"
+      },
+      "inference_ablation": {
+        "$ref": "#/$defs/V9ConfirmationRawDimension"
+      },
+      "longmemeval": {
+        "$ref": "#/$defs/V9ConfirmationRawDimension"
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "maxLength": 512,
+        "minLength": 2,
+        "pattern": "^[0-9a-f]+$",
+        "type": "string"
+      },
+      "ticket_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      },
+      "wire_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "ticket_id",
+      "nonce",
+      "requested_at",
+      "wire_sha256",
+      "ablation_coordinator_latency_ms",
+      "longmemeval",
+      "inference_ablation",
+      "embedding_ablation",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "V9ConfirmationPreparedReport": {
+    "$defs": {
+      "AblationBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "max_chat_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_chat_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_inputs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_chat_requests",
+          "max_chat_input_bytes",
+          "max_embedding_requests",
+          "max_embedding_inputs",
+          "max_embedding_input_bytes"
+        ],
+        "type": "object"
+      },
+      "AblationDimensionEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/$defs/AblationEvidence"
+          },
+          "evidence_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "input_tokens": {
+            "const": 0,
+            "type": "integer"
+          },
+          "latency_ms": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "const": 0,
+            "type": "integer"
+          },
+          "provider_cost_microusd": {
+            "const": 0,
+            "type": "integer"
+          },
+          "request_count": {
+            "const": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "not_run",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "synthetic": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "evidence_sha256",
+          "latency_ms",
+          "request_count",
+          "input_tokens",
+          "output_tokens",
+          "provider_cost_microusd",
+          "synthetic",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "AblationEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "ablated_mean_micros": {
+            "anyOf": [
+              {
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ablated_scores_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "affected_call_count": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "applied_factor_bps": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "artifact_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "baseline_mean_micros": {
+            "anyOf": [
+              {
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "baseline_scores_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bench_version": {
+            "const": 9,
+            "type": "integer"
+          },
+          "case_set_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "contract_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "coordinator_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "dataset_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "delta_micros": {
+            "anyOf": [
+              {
+                "maximum": 1000000,
+                "minimum": -1000000,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intervention": {
+            "enum": [
+              "inference",
+              "embedding"
+            ],
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "off",
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "profile_checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sample_count": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "semantic_factor_bps": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "not_run",
+              "passed",
+              "failed",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "synthetic_usage": {
+            "$ref": "#/$defs/AblationSyntheticUsage"
+          },
+          "threshold_manifest_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "threshold_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contract_version",
+          "bench_version",
+          "artifact_sha256",
+          "intervention",
+          "mode",
+          "status",
+          "reason",
+          "profile_revision",
+          "profile_checksum",
+          "threshold_manifest_sha256",
+          "coordinator_sha256",
+          "dataset_sha256",
+          "case_set_sha256",
+          "baseline_scores_sha256",
+          "ablated_scores_sha256",
+          "baseline_mean_micros",
+          "ablated_mean_micros",
+          "delta_micros",
+          "threshold_micros",
+          "sample_count",
+          "affected_call_count",
+          "semantic_factor_bps",
+          "applied_factor_bps",
+          "synthetic_usage"
+        ],
+        "type": "object"
+      },
+      "AblationSyntheticUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "$ref": "#/$defs/AblationBudget"
+          },
+          "budget_exhausted": {
+            "type": "boolean"
+          },
+          "chat_applied": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "chat_attempts": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "chat_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "embedding_applied": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "embedding_attempts": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "embedding_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "embedding_inputs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "intervention": {
+            "enum": [
+              "inference",
+              "embedding"
+            ],
+            "type": "string"
+          },
+          "rejected_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "synthetic": {
+            "const": true,
+            "type": "boolean"
+          },
+          "upstream_input_tokens": {
+            "const": 0,
+            "type": "integer"
+          },
+          "upstream_output_tokens": {
+            "const": 0,
+            "type": "integer"
+          },
+          "upstream_provider_cost_microusd": {
+            "const": 0,
+            "type": "integer"
+          },
+          "upstream_requests": {
+            "const": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "synthetic",
+          "intervention",
+          "budget",
+          "chat_attempts",
+          "chat_applied",
+          "chat_input_bytes",
+          "embedding_attempts",
+          "embedding_applied",
+          "embedding_inputs",
+          "embedding_input_bytes",
+          "rejected_requests",
+          "budget_exhausted",
+          "upstream_requests",
+          "upstream_input_tokens",
+          "upstream_output_tokens",
+          "upstream_provider_cost_microusd"
+        ],
+        "type": "object"
+      },
+      "LongMemCapabilityScore": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "enum": [
+              "extraction",
+              "multi_session_reasoning",
+              "temporal_reasoning",
+              "knowledge_update",
+              "preference",
+              "abstention"
+            ],
+            "type": "string"
+          },
+          "correct": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "count": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mean_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "capability",
+          "correct",
+          "count",
+          "mean_micros"
+        ],
+        "type": "object"
+      },
+      "LongMemDimensionEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/$defs/LongMemEvidence"
+          },
+          "evidence_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "input_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "latency_ms": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "provider_cost_microusd": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "request_count": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "const": "completed",
+            "type": "string"
+          },
+          "synthetic": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "evidence_sha256",
+          "latency_ms",
+          "request_count",
+          "input_tokens",
+          "output_tokens",
+          "provider_cost_microusd",
+          "synthetic",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "LongMemEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "bench_version": {
+            "const": 9,
+            "type": "integer"
+          },
+          "case_set_digest": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "dataset_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "dataset_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "profile_checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "provider_evidence": {
+            "items": {
+              "$ref": "#/$defs/LongMemProviderLaneEvidence"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 2,
+            "type": "integer"
+          },
+          "score": {
+            "$ref": "#/$defs/LongMemScoreEvidence"
+          }
+        },
+        "required": [
+          "schema_version",
+          "artifact_sha256",
+          "bench_version",
+          "profile_checksum",
+          "case_set_digest",
+          "dataset_revision",
+          "dataset_sha256",
+          "score",
+          "provider_evidence"
+        ],
+        "type": "object"
+      },
+      "LongMemProviderLaneEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cost_source": {
+            "const": "provider_receipt_v1",
+            "type": "string"
+          },
+          "cost_usd_micros": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "const": "USD",
+            "type": "string"
+          },
+          "fallback_used": {
+            "const": false,
+            "type": "boolean"
+          },
+          "lane": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "receipt_set_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "receipted_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requests": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "successes": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "total_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane",
+          "cost_source",
+          "currency",
+          "provider",
+          "profile_revision",
+          "model",
+          "fallback_used",
+          "requests",
+          "successes",
+          "receipted_requests",
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens",
+          "cost_usd_micros",
+          "receipt_set_sha256"
+        ],
+        "type": "object"
+      },
+      "LongMemScoreEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "case_count": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "longmem_mean_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "longmem_stderr_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "per_capability": {
+            "items": {
+              "$ref": "#/$defs/LongMemCapabilityScore"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "longmem_mean_micros",
+          "longmem_stderr_micros",
+          "case_count",
+          "per_capability"
+        ],
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "ablation_coordinator_latency_ms": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "bundle_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "embedding_ablation": {
+        "$ref": "#/$defs/AblationDimensionEnvelope"
+      },
+      "evidence_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "inference_ablation": {
+        "$ref": "#/$defs/AblationDimensionEnvelope"
+      },
+      "longmemeval": {
+        "$ref": "#/$defs/LongMemDimensionEnvelope"
+      },
+      "ticket_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "bundle_id",
+      "ticket_id",
+      "ablation_coordinator_latency_ms",
+      "longmemeval",
+      "inference_ablation",
+      "embedding_ablation",
+      "evidence_sha256"
+    ],
+    "type": "object"
+  },
+  "V9ConfirmationSubmitRequest": {
+    "$defs": {
+      "AblationBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "max_chat_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_chat_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_inputs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_embedding_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_chat_requests",
+          "max_chat_input_bytes",
+          "max_embedding_requests",
+          "max_embedding_inputs",
+          "max_embedding_input_bytes"
+        ],
+        "type": "object"
+      },
+      "AblationDimensionEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/$defs/AblationEvidence"
+          },
+          "evidence_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "input_tokens": {
+            "const": 0,
+            "type": "integer"
+          },
+          "latency_ms": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "const": 0,
+            "type": "integer"
+          },
+          "provider_cost_microusd": {
+            "const": 0,
+            "type": "integer"
+          },
+          "request_count": {
+            "const": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "not_run",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "synthetic": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "evidence_sha256",
+          "latency_ms",
+          "request_count",
+          "input_tokens",
+          "output_tokens",
+          "provider_cost_microusd",
+          "synthetic",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "AblationEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "ablated_mean_micros": {
+            "anyOf": [
+              {
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ablated_scores_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "affected_call_count": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "applied_factor_bps": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "artifact_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "baseline_mean_micros": {
+            "anyOf": [
+              {
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "baseline_scores_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bench_version": {
+            "const": 9,
+            "type": "integer"
+          },
+          "case_set_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "contract_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "coordinator_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "dataset_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "delta_micros": {
+            "anyOf": [
+              {
+                "maximum": 1000000,
+                "minimum": -1000000,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intervention": {
+            "enum": [
+              "inference",
+              "embedding"
+            ],
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "off",
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "profile_checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sample_count": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "semantic_factor_bps": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "not_run",
+              "passed",
+              "failed",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "synthetic_usage": {
+            "$ref": "#/$defs/AblationSyntheticUsage"
+          },
+          "threshold_manifest_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "threshold_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contract_version",
+          "bench_version",
+          "artifact_sha256",
+          "intervention",
+          "mode",
+          "status",
+          "reason",
+          "profile_revision",
+          "profile_checksum",
+          "threshold_manifest_sha256",
+          "coordinator_sha256",
+          "dataset_sha256",
+          "case_set_sha256",
+          "baseline_scores_sha256",
+          "ablated_scores_sha256",
+          "baseline_mean_micros",
+          "ablated_mean_micros",
+          "delta_micros",
+          "threshold_micros",
+          "sample_count",
+          "affected_call_count",
+          "semantic_factor_bps",
+          "applied_factor_bps",
+          "synthetic_usage"
+        ],
+        "type": "object"
+      },
+      "AblationSyntheticUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "$ref": "#/$defs/AblationBudget"
+          },
+          "budget_exhausted": {
+            "type": "boolean"
+          },
+          "chat_applied": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "chat_attempts": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "chat_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "embedding_applied": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "embedding_attempts": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "embedding_input_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "embedding_inputs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "intervention": {
+            "enum": [
+              "inference",
+              "embedding"
+            ],
+            "type": "string"
+          },
+          "rejected_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "synthetic": {
+            "const": true,
+            "type": "boolean"
+          },
+          "upstream_input_tokens": {
+            "const": 0,
+            "type": "integer"
+          },
+          "upstream_output_tokens": {
+            "const": 0,
+            "type": "integer"
+          },
+          "upstream_provider_cost_microusd": {
+            "const": 0,
+            "type": "integer"
+          },
+          "upstream_requests": {
+            "const": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "synthetic",
+          "intervention",
+          "budget",
+          "chat_attempts",
+          "chat_applied",
+          "chat_input_bytes",
+          "embedding_attempts",
+          "embedding_applied",
+          "embedding_inputs",
+          "embedding_input_bytes",
+          "rejected_requests",
+          "budget_exhausted",
+          "upstream_requests",
+          "upstream_input_tokens",
+          "upstream_output_tokens",
+          "upstream_provider_cost_microusd"
+        ],
+        "type": "object"
+      },
+      "ConfirmationCompletionReport": {
+        "additionalProperties": false,
+        "properties": {
+          "ablation_coordinator_latency_ms": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bundle_signature": {
+            "maxLength": 512,
+            "minLength": 2,
+            "pattern": "^[0-9a-f]+$",
+            "type": "string"
+          },
+          "embedding_ablation": {
+            "$ref": "#/$defs/AblationDimensionEnvelope"
+          },
+          "inference_ablation": {
+            "$ref": "#/$defs/AblationDimensionEnvelope"
+          },
+          "longmemeval": {
+            "$ref": "#/$defs/LongMemDimensionEnvelope"
+          }
+        },
+        "required": [
+          "ablation_coordinator_latency_ms",
+          "longmemeval",
+          "inference_ablation",
+          "embedding_ablation",
+          "bundle_signature"
+        ],
+        "type": "object"
+      },
+      "LongMemCapabilityScore": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "enum": [
+              "extraction",
+              "multi_session_reasoning",
+              "temporal_reasoning",
+              "knowledge_update",
+              "preference",
+              "abstention"
+            ],
+            "type": "string"
+          },
+          "correct": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "count": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mean_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "capability",
+          "correct",
+          "count",
+          "mean_micros"
+        ],
+        "type": "object"
+      },
+      "LongMemDimensionEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/$defs/LongMemEvidence"
+          },
+          "evidence_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "input_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "latency_ms": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "provider_cost_microusd": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "request_count": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "const": "completed",
+            "type": "string"
+          },
+          "synthetic": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "evidence_sha256",
+          "latency_ms",
+          "request_count",
+          "input_tokens",
+          "output_tokens",
+          "provider_cost_microusd",
+          "synthetic",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "LongMemEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "bench_version": {
+            "const": 9,
+            "type": "integer"
+          },
+          "case_set_digest": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "dataset_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "dataset_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "profile_checksum": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "provider_evidence": {
+            "items": {
+              "$ref": "#/$defs/LongMemProviderLaneEvidence"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 2,
+            "type": "integer"
+          },
+          "score": {
+            "$ref": "#/$defs/LongMemScoreEvidence"
+          }
+        },
+        "required": [
+          "schema_version",
+          "artifact_sha256",
+          "bench_version",
+          "profile_checksum",
+          "case_set_digest",
+          "dataset_revision",
+          "dataset_sha256",
+          "score",
+          "provider_evidence"
+        ],
+        "type": "object"
+      },
+      "LongMemProviderLaneEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cost_source": {
+            "const": "provider_receipt_v1",
+            "type": "string"
+          },
+          "cost_usd_micros": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "const": "USD",
+            "type": "string"
+          },
+          "fallback_used": {
+            "const": false,
+            "type": "boolean"
+          },
+          "lane": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "receipt_set_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "receipted_requests": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requests": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "successes": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "total_tokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane",
+          "cost_source",
+          "currency",
+          "provider",
+          "profile_revision",
+          "model",
+          "fallback_used",
+          "requests",
+          "successes",
+          "receipted_requests",
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens",
+          "cost_usd_micros",
+          "receipt_set_sha256"
+        ],
+        "type": "object"
+      },
+      "LongMemScoreEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "case_count": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "longmem_mean_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "longmem_stderr_micros": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "per_capability": {
+            "items": {
+              "$ref": "#/$defs/LongMemCapabilityScore"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "longmem_mean_micros",
+          "longmem_stderr_micros",
+          "case_count",
+          "per_capability"
+        ],
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "report": {
+        "$ref": "#/$defs/ConfirmationCompletionReport"
+      },
+      "ticket_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "ticket_id",
+      "report"
+    ],
+    "type": "object"
+  },
+  "V9ConfirmationSubmitResponse": {
+    "additionalProperties": false,
+    "properties": {
+      "accepted": {
+        "const": true,
+        "type": "boolean"
+      },
+      "bundle_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "evidence_sha256": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "qualification_status": {
+        "enum": [
+          "qualified",
+          "unqualified"
+        ],
+        "type": "string"
+      },
+      "replayed": {
+        "type": "boolean"
+      },
+      "state": {
+        "const": "completed",
+        "type": "string"
+      },
+      "ticket_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "bundle_id",
+      "ticket_id",
+      "accepted",
+      "state",
+      "qualification_status",
+      "evidence_sha256",
+      "replayed"
+    ],
+    "type": "object"
+  }
+}

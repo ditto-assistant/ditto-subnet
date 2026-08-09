@@ -16,7 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from statistics import median
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 from sqlalchemy import (
@@ -34,10 +34,18 @@ from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm.util import AliasedClass
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.confirmation_bundles import (
+    ConfirmationBundleMode,
+    ConfirmationBundleSettings,
+)
 from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
     BenchmarkRolloutMember,
+    ConfirmationBundle,
+    ConfirmationBundleSettingsRevision,
+    ConfirmationBundleSubject,
+    ConfirmationBundleTicket,
     ConfirmationScore,
     EvaluationPayment,
     OwnerAttestation,
@@ -254,6 +262,14 @@ class LedgerRow:
     ``None`` on rows built outside the owner-family query (provisional
     ``evaluating`` rows, moderation fixtures); :attr:`fold_first_seen` falls back
     to :attr:`first_seen` there, which is exactly the pre-anchor behaviour.
+    """
+    v9_confirmation: dict[str, Any] | None = None
+    """Signed full-confirmation receipt for an enforce-mode Bench v9 row.
+
+    ``None`` for every pre-v9 row and whenever the global confirmation policy
+    is off or shadow.  The ordinary signed score fields above are never
+    rewritten; consumers independently validate this separate receipt before
+    using its derived full composite.
     """
 
     @property
@@ -857,6 +873,112 @@ class SubmissionRow:
     scores: list[Score]
 
 
+@dataclass(frozen=True)
+class V9ConfirmationPublicProjection:
+    """Current public contract state for one v9 subject."""
+
+    result_status: Literal["base_only", "provisional", "full_confirmed"]
+    full_confirmed_composite: float | None = None
+    evidence_sha256: str | None = None
+    receipt: dict[str, Any] | None = None
+
+
+async def v9_confirmation_public_projections(
+    session: AsyncSession, *, agent_ids: Sequence[UUID]
+) -> dict[UUID, V9ConfirmationPublicProjection]:
+    """Project current mode without rewriting immutable bundle evidence."""
+
+    ids = tuple(dict.fromkeys(agent_ids))
+    if not ids:
+        return {}
+    enforcement_settings = await _v9_confirmation_enforcement_settings(session)
+    rows = (
+        await session.execute(
+            select(
+                ConfirmationBundleSubject,
+                ConfirmationBundle,
+                ConfirmationBundleTicket.deadline.label("ticket_deadline"),
+            )
+            .outerjoin(
+                ConfirmationBundle,
+                ConfirmationBundle.bundle_id == ConfirmationBundleSubject.bundle_id,
+            )
+            .outerjoin(
+                ConfirmationBundleTicket,
+                ConfirmationBundleTicket.ticket_id
+                == ConfirmationBundle.completion_ticket_id,
+            )
+            .where(
+                ConfirmationBundleSubject.agent_id.in_(ids),
+                ConfirmationBundleSubject.bench_version == 9,
+            )
+        )
+    ).all()
+    projections: dict[UUID, V9ConfirmationPublicProjection] = {}
+    for subject, bundle, ticket_deadline in rows:
+        completion_is_authoritative = bool(
+            bundle is not None
+            and (
+                bundle.completion_mode == "enforce"
+                or (
+                    bundle.completion_mode == "shadow"
+                    and enforcement_settings is not None
+                    and bundle.profile_revision == enforcement_settings.profile_revision
+                    and bundle.profile_checksum == enforcement_settings.profile_checksum
+                )
+            )
+        )
+        completed = bool(
+            enforcement_settings is not None
+            and bundle is not None
+            and subject.result_status == "full_confirmed"
+            and subject.full_effective_micros is not None
+            and bundle.state == "completed"
+            and bundle.qualification_status == "qualified"
+            and completion_is_authoritative
+            and bundle.completion_ticket_id is not None
+            and ticket_deadline is not None
+        )
+        if completed:
+            assert bundle is not None
+            receipt = {
+                "mode": "enforce",
+                "result_status": "full_confirmed",
+                "qualification_status": "qualified",
+                "bundle_id": bundle.bundle_id,
+                "ticket_id": bundle.completion_ticket_id,
+                "ticket_deadline": ticket_deadline,
+                "reporter_hotkey": bundle.reporter_hotkey,
+                "bundle_signature": bundle.bundle_signature,
+                "evidence_sha256": bundle.evidence_sha256,
+                "evidence_root": bundle.evidence_root,
+                "base_evidence_sha256": subject.base_evidence_sha256,
+                "base_quality_micros": subject.base_quality_micros,
+                "base_stderr_micros": subject.base_stderr_micros,
+                "base_model_factor_bps": subject.base_model_factor_bps,
+                "base_tool_factor_bps": subject.base_tool_factor_bps,
+                "full_quality_micros": subject.full_quality_micros,
+                "full_stderr_micros": subject.full_stderr_micros,
+                "semantic_factor_bps": subject.semantic_factor_bps,
+                "applied_factor_bps": subject.applied_factor_bps,
+                "full_effective_micros": subject.full_effective_micros,
+                "verified_at": bundle.verified_at,
+            }
+            projections[subject.agent_id] = V9ConfirmationPublicProjection(
+                result_status="full_confirmed",
+                full_confirmed_composite=subject.full_effective_micros / 1_000_000,
+                evidence_sha256=bundle.evidence_sha256,
+                receipt=receipt,
+            )
+        else:
+            projections[subject.agent_id] = V9ConfirmationPublicProjection(
+                result_status=(
+                    "provisional" if subject.bundle_id is not None else "base_only"
+                )
+            )
+    return projections
+
+
 async def get_submission_scores(
     session: AsyncSession, *, agent_id: UUID
 ) -> SubmissionRow | None:
@@ -1062,7 +1184,33 @@ async def ranked_quorum_agent_ids(
             ),
         )
     )
-    return set(await session.scalars(qualifying))
+    ranked = set(await session.scalars(qualifying))
+    if bench_version != 9:
+        return ranked
+    enforcement_settings = await _v9_confirmation_enforcement_settings(session)
+    if enforcement_settings is None:
+        return ranked
+    if not ranked:
+        return set()
+    confirmed = set(
+        await session.scalars(
+            select(ConfirmationBundleSubject.agent_id)
+            .join(
+                ConfirmationBundle,
+                ConfirmationBundle.bundle_id == ConfirmationBundleSubject.bundle_id,
+            )
+            .where(
+                ConfirmationBundleSubject.agent_id.in_(ranked),
+                ConfirmationBundleSubject.bench_version == 9,
+                ConfirmationBundleSubject.result_status == "full_confirmed",
+                ConfirmationBundleSubject.full_effective_micros > 0,
+                ConfirmationBundle.state == "completed",
+                ConfirmationBundle.qualification_status == "qualified",
+                _v9_confirmation_completion_is_authoritative(enforcement_settings),
+            )
+        )
+    )
+    return ranked & confirmed
 
 
 async def count_ranked_quorum_agents(
@@ -1116,6 +1264,57 @@ async def count_ranked_quorum_agents(
     return len(set(await attested_emission_owner_roots(session, identities)))
 
 
+async def _v9_confirmation_enforcement_settings(
+    session: AsyncSession,
+) -> ConfirmationBundleSettings | None:
+    """Return the latest valid enforce policy, otherwise fail closed.
+
+    The profile identity is load-bearing when qualified evidence was completed
+    in shadow mode: immutable shadow evidence becomes authoritative only while
+    the current enforce policy names that exact frozen profile.  This mirrors
+    the database subject-authority trigger.
+    """
+
+    row = await session.scalar(
+        select(ConfirmationBundleSettingsRevision)
+        .where(ConfirmationBundleSettingsRevision.scope == "*")
+        .order_by(ConfirmationBundleSettingsRevision.revision.desc())
+        .limit(1)
+    )
+    if row is None:
+        return None
+    try:
+        settings = ConfirmationBundleSettings.model_validate(row.settings)
+    except ValueError:
+        return None
+    if settings.mode != ConfirmationBundleMode.ENFORCE:
+        return None
+    return settings
+
+
+def _v9_confirmation_completion_is_authoritative(
+    settings: ConfirmationBundleSettings,
+) -> ColumnElement[bool]:
+    """SQL predicate matching the subject-authority trigger's mode clause."""
+
+    assert settings.profile_revision is not None
+    assert settings.profile_checksum is not None
+    return or_(
+        ConfirmationBundle.completion_mode == "enforce",
+        and_(
+            ConfirmationBundle.completion_mode == "shadow",
+            ConfirmationBundle.profile_revision == settings.profile_revision,
+            ConfirmationBundle.profile_checksum == settings.profile_checksum,
+        ),
+    )
+
+
+async def v9_confirmation_enforcement_active(session: AsyncSession) -> bool:
+    """Whether the latest valid immutable policy enables v9 rewards."""
+
+    return await _v9_confirmation_enforcement_settings(session) is not None
+
+
 async def list_eligible_ledger(
     session: AsyncSession,
     *,
@@ -1125,6 +1324,7 @@ async def list_eligible_ledger(
     include_family_members: bool = False,
     bench_version: int | None = None,
     owner_score: Literal["official", "canonical"] = "official",
+    apply_v9_confirmation_policy: bool = True,
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
 
@@ -1224,36 +1424,81 @@ async def list_eligible_ledger(
         if bench_version is not None
         else tuple({canonical_version, desired_version} - {None})
     )
+    enforcement_settings = (
+        await _v9_confirmation_enforcement_settings(session)
+        if apply_v9_confirmation_policy
+        else None
+    )
+    v9_enforce = enforcement_settings is not None
+    confirmed_v9 = and_(
+        ConfirmationBundleSubject.result_status == "full_confirmed",
+        ConfirmationBundleSubject.full_effective_micros.is_not(None),
+        ConfirmationBundle.state == "completed",
+        ConfirmationBundle.qualification_status == "qualified",
+        _v9_confirmation_completion_is_authoritative(enforcement_settings)
+        if enforcement_settings is not None
+        else literal(False),
+    )
+    ranking_composite = cast(ColumnElement[Any], Score.composite)
+    ranked_predicate: ColumnElement[bool] = _is_ranked()
+    if v9_enforce:
+        ranking_composite = case(
+            (
+                Score.bench_version == 9,
+                ConfirmationBundleSubject.full_effective_micros / 1_000_000.0,
+            ),
+            else_=Score.composite,
+        )
+        ranked_predicate = and_(
+            Score.n >= MIN_ELIGIBLE_CASES,
+            ranking_composite > 0.0,
+            or_(Score.bench_version != 9, confirmed_v9),
+        )
     # Keep the ranking relation scalar-only. Large score JSON and moderation
     # fingerprints are joined only after PostgreSQL has selected one winner per
     # attested owner component.
-    agent_best = (
-        select(
-            Score.agent_id.label("agent_id"),
-            Score.bench_version.label("bench_version"),
-            Score.composite.label("composite"),
-            Score.n.label("n"),
-            _is_ranked().label("eligible"),
-            Score.validator_hotkey.label("validator_hotkey"),
-            # Row count in the agent's pool, so the median position is (cnt+1)/2.
-            func.count(Score.agent_id)
-            .over(partition_by=(Score.agent_id, Score.bench_version))
-            .label("cnt"),
-            # Ascending composite so the middle row (by srn) is the median; the
-            # validator_hotkey tie-break keeps the pick deterministic.
-            func.row_number()
-            .over(
-                partition_by=(Score.agent_id, Score.bench_version),
-                order_by=(
-                    Score.composite.asc(),
-                    Score.validator_hotkey.asc(),
+    agent_best_stmt = select(
+        Score.agent_id.label("agent_id"),
+        Score.bench_version.label("bench_version"),
+        Score.composite.label("composite"),
+        ranking_composite.label("ranking_composite"),
+        Score.n.label("n"),
+        ranked_predicate.label("eligible"),
+        Score.validator_hotkey.label("validator_hotkey"),
+        # Row count in the agent's pool, so the median position is (cnt+1)/2.
+        func.count(Score.agent_id)
+        .over(partition_by=(Score.agent_id, Score.bench_version))
+        .label("cnt"),
+        # Ascending composite so the middle row (by srn) is the median; the
+        # validator_hotkey tie-break keeps the pick deterministic.
+        func.row_number()
+        .over(
+            partition_by=(Score.agent_id, Score.bench_version),
+            order_by=(
+                Score.composite.asc(),
+                Score.validator_hotkey.asc(),
+            ),
+        )
+        .label("srn"),
+    ).where(Score.bench_version.in_(candidate_versions))
+    if v9_enforce:
+        agent_best_stmt = (
+            agent_best_stmt.outerjoin(
+                ConfirmationBundleSubject,
+                and_(
+                    ConfirmationBundleSubject.agent_id == Score.agent_id,
+                    ConfirmationBundleSubject.bench_version == Score.bench_version,
                 ),
             )
-            .label("srn"),
+            .outerjoin(
+                ConfirmationBundle,
+                ConfirmationBundle.bundle_id == ConfirmationBundleSubject.bundle_id,
+            )
+            # In enforce mode a base-only or unqualified v9 row is not merely
+            # ordered low: it is absent from the authoritative ledger entirely.
+            .where(or_(Score.bench_version != 9, confirmed_v9))
         )
-        .where(Score.bench_version.in_(candidate_versions))
-        .subquery()
-    )
+    agent_best = agent_best_stmt.subquery()
     per_agent = (
         select(
             Agent.agent_id.label("agent_id"),
@@ -1263,6 +1508,7 @@ async def list_eligible_ledger(
             Agent.created_at.label("first_seen"),
             Agent.status.label("status"),
             agent_best.c.composite,
+            agent_best.c.ranking_composite,
             agent_best.c.n,
             agent_best.c.eligible,
             agent_best.c.validator_hotkey,
@@ -1374,7 +1620,7 @@ async def list_eligible_ledger(
         .cte("authoritative")
         .prefix_with("MATERIALIZED")
     )
-    selection_score: ColumnElement[Any] = authoritative.c.composite
+    selection_score: ColumnElement[Any] = authoritative.c.ranking_composite
     official_joins: tuple[Any, ...] = ()
     if owner_score == "official":
         from ditto.db.queries.score_ranking import continual_mean_is_active
@@ -1486,10 +1732,21 @@ async def list_eligible_ledger(
                 .prefix_with("MATERIALIZED")
             )
             official_joins = (quorum, confirmation)
-            selection_score = func.coalesce(
+            continual_selection = func.coalesce(
                 (quorum.c.quorum_sum + confirmation.c.confirmation_sum)
                 / (quorum.c.quorum_count + confirmation.c.confirmation_count),
                 authoritative.c.composite,
+            )
+            selection_score = (
+                case(
+                    (
+                        authoritative.c.bench_version == 9,
+                        authoritative.c.ranking_composite,
+                    ),
+                    else_=continual_selection,
+                )
+                if v9_enforce
+                else continual_selection
             )
 
     candidates_stmt = select(
@@ -1691,6 +1948,71 @@ async def list_eligible_ledger(
             null().label("family_agent_version"),
             null().label("family_canonical_composite"),
         )
+    if v9_enforce:
+        receipt_columns: tuple[ColumnElement[Any], ...] = (
+            ConfirmationBundleSubject.result_status.label("v9_result_status"),
+            ConfirmationBundleSubject.base_evidence_sha256.label(
+                "v9_base_evidence_sha256"
+            ),
+            ConfirmationBundleSubject.base_quality_micros.label(
+                "v9_base_quality_micros"
+            ),
+            ConfirmationBundleSubject.base_stderr_micros.label("v9_base_stderr_micros"),
+            ConfirmationBundleSubject.base_model_factor_bps.label(
+                "v9_base_model_factor_bps"
+            ),
+            ConfirmationBundleSubject.base_tool_factor_bps.label(
+                "v9_base_tool_factor_bps"
+            ),
+            ConfirmationBundleSubject.full_quality_micros.label(
+                "v9_full_quality_micros"
+            ),
+            ConfirmationBundleSubject.full_stderr_micros.label("v9_full_stderr_micros"),
+            ConfirmationBundleSubject.semantic_factor_bps.label(
+                "v9_semantic_factor_bps"
+            ),
+            ConfirmationBundleSubject.applied_factor_bps.label("v9_applied_factor_bps"),
+            ConfirmationBundleSubject.full_effective_micros.label(
+                "v9_full_effective_micros"
+            ),
+            ConfirmationBundle.bundle_id.label("v9_bundle_id"),
+            ConfirmationBundle.qualification_status.label("v9_qualification_status"),
+            ConfirmationBundle.completion_mode.label("v9_completion_mode"),
+            ConfirmationBundle.evidence_root.label("v9_evidence_root"),
+            ConfirmationBundle.evidence_sha256.label("v9_evidence_sha256"),
+            ConfirmationBundle.reporter_hotkey.label("v9_reporter_hotkey"),
+            ConfirmationBundle.bundle_signature.label("v9_bundle_signature"),
+            ConfirmationBundle.verified_at.label("v9_verified_at"),
+            ConfirmationBundleTicket.ticket_id.label("v9_ticket_id"),
+            ConfirmationBundleTicket.deadline.label("v9_ticket_deadline"),
+        )
+    else:
+        receipt_columns = tuple(
+            null().label(name)
+            for name in (
+                "v9_result_status",
+                "v9_base_evidence_sha256",
+                "v9_base_quality_micros",
+                "v9_base_stderr_micros",
+                "v9_base_model_factor_bps",
+                "v9_base_tool_factor_bps",
+                "v9_full_quality_micros",
+                "v9_full_stderr_micros",
+                "v9_semantic_factor_bps",
+                "v9_applied_factor_bps",
+                "v9_full_effective_micros",
+                "v9_bundle_id",
+                "v9_qualification_status",
+                "v9_completion_mode",
+                "v9_evidence_root",
+                "v9_evidence_sha256",
+                "v9_reporter_hotkey",
+                "v9_bundle_signature",
+                "v9_verified_at",
+                "v9_ticket_id",
+                "v9_ticket_deadline",
+            )
+        )
     stmt = (
         select(
             winners.c.owner_root,
@@ -1719,6 +2041,7 @@ async def list_eligible_ledger(
             Score.signature,
             Score.bench_version,
             winners.c.crown_first_seen,
+            *receipt_columns,
         )
         .join(Agent, Agent.agent_id == winners.c.agent_id)
         .join(
@@ -1731,6 +2054,25 @@ async def list_eligible_ledger(
         )
         .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
     )
+    if v9_enforce:
+        stmt = (
+            stmt.outerjoin(
+                ConfirmationBundleSubject,
+                and_(
+                    ConfirmationBundleSubject.agent_id == winners.c.agent_id,
+                    ConfirmationBundleSubject.bench_version == winners.c.bench_version,
+                ),
+            )
+            .outerjoin(
+                ConfirmationBundle,
+                ConfirmationBundle.bundle_id == ConfirmationBundleSubject.bundle_id,
+            )
+            .outerjoin(
+                ConfirmationBundleTicket,
+                ConfirmationBundleTicket.ticket_id
+                == ConfirmationBundle.completion_ticket_id,
+            )
+        )
     if include_family_members:
         # Extract the winner's JSON-backed stderr and join its agent/payment
         # metadata exactly once. Joining the family first made PostgreSQL
@@ -1785,6 +2127,31 @@ async def list_eligible_ledger(
             for member in group_rows
             if member.family_agent_id is not None
         )
+        v9_confirmation = None
+        if row.bench_version == 9 and row.v9_bundle_id is not None:
+            v9_confirmation = {
+                "mode": row.v9_completion_mode,
+                "result_status": row.v9_result_status,
+                "qualification_status": row.v9_qualification_status,
+                "bundle_id": row.v9_bundle_id,
+                "ticket_id": row.v9_ticket_id,
+                "ticket_deadline": row.v9_ticket_deadline,
+                "reporter_hotkey": row.v9_reporter_hotkey,
+                "bundle_signature": row.v9_bundle_signature,
+                "evidence_sha256": row.v9_evidence_sha256,
+                "evidence_root": row.v9_evidence_root,
+                "base_evidence_sha256": row.v9_base_evidence_sha256,
+                "base_quality_micros": row.v9_base_quality_micros,
+                "base_stderr_micros": row.v9_base_stderr_micros,
+                "base_model_factor_bps": row.v9_base_model_factor_bps,
+                "base_tool_factor_bps": row.v9_base_tool_factor_bps,
+                "full_quality_micros": row.v9_full_quality_micros,
+                "full_stderr_micros": row.v9_full_stderr_micros,
+                "semantic_factor_bps": row.v9_semantic_factor_bps,
+                "applied_factor_bps": row.v9_applied_factor_bps,
+                "full_effective_micros": row.v9_full_effective_micros,
+                "verified_at": row.v9_verified_at,
+            }
         ledger.append(
             LedgerRow(
                 miner_hotkey=row.miner_hotkey,
@@ -1816,6 +2183,7 @@ async def list_eligible_ledger(
                 stored_composite_stderr=row.stored_composite_stderr,
                 family_members=family_members,
                 crown_first_seen=row.crown_first_seen,
+                v9_confirmation=v9_confirmation,
             )
         )
     return ledger

@@ -38,6 +38,8 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("POST /v1/inference/session", s.broker.prepare)
 	mux.HandleFunc("POST /v1/inference/session/{id}/activate", s.broker.activate)
 	mux.HandleFunc("DELETE /v1/inference/session/{id}", s.broker.cancel)
+	mux.HandleFunc("GET /v1/confirmation/readiness", s.handleConfirmationReadiness)
+	mux.HandleFunc("POST /v1/confirmation/execute", s.handleConfirmationExecute)
 	return mux
 }
 
@@ -59,6 +61,8 @@ var controlPlaneRoutes = []string{
 	"POST /v1/inference/session",
 	"POST /v1/inference/session/{id}/activate",
 	"DELETE /v1/inference/session/{id}",
+	"GET /v1/confirmation/readiness",
+	"POST /v1/confirmation/execute",
 }
 
 // controlAuthMode selects what the control plane does with a request that fails

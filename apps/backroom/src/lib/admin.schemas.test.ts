@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
+import type { output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   auditReasonSchema,
@@ -64,9 +65,19 @@ import {
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
+  authorizeConfirmationBundleRetestInputSchema,
+  confirmationBundleListInputSchema,
+  confirmationBundleListSchema,
+  confirmationBundleSettingsConfirmation,
+  confirmationBundleSettingsControlSchema,
+  confirmationBundleViewSchema,
+  setConfirmationBundleSettingsInputSchema,
   sourceReviewFindingSchema,
 } from './admin.schemas'
 
+type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
+type GeneratedConfirmationBundleList =
+  PlatformComponents['schemas']['AdminConfirmationBundleListResponse']
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 
 describe('admin API schemas', () => {
@@ -359,6 +370,670 @@ describe('admin API schemas', () => {
   })
 })
 
+const confirmationDigest = 'a'.repeat(64)
+const confirmationTimestamp = '2026-08-08T12:00:00Z'
+const confirmationBundleId = '11111111-1111-4111-8111-111111111111'
+const confirmationTicketId = '22222222-2222-4222-8222-222222222222'
+
+function confirmationSettings(mode: 'off' | 'shadow' | 'enforce' = 'off') {
+  const active = mode !== 'off'
+  return {
+    mode,
+    top_n: 5,
+    daily_bundle_cap: active ? 20 : 0,
+    daily_dollar_cap_microusd: active ? 2_000_000 : 0,
+    per_bundle_request_cap: active ? 500 : 0,
+    per_bundle_token_cap: active ? 2_000_000 : 0,
+    profile_revision: active ? 'v9-confirmation-shadow-1' : null,
+    profile_checksum: active ? confirmationDigest : null,
+    challenger_z: 1.64,
+  }
+}
+
+function confirmationSettingsControl() {
+  const settings = confirmationSettings('shadow')
+  const revision = {
+    revision: 1,
+    parent_revision: 0,
+    scope: '*',
+    settings,
+    checksum: confirmationDigest,
+    reason: 'measure v9 confirmation costs before enforcement',
+    actor: 'operator@example.com',
+    created_at: confirmationTimestamp,
+  }
+  return {
+    current: [revision],
+    history: [revision],
+    default: confirmationSettings(),
+    effective: {
+      revision: 1,
+      scope: '*',
+      settings,
+      checksum: confirmationDigest,
+      source: 'revision',
+      configured: true,
+      issuance_active: true,
+      max_top_n: 10,
+      max_daily_bundle_cap: 1_000,
+      max_daily_dollar_microusd: 1_000_000_000,
+      max_bundle_request_cap: 100_000,
+      max_bundle_token_cap: 100_000_000,
+    },
+  }
+}
+
+function confirmationCalibration() {
+  return {
+    observed_from_utc_day: '2026-08-01',
+    observed_through_utc_day: '2026-08-08',
+    observation_days: 8,
+    confirmation_profile_revision: 'v9-confirmation-shadow-1',
+    confirmation_profile_checksum: confirmationDigest,
+    base_run_count: 40,
+    measured_base_cost_microusd: 130_000,
+    confirmation_bundle_count: 10,
+    measured_bundle_cost_microusd: 60_000,
+    completed_bundle_count: 8,
+    qualified_bundle_count: 2,
+    promotion_rate_bps: 2_500,
+    projected_daily_spend_microusd: 725_000,
+    epoch_duration_seconds: null,
+    projected_epoch_spend_microusd: null,
+    epoch_projection_unavailable_reason:
+      'Bench v9 has no configured epoch duration; no projection was guessed.',
+  }
+}
+
+function confirmationAblation(intervention: 'inference' | 'embedding') {
+  return {
+    status: 'not_run' as const,
+    evidence_sha256: confirmationDigest,
+    latency_ms: 5,
+    request_count: 0 as const,
+    input_tokens: 0 as const,
+    output_tokens: 0 as const,
+    provider_cost_microusd: 0 as const,
+    synthetic: true as const,
+    evidence: {
+      contract_version: 'ablation-v1',
+      bench_version: 9 as const,
+      artifact_sha256: confirmationDigest,
+      intervention,
+      mode: 'shadow' as const,
+      status: 'not_run' as const,
+      reason: 'disabled',
+      profile_revision: 'v9-confirmation-shadow-1',
+      profile_checksum: confirmationDigest,
+      threshold_manifest_sha256: confirmationDigest,
+      coordinator_sha256: confirmationDigest,
+      dataset_sha256: confirmationDigest,
+      case_set_sha256: confirmationDigest,
+      baseline_scores_sha256: null,
+      ablated_scores_sha256: null,
+      baseline_mean_micros: null,
+      ablated_mean_micros: null,
+      delta_micros: null,
+      threshold_micros: 400_000,
+      sample_count: 0,
+      affected_call_count: 0,
+      semantic_factor_bps: null,
+      applied_factor_bps: null,
+      synthetic_usage: {
+        synthetic: true as const,
+        intervention,
+        budget: {
+          max_chat_requests: intervention === 'inference' ? 10 : 0,
+          max_chat_input_bytes: intervention === 'inference' ? 1_000 : 0,
+          max_embedding_requests: intervention === 'embedding' ? 10 : 0,
+          max_embedding_inputs: intervention === 'embedding' ? 20 : 0,
+          max_embedding_input_bytes: intervention === 'embedding' ? 1_000 : 0,
+        },
+        chat_attempts: 0,
+        chat_applied: 0,
+        chat_input_bytes: 0,
+        embedding_attempts: 0,
+        embedding_applied: 0,
+        embedding_inputs: 0,
+        embedding_input_bytes: 0,
+        rejected_requests: 0,
+        budget_exhausted: false,
+        upstream_requests: 0 as const,
+        upstream_input_tokens: 0 as const,
+        upstream_output_tokens: 0 as const,
+        upstream_provider_cost_microusd: 0 as const,
+      },
+    },
+  }
+}
+
+function confirmationLongMem() {
+  const capabilities = [
+    'extraction',
+    'multi_session_reasoning',
+    'temporal_reasoning',
+    'knowledge_update',
+    'preference',
+    'abstention',
+  ] as const
+  return {
+    status: 'completed' as const,
+    evidence_sha256: confirmationDigest,
+    latency_ms: 2_000,
+    request_count: 3,
+    input_tokens: 120,
+    output_tokens: 30,
+    provider_cost_microusd: 60_000,
+    synthetic: false as const,
+    evidence: {
+      schema_version: 2 as const,
+      artifact_sha256: confirmationDigest,
+      bench_version: 9 as const,
+      profile_checksum: confirmationDigest,
+      case_set_digest: confirmationDigest,
+      dataset_revision: 'longmemeval-s-v1',
+      dataset_sha256: confirmationDigest,
+      score: {
+        longmem_mean_micros: 500_000,
+        longmem_stderr_micros: 100_000,
+        case_count: 12,
+        per_capability: capabilities.map((capability) => ({
+          capability,
+          correct: 1,
+          count: 2,
+          mean_micros: 500_000,
+        })),
+      },
+      provider_evidence: [
+        {
+          lane: 'judge',
+          cost_source: 'provider_receipt_v1' as const,
+          currency: 'USD' as const,
+          provider: 'openrouter',
+          profile_revision: 'judge-v1',
+          model: 'openai/gpt-4o-2024-08-06',
+          fallback_used: false as const,
+          requests: 1,
+          successes: 1,
+          receipted_requests: 1,
+          prompt_tokens: 20,
+          completion_tokens: 10,
+          total_tokens: 30,
+          cost_usd_micros: 10_000,
+          receipt_set_sha256: 'b'.repeat(64),
+        },
+        {
+          lane: 'reader',
+          cost_source: 'provider_receipt_v1' as const,
+          currency: 'USD' as const,
+          provider: 'openrouter',
+          profile_revision: 'reader-v1',
+          model: 'openai/gpt-oss-20b',
+          fallback_used: false as const,
+          requests: 2,
+          successes: 2,
+          receipted_requests: 2,
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cost_usd_micros: 50_000,
+          receipt_set_sha256: confirmationDigest,
+        },
+      ],
+    },
+  }
+}
+
+function confirmationBundle() {
+  const longmemeval = confirmationLongMem()
+  const inference = confirmationAblation('inference')
+  const embedding = confirmationAblation('embedding')
+  return {
+    bundle_id: confirmationBundleId,
+    artifact_sha256: confirmationDigest,
+    bench_version: 9,
+    profile_revision: 'v9-confirmation-shadow-1',
+    profile_checksum: confirmationDigest,
+    retest_generation: 0,
+    generation_reason: 'initial',
+    source_bundle_id: null,
+    state: 'completed',
+    settings_revision: 1,
+    settings_checksum: confirmationDigest,
+    qualification_status: 'unqualified',
+    completion_mode: 'shadow',
+    completion_ticket_id: confirmationTicketId,
+    evidence_sha256: confirmationDigest,
+    reporter_hotkey: '5Validator',
+    bundle_signature: 'ab'.repeat(64),
+    evidence_root: {
+      schema_version: 1,
+      artifact_sha256: confirmationDigest,
+      bench_version: 9,
+      confirmation_profile_revision: 'v9-confirmation-shadow-1',
+      confirmation_profile_checksum: confirmationDigest,
+      settings_revision: 1,
+      settings_checksum: confirmationDigest,
+      retest_generation: 0,
+      ablation_coordinator_latency_ms: 10,
+      composite_policy: {
+        schema_version: 1,
+        revision: 'composite-v9-test-1',
+        formula_revision: 'weighted-quality-gates-v1',
+        base_weight_bps: 6_000,
+        longmem_weight_bps: 4_000,
+        checksum: confirmationDigest,
+      },
+      longmemeval,
+      inference_ablation: inference,
+      embedding_ablation: embedding,
+      totals: {
+        request_count: 3,
+        input_tokens: 120,
+        output_tokens: 30,
+        provider_cost_microusd: 60_000,
+        latency_ms: 2_010,
+      },
+    },
+    verified_at: confirmationTimestamp,
+    completed_at: confirmationTimestamp,
+    created_at: confirmationTimestamp,
+    updated_at: confirmationTimestamp,
+    subjects: [
+      {
+        agent_id: '33333333-3333-4333-8333-333333333333',
+        bench_version: 9,
+        artifact_sha256: confirmationDigest,
+        result_status: 'provisional',
+        base_evidence_sha256: confirmationDigest,
+        base_quality_micros: 700_000,
+        base_stderr_micros: 20_000,
+        base_model_factor_bps: 10_000,
+        base_tool_factor_bps: 10_000,
+        full_quality_micros: null,
+        full_stderr_micros: null,
+        semantic_factor_bps: null,
+        applied_factor_bps: null,
+        full_effective_micros: null,
+        bundle_id: confirmationBundleId,
+        created_at: confirmationTimestamp,
+        updated_at: confirmationTimestamp,
+      },
+    ],
+    dimensions: [
+      { dimension: 'longmemeval', ...longmemeval, created_at: confirmationTimestamp },
+      {
+        dimension: 'inference_ablation',
+        ...inference,
+        created_at: confirmationTimestamp,
+      },
+      {
+        dimension: 'embedding_ablation',
+        ...embedding,
+        created_at: confirmationTimestamp,
+      },
+    ],
+    tickets: [
+      {
+        ticket_id: confirmationTicketId,
+        validator_hotkey: '5Validator',
+        slot_id: 'slot-1',
+        status: 'scored',
+        attempt: 1,
+        issued_at: confirmationTimestamp,
+        deadline: '2026-08-08T13:30:00Z',
+        failure_reason: null,
+        failed_at: null,
+      },
+    ],
+  } satisfies GeneratedConfirmationBundleView
+}
+
+type MutableConfirmationValue<T> = T extends string
+  ? string
+  : T extends number
+    ? number
+    : T extends boolean
+      ? boolean
+      : T extends null
+        ? null
+        : T extends ReadonlyArray<infer Item>
+          ? Array<MutableConfirmationValue<Item>>
+          : T extends object
+            ? { -readonly [Key in keyof T]: MutableConfirmationValue<T[Key]> }
+            : T
+type MutableConfirmationBundle = MutableConfirmationValue<
+  ReturnType<typeof confirmationBundle>
+>
+
+describe('Bench v9 confirmation bundle schemas', () => {
+  it('stays statically exhaustive against the generated Platform response types', () => {
+    expectTypeOf<keyof ZodOutput<typeof confirmationBundleViewSchema>>().toEqualTypeOf<
+      keyof GeneratedConfirmationBundleView
+    >()
+    expectTypeOf<ZodOutput<typeof confirmationBundleViewSchema>>().toMatchTypeOf<
+      GeneratedConfirmationBundleView
+    >()
+    expectTypeOf<keyof ZodOutput<typeof confirmationBundleListSchema>>().toEqualTypeOf<
+      keyof GeneratedConfirmationBundleList
+    >()
+    expectTypeOf<ZodOutput<typeof confirmationBundleListSchema>>().toMatchTypeOf<
+      GeneratedConfirmationBundleList
+    >()
+  })
+
+  it('keeps the shipped settings default off and parses a complete shadow revision', () => {
+    const parsed = confirmationBundleSettingsControlSchema.parse(
+      confirmationSettingsControl(),
+    )
+    expect(parsed.default.mode).toBe('off')
+    expect(parsed.effective.issuance_active).toBe(true)
+  })
+
+  it.each(['shadow', 'enforce'] as const)(
+    'rejects an incomplete %s settings write instead of filling omitted caps',
+    (mode) => {
+      const settings = confirmationSettings(mode)
+      expect(() =>
+        setConfirmationBundleSettingsInputSchema.parse({
+          scope: '*',
+          expectedRevision: 1,
+          settings: { ...settings, per_bundle_token_cap: 0 },
+          reason: 'operator reviewed the bounded confirmation spend',
+          confirmation: confirmationBundleSettingsConfirmation(mode),
+        }),
+      ).toThrow(/per_bundle_token_cap/)
+    },
+  )
+
+  it.each(['off', 'shadow', 'enforce'] as const)(
+    'requires the exact mode-bound confirmation for %s',
+    (mode) => {
+      const input = {
+        scope: '*',
+        expectedRevision: 1,
+        settings: confirmationSettings(mode),
+        reason: 'operator reviewed the bounded confirmation spend',
+        confirmation: confirmationBundleSettingsConfirmation(mode),
+      }
+      expect(setConfirmationBundleSettingsInputSchema.parse(input)).toEqual(input)
+      const parseWrongMode = () =>
+        setConfirmationBundleSettingsInputSchema.parse({
+          ...input,
+          confirmation: 'APPLY V9 CONFIRMATION MODE SHADOW',
+        })
+      if (mode === 'shadow') expect(parseWrongMode).not.toThrow()
+      else expect(parseWrongMode).toThrow()
+    },
+  )
+
+  it('rejects unknown write fields instead of silently stripping them', () => {
+    expect(() =>
+      setConfirmationBundleSettingsInputSchema.parse({
+        scope: '*',
+        expectedRevision: 1,
+        settings: confirmationSettings('off'),
+        reason: 'disable bundle issuance while retaining evidence',
+        confirmation: 'APPLY V9 CONFIRMATION MODE OFF',
+        activateRewards: true,
+      }),
+    ).toThrow(/Unrecognized key/)
+  })
+
+  it('fails closed when Platform omits the completion audit fields', () => {
+    const { settings_checksum: _missing, ...stale } = confirmationBundle()
+    expect(() => confirmationBundleViewSchema.parse(stale)).toThrow(/settings_checksum/)
+  })
+
+  it('preserves receipt-derived LongMem lane cost and integer score fields', () => {
+    const parsed = confirmationBundleViewSchema.parse(confirmationBundle())
+    expect(parsed.generation_reason).toBe('initial')
+    expect(parsed.source_bundle_id).toBeNull()
+    const longmem = parsed.evidence_root?.longmemeval.evidence
+    expect(longmem?.provider_evidence.find((lane) => lane.lane === 'reader')).toMatchObject({
+      lane: 'reader',
+      fallback_used: false,
+      cost_usd_micros: 50_000,
+      receipt_set_sha256: confirmationDigest,
+    })
+    expect(longmem?.score.longmem_mean_micros).toBe(500_000)
+  })
+
+  it('accepts both legal superseded audit shapes and rejects partial completion', () => {
+    const completed = structuredClone(confirmationBundle()) as GeneratedConfirmationBundleView
+    completed.state = 'superseded'
+    expect(confirmationBundleViewSchema.parse(completed).completed_at).toBe(confirmationTimestamp)
+
+    const unspent = structuredClone(confirmationBundle()) as GeneratedConfirmationBundleView
+    unspent.state = 'superseded'
+    unspent.qualification_status = null
+    unspent.completion_mode = null
+    unspent.completion_ticket_id = null
+    unspent.evidence_sha256 = null
+    unspent.reporter_hotkey = null
+    unspent.bundle_signature = null
+    unspent.evidence_root = null
+    unspent.verified_at = null
+    unspent.completed_at = null
+    unspent.dimensions = []
+    expect(confirmationBundleViewSchema.parse(unspent).completed_at).toBeNull()
+
+    const partial = structuredClone(unspent)
+    partial.evidence_sha256 = confirmationDigest
+    expect(() => confirmationBundleViewSchema.parse(partial)).toThrow(/completion fields are inconsistent/)
+
+    const impossibleDimensions = structuredClone(unspent)
+    impossibleDimensions.dimensions = completed.dimensions
+    expect(() => confirmationBundleViewSchema.parse(impossibleDimensions)).toThrow(
+      /cannot publish dimensions/,
+    )
+  })
+
+  it('requires source lineage for every non-initial generation', () => {
+    const retest = structuredClone(confirmationBundle()) as GeneratedConfirmationBundleView
+    retest.retest_generation = 1
+    retest.generation_reason = 'operator_retest'
+    retest.source_bundle_id = '66666666-6666-4666-8666-666666666666'
+    retest.evidence_root!.retest_generation = 1
+    expect(confirmationBundleViewSchema.parse(retest).source_bundle_id).toBe(
+      '66666666-6666-4666-8666-666666666666',
+    )
+    retest.source_bundle_id = null
+    expect(() => confirmationBundleViewSchema.parse(retest)).toThrow(/generation lineage/)
+  })
+
+  it.each([
+    ['fallback', (bundle: MutableConfirmationBundle) => {
+      bundle.evidence_root!.longmemeval.evidence.provider_evidence[0].fallback_used = true
+    }],
+    ['missing receipt', (bundle: MutableConfirmationBundle) => {
+      bundle.evidence_root!.longmemeval.evidence.provider_evidence[0].receipted_requests = 0
+    }],
+    ['token mismatch', (bundle: MutableConfirmationBundle) => {
+      bundle.evidence_root!.longmemeval.evidence.provider_evidence[0].total_tokens = 121
+    }],
+    ['capability mean mismatch', (bundle: MutableConfirmationBundle) => {
+      bundle.evidence_root!.longmemeval.evidence.score.per_capability[0].mean_micros = 400_000
+    }],
+  ] as const)('rejects adversarial LongMem %s evidence', (_name, mutate) => {
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle()))
+    mutate(bundle)
+    expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow()
+  })
+
+  it('rejects duplicate LongMem provider lanes', () => {
+    const bundle = confirmationBundle()
+    const lanes = bundle.evidence_root!.longmemeval.evidence.provider_evidence
+    lanes.push({ ...lanes[0] })
+    expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow(/expected array/)
+  })
+
+  it('rejects missing or reordered LongMem provider lanes', () => {
+    const missing = confirmationBundle()
+    missing.evidence_root!.longmemeval.evidence.provider_evidence.pop()
+    expect(() => confirmationBundleViewSchema.parse(missing)).toThrow(/expected array/)
+
+    const reordered = confirmationBundle()
+    reordered.evidence_root!.longmemeval.evidence.provider_evidence.reverse()
+    expect(() => confirmationBundleViewSchema.parse(reordered)).toThrow(/judge then reader/)
+  })
+
+  it('rejects a non-binary ablation factor', () => {
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle()))
+    const evidence = bundle.evidence_root!.inference_ablation.evidence
+    evidence.status = 'passed'
+    evidence.baseline_scores_sha256 = confirmationDigest
+    evidence.ablated_scores_sha256 = confirmationDigest
+    evidence.baseline_mean_micros = 800_000
+    evidence.ablated_mean_micros = 200_000
+    evidence.delta_micros = 600_000
+    evidence.sample_count = 2
+    evidence.semantic_factor_bps = 5_000
+    evidence.applied_factor_bps = 10_000
+    expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow()
+  })
+
+  it('rejects upstream provider accounting on synthetic ablations', () => {
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle()))
+    bundle.evidence_root!.embedding_ablation.evidence.synthetic_usage.upstream_requests = 1
+    expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow(/expected 0/)
+  })
+
+  it('rejects a shadow completion that claims a fully confirmed subject', () => {
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle()))
+    bundle.subjects[0].result_status = 'full_confirmed'
+    expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow(/shadow/)
+  })
+
+  it('rejects completion provenance that does not bind the signed root and scored ticket', () => {
+    const wrongRoot = confirmationBundle()
+    wrongRoot.evidence_root!.settings_checksum = 'b'.repeat(64)
+    expect(() => confirmationBundleViewSchema.parse(wrongRoot)).toThrow(/bind/)
+
+    const wrongTicket = confirmationBundle()
+    wrongTicket.completion_ticket_id = '44444444-4444-4444-8444-444444444444'
+    expect(() => confirmationBundleViewSchema.parse(wrongTicket)).toThrow(/scored ticket/)
+  })
+
+  it('rejects contradictory composite, coordinator, and root-total provenance', () => {
+    const wrongWeights = confirmationBundle()
+    wrongWeights.evidence_root!.composite_policy.base_weight_bps = 5_000
+    expect(() => confirmationBundleViewSchema.parse(wrongWeights)).toThrow(/weights/)
+
+    const splitCoordinator = confirmationBundle()
+    splitCoordinator.evidence_root!.embedding_ablation.evidence.coordinator_sha256 =
+      'f'.repeat(64)
+    expect(() => confirmationBundleViewSchema.parse(splitCoordinator)).toThrow(/coordinator/)
+
+    const wrongLatency = confirmationBundle()
+    wrongLatency.evidence_root!.totals.latency_ms += 1
+    expect(() => confirmationBundleViewSchema.parse(wrongLatency)).toThrow(/root totals/)
+  })
+
+  it('parses bounded list filters and rejects reward/activation controls', () => {
+    expect(confirmationBundleListInputSchema.parse({ state: 'failed', limit: 25 })).toEqual({
+      state: 'failed',
+      limit: 25,
+      offset: 0,
+    })
+    expect(() =>
+      confirmationBundleListInputSchema.parse({ state: 'failed', limit: 25, reward: true }),
+    ).toThrow(/Unrecognized key/)
+  })
+
+  it('requires exact retest confirmation, reason, generation, and idempotency id', () => {
+    const input = {
+      bundleId: confirmationBundleId,
+      requestId: '55555555-5555-4555-8555-555555555555',
+      expectedGeneration: 0,
+      reason: 'fresh evidence approved after provider recovery',
+      confirmation: 'AUTHORIZE CONFIRMATION BUNDLE RETEST',
+    }
+    expect(authorizeConfirmationBundleRetestInputSchema.parse(input)).toEqual(input)
+    expect(() =>
+      authorizeConfirmationBundleRetestInputSchema.parse({
+        ...input,
+        confirmation: 'RETEST',
+      }),
+    ).toThrow()
+  })
+
+  it('validates the list response count and budget without dropping bundle evidence', () => {
+    const parsed = confirmationBundleListSchema.parse({
+      items: [confirmationBundle()],
+      count: 1,
+      budget: {
+        utc_day: '2026-08-08',
+        revision: 3,
+        issued_attempts: 2,
+        outstanding_reserved_microusd: 10_000,
+        settled_microusd: 50_000,
+      },
+      shadow_calibration: confirmationCalibration(),
+    })
+    expect(parsed.items[0].evidence_root?.totals.provider_cost_microusd).toBe(60_000)
+    expect(parsed.shadow_calibration.measured_base_cost_microusd).toBe(130_000)
+    expect(parsed.shadow_calibration.promotion_rate_bps).toBe(2_500)
+  })
+
+  it('rejects internally inconsistent shadow calibration aggregates', () => {
+    expect(() =>
+      confirmationBundleListSchema.parse({
+        items: [],
+        count: 0,
+        budget: {
+          utc_day: '2026-08-08',
+          revision: 0,
+          issued_attempts: 0,
+          outstanding_reserved_microusd: 0,
+          settled_microusd: 0,
+        },
+        shadow_calibration: {
+          ...confirmationCalibration(),
+          completed_bundle_count: 0,
+          qualified_bundle_count: 1,
+          confirmation_profile_checksum: null,
+          epoch_projection_unavailable_reason: null,
+        },
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a daily projection whose sample window is miscounted', () => {
+    expect(() =>
+      confirmationBundleListSchema.parse({
+        items: [],
+        count: 0,
+        budget: {
+          utc_day: '2026-08-08',
+          revision: 0,
+          issued_attempts: 0,
+          outstanding_reserved_microusd: 0,
+          settled_microusd: 0,
+        },
+        shadow_calibration: { ...confirmationCalibration(), observation_days: 7 },
+      }),
+    ).toThrow(/observation days/)
+  })
+
+  it('rejects a total count smaller than the returned bounded page', () => {
+    expect(() =>
+      confirmationBundleListSchema.parse({
+        items: [confirmationBundle()],
+        count: 0,
+        budget: {
+          utc_day: '2026-08-08',
+          revision: 0,
+          issued_attempts: 0,
+          outstanding_reserved_microusd: 0,
+          settled_microusd: 0,
+        },
+        shadow_calibration: confirmationCalibration(),
+      }),
+    ).toThrow(/count cannot be smaller/)
+  })
+})
+
 describe('source review causal evidence schema', () => {
   const generatedFinding = {
     artifact_sha256: 'a'.repeat(64),
@@ -382,9 +1057,33 @@ describe('source review causal evidence schema', () => {
     },
   } satisfies GeneratedSourceReviewFinding
 
+  it('stays statically exhaustive against the generated Platform finding type', () => {
+    expectTypeOf<keyof ZodOutput<typeof sourceReviewFindingSchema>>().toEqualTypeOf<
+      keyof GeneratedSourceReviewFinding
+    >()
+    expectTypeOf<ZodOutput<typeof sourceReviewFindingSchema>>().toMatchTypeOf<
+      GeneratedSourceReviewFinding
+    >()
+  })
+
   it('parses the generated v2 finding shape without stripping causal proof', () => {
     const parsed = sourceReviewFindingSchema.parse(generatedFinding)
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
+  })
+
+  it('accepts the generated legacy shape when optional finding fields are absent', () => {
+    const legacyFinding = {
+      artifact_sha256: 'a'.repeat(64),
+      prompt_revision: 'source-review-v1',
+      risk_level: 'low',
+      confidence: 0.8,
+      categories: ['safe'],
+      summary: 'No causal finding was recorded by the legacy source review.',
+    } satisfies GeneratedSourceReviewFinding
+
+    const parsed = sourceReviewFindingSchema.parse(legacyFinding)
+    expect(parsed.evidence).toEqual([])
+    expect(parsed).not.toHaveProperty('causal_evidence')
   })
 
   it('rejects unknown, duplicate, incompatible, and unbound causal proof', () => {

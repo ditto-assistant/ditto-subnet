@@ -21,7 +21,10 @@ from ditto.api_models.retry_state import RetryState
 from ditto.api_models.screener import ScreenerProgressStage, ScreenerRuntimeState
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.ticket_status import TicketPurpose
-from ditto.api_models.validator import ValidatorRuntimeState
+from ditto.api_models.validator import (
+    V9ConfirmationReceipt,
+    ValidatorRuntimeState,
+)
 from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
@@ -524,8 +527,9 @@ class PublicLeaderboardEntry(BaseModel):
     """
 
     rank: Annotated[
-        int,
+        int | None,
         Field(
+            default=None,
             ge=1,
             description=(
                 "1-based rank by ``official_composite`` -- NOT by ``composite``. "
@@ -536,10 +540,12 @@ class PublicLeaderboardEntry(BaseModel):
                 "and ``official_composite`` is the one that ranks the board and "
                 "drives the weight fold. Ties break on ``first_seen`` then "
                 "``agent_id``. Provisional (pre-quorum) rows are ranked among "
-                "themselves and always trail the finalized board."
+                "themselves and always trail the finalized board. Bench v9 "
+                "base/provisional rows in confirmation enforce mode are null: "
+                "only full-confirmed rows rank."
             ),
         ),
-    ]
+    ] = None
     finalized: Annotated[
         bool,
         Field(
@@ -681,6 +687,40 @@ class PublicLeaderboardEntry(BaseModel):
             ),
         ),
     ]
+    v9_confirmation_status: Annotated[
+        Literal["base_only", "provisional", "full_confirmed"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Bench v9 score contract state. Base-only/provisional values are "
+                "never ranked in enforce mode; full_confirmed is the only "
+                "reward-authoritative state."
+            ),
+        ),
+    ] = None
+    v9_full_confirmed_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Independently derivable full v9 composite used for this rank. "
+                "Null for base-only and shadow/provisional rows."
+            ),
+        ),
+    ] = None
+    v9_confirmation_evidence_sha256: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=r"^[0-9a-f]{64}$",
+            exclude_if=lambda value: value is None,
+            description="Signed full-confirmation evidence root digest.",
+        ),
+    ] = None
     aggregate_method: Literal["canonical_median", "continual_mean"] = "canonical_median"
     pre_efficiency_composite: Annotated[
         float | None,
@@ -1416,6 +1456,17 @@ class PublicLeaderboardResponse(BaseModel):
             )
         ),
     ]
+    v9_confirmation_mode: Annotated[
+        Literal["enforce"] | None,
+        Field(
+            default=None,
+            description=(
+                "Fail-closed marker: Bench v9 base-only and provisional rows "
+                "cannot rank or receive emissions while present. Null when "
+                "confirmation is not ranking-authoritative."
+            ),
+        ),
+    ] = None
     continual_aggregate_active: Annotated[
         bool,
         Field(
@@ -1713,6 +1764,25 @@ class PublicSubmissionScores(BaseModel):
             description="Median canonical composite in [0,1].",
         ),
     ]
+    v9_confirmation_status: Annotated[
+        Literal["base_only", "provisional", "full_confirmed"] | None,
+        Field(default=None, exclude_if=lambda value: value is None),
+    ] = None
+    v9_full_confirmed_composite: Annotated[
+        float | None,
+        Field(default=None, ge=0.0, le=1.0, exclude_if=lambda value: value is None),
+    ] = None
+    v9_confirmation_receipt: Annotated[
+        V9ConfirmationReceipt | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Signed evidence root and subject projection used to reproduce "
+                "the reward-authoritative full v9 composite."
+            ),
+        ),
+    ] = None
     dataset_seed: Annotated[
         int | None,
         Field(default=None, description="Platform-pinned dataset seed (regenerable)."),

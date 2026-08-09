@@ -25,7 +25,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
@@ -33,7 +33,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerResponse
 from ditto.api_models.upload import _SS58_PATTERN
-from ditto.api_models.validator import LedgerScoreProof
+from ditto.api_models.validator import (
+    LedgerScoreProof,
+    V9BaseEvidence,
+    V9ConfirmationReceipt,
+)
 from ditto.api_server.continual_retest_settings import aggregate_is_active
 from ditto.api_server.endpoints.validator import (
     ChainDep,
@@ -55,6 +59,7 @@ from ditto.db.queries.scores import (
     list_eligible_ledger,
     quorum_composites,
     quorum_score_rows,
+    v9_confirmation_enforcement_active,
 )
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
@@ -98,6 +103,7 @@ class _LedgerSnapshot:
     instead would silently hand the fleet a 0% burn for as long as the outage
     lasts. Replaying the last known share is the only answer that does not move
     emissions because of a database problem."""
+    v9_confirmation_mode: Literal["enforce"] | None = None
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -127,6 +133,7 @@ def _score_proof(score: Score) -> LedgerScoreProof:
         parsed_deadline = None
     transcript = details.get("transcript_sha256")
     base_evidence = details.get("base_evidence_sha256")
+    base_evidence_root = details.get("v9_base")
     return LedgerScoreProof(
         validator_hotkey=score.validator_hotkey,
         run_id=score.run_id,
@@ -137,6 +144,11 @@ def _score_proof(score: Score) -> LedgerScoreProof:
         transcript_sha256=transcript if isinstance(transcript, str) else None,
         base_evidence_sha256=(
             base_evidence if isinstance(base_evidence, str) else None
+        ),
+        base_evidence=(
+            V9BaseEvidence.model_validate(base_evidence_root)
+            if isinstance(base_evidence_root, dict)
+            else None
         ),
         signature=score.signature,
     )
@@ -300,6 +312,9 @@ async def scores(
             ) from exc
     try:
         rows = await list_eligible_ledger(session, include_fingerprints=False)
+        v9_confirmation_mode: Literal["enforce"] | None = (
+            "enforce" if await v9_confirmation_enforcement_active(session) else None
+        )
         # The k=3 quorum spread per agent -> composite_stderr when the run itself
         # did not stash one, so the KOTH z-band is noise-aware with no re-score.
         quorum = await quorum_composites(
@@ -352,7 +367,7 @@ async def scores(
         if efficiency_config.enabled and efficiency_config.fold_enabled:
             bonus_rows = await get_bonus_rows(
                 session,
-                [r.agent_id for r in rows],
+                [r.agent_id for r in rows if r.v9_confirmation is None],
                 bench_versions={r.agent_id: r.bench_version for r in rows},
             )
         else:
@@ -389,12 +404,20 @@ async def scores(
             bench_version=r.bench_version,
             signature=r.signature,
             score_proofs=[_score_proof(s) for s in proof_rows.get(r.agent_id, [])],
-            composite_stderr=_ledger_stderr(r.details, quorum.get(r.agent_id, [])),
+            composite_stderr=(
+                r.v9_confirmation["full_stderr_micros"] / 1_000_000
+                if r.v9_confirmation is not None
+                else _ledger_stderr(r.details, quorum.get(r.agent_id, []))
+            ),
             confirmation_composites=(
-                _confirmation_composites(r.details) if continual_mean_active else None
+                _confirmation_composites(r.details)
+                if continual_mean_active and r.v9_confirmation is None
+                else None
             ),
             confirmation_seeds=(
-                _confirmation_seeds(r.details) if continual_mean_active else None
+                _confirmation_seeds(r.details)
+                if continual_mean_active and r.v9_confirmation is None
+                else None
             ),
             confirmation_history=(
                 [
@@ -407,17 +430,26 @@ async def scores(
                     )
                     for row in history[r.agent_id]
                 ]
-                if continual_mean_active and r.agent_id in history
+                if continual_mean_active
+                and r.v9_confirmation is None
+                and r.agent_id in history
                 else None
             ),
             continual_aggregate_method=(
-                "mean_after_quorum" if continual_mean_active else None
+                "mean_after_quorum"
+                if continual_mean_active and r.v9_confirmation is None
+                else None
             ),
             efficiency_bonus=(
                 bonus_rows[r.agent_id].bonus if r.agent_id in bonus_rows else None
             ),
             effective_composite=(
                 ranking_scores[r.agent_id] if r.agent_id in bonus_rows else None
+            ),
+            v9_confirmation=(
+                V9ConfirmationReceipt.model_validate(r.v9_confirmation)
+                if r.v9_confirmation is not None
+                else None
             ),
             status=r.status,
         )
@@ -429,6 +461,7 @@ async def scores(
             entries=entries,
             generated_at=generated_at,
             burn_share=burn_settings.burn_share,
+            v9_confirmation_mode=v9_confirmation_mode,
         ),
     )
     logger.info(
@@ -438,6 +471,7 @@ async def scores(
     )
     return LedgerResponse(
         entries=entries,
+        v9_confirmation_mode=v9_confirmation_mode,
         count=len(entries),
         generated_at=generated_at,
         stale=False,
@@ -507,6 +541,7 @@ def _serve_last_known(
     ]
     return LedgerResponse(
         entries=entries,
+        v9_confirmation_mode=snapshot.v9_confirmation_mode,
         count=len(entries),
         generated_at=snapshot.generated_at,
         stale=True,

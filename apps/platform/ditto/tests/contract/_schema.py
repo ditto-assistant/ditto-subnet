@@ -45,6 +45,18 @@ SHARED_MODELS = [
     "FailJobResponse",
 ]
 
+CONFIRMATION_MODELS = [
+    "ConfirmationExecutionProfile",
+    "V9ConfirmationClaimRequest",
+    "V9ConfirmationJobResponse",
+    "V9ConfirmationPrepareRequest",
+    "V9ConfirmationPreparedReport",
+    "V9ConfirmationSubmitRequest",
+    "V9ConfirmationSubmitResponse",
+    "V9ConfirmationFailRequest",
+    "V9ConfirmationFailResponse",
+]
+
 # Cosmetic JSON-Schema keys that carry prose/illustration, not structure.
 _STRIP_KEYS = {"title", "description", "examples", "example"}
 
@@ -69,3 +81,10 @@ def compute_contract(
     mod = importlib.import_module(module)
 
     return {name: _strip(getattr(mod, name).model_json_schema()) for name in models}
+
+
+def compute_confirmation_contract() -> dict[str, Any]:
+    """Return the exact private v9 confirmation transport contract."""
+    return compute_contract(
+        CONFIRMATION_MODELS, module="ditto.api_models.validator_confirmation"
+    )

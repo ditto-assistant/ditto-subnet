@@ -279,7 +279,7 @@ def compute_weights(
     is the whole vector.
     """
     eligible = filter_eligible(entries)
-    scored = [e for e in eligible if e.composite > 0.0]
+    scored = [e for e in eligible if _effective_composite(e) > 0.0]
     if not scored:
         return {}
 
@@ -307,7 +307,7 @@ def select_champion(
     entries: Sequence[LedgerEntry], *, margin: float, dethrone_z: float = 0.0
 ) -> LedgerEntry | None:
     """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
-    scored = [e for e in filter_eligible(entries) if e.composite > 0.0]
+    scored = [e for e in filter_eligible(entries) if _effective_composite(e) > 0.0]
     return _champion(scored, margin, dethrone_z) if scored else None
 
 
@@ -436,6 +436,12 @@ def _effective_composite(entry: LedgerEntry) -> float:
     independently activated mechanisms compose without rewriting signed
     validator scores or reviving the legacy pre-v7 token penalty.
     """
+    receipt = getattr(entry, "v9_confirmation", None)
+    if _entry_version(entry) == 9 and receipt is not None:
+        value = getattr(receipt, "full_effective_micros", None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value / 1_000_000
+        return 0.0
     return _continual_composite(entry) * _efficiency_multiplier(entry)
 
 
@@ -462,6 +468,15 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
     non-negative int seeds with no duplicate; anything else is treated as absent
     (a consensus-safe guard so two validators never pair off a differently-parsed
     map)."""
+    # A v9 full-confirmation receipt is a separate signed score authority. Its
+    # KOTH comparison must use that verified receipt, never legacy continual
+    # histories that the receipt does not bind and an untrusted Platform could
+    # otherwise attach to recreate the pre-v9 paired-dethrone path.
+    if (
+        _entry_version(entry) == 9
+        and getattr(entry, "v9_confirmation", None) is not None
+    ):
+        return None
     history = _entry_confirmation_history(entry)
     if history is not None:
         return history
@@ -588,7 +603,8 @@ def top5_confirmation_set(
     scored = [
         entry
         for entry in entries
-        if entry.composite > 0.0 and _entry_version(entry) == current_version
+        if _effective_composite(entry) > 0.0
+        and _entry_version(entry) == current_version
     ]
     if not scored:
         return None
@@ -789,7 +805,7 @@ def agents_needing_rescore(
     not strand on an empty current-version subset. Returns the ledger entries
     (with ``agent_id``) so the caller can request their re-evaluation.
     """
-    scored = [e for e in entries if e.composite > 0.0]
+    scored = [e for e in entries if _effective_composite(e) > 0.0]
     if not scored:
         return []
     champion = _champion(scored, margin, dethrone_z)
@@ -879,7 +895,7 @@ def contested_confirmation_set(
     keep sharing them and are never re-scored: cost is O(1) per new
     challenger, not O(cohort) per sweep.
     """
-    scored = [e for e in entries if e.composite > 0.0]
+    scored = [e for e in entries if _effective_composite(e) > 0.0]
     if len(scored) < 2:
         return []
     champion = _champion(scored, margin, dethrone_z)

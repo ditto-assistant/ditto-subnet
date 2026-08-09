@@ -64,6 +64,10 @@ import {
   updateSubmissionSettingsInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   retryFailedScreeningNowInputSchema,
+  confirmationBundleStateSchema,
+  confirmationBundleDetailInputSchema,
+  setConfirmationBundleSettingsInputSchema,
+  authorizeConfirmationBundleRetestInputSchema,
 } from '../lib/admin.schemas'
 import {
   fetchCopyReviewSourceDiff,
@@ -129,6 +133,11 @@ import {
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
+  fetchConfirmationBundleSettings,
+  setConfirmationBundleSettings,
+  fetchConfirmationBundles,
+  fetchConfirmationBundle,
+  authorizeConfirmationBundleRetest,
 } from './admin.service'
 
 export const BACKROOM_READ_SCOPE = 'backroom:read'
@@ -175,6 +184,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_submission_cooldown',
   'set_source_release_policy',
   'set_burn_settings',
+  'set_confirmation_bundle_settings',
+  'authorize_confirmation_bundle_retest',
 ])
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
@@ -389,6 +400,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read the emission burn in force, the miner share it leaves, the governing revision, and how many validators are live enough to fold it. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   get_submission_cooldown:
     'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
+  get_confirmation_bundle_settings:
+    'Read isolated Bench v9 confirmation issuance settings and optional audit history. Shadow cannot full-confirm. This does not activate v9 or rewards.',
+  set_confirmation_bundle_settings:
+    'Apply a complete bounded confirmation policy with revision guard, reason, and exact mode phrase. Does not activate v9 or rewards.',
+  list_confirmation_bundles:
+    'Page shared v9 confirmation evidence and spend, preserving LongMem lanes, binary ablations, and per-subject projections.',
+  get_confirmation_bundle:
+    'Read one complete v9 confirmation root, signature, typed evidence, tickets, and subject projections.',
+  authorize_confirmation_bundle_retest:
+    'Authorize exactly the next evidence generation with current generation, request UUID, reason, and exact retest phrase. Does not activate rewards.',
   remove_failed_submission_from_queue:
     'Withdraw an exhausted submission using a fresh snapshot and "REMOVE FROM VALIDATOR QUEUE". Preserves the record, scores, artifact, payment, and history. Use evict_live_validator_leases instead when live leases still consume capacity.',
   get_score_history:
@@ -1229,6 +1250,82 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => setQueuePolicySettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_confirmation_bundle_settings',
+    {
+      title: 'Get Bench v9 confirmation settings',
+      description:
+        'Read the complete platform-owned qualification policy for Bench v9 confirmation bundles. Returns the mode, bounded daily and per-bundle spend caps, top-N challenger cohort, frozen confirmation profile identity, effective revision/checksum/source, and optional newest-first append-only history. Mode off issues no work. Shadow records signed evidence and derived previews but must leave every subject provisional. Enforce may mark a subject full-confirmed only when the shared evidence is qualified. This setting does not change the active benchmark, canonical score ledger, emissions, or rewards. Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(
+            await fetchConfirmationBundleSettings(),
+            historyLimit,
+            historyOffset,
+          ),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
+    'set_confirmation_bundle_settings',
+    {
+      title: 'Set Bench v9 confirmation settings',
+      description:
+        'Apply one complete append-only Bench v9 confirmation issuance revision. Supply every setting, expectedRevision from get_confirmation_bundle_settings, an audit reason, and the exact phrase "APPLY V9 CONFIRMATION MODE OFF", "... SHADOW", or "... ENFORCE" matching settings.mode. Active modes require a frozen profile revision/checksum and positive daily/per-bundle caps. Off is the issuance kill switch; it does not revoke an existing lease. Shadow is evidence-only and cannot full-confirm. Enforce changes only the isolated v9 qualification status; this tool cannot activate Bench v9, canonical scoring, emissions, or rewards. Requires backroom:write.',
+      inputSchema: setConfirmationBundleSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => setConfirmationBundleSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'list_confirmation_bundles',
+    {
+      title: 'List Bench v9 confirmation bundles',
+      description:
+        'Read newest-first shared Bench v9 qualification evidence, the current UTC budget ledger, and stored-row-derived shadow calibration: measured base and average bundle cost, promotion rate, projected daily spend, and explicit epoch availability. Filter by lifecycle state and bound the result. Completed rows expose exact root/settings/profile provenance, one validator signature, typed LongMem provider lanes and receipts, provider-free binary ablations, tickets, and separately derived per-subject base/full quality and gates. Shadow subjects remain provisional even when their preview is populated. Requires backroom:read and changes nothing.',
+      inputSchema: {
+        state: confirmationBundleStateSchema.optional(),
+        limit: z.number().int().min(1).max(200).default(20),
+        offset: z.number().int().min(0).default(0),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchConfirmationBundles(input)),
+  )
+
+  registerTool(
+    'get_confirmation_bundle',
+    {
+      title: 'Get Bench v9 confirmation bundle',
+      description:
+        'Read one complete Bench v9 confirmation bundle by UUID. Use this before authorizing a retest or diagnosing qualification: it preserves the root digest and signature, settings/profile/generation binding, completion mode, qualification status, typed provider receipts and synthetic ablations, ticket history, and every subject projection. Requires backroom:read and changes nothing.',
+      inputSchema: confirmationBundleDetailInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchConfirmationBundle(input)),
+  )
+
+  registerTool(
+    'authorize_confirmation_bundle_retest',
+    {
+      title: 'Authorize Bench v9 confirmation retest',
+      description:
+        'Create exactly the next evidence generation for one completed or superseded Bench v9 confirmation bundle. Supply a fresh requestId, expectedGeneration from get_confirmation_bundle, an audit reason, and exact confirmation "AUTHORIZE CONFIRMATION BUNDLE RETEST". The source is preserved and superseded, the new bundle starts pending, and every attached subject returns to provisional with no full projection until new evidence verifies. This is not evidence submission, score replacement, benchmark activation, or reward activation. Requires backroom:write.',
+      inputSchema: authorizeConfirmationBundleRetestInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => authorizeConfirmationBundleRetest(input, props.session.email)),
   )
 
   registerTool(

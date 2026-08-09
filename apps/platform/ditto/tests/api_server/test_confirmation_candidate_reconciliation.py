@@ -1,0 +1,693 @@
+"""DB-backed reconciliation tests for ordinary v9 -> confirmation work."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.confirmation_bundles import (
+    ConfirmationBundleMode,
+    ConfirmationBundleSettings,
+    ConfirmationResultStatus,
+)
+from ditto.api_models.screener import SCREENING_POLICY_VERSION
+from ditto.api_models.validator import V9BaseEvidence
+from ditto.api_server.confirmation_candidate_reconciliation import (
+    lower_median_v9_base_proof,
+    reconcile_v9_confirmation_candidates,
+)
+from ditto.db.models import (
+    Agent,
+    ConfirmationBudgetReservation,
+    ConfirmationBundle,
+    ConfirmationBundleSettingsRevision,
+    ConfirmationBundleSubject,
+    EvaluationPayment,
+    Score,
+)
+from ditto.db.queries.confirmation_bundles import (
+    complete_confirmation_bundle,
+    insert_confirmation_bundle_settings_revision,
+    issue_confirmation_bundle_ticket,
+    reserve_confirmation_bundle_budget,
+    settle_confirmation_bundle_budget,
+)
+from ditto.tests.confirmation_evidence_fixtures import (
+    VALIDATOR_KEYPAIR,
+    active_settings,
+    signed_report,
+    verification_profile,
+)
+
+pytestmark = pytest.mark.asyncio
+
+_NOW = datetime(2026, 8, 8, 12, tzinfo=UTC)
+_VECTOR_PATH = (
+    Path(__file__).resolve().parents[5]
+    / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+)
+_VECTOR = json.loads(_VECTOR_PATH.read_text())["vectors"][0]["details"]
+
+
+def _checksum(settings: ConfirmationBundleSettings) -> str:
+    encoded = json.dumps(
+        settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+async def _settings(
+    session: AsyncSession,
+    *,
+    mode: ConfirmationBundleMode = ConfirmationBundleMode.SHADOW,
+    top_n: int = 5,
+    parent_revision: int = 0,
+    daily_bundle_cap: int | None = None,
+) -> tuple[ConfirmationBundleSettingsRevision, ConfirmationBundleSettings]:
+    settings = active_settings(mode=mode).model_copy(update={"top_n": top_n})
+    if daily_bundle_cap is not None:
+        settings = settings.model_copy(update={"daily_bundle_cap": daily_bundle_cap})
+    row = await insert_confirmation_bundle_settings_revision(
+        session,
+        parent_revision=parent_revision,
+        scope="*",
+        settings=settings.model_dump(mode="json"),
+        checksum=_checksum(settings),
+        reason="operator approved candidate reconciliation test",
+        actor="operator@example.com",
+    )
+    return row, settings
+
+
+def _score(
+    agent_id: UUID,
+    *,
+    artifact_sha256: str,
+    composite_micros: int,
+    stderr_micros: int,
+    validator_index: int,
+) -> Score:
+    raw = copy.deepcopy(_VECTOR)
+    raw.update(
+        {
+            "run_id": f"run-{agent_id}-{validator_index}",
+            "artifact_sha256": artifact_sha256,
+            "ordinary_composite_micros": composite_micros,
+            "ordinary_stderr_micros": stderr_micros,
+            "effective_composite_micros": composite_micros,
+            "effective_stderr_micros": stderr_micros,
+        }
+    )
+    evidence = V9BaseEvidence.model_validate(raw)
+    digest = evidence.digest_hex()
+    return Score(
+        agent_id=agent_id,
+        validator_hotkey=f"5Validator-{validator_index:02d}",
+        bench_version=9,
+        run_id=evidence.run_id,
+        signature=f"{validator_index + 1:02x}",
+        seed=validator_index,
+        composite=composite_micros / 1_000_000,
+        tool_mean=composite_micros / 1_000_000,
+        memory_mean=composite_micros / 1_000_000,
+        median_ms=100,
+        n=114,
+        details={
+            "v9_base": evidence.model_dump(mode="json"),
+            "base_evidence_sha256": digest,
+        },
+        generated_at=_NOW + timedelta(seconds=validator_index),
+    )
+
+
+async def _agent_with_quorum(
+    session: AsyncSession,
+    *,
+    index: int,
+    composites: tuple[int, ...],
+    stderr_micros: int = 10_000,
+    artifact_sha256: str | None = None,
+) -> tuple[Agent, list[Score]]:
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey=f"5Miner-{index:02d}",
+        name=f"candidate-{index}",
+        sha256=artifact_sha256 or f"{index + 1:064x}",
+        status=AgentStatus.SCORED,
+        screening_policy_version=SCREENING_POLICY_VERSION,
+        created_at=_NOW + timedelta(minutes=index),
+    )
+    scores = [
+        _score(
+            agent.agent_id,
+            artifact_sha256=agent.sha256,
+            composite_micros=value,
+            stderr_micros=stderr_micros,
+            validator_index=position,
+        )
+        for position, value in enumerate(composites)
+    ]
+    session.add(agent)
+    session.add_all(scores)
+    await session.flush()
+    return agent, scores
+
+
+def _registry() -> dict[tuple[str, str], object]:
+    profile = verification_profile()
+    return {(profile.revision, profile.checksum()): profile}
+
+
+async def test_no_settings_persists_physical_lower_median_base_proof_only(
+    session: AsyncSession,
+) -> None:
+    async with session.begin():
+        agent, scores = await _agent_with_quorum(
+            session,
+            index=0,
+            composites=(900_000, 600_000, 800_000, 700_000),
+        )
+        expected = lower_median_v9_base_proof(scores, artifact_sha256=agent.sha256)
+        result = await reconcile_v9_confirmation_candidates(
+            session,
+            verification_profiles={},
+            finalized_agent=agent,
+            finalized_scores=scores,
+        )
+
+    subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+    assert subject is not None
+    assert subject.base_evidence_sha256 == expected.evidence_sha256
+    assert subject.base_quality_micros == 700_000
+    assert subject.result_status == ConfirmationResultStatus.BASE_ONLY.value
+    assert subject.bundle_id is None
+    assert result.issuance_active is False
+    bundle_count = await session.scalar(
+        select(func.count()).select_from(ConfirmationBundle)
+    )
+    assert bundle_count == 0
+
+
+@pytest.mark.parametrize("future_version", [10, 11, 100])
+async def test_future_bench_versions_do_not_enter_the_v9_ledger(
+    session: AsyncSession, future_version: int
+) -> None:
+    async with session.begin():
+        agent, scores = await _agent_with_quorum(
+            session, index=0, composites=(700_000, 800_000, 900_000)
+        )
+        result = await reconcile_v9_confirmation_candidates(
+            session,
+            verification_profiles=_registry(),
+            finalized_agent=agent,
+            finalized_scores=scores,
+            bench_version=future_version,
+        )
+    assert result.base_subjects == 0
+    assert await session.get(ConfirmationBundleSubject, (agent.agent_id, 9)) is None
+
+
+async def test_active_settings_without_exact_registered_profile_fail_base_only(
+    session: AsyncSession,
+) -> None:
+    async with session.begin():
+        await _settings(session)
+        agent, scores = await _agent_with_quorum(
+            session, index=0, composites=(700_000, 800_000, 900_000)
+        )
+        result = await reconcile_v9_confirmation_candidates(
+            session,
+            verification_profiles={},
+            finalized_agent=agent,
+            finalized_scores=scores,
+        )
+    subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+    assert subject is not None and subject.bundle_id is None
+    assert result.issuance_active is False
+
+
+async def test_off_settings_never_create_work_even_with_registered_profile(
+    session: AsyncSession,
+) -> None:
+    async with session.begin():
+        await _settings(session, mode=ConfirmationBundleMode.OFF)
+        agent, scores = await _agent_with_quorum(
+            session, index=0, composites=(700_000, 800_000, 900_000)
+        )
+        result = await reconcile_v9_confirmation_candidates(
+            session,
+            verification_profiles=_registry(),
+            finalized_agent=agent,
+            finalized_scores=scores,
+        )
+    subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+    assert subject is not None and subject.bundle_id is None
+    assert result.issuance_active is False
+    bundle_count = await session.scalar(
+        select(func.count()).select_from(ConfirmationBundle)
+    )
+    assert bundle_count == 0
+
+
+async def test_top_n_challenger_digest_reuse_and_replay_are_deterministic(
+    session: AsyncSession,
+) -> None:
+    shared_digest = "a" * 64
+    async with session.begin():
+        await _settings(session, top_n=2)
+        first, _ = await _agent_with_quorum(
+            session,
+            index=0,
+            composites=(900_000,) * 3,
+            artifact_sha256=shared_digest,
+        )
+        renamed, _ = await _agent_with_quorum(
+            session,
+            index=1,
+            composites=(800_000,) * 3,
+            artifact_sha256=shared_digest,
+        )
+        challenger, _ = await _agent_with_quorum(
+            session,
+            index=2,
+            composites=(790_000,) * 3,
+            stderr_micros=20_000,
+        )
+        outside, _ = await _agent_with_quorum(
+            session,
+            index=3,
+            composites=(700_000,) * 3,
+        )
+        first_pass = await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=_registry()
+        )
+        second_pass = await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=_registry()
+        )
+
+    subjects = {
+        agent.agent_id: await session.get(
+            ConfirmationBundleSubject, (agent.agent_id, 9)
+        )
+        for agent in (first, renamed, challenger, outside)
+    }
+    first_subject = subjects[first.agent_id]
+    renamed_subject = subjects[renamed.agent_id]
+    challenger_subject = subjects[challenger.agent_id]
+    outside_subject = subjects[outside.agent_id]
+    assert first_subject is not None
+    assert renamed_subject is not None
+    assert challenger_subject is not None
+    assert outside_subject is not None
+    assert first_subject.bundle_id == renamed_subject.bundle_id
+    assert challenger_subject.bundle_id is not None
+    assert outside_subject.bundle_id is None
+    assert first_pass.selected_subjects == second_pass.selected_subjects == 3
+    bundle_count = await session.scalar(
+        select(func.count()).select_from(ConfirmationBundle)
+    )
+    assert bundle_count == 2
+
+
+async def test_ledger_and_persisted_fallback_share_attested_owner_key_space(
+    session: AsyncSession,
+) -> None:
+    coldkey = "5SharedConfirmationOwner"
+
+    def payment(agent: Agent, *, index: int) -> EvaluationPayment:
+        return EvaluationPayment(
+            block_hash=f"0x{index:064x}",
+            extrinsic_index=index,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            miner_coldkey=coldkey,
+            amount_rao=1,
+            dest_address="5ConfirmationTreasury",
+            timestamp=_NOW + timedelta(minutes=index),
+        )
+
+    async with session.begin():
+        older, older_scores = await _agent_with_quorum(
+            session,
+            index=0,
+            composites=(700_000,) * 3,
+        )
+        session.add(payment(older, index=0))
+        await session.flush()
+        # Persist the older subject while issuance is disabled, reproducing a
+        # durable fallback row without creating spendable work.
+        await reconcile_v9_confirmation_candidates(
+            session,
+            verification_profiles={},
+            finalized_agent=older,
+            finalized_scores=older_scores,
+        )
+
+        await _settings(session, top_n=2)
+        winner, _ = await _agent_with_quorum(
+            session,
+            index=1,
+            composites=(900_000,) * 3,
+        )
+        session.add(payment(winner, index=1))
+        await session.flush()
+        result = await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=_registry()
+        )
+
+    older_subject = await session.get(ConfirmationBundleSubject, (older.agent_id, 9))
+    winner_subject = await session.get(ConfirmationBundleSubject, (winner.agent_id, 9))
+    assert older_subject is not None and older_subject.bundle_id is None
+    assert winner_subject is not None and winner_subject.bundle_id is not None
+    assert result.selected_subjects == 1
+    assert (
+        await session.scalar(select(func.count()).select_from(ConfirmationBundle)) == 1
+    )
+
+
+async def test_settings_change_supersedes_only_zero_spend_pending_generation(
+    session: AsyncSession,
+) -> None:
+    registry = _registry()
+    async with session.begin():
+        shadow_revision, _ = await _settings(session, top_n=1)
+        agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
+        await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+        subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+        assert subject is not None and subject.bundle_id is not None
+        original = await session.get(ConfirmationBundle, subject.bundle_id)
+        assert original is not None
+
+        enforce_revision, _ = await _settings(
+            session,
+            mode=ConfirmationBundleMode.ENFORCE,
+            top_n=1,
+            parent_revision=shadow_revision.revision,
+        )
+        first = await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+        replay = await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+
+    refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+    assert refreshed is not None and refreshed.bundle_id is not None
+    replacement = await session.get(ConfirmationBundle, refreshed.bundle_id)
+    assert replacement is not None
+    assert original.state == "superseded"
+    assert original.evidence_sha256 is None
+    assert replacement.bundle_id != original.bundle_id
+    assert replacement.retest_generation == original.retest_generation + 1
+    assert replacement.generation_reason == "settings_supersession"
+    assert replacement.source_bundle_id == original.bundle_id
+    assert replacement.settings_revision == enforce_revision.revision
+    assert first.resolved_bundles == replay.resolved_bundles == 1
+    bundle_count = await session.scalar(
+        select(func.count()).select_from(ConfirmationBundle)
+    )
+    assert bundle_count == 2
+
+
+async def test_settings_change_recovers_failed_spent_generation(
+    session: AsyncSession,
+) -> None:
+    registry = _registry()
+    async with session.begin():
+        shadow_revision, shadow = await _settings(session, top_n=1)
+        agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
+        await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+        subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+        assert subject is not None and subject.bundle_id is not None
+        source = await session.get(ConfirmationBundle, subject.bundle_id)
+        assert source is not None
+        decision = await reserve_confirmation_bundle_budget(
+            session,
+            bundle_id=source.bundle_id,
+            reservation_id=uuid4(),
+            now=_NOW,
+            expected_revision=0,
+            settings_revision=shadow_revision.revision,
+            settings=shadow,
+            reserve_microusd=50_000,
+        )
+        assert decision.reservation is not None
+        ticket = await issue_confirmation_bundle_ticket(
+            session,
+            bundle_id=source.bundle_id,
+            reservation_id=decision.reservation.reservation_id,
+            validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
+            slot_id="slot-failed-settings-recovery",
+            now=_NOW,
+        )
+        await settle_confirmation_bundle_budget(
+            session,
+            reservation_id=decision.reservation.reservation_id,
+            expected_revision=1,
+            actual_microusd=42_000,
+            failed_attempt=True,
+            settled_at=_NOW + timedelta(minutes=1),
+        )
+        assert source.state == "failed"
+
+        enforce_revision, _ = await _settings(
+            session,
+            mode=ConfirmationBundleMode.ENFORCE,
+            top_n=1,
+            parent_revision=shadow_revision.revision,
+        )
+        await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+
+    refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+    assert refreshed is not None and refreshed.bundle_id is not None
+    replacement = await session.get(ConfirmationBundle, refreshed.bundle_id)
+    assert replacement is not None
+    assert source.state == "superseded"
+    assert replacement.source_bundle_id == source.bundle_id
+    assert replacement.generation_reason == "settings_supersession"
+    assert replacement.settings_revision == enforce_revision.revision
+    assert replacement.state == "pending"
+    assert decision.reservation.state == "settled"
+    assert decision.reservation.actual_microusd == 42_000
+    assert ticket.status == "expired"
+
+
+async def test_settings_change_recovers_budget_blocked_spent_generation(
+    session: AsyncSession,
+) -> None:
+    registry = _registry()
+    async with session.begin():
+        shadow_revision, shadow = await _settings(session, top_n=1, daily_bundle_cap=1)
+        agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
+        await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+        subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+        assert subject is not None and subject.bundle_id is not None
+        source = await session.get(ConfirmationBundle, subject.bundle_id)
+        assert source is not None
+        first = await reserve_confirmation_bundle_budget(
+            session,
+            bundle_id=source.bundle_id,
+            reservation_id=uuid4(),
+            now=_NOW,
+            expected_revision=0,
+            settings_revision=shadow_revision.revision,
+            settings=shadow,
+            reserve_microusd=50_000,
+        )
+        assert first.reservation is not None
+        await issue_confirmation_bundle_ticket(
+            session,
+            bundle_id=source.bundle_id,
+            reservation_id=first.reservation.reservation_id,
+            validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
+            slot_id="slot-blocked-settings-recovery",
+            now=_NOW,
+        )
+        await settle_confirmation_bundle_budget(
+            session,
+            reservation_id=first.reservation.reservation_id,
+            expected_revision=1,
+            actual_microusd=50_000,
+            failed_attempt=True,
+            settled_at=_NOW + timedelta(minutes=1),
+        )
+        blocked = await reserve_confirmation_bundle_budget(
+            session,
+            bundle_id=source.bundle_id,
+            reservation_id=uuid4(),
+            now=_NOW + timedelta(minutes=2),
+            expected_revision=2,
+            settings_revision=shadow_revision.revision,
+            settings=shadow,
+            reserve_microusd=50_000,
+        )
+        assert blocked.reservation is None
+        assert blocked.blocked_reason == "bundle_cap"
+        assert source.state == "blocked_budget"
+
+        enforce_revision, _ = await _settings(
+            session,
+            mode=ConfirmationBundleMode.ENFORCE,
+            top_n=1,
+            parent_revision=shadow_revision.revision,
+            daily_bundle_cap=2,
+        )
+        await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+
+    refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+    assert refreshed is not None and refreshed.bundle_id is not None
+    replacement = await session.get(ConfirmationBundle, refreshed.bundle_id)
+    assert replacement is not None
+    assert source.state == "superseded"
+    assert replacement.source_bundle_id == source.bundle_id
+    assert replacement.settings_revision == enforce_revision.revision
+    assert replacement.state == "pending"
+    assert first.reservation.state == "settled"
+    assert first.reservation.actual_microusd == 50_000
+
+
+async def test_reserved_pending_generation_requires_operator_recovery(
+    session: AsyncSession,
+) -> None:
+    registry = _registry()
+    async with session.begin():
+        shadow_revision, shadow = await _settings(session, top_n=1)
+        agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
+        await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+        subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+        assert subject is not None and subject.bundle_id is not None
+        original = await session.get(ConfirmationBundle, subject.bundle_id)
+        assert original is not None
+        decision = await reserve_confirmation_bundle_budget(
+            session,
+            bundle_id=original.bundle_id,
+            reservation_id=uuid4(),
+            now=_NOW,
+            expected_revision=0,
+            settings_revision=shadow_revision.revision,
+            settings=shadow,
+            reserve_microusd=50_000,
+        )
+        assert decision.reservation is not None
+
+        await _settings(
+            session,
+            mode=ConfirmationBundleMode.ENFORCE,
+            top_n=1,
+            parent_revision=shadow_revision.revision,
+        )
+        await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+
+    refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+    assert refreshed is not None
+    assert refreshed.bundle_id == original.bundle_id
+    assert original.state == "pending"
+    bundle_count = await session.scalar(
+        select(func.count()).select_from(ConfirmationBundle)
+    )
+    assert bundle_count == 1
+
+
+async def test_shadow_evidence_reprojects_under_enforce_without_new_spend(
+    session: AsyncSession,
+) -> None:
+    profile = verification_profile()
+    registry = _registry()
+    async with session.begin():
+        shadow_revision, shadow = await _settings(session, top_n=1)
+        agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
+        await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+        subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+        assert subject is not None and subject.bundle_id is not None
+        bundle = await session.get(ConfirmationBundle, subject.bundle_id)
+        assert bundle is not None
+        reservation = await reserve_confirmation_bundle_budget(
+            session,
+            bundle_id=bundle.bundle_id,
+            reservation_id=uuid4(),
+            now=_NOW,
+            expected_revision=0,
+            settings_revision=shadow_revision.revision,
+            settings=shadow,
+            reserve_microusd=50_000,
+        )
+        assert reservation.reservation is not None
+        ticket = await issue_confirmation_bundle_ticket(
+            session,
+            bundle_id=bundle.bundle_id,
+            reservation_id=reservation.reservation.reservation_id,
+            validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
+            slot_id="slot-0",
+            now=_NOW,
+        )
+        await settle_confirmation_bundle_budget(
+            session,
+            reservation_id=reservation.reservation.reservation_id,
+            expected_revision=1,
+            actual_microusd=15_000,
+            failed_attempt=False,
+            settled_at=_NOW + timedelta(minutes=4),
+        )
+        await complete_confirmation_bundle(
+            session,
+            bundle_id=bundle.bundle_id,
+            ticket_id=ticket.ticket_id,
+            report=signed_report(
+                bundle=bundle,
+                ticket=ticket,
+                mode=ConfirmationBundleMode.SHADOW,
+            ),
+            verification_profile=profile,
+            now=_NOW + timedelta(minutes=5),
+        )
+        frozen_evidence = bundle.evidence_sha256
+        enforce_revision, _ = await _settings(
+            session,
+            mode=ConfirmationBundleMode.ENFORCE,
+            top_n=1,
+            parent_revision=shadow_revision.revision,
+        )
+        enforce_result = await reconcile_v9_confirmation_candidates(
+            session, verification_profiles=registry
+        )
+        assert enforce_result.reused_bundles == 1
+        assert subject.result_status == ConfirmationResultStatus.FULL_CONFIRMED.value
+
+    refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
+    assert refreshed is not None
+    assert refreshed.result_status == ConfirmationResultStatus.FULL_CONFIRMED.value
+    assert refreshed.bundle_id == bundle.bundle_id
+    assert bundle.evidence_sha256 == frozen_evidence
+    assert bundle.settings_revision == shadow_revision.revision
+    assert enforce_revision.revision != bundle.settings_revision
+    assert (
+        await session.scalar(
+            select(func.count()).select_from(ConfirmationBudgetReservation)
+        )
+        == 1
+    )

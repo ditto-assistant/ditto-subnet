@@ -144,6 +144,14 @@ import {
   scoreLeaderboardPageSchema,
   type PublicLeaderboardEntry,
   type PublicSubmissionPipeline,
+  authorizeConfirmationBundleRetestInputSchema,
+  confirmationBundleDetailInputSchema,
+  confirmationBundleListInputSchema,
+  confirmationBundleListSchema,
+  confirmationBundleRetestResponseSchema,
+  confirmationBundleSettingsControlSchema,
+  confirmationBundleViewSchema,
+  setConfirmationBundleSettingsInputSchema,
 } from '../lib/admin.schemas'
 import {
   PlatformAdminError,
@@ -505,6 +513,96 @@ export async function setBurnSettings(rawInput: unknown, actor: string) {
     throw burnSettingsConflict(cause) ?? cause
   }
   return fetchBurnSettings()
+}
+
+const CONFIRMATION_BUNDLE_SETTINGS_PATH = '/api/v1/admin/confirmation-bundle-settings'
+const CONFIRMATION_BUNDLES_PATH = '/api/v1/admin/confirmation-bundles'
+
+export async function fetchConfirmationBundleSettings() {
+  const payload = await platformAdminRequest(CONFIRMATION_BUNDLE_SETTINGS_PATH)
+  return confirmationBundleSettingsControlSchema.parse(payload)
+}
+
+function confirmationBundleWriteRefusal(cause: unknown, readTool: string) {
+  if (!(cause instanceof PlatformAdminError)) return null
+  if (cause.status !== 409 && cause.status !== 422) return null
+  return new Error(
+    `${cause.message}. Nothing was applied: re-read ${readTool} and resubmit with its current revision or generation.`,
+  )
+}
+
+export async function setConfirmationBundleSettings(rawInput: unknown, actor: string) {
+  const input = setConfirmationBundleSettingsInputSchema.parse(rawInput)
+  try {
+    await platformAdminRequest(CONFIRMATION_BUNDLE_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      // A settings revision is the complete policy, never a patch. In
+      // particular, Backroom does not infer or preserve a profile identity the
+      // operator did not include in this exact reviewed write.
+      body: {
+        scope: input.scope,
+        expected_revision: input.expectedRevision,
+        settings: input.settings,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+  } catch (cause) {
+    throw (
+      confirmationBundleWriteRefusal(cause, 'get_confirmation_bundle_settings') ??
+      cause
+    )
+  }
+  return fetchConfirmationBundleSettings()
+}
+
+export async function fetchConfirmationBundles(rawInput: unknown = {}) {
+  const input = confirmationBundleListInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  if (input.state !== undefined) query.set('state', input.state)
+  const payload = await platformAdminRequest(`${CONFIRMATION_BUNDLES_PATH}?${query}`)
+  return confirmationBundleListSchema.parse(payload)
+}
+
+export async function fetchConfirmationBundle(rawInput: unknown) {
+  const input = confirmationBundleDetailInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `${CONFIRMATION_BUNDLES_PATH}/${encodeURIComponent(input.bundleId)}`,
+  )
+  return confirmationBundleViewSchema.parse(payload)
+}
+
+export async function authorizeConfirmationBundleRetest(
+  rawInput: unknown,
+  actor: string,
+) {
+  const input = authorizeConfirmationBundleRetestInputSchema.parse(rawInput)
+  try {
+    const payload = await platformAdminRequest(
+      `${CONFIRMATION_BUNDLES_PATH}/${encodeURIComponent(input.bundleId)}/authorize-retest`,
+      {
+        method: 'POST',
+        actor,
+        body: {
+          request_id: input.requestId,
+          expected_generation: input.expectedGeneration,
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+        },
+      },
+    )
+    return confirmationBundleRetestResponseSchema.parse(payload)
+  } catch (cause) {
+    throw (
+      confirmationBundleWriteRefusal(cause, 'get_confirmation_bundle') ?? cause
+    )
+  }
 }
 
 const CONTINUAL_RETEST_SETTINGS_PATH = '/api/v1/admin/continual-retest-settings'

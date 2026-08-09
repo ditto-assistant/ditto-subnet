@@ -171,6 +171,10 @@ type server struct {
 	relayRunMu sync.Mutex
 	cancelMu   sync.Mutex
 	runCancels map[string]context.CancelFunc
+	// confirmation is nil until an exact server-owned v9 profile and every
+	// trusted LongMem/ablation dependency have been installed. Nil is the
+	// production-safe default and is independent of public v8 capabilities.
+	confirmation confirmationExecutor
 }
 
 func main() {
@@ -247,6 +251,11 @@ func main() {
 	}
 	s.broker.relayWait = s.store.SetRelayWaiting
 	s.broker.terminalAgentFailure = s.failAgentInferenceRun
+	confirmationRuntime, err := confirmationExecutorFromEnvironment(os.Getenv, sandboxRuntime, s.broker)
+	if err != nil {
+		log.Fatalf("v9 confirmation installation failed: %v", err)
+	}
+	s.confirmation = confirmationRuntime
 
 	mux := s.newControlPlaneMux()
 

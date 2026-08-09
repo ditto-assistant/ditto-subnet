@@ -78,15 +78,20 @@ describe('Backroom MCP tools', () => {
         'get_burn_settings',
         'get_copy_review_source_diff',
         'get_continual_retest_settings',
+        'get_confirmation_bundle_settings',
+        'get_confirmation_bundle',
         'get_efficiency_bonus_settings',
         'get_inference_concurrency_settings',
         'get_queue_policy_settings',
         'get_validator_slot_settings',
+        'list_confirmation_bundles',
         'set_burn_settings',
         'set_continual_retest_settings',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
         'set_validator_slot_settings',
+        'set_confirmation_bundle_settings',
+        'authorize_confirmation_bundle_retest',
         'read_copy_review_source_diff_file',
         'get_screening_baseline_diff',
         'read_screening_baseline_diff_file',
@@ -321,6 +326,172 @@ describe('Backroom MCP tools', () => {
     )
     expect(revocations?.description).toContain('validator_lease_audit')
     expect(revocations?.description).toContain('operator_evicted')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads confirmation policy as an isolated no-activation control', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      mode: 'shadow',
+      top_n: 5,
+      daily_bundle_cap: 10,
+      daily_dollar_cap_microusd: 1_000_000,
+      per_bundle_request_cap: 100,
+      per_bundle_token_cap: 10_000,
+      profile_revision: 'confirmation-v9-1',
+      profile_checksum: 'a'.repeat(64),
+      challenger_z: 1.64,
+    }
+    const revision = {
+      revision: 1,
+      parent_revision: 0,
+      scope: '*',
+      settings,
+      checksum: 'b'.repeat(64),
+      reason: 'collect bounded shadow evidence before enforcement',
+      actor: 'operator@example.com',
+      created_at: '2026-08-08T12:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        current: [revision],
+        history: [revision],
+        default: {
+          ...settings,
+          mode: 'off',
+          daily_bundle_cap: 0,
+          daily_dollar_cap_microusd: 0,
+          per_bundle_request_cap: 0,
+          per_bundle_token_cap: 0,
+          profile_revision: null,
+          profile_checksum: null,
+        },
+        effective: {
+          revision: 1,
+          scope: '*',
+          settings,
+          checksum: 'b'.repeat(64),
+          source: 'revision',
+          configured: true,
+          issuance_active: true,
+          max_top_n: 10,
+          max_daily_bundle_cap: 1_000,
+          max_daily_dollar_microusd: 1_000_000_000,
+          max_bundle_request_cap: 100_000,
+          max_bundle_token_cap: 100_000_000,
+        },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_confirmation_bundle_settings',
+      arguments: { historyLimit: 0 },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: {
+        revision: 1,
+        settings: { mode: 'shadow' },
+        issuance_active: true,
+      },
+      history: [],
+      history_count: 1,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/confirmation-bundle-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('writes a complete confirmation policy with the signed-in actor', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      mode: 'enforce',
+      top_n: 5,
+      daily_bundle_cap: 10,
+      daily_dollar_cap_microusd: 1_000_000,
+      per_bundle_request_cap: 100,
+      per_bundle_token_cap: 10_000,
+      profile_revision: 'confirmation-v9-1',
+      profile_checksum: 'a'.repeat(64),
+      challenger_z: 1.64,
+    }
+    const control = {
+      current: [],
+      history: [],
+      default: {
+        ...settings,
+        mode: 'off',
+        daily_bundle_cap: 0,
+        daily_dollar_cap_microusd: 0,
+        per_bundle_request_cap: 0,
+        per_bundle_token_cap: 0,
+        profile_revision: null,
+        profile_checksum: null,
+      },
+      effective: {
+        revision: 2,
+        scope: '*',
+        settings,
+        checksum: 'b'.repeat(64),
+        source: 'revision',
+        configured: true,
+        issuance_active: true,
+        max_top_n: 10,
+        max_daily_bundle_cap: 1_000,
+        max_daily_dollar_microusd: 1_000_000_000,
+        max_bundle_request_cap: 100_000,
+        max_bundle_token_cap: 100_000_000,
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 2 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'set_confirmation_bundle_settings',
+      arguments: {
+        scope: '*',
+        expectedRevision: 1,
+        settings,
+        reason: 'enforce only after the bounded shadow audit passed',
+        confirmation: 'APPLY V9 CONFIRMATION MODE ENFORCE',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 2, settings: { mode: 'enforce' } },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/confirmation-bundle-settings',
+    )
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer platform-admin-token',
+      'X-Admin-Actor': 'peyton@omniaura.ai',
+    })
+    expect(JSON.parse(String(init.body))).toEqual({
+      scope: '*',
+      expected_revision: 1,
+      settings,
+      reason: 'enforce only after the bounded shadow audit passed',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'APPLY V9 CONFIRMATION MODE ENFORCE',
+    })
 
     await client.close()
     await server.close()

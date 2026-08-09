@@ -32,7 +32,7 @@ ignored_paths = [
 ]
 
 [components.screening_protocol]
-description = "Shared screener wire and signing protocol"
+description = "Shared screening and benchmark wire protocol"
 paths = [
   "packages/ditto-screening-protocol/**",
 ]
@@ -75,6 +75,7 @@ paths = [
   "ditto/api_models/upload.py",
   "ditto/api_models/validator.py",
   "ditto/api_models/validator_capabilities.py",
+  "ditto/api_models/validator_confirmation.py",
   "scripts/install-validator-stack-auto-update.sh",
   "scripts/test-validator-stack-auto-update-e2e.sh",
   "scripts/test-validator-stack-release-runtime.sh",

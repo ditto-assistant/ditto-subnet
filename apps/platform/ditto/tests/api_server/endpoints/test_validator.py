@@ -73,6 +73,7 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.endpoints import validator as validator_endpoint
 from ditto.api_server.endpoints.validator import (
     _fresh_submission_lane_due,
     _heartbeat_signing_message,
@@ -6387,6 +6388,110 @@ class TestFailJob:
 
 
 class TestSubmitScore:
+    async def test_v9_quorum_reconciles_once_without_starting_confirmation_work(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        overrides = _v9_score_overrides()
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="a" * 64,
+            dataset_version=9,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        reconcile = AsyncMock()
+        monkeypatch.setattr(
+            validator_endpoint,
+            "reconcile_v9_confirmation_candidates",
+            reconcile,
+        )
+
+        for keypair in _KEYPAIRS:
+            await _seed_ticket(
+                session_maker, agent_id, keypair=keypair, bench_version=9
+            )
+            response = await client.post(
+                f"/api/v1/validator/agent/{agent_id}/score",
+                json=_score_payload(
+                    agent_id,
+                    run_id="run-v9-vector",
+                    keypair=keypair,
+                    **overrides,
+                ),
+            )
+            assert response.status_code == 200, response.text
+
+        reconcile.assert_awaited_once()
+        awaited = reconcile.await_args
+        assert awaited is not None
+        assert len(awaited.kwargs["finalized_scores"]) == 3
+        assert awaited.kwargs["finalized_agent"].agent_id == agent_id
+
+    async def test_v9_reconciliation_failure_cannot_roll_back_canonical_quorum(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        overrides = _v9_score_overrides()
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="a" * 64,
+            dataset_version=9,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        reconcile = AsyncMock(side_effect=RuntimeError("auxiliary projection failed"))
+        monkeypatch.setattr(
+            validator_endpoint,
+            "reconcile_v9_confirmation_candidates",
+            reconcile,
+        )
+
+        response: httpx.Response | None = None
+        for keypair in _KEYPAIRS:
+            await _seed_ticket(
+                session_maker, agent_id, keypair=keypair, bench_version=9
+            )
+            response = await client.post(
+                f"/api/v1/validator/agent/{agent_id}/score",
+                json=_score_payload(
+                    agent_id,
+                    run_id="run-v9-vector",
+                    keypair=keypair,
+                    **overrides,
+                ),
+            )
+        assert response is not None
+        assert response.status_code == 200, response.text
+        reconcile.assert_awaited_once()
+
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            score_count = await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(Score.agent_id == agent_id)
+            )
+            scored_ticket_count = await session.scalar(
+                select(func.count())
+                .select_from(ValidatorTicket)
+                .where(
+                    ValidatorTicket.agent_id == agent_id,
+                    ValidatorTicket.status == TicketStatus.SCORED,
+                )
+            )
+        assert agent is not None and agent.status == AgentStatus.SCORED
+        assert score_count == 3
+        assert scored_ticket_count == 3
+
     async def test_accepts_digest_verified_v9_base_evidence_without_double_gate(
         self,
         app: FastAPI,

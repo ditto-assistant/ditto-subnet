@@ -26,7 +26,7 @@ import argparse
 import json
 from pathlib import Path
 
-from ditto.tests.contract._schema import compute_contract
+from ditto.tests.contract._schema import compute_confirmation_contract, compute_contract
 
 _DEFAULT_OUT = (
     Path(__file__).resolve().parent.parent
@@ -35,6 +35,7 @@ _DEFAULT_OUT = (
     / "contract"
     / "validator_contract.json"
 )
+_DEFAULT_CONFIRMATION_OUT = _DEFAULT_OUT.with_name("confirmation_contract.json")
 
 
 def main() -> None:
@@ -45,10 +46,21 @@ def main() -> None:
         default=_DEFAULT_OUT,
         help="destination golden path (default: the committed subnet golden)",
     )
+    parser.add_argument(
+        "--confirmation-out",
+        type=Path,
+        default=_DEFAULT_CONFIRMATION_OUT,
+        help="destination private v9 confirmation contract golden",
+    )
     args = parser.parse_args()
     contract = compute_contract()
     args.out.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
     print(f"wrote {len(contract)} model(s) to {args.out}")
+    confirmation = compute_confirmation_contract()
+    args.confirmation_out.write_text(
+        json.dumps(confirmation, indent=2, sort_keys=True) + "\n"
+    )
+    print(f"wrote {len(confirmation)} model(s) to {args.confirmation_out}")
 
 
 if __name__ == "__main__":

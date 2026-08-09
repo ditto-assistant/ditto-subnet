@@ -39,6 +39,18 @@ SHARED_MODELS = [
     "FailJobResponse",
 ]
 
+CONFIRMATION_MODELS = [
+    "ConfirmationExecutionProfile",
+    "V9ConfirmationClaimRequest",
+    "V9ConfirmationJobResponse",
+    "V9ConfirmationPrepareRequest",
+    "V9ConfirmationPreparedReport",
+    "V9ConfirmationSubmitRequest",
+    "V9ConfirmationSubmitResponse",
+    "V9ConfirmationFailRequest",
+    "V9ConfirmationFailResponse",
+]
+
 # The miner-CLI request/response models that cross the same boundary, keyed by
 # the module each lives in. Guarded for the same reason as the validator models
 # and learned the same way: the platform added ``payment_required``,
@@ -85,6 +97,13 @@ def compute_contract(
     mod = importlib.import_module(module)
 
     return {name: _strip(getattr(mod, name).model_json_schema()) for name in models}
+
+
+def compute_confirmation_contract() -> dict[str, Any]:
+    """Return the exact private v9 confirmation transport contract."""
+    return compute_contract(
+        CONFIRMATION_MODELS, module="ditto.api_models.validator_confirmation"
+    )
 
 
 def compute_miner_contract(

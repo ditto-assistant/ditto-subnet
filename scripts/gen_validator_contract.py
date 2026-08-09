@@ -57,6 +57,7 @@ def _load_contract_schema() -> ModuleType:
 _CONTRACT_DIR = Path(__file__).resolve().parent.parent / "ditto" / "tests" / "contract"
 _DEFAULT_OUT = _CONTRACT_DIR / "validator_contract.json"
 _DEFAULT_MINER_OUT = _CONTRACT_DIR / "miner_contract.json"
+_DEFAULT_CONFIRMATION_OUT = _CONTRACT_DIR / "confirmation_contract.json"
 
 
 def main() -> None:
@@ -66,6 +67,12 @@ def main() -> None:
         type=Path,
         default=_DEFAULT_OUT,
         help="destination validator golden path (default: the committed one)",
+    )
+    parser.add_argument(
+        "--confirmation-out",
+        type=Path,
+        default=_DEFAULT_CONFIRMATION_OUT,
+        help="destination private v9 confirmation contract golden",
     )
     parser.add_argument(
         "--miner-out",
@@ -78,6 +85,7 @@ def main() -> None:
     for compute, out in (
         (schema.compute_contract, args.out),
         (schema.compute_miner_contract, args.miner_out),
+        (schema.compute_confirmation_contract, args.confirmation_out),
     ):
         contract = compute()
         out.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")

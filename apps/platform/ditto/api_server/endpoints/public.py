@@ -39,7 +39,7 @@ import re
 import statistics
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from datetime import time as datetime_time
 from typing import Annotated, Any, Literal, cast
@@ -156,7 +156,11 @@ from ditto.api_models.screener import (
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import SystemMetrics
 from ditto.api_models.ticket_status import TicketStatus
-from ditto.api_models.validator import V9BaseEvidence, ValidatorRuntimeState
+from ditto.api_models.validator import (
+    V9BaseEvidence,
+    V9ConfirmationReceipt,
+    ValidatorRuntimeState,
+)
 from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
@@ -284,6 +288,7 @@ from ditto.db.queries.scores import (
     SCORING_QUORUM,
     LedgerRow,
     SubmissionRow,
+    V9ConfirmationPublicProjection,
     attested_emission_owner_roots,
     emission_owner,
     get_public_health,
@@ -297,6 +302,8 @@ from ditto.db.queries.scores import (
     list_scores_for_bench_version,
     list_submission_family_members,
     quorum_composites,
+    v9_confirmation_enforcement_active,
+    v9_confirmation_public_projections,
 )
 from ditto.db.queries.screening import (
     get_running_screening_attempts,
@@ -1790,6 +1797,7 @@ def _public_entry(
     submission_family: PublicLeaderboardFamily | None = None,
     average_run_cost_microusd: int | None = None,
     inference_run_count: int = 0,
+    v9_confirmation: V9ConfirmationPublicProjection | None = None,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -1825,7 +1833,16 @@ def _public_entry(
     trend = history if history and len(history) >= 2 else None
     calibration_brier, calibration_n = _safe_calibration(details)
     return PublicLeaderboardEntry(
-        rank=rank,
+        rank=(
+            None
+            if bench_version == 9
+            and not finalized
+            and (
+                v9_confirmation is None
+                or v9_confirmation.result_status != "full_confirmed"
+            )
+            else rank
+        ),
         finalized=finalized,
         score_count=score_count,
         score_quorum=SCORING_QUORUM,
@@ -1843,6 +1860,19 @@ def _public_entry(
         composite=r.composite,
         official_composite=(
             official_composite if official_composite is not None else r.composite
+        ),
+        v9_confirmation_status=(
+            v9_confirmation.result_status
+            if v9_confirmation is not None
+            else ("base_only" if bench_version == 9 else None)
+        ),
+        v9_full_confirmed_composite=(
+            v9_confirmation.full_confirmed_composite
+            if v9_confirmation is not None
+            else None
+        ),
+        v9_confirmation_evidence_sha256=(
+            v9_confirmation.evidence_sha256 if v9_confirmation is not None else None
         ),
         pre_efficiency_composite=(
             pre_efficiency_composite
@@ -2030,7 +2060,11 @@ def _public_koth_emissions(
             KothEntry(
                 miner_hotkey=row.miner_hotkey,
                 agent_id=row.agent_id,
-                composite=row.composite,
+                composite=(
+                    row.v9_confirmation["full_effective_micros"] / 1_000_000
+                    if row.v9_confirmation is not None
+                    else row.composite
+                ),
                 first_seen=row.fold_first_seen,
                 raw_rank=raw_rank,
                 bench_version=row.bench_version,
@@ -2273,6 +2307,9 @@ async def leaderboard(
     rollout = await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else active_version
     display_version = bench_version or desired_version
+    v9_confirmation_mode: Literal["enforce"] | None = (
+        "enforce" if await v9_confirmation_enforcement_active(session) else None
+    )
     # A board explicitly pinned to a version the rollout has already moved past
     # is settled history; the default (unpinned) board and the versions still in
     # play keep the short live window. The dashboard's timeline fetches one board
@@ -2296,13 +2333,34 @@ async def leaderboard(
         bench_version=bench_version,
         owner_score="canonical" if bench_version is not None else "official",
     )
-    selected_versions = {row.agent_id: row.bench_version for row in ledger_rows}
+    # Enforce mode deliberately removes base-only/provisional v9 rows from the
+    # authoritative ledger. Keep a separate, explicitly non-authoritative read
+    # for public visibility: these rows are appended only to the provisional
+    # section below, so they cannot rank, appear finalized, or earn emissions.
+    v9_display_rows: list[LedgerRow] = []
+    if display_version == 9 and v9_confirmation_mode == "enforce":
+        authoritative_ids = {row.agent_id for row in ledger_rows}
+        v9_display_rows = [
+            replace(row, eligible=False)
+            for row in await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                include_family_members=True,
+                bench_version=9,
+                owner_score="canonical",
+                apply_v9_confirmation_policy=False,
+            )
+            if row.agent_id not in authoritative_ids
+        ]
+    visible_rows = ledger_rows + v9_display_rows
+    selected_versions = {row.agent_id: row.bench_version for row in visible_rows}
     registration = await _current_registration(request)
     registered_uids = registration.uids_by_hotkey if registration else None
     registration_stale = registration is not None and registration.stale
     quorum = await quorum_composites(
         session,
-        [row.agent_id for row in ledger_rows],
+        [row.agent_id for row in visible_rows],
         bench_versions=selected_versions,
     )
     fold_stderrs = {
@@ -2314,11 +2372,11 @@ async def leaderboard(
             ),
             quorum.get(row.agent_id, []),
         )
-        for row in ledger_rows
+        for row in visible_rows
     }
     score_counts = await get_score_counts(
         session,
-        [row.agent_id for row in ledger_rows],
+        [row.agent_id for row in visible_rows],
         bench_versions=selected_versions,
     )
     finalized_rows = [
@@ -2404,7 +2462,14 @@ async def leaderboard(
         and not efficiency_view.preview
     )
     efficiency_bonuses = (
-        {agent_id: row.bonus for agent_id, row in efficiency_view.bonuses.items()}
+        {
+            agent_id: bonus_row.bonus
+            for agent_id, bonus_row in efficiency_view.bonuses.items()
+            if not any(
+                row.agent_id == agent_id and row.v9_confirmation is not None
+                for row in finalized_rows
+            )
+        }
         if efficiency_fold_active and efficiency_view is not None
         else {}
     )
@@ -2416,17 +2481,26 @@ async def leaderboard(
         efficiency_bonuses=efficiency_bonuses,
         efficiency_fold_active=efficiency_fold_active,
     )
+    for row in finalized_rows:
+        if row.v9_confirmation is not None:
+            full = row.v9_confirmation["full_effective_micros"] / 1_000_000
+            pre_efficiency_composites[row.agent_id] = full
+            board_official_composites[row.agent_id] = full
     finalized_rows = rank_submissions(finalized_rows, scores=board_official_composites)
     # The finalized board is already one row per owner (``list_eligible_ledger``
     # partitions on ``emission_owner``), so the provisional overlay has to
     # suppress and dedupe on that same owner. Keyed on the hotkey it showed an
     # owner's second hotkey as an extra provisional row beside the finalized one
     # it is not separately ranked against.
-    provisional_candidates = [
-        (row, score_counts.get(row.agent_id, 0))
-        for row in ledger_rows
-        if score_counts.get(row.agent_id, 0) < SCORING_QUORUM
-    ] + list(await list_provisional_ledger(session, bench_version=bench_version))
+    provisional_candidates = (
+        [
+            (row, score_counts.get(row.agent_id, 0))
+            for row in ledger_rows
+            if score_counts.get(row.agent_id, 0) < SCORING_QUORUM
+        ]
+        + [(row, score_counts.get(row.agent_id, 0)) for row in v9_display_rows]
+        + list(await list_provisional_ledger(session, bench_version=bench_version))
+    )
     # Pre-quorum rows have no continual mean, so the canonical comparator reads
     # their raw composite -- the same call ``list_provisional_ledger`` makes.
     provisional_candidates.sort(key=lambda candidate: score_order_key(candidate[0]))
@@ -2453,6 +2527,10 @@ async def leaderboard(
             provisional_by_owner.setdefault(owner, candidate)
     provisional_rows = list(provisional_by_owner.values())
     rows = finalized_rows + [row for row, _count in provisional_rows]
+    v9_confirmations = await v9_confirmation_public_projections(
+        session,
+        agent_ids=[row.agent_id for row in rows if row.bench_version == 9],
+    )
     # The run ledger is append-only for its retention window. A grant can keep
     # its raw ``active`` status after the validator has finished, so settlement
     # is derived from the immutable lease deadline (or an explicit terminal
@@ -2614,6 +2692,7 @@ async def leaderboard(
                 inference_run_count=run_costs.get(
                     (row.agent_id, row.bench_version), (None, 0)
                 )[1],
+                v9_confirmation=v9_confirmations.get(row.agent_id),
             )
         )
     for row, count in provisional_rows:
@@ -2647,6 +2726,7 @@ async def leaderboard(
                 inference_run_count=run_costs.get(
                     (row.agent_id, row.bench_version), (None, 0)
                 )[1],
+                v9_confirmation=v9_confirmations.get(row.agent_id),
             )
         )
     return PublicLeaderboardResponse(
@@ -2657,6 +2737,7 @@ async def leaderboard(
         desired_bench_version=desired_version,
         available_bench_versions=await list_scored_bench_versions(session),
         selection_mode="historical" if bench_version is not None else "authoritative",
+        v9_confirmation_mode=v9_confirmation_mode,
         continual_aggregate_active=continual_mean_active,
         continual_aggregate_required_protocol=_CONTINUAL_MEAN_PROTOCOL,
         registration_stale=registration_stale,
@@ -3453,7 +3534,10 @@ def _dataset_command(
 
 
 def _submission_scores(
-    row: SubmissionRow, *, artifact_release: PublicArtifactRelease
+    row: SubmissionRow,
+    *,
+    artifact_release: PublicArtifactRelease,
+    v9_confirmation: V9ConfirmationPublicProjection | None = None,
 ) -> PublicSubmissionScores:
     """Map a submission row to the full public k=3 record."""
     return PublicSubmissionScores(
@@ -3464,6 +3548,23 @@ def _submission_scores(
         quorum=SCORING_QUORUM,
         score_count=len(row.scores),
         median_composite=_median_composite(row),
+        v9_confirmation_status=(
+            v9_confirmation.result_status
+            if v9_confirmation is not None
+            else (
+                "base_only" if any(s.bench_version == 9 for s in row.scores) else None
+            )
+        ),
+        v9_full_confirmed_composite=(
+            v9_confirmation.full_confirmed_composite
+            if v9_confirmation is not None
+            else None
+        ),
+        v9_confirmation_receipt=(
+            V9ConfirmationReceipt.model_validate(v9_confirmation.receipt)
+            if v9_confirmation is not None and v9_confirmation.receipt is not None
+            else None
+        ),
         dataset_seed=row.dataset_seed,
         dataset_sha256=row.dataset_sha256,
         dataset_run_size=row.dataset_run_size,
@@ -5122,7 +5223,14 @@ async def agent_scores(
             session, statuses={agent_id: row.status}, now=datetime.now(UTC)
         )
     )[agent_id]
-    return _submission_scores(row, artifact_release=artifact_release)
+    v9_confirmation = (
+        await v9_confirmation_public_projections(session, agent_ids=[agent_id])
+    ).get(agent_id)
+    return _submission_scores(
+        row,
+        artifact_release=artifact_release,
+        v9_confirmation=v9_confirmation,
+    )
 
 
 @router.get("/agent/{agent_id}/artifact", response_model=PublicArtifactDownload)
