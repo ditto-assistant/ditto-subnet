@@ -20,6 +20,56 @@ applied to an existing version. It ships as a new one.
 | 6 | `2026-10-01` | Memory-as-data and the complexity suite; retains the v5 scoring contract. |
 | 7 | `2026-11-01` | Platform-owned OpenRouter inference with locked `openai/gpt-oss-20b`, and the difficulty release: a version-gated hard-case suite roughly an order of magnitude harder for a non-reasoning harness while a correct trajectory still scores full marks. |
 | 8 | `2026-12-01` | The answering-machine-proof release: natural requests whose route depends on seeded prior context, semantic enum/identifier resolution without magic free-form strings, a larger computed-memory share, and stricter deterministic answer grading. |
+| 9 (pre-activation) | `2027-01-01` | A qualification contract for the Bench v9 family mix and launch gates. Explicit generation and offline audit are available; the advertised runtime contract remains v8 until activation. |
+
+## V9 grader hardening and canned-response audit
+
+V9 has an explicit grading policy even where its initial rule is identical to
+V8. The policy inherits V8's bounded chitchat credit, strict acknowledgement and
+persistence checks, and authoritative structured answer slot. Keeping V9 behind
+its own gate lets later V9-only corrections remain unreachable from V8. Stored
+transcript goldens pin V2 through V8 grading, and the scorer contract separately
+pins V8's serialized case score, so adding V9 cannot silently re-grade a
+published historical run.
+
+The launch gate includes a public, model-free grader audit with two independent
+checks:
+
+```sh
+go run ./cmd/graderaudit -bench-version 9 -seeds 40 -run-size full
+```
+
+The **generated-corpus exposure gate** generates seeds 1 through 40 and grades
+a fixed suite of case-independent generic responses plus public-question-only
+templates against every memory case. Those probes receive no case id, expected
+value, answer item, generated memory, or usage data. The gate publishes passable share and mean
+credit for each answer kind and overall, using `score >= 0.5` as the pass
+threshold, and fails unless overall passable share is strictly below 5%. On the
+pinned full-profile audit, 241 of 10,040 cases are passable by at least one
+response: **2.4004%**, with mean credit **1.7978%**.
+
+The **synthetic per-kind robustness gate** is the versioned public bank `v9-2`.
+It supplies one explicit case for each affected kind—chitchat, acknowledge,
+decline, persistence, and reversal—and value, list, number, and money controls.
+Its 22 strategies comprise 17 independent held-out generic/paraphrase responses
+and five templates that can use only the public question. Across 198
+case-strategy evaluations, aggregate telemetry remains available, but limits
+gate the worst individual strategy for each answer kind. Interaction-only
+acknowledge, chitchat, and decline expose their intentional generic maxima;
+persistence, reversal, and all four typed controls have a zero worst-strategy
+pass share. Nine positive controls—including a cents-valued money case—must
+score above zero, and ten negative near-miss checks must all score zero. The
+command fails on missing kind coverage, expected-answer leakage, a failed
+control, or any worst-strategy per-kind pass-share or mean-credit limit rather
+than allowing one strategy to hide behind the pooled denominator.
+
+Both banks are public deterministic measurements of grader exposure. They are
+not secret probes and are not an anti-overfit defense: publishing them makes the
+contract auditable but means an adversary can read every response. The broader
+bank reduces accidental string-list overfitting; it does not claim to enumerate
+every paraphrase or adaptive strategy. The answer-dump threshold remains
+deterministic; the bounded launch inference/embedding ablation is delegated to
+#386, while broader causal probing remains follow-up #532.
 
 ## What v8 is
 

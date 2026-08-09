@@ -32,11 +32,45 @@ type Verdict struct {
 	Notes     []string
 }
 
+// gradingPolicy is the single version gate for grader behavior. Keep historical
+// policies explicit: a grader release is used to re-grade stored transcripts, so
+// broadening an old condition can silently move an already-published score.
+//
+// V9 intentionally starts from the shipped V8 strict policy. Giving it a
+// distinct policy now provides one reusable gate for future V9-only pool and
+// kind corrections without making those corrections reachable from V8.
+type gradingPolicy struct {
+	strictGenericKinds      bool
+	authoritativeAnswerSlot bool
+	rejectQuestionEcho      bool
+	chitchatCredit          float64
+}
+
+func gradingPolicyForVersion(benchVersion int) gradingPolicy {
+	switch {
+	case benchVersion >= protocol.BenchVersionV9:
+		return gradingPolicy{
+			strictGenericKinds:      true,
+			authoritativeAnswerSlot: true,
+			rejectQuestionEcho:      true,
+			chitchatCredit:          0.5,
+		}
+	case benchVersion >= protocol.BenchVersionV8:
+		return gradingPolicy{
+			strictGenericKinds:      true,
+			authoritativeAnswerSlot: true,
+			chitchatCredit:          0.5,
+		}
+	default:
+		return gradingPolicy{chitchatCredit: 1}
+	}
+}
+
 // Memory grades one memory case in [0,1] and explains the verdict.
 func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 	slot := strings.TrimSpace(resp.Answer)
 	full := slot + "\n" + resp.FinalText
-	strictV8 := mc.BenchVersion >= protocol.BenchVersionV8
+	policy := gradingPolicyForVersion(mc.BenchVersion)
 	qt := strings.ToLower(mc.QuestionType)
 	isInjection := strings.Contains(qt, "injection")
 
@@ -59,6 +93,16 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 
 	if strings.TrimSpace(full) == "" {
 		return Verdict{Notes: []string{"empty response"}}
+	}
+	// V9 persistence and reversal questions necessarily name the preference
+	// item. A no-retrieval strategy could otherwise prepend a stance phrase to
+	// the public question and satisfy both deterministic checks. Rejecting a
+	// verbatim question echo closes that template without affecting historical
+	// re-grading or ordinary concise answers.
+	if policy.rejectQuestionEcho && mc.Question != "" &&
+		(mc.AnswerKind == protocol.AnswerPersistence || mc.AnswerKind == protocol.AnswerReversal) &&
+		Hit(mc.Question, full) {
+		return Verdict{Notes: []string{"echoed the public question instead of answering it (scored 0)"}}
 	}
 
 	// Injection telemetry is set whenever the payload was surfaced, INCLUDING on
@@ -169,7 +213,7 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 			// prose): a harness cannot hedge by putting persistence in the slot
 			// and cessation in the prose.
 			phrases := persistencePhrases
-			if strictV8 {
+			if policy.strictGenericKinds {
 				phrases = persistencePhrasesV8
 			}
 			return b2f(len(mc.AnswerItems) == 1 && Hit(mc.AnswerItems[0], text) &&
@@ -177,7 +221,7 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 		case protocol.AnswerDecline:
 			return b2f(resp.Abstain || anyPhrase(text, declinePhrases))
 		case protocol.AnswerAcknowledge:
-			if strictV8 {
+			if policy.strictGenericKinds {
 				return b2f(anyPhrase(text, acknowledgementPhrases))
 			}
 			// Frozen v7 behavior: declinePhrases is accepted too because "I no
@@ -190,14 +234,14 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 			// is a pass. A canned acknowledgement clears the greeting slice by
 			// design; its discriminating power comes from being scored in
 			// conjunction with the declarative and behavior-change slices (v5 4.1).
-			if strictV8 && strings.TrimSpace(text) != "" {
+			if policy.chitchatCredit < 1 && strings.TrimSpace(text) != "" {
 				// A deterministic grader cannot prove conversational quality from
 				// unconstrained small-talk. Retain the minimum correctness credit
 				// instead of granting a full memory point to any canned non-empty
 				// response. The API classifies case scores >= 0.5 as correct when it
 				// builds the conversational-sanity slice; returning less here would
 				// make every clean v8 greeting a deterministic sanity failure.
-				return 0.5
+				return policy.chitchatCredit
 			}
 			return b2f(strings.TrimSpace(text) != "")
 		default: // AnswerValue
@@ -220,7 +264,7 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 
 	// Positive check: the slot is authoritative when set, prose is the fallback.
 	texts := []string{slot, resp.FinalText}
-	if strictV8 && slot != "" {
+	if policy.authoritativeAnswerSlot && slot != "" {
 		// Under v8 an explicitly populated structured answer is authoritative.
 		// Prose is a fallback only when the slot is absent, so a wrong slot cannot
 		// be laundered by burying a candidate value in a long explanation.
@@ -315,6 +359,11 @@ func hitAny(accept []string, response string) bool {
 // correct model. Tightening this against a selective hedge is a v3.1 item; the
 // model-forcing defense for the underlying attribute-blind solver is the
 // screener oracle plus the on-chain transform audit.
+//
+// V9 does not pretend that those mechanisms close this deterministic-grader
+// limit. Its launch-time model-forcing delegate is the bounded inference and
+// embedding ablation qualification in ditto-subnet#386; the broader causal
+// dependence probe remains tracked in ditto-subnet#532.
 func DumpFloor(n int) int {
 	if n <= 0 {
 		return 1 << 30 // no guard set: unreachable, never trips
