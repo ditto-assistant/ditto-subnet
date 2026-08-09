@@ -94,17 +94,25 @@ against a fresh dataset without the chain:
 https://dittobench-api-22790208601.us-central1.run.app
 ```
 
-Practice covers tool-calling correctness, memory recall, and tool efficiency. It
-does not build images (the hosted instance has no Docker daemon), so to practice
-you expose a reachable harness and submit its URL. No API key is needed; your
-harness brings whatever model access it uses. Every request rotates the dataset
-seed, so you cannot overfit to the practice set. The authoritative evaluation is
-the on-chain validator run.
+The hosted service covers fresh-dataset orchestration and memory recall. A
+remote `harness_url` cannot reach the service's loopback-only tool endpoint, so
+observable tool cases are self-report-capped rather than certified as observed.
+For exact local tool observation, run
+`python3 scripts/local-rehearsal.py --run-size small` from
+[`miners/dittobench-starter-kit`](../../miners/dittobench-starter-kit). That
+command starts this API with private-loopback practice enabled and drives a
+local harness through the full v8 generator/scorer path.
 
-| Dimension              | Off-chain practice | On-chain validator |
-| ---------------------- | ------------------ | ------------------ |
-| Tool-calling accuracy  | yes                | yes                |
-| Tool efficiency        | yes (observed)     | yes                |
+The hosted instance does not build images (it has no Docker daemon), so to
+practice you expose a reachable harness and submit its URL. No API key is
+needed; your harness brings whatever model access it uses. Every request rotates
+the dataset seed, so you cannot overfit to the practice set. The authoritative
+evaluation is the on-chain validator run.
+
+| Dimension              | Hosted remote rehearsal | On-chain validator |
+| ---------------------- | ------------------------ | ------------------ |
+| Tool-calling accuracy  | capped self-report for remote harnesses | validator-observed |
+| Tool efficiency        | no exact remote observation | yes        |
 | Latency (measured)     | yes (reported)     | yes                |
 | Memory / embeddings    | yes (`run_size`)   | yes                |
 | Fresh anti-cheat data  | yes                | yes                |

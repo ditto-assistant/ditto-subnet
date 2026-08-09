@@ -218,14 +218,15 @@ struct ChatResp {
 const INDEX_HTML: &str = include_str!("../playground.html");
 
 #[cfg(test)]
-mod hosted_practice_copy_tests {
+mod hosted_rehearsal_copy_tests {
     use super::INDEX_HTML;
 
     #[test]
-    fn hosted_practice_banner_names_the_active_v8_contract() {
-        assert!(INDEX_HTML.contains("Hosted v8 practice."));
-        assert!(INDEX_HTML.contains("active v8 dataset and scoring contract"));
-        assert!(!INDEX_HTML.contains("active legacy benchmark"));
+    fn banner_explains_the_remote_tool_observation_boundary() {
+        assert!(INDEX_HTML.contains("Hosted v8 rehearsal."));
+        assert!(INDEX_HTML.contains("remote harness cannot reach"));
+        assert!(INDEX_HTML.contains("scripts/local-rehearsal.py --run-size small"));
+        assert!(INDEX_HTML.contains("neither rehearsal is submission certification"));
     }
 }
 

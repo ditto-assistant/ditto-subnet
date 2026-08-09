@@ -52,4 +52,8 @@ jobs:
         run: cargo test --locked --verbose
 
       - name: Test submission labs
-        run: python3 -m unittest scripts/test_submission_lab.py scripts/test_submission_workbench.py
+        run: >-
+          python3 -m unittest
+          scripts/test_local_rehearsal.py
+          scripts/test_submission_lab.py
+          scripts/test_submission_workbench.py

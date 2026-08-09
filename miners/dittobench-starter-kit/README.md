@@ -132,10 +132,12 @@ The loop is: edit this kit, test locally, submit this kit. In order:
    iterating) or `cargo run -- practice` (rotating inputs). Watch the composite,
    the per-category tool means, and the slowest cases. Run this after any change
    to the prompt or tools.
-4. Rehearse against the real validator (optional, recommended before you submit):
-   serve your harness and drive it from the playground Submit tab. This is the
-   only local run with a fresh random dataset per submission, and the only one
-   that exercises Tier B/C seeding. See Hosted practice.
+4. Rehearse through the real v8 generator/scorer (recommended before you
+   submit): `python3 scripts/local-rehearsal.py --run-size small`. One command
+   builds and starts your harness plus the local validator, supplies a
+   validator-visible `tool_endpoint`, runs fresh v8 data including staged
+   seeding, prints observed/capped tool counts, and tears both down. Move to
+   `medium` or `full` when the smoke run is healthy.
 5. Package: `cargo run -- submit` builds `dittobench-submission.tgz` from your
    whole crate.
 6. Go on-chain: register a hotkey on netuid 118 and upload with the eval fee. The
@@ -158,6 +160,7 @@ when you build.
 | `src/datagen.rs`              | Deterministic-per-seed dataset generator.                                                                   |
 | `src/scorer.rs`               | Local score report (tool accuracy + memory + latency).                                                      |
 | `src/bin/dittobench-miner.rs` | CLI: `serve`, `playground`, `seed-user`, `mem-eval`, `evaluate`, `practice`, `submit`.                      |
+| `scripts/local-rehearsal.py`  | One-command local v8 generator/scorer run with validator-observed tool execution.                           |
 | `fixtures/seed-user/`         | The seed user: pairs + pre-synced subjects + subject graph + LongMemEval questions.                         |
 | `fixtures/models/`            | Shipped weights: `mlp-weights.bin` (217K-param MLP) + `cross-encoder.onnx` (TinyBERT-L2 INT8) + BERT vocab. |
 | `scripts/build-seed-user.py`  | Regenerates the seed-user slice from the LongMemEval fixture (maintainers only, inputs not distributed).   |
@@ -197,6 +200,10 @@ cargo run -- mem-eval --k 10        # retrieval recall over the seed user (no LL
 cargo run -- evaluate               # FIXED local submission test (static user + same questions)
 cargo run -- practice --n 20        # ROTATING random dataset (anti-overfit, like the hosted validator)
 
+# Run the actual local v8 generator + staged seeding + observed-tool scorer.
+# This starts and stops both the harness and local scorer for you.
+python3 scripts/local-rehearsal.py --run-size small
+
 # 4. Serve the harness for the validator.
 cargo run -- serve --port 8080
 ```
@@ -229,31 +236,72 @@ The UI shows the full tool catalog (every tool's description + JSON schema),
 and after each turn a trace of the tool calls (args + fake results) and
 the memories retrieved for that query. Try *"search the web for…"*
 (`search_web` fires) or *"how many postcards have I collected?"* (memory
-retrieval answers with `ditto://memory/…` citations). The Submit tab scores
-your harness against the official hosted validator. See *Hosted practice*
+retrieval answers with `ditto://memory/…` citations). The Submit tab rehearses
+your harness against the official hosted service. See *Hosted rehearsal*
 below.
 
-### Local practice vs. the hosted validator
+### Choose the right practice loop
 
 - `evaluate` (local, fixed): scores your submission against the same inputs every run: the static seed user, the same bundled LongMemEval questions, and a fixed-seed tool set. Inputs are reproducible and model output is still stochastic.
 - `practice` (local, rotating): re-rolls prompts per run, but from a small fixed template pool (10 memory facts). It varies wording, not substance, and never exercises the seeding tiers/waves.
-- Hosted validator: generates a fresh random v8 dataset per submission, like the on-chain SN118 validator, and is the only pre-chain rehearsal of the staged seeding waves and real question mix. Drive it from the playground's Submit tab (below). A `harness_url` practice submission uses that harness's local model configuration; scored submissions use the ticket-bound platform routes.
+- `scripts/local-rehearsal.py` (local, full v8 path): starts your harness and the monorepo's v8 scorer together, generates a fresh version-8 dataset, exercises staged seeding and graph isolation for the selected run size, and gives the harness a reachable validator-owned `tool_endpoint`. Use this when debugging tool arguments, order, result use, or `observed_tool_cases` / `capped_tool_cases`.
+- Hosted rehearsal (remote): generates a fresh v8 dataset and exercises the seeding/question mix, but a publicly tunneled harness cannot reach a loopback-only tool endpoint on the hosted scorer. Observable tool cases are therefore self-report-capped. Use it for reachability and hosted orchestration, not for an exact tool score or screening/submission certification.
+- On-chain scoring: runs the screened image with locked, ticket-bound chat and Perplexity embedding routes. Neither local nor hosted rehearsal proves that boundary.
 
 Use `evaluate` to develop.
 
-### Hosted practice
+#### One-command local v8 rehearsal
 
-The hosted validator is available. The playground's Submit tab drives it:
+From this directory:
+
+```bash
+python3 scripts/local-rehearsal.py --run-size small
+```
+
+The command requires Rust and Go, plus the same local provider setup as
+`serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
+provider selected in `.env`. It builds both binaries, uses an isolated temporary
+database, selects free loopback ports, submits a version-8 run, displays
+progress and the final score/provenance counts, and cleans up on exit.
+
+Useful variants:
+
+```bash
+# Reproduce the same generated dataset.
+python3 scripts/local-rehearsal.py --run-size small --seed 12345
+
+# Exercise Tier B/C seeding and isolation more deeply; expect a longer run.
+python3 scripts/local-rehearsal.py --run-size medium
+
+# Keep the complete run envelope for comparing changes.
+python3 scripts/local-rehearsal.py --run-size small --report /tmp/dittobench-report.json
+```
+
+This runs the real public v8 generator and scorer, including observed tool
+execution. It is still a rehearsal: the harness uses your `.env` chat and
+embedding configuration, runs as a local process rather than a screened
+container, and does not receive canonical ticket-bound inference.
+
+### Hosted rehearsal
+
+The hosted practice service is available. The playground's Submit tab drives it:
 
 1. Serve your harness and expose it publicly so the validator can reach it:
   `cargo run -- serve --port 8080`, then e.g. `ngrok http 8080`.
 2. Set `DITTOBENCH_HARNESS_URL` in `.env` to the public URL.
   [.env.example](.env.example) ships the official `DITTOBENCH_API_URL`.
 3. `cargo run -- playground` → open the Submit tab and pick a run size.
-  Canonical v8 scoring uses locked GPT-OSS-20B inference supplied through the
-  platform's ticket-scoped route. The playground does not send a provider key.
-  The local target continues to use only the model configuration of your
-  already-running harness.
+  This harness continues to use its own local model and embedding configuration;
+  the playground sends no provider key.
+
+The hosted service intentionally does not advertise its loopback tool endpoint
+to a remote `harness_url`. Its report can therefore show many
+`capped_tool_cases` even when the harness self-reports tool calls. That result
+means the tool execution was not validator-observed; it does not mean setting a
+client environment variable can certify it. `DITTOBENCH_REQUIRE_OBSERVED_TOOLS`
+is not a starter-kit or hosted-API setting. Run the one-command local rehearsal
+above to put the harness and observer on the same host, then check both
+`observed_tool_cases` and `capped_tool_cases` in the report.
 
 The active submission target is the uploaded tarball. Hosted `harness_url`
 practice can drive any already-running implementation. Production v8 validators

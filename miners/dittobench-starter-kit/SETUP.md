@@ -17,15 +17,18 @@ miners/dittobench-starter-kit  ──depends on──►  ditto-harness
    (your Rust harness)                    (Rust crate, pinned rev)
 ```
 
-You score yourself locally with the kit's built-in `evaluate` (fixed benchmark),
-and against the hosted validator (fresh dataset per submission, as on-chain)
-via the playground's Submit tab; see §2.
+You iterate with the kit's built-in `evaluate` (fixed benchmark), then run the
+monorepo's real v8 generator/scorer locally with one command. The hosted service
+is a useful reachability rehearsal, but remote harness tool calls cannot be
+observed through its loopback tool endpoint; see §2.
 
 ---
 
 ## 0. Prerequisites
 
 - Rust (latest stable; this reference needs >= 1.85). Install via [rustup](https://rustup.rs).
+- Go >= 1.23 for the one-command local v8 rehearsal, which builds the
+  monorepo's scorer. The standalone harness commands do not need Go.
 - Ollama, for memory embeddings (`embeddinggemma`, 768-dim):
   ```bash
   ollama serve &
@@ -67,11 +70,14 @@ cargo run -- mem-eval --k 10     # retrieval recall@k over the seed user (no LLM
 cargo run -- evaluate            # FIXED local submission test: static user + same questions, every run
 cargo run -- practice --n 20     # ROTATING random dataset (anti-overfit), like the hosted validator
 cargo run -- serve --port 8080   # expose GET /health, POST /run, POST /seed for the validator
+
+# Recommended before submission: full local v8 path with observed tools.
+python3 scripts/local-rehearsal.py --run-size small
 ```
 
-> `evaluate` is fixed; the hosted validator generates a fresh
-> dataset per submission. See the README's *Local practice vs. the hosted
-> validator* section.
+> `evaluate` is fixed; the local v8 and hosted rehearsal paths generate a fresh
+> dataset per submission. See the README's *Choose the right practice loop*
+> section.
 
 ### `.env` reference
 
@@ -82,6 +88,18 @@ DITTOBENCH_MODEL=openai/gpt-oss-20b      # benchmark v8 scored model
 OLLAMA_BASE_URL=http://localhost:11434   # embeddings (and ollama chat) endpoint
 DITTOBENCH_DB=./dittobench.db            # local Turso DB; keep the same path across seed-user + commands
 ```
+
+Local embeddings are intentionally narrower than chat configuration. The
+reference kit always calls Ollama `embeddinggemma` through `OLLAMA_BASE_URL` and
+expects 768 dimensions. It does not read `DITTOBENCH_EMBED_PROVIDER`,
+`DITTOBENCH_EMBED_MODEL`, or `DITTOBENCH_EMBED_BASE_URL`.
+
+Canonical v8 scoring is different: the validator replaces `OLLAMA_BASE_URL`
+with a ticket-bound Ollama-compatible gateway that locks profile
+`dittobench-v7-openrouter-pplx-embed-v1-0.6b-768-v1`, backed only by
+`perplexity/pplx-embed-v1-0.6b`. The harness receives neither an OpenRouter key
+nor a provider/model selector. This is why putting a Perplexity model name next
+to `DITTOBENCH_EMBED_PROVIDER=ollama` in a local `.env` has no effect.
 
 Fully local development and practice (no API key):
 
@@ -101,10 +119,25 @@ Ollama is not a scored fallback.
 
 ---
 
-## 2. Scoring like the subnet: hosted practice
+## 2. Rehearsing the v8 path
 
-The hosted validator is available; the playground's Submit tab drives it
-against a fresh rotating dataset. Full steps: README, *Hosted practice*.
+Use the local path when you need validator-observed tool scoring:
+
+```bash
+python3 scripts/local-rehearsal.py --run-size small
+```
+
+It builds and starts the harness plus `services/dittobench-api`, uses an
+isolated temporary database, supplies a reachable `tool_endpoint`, runs the
+fresh v8 generator and staged seeding path, prints the report, then cleans up.
+It uses the chat and embedding providers in your `.env`, so it is rehearsal,
+not screening/submission certification.
+
+The playground Submit tab still drives the hosted service against a fresh
+rotating dataset. A remote public `harness_url` cannot reach the hosted scorer's
+loopback tool endpoint, so observable cases are capped there. Use that path for
+public reachability and hosted orchestration checks, not an exact tool score.
+Full steps: README, *Hosted rehearsal*.
 
 ---
 
