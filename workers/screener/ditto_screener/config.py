@@ -140,6 +140,10 @@ class ScreenerConfig:
     source_review_base_url: str
     source_review_timeout_seconds: float
     source_review_max_steps: int
+    static_preflight_v2_mode: str
+    """V2 detector rollout: legacy authority in off/shadow, v2 in enforce."""
+    static_preflight_audit_file: str | None
+    """Mode-0600 private v1/v2 reachability and causality journal."""
 
     l2_review_mode: str
     l2_review_model: str
@@ -307,6 +311,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "180"
         ),
         source_review_max_steps=_parse_int("SCREENER_SOURCE_REVIEW_MAX_STEPS", "10"),
+        static_preflight_v2_mode=os.environ.get(
+            "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
+        ),
+        static_preflight_audit_file=(
+            os.environ.get("SCREENER_STATIC_PREFLIGHT_AUDIT_FILE") or None
+        ),
         l2_review_mode=os.environ.get("SCREENER_L2_REVIEW_MODE", "off"),
         l2_review_model=os.environ.get(
             "SCREENER_L2_REVIEW_MODEL", "moonshotai/kimi-k3"
@@ -369,6 +379,17 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not 1 <= config.source_review_max_steps <= 20:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_MAX_STEPS must be between 1 and 20"
+        )
+    if config.static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
+        raise ScreenerConfigError(
+            "SCREENER_STATIC_PREFLIGHT_V2_MODE must be off, shadow, or enforce"
+        )
+    if (
+        config.static_preflight_v2_mode == "shadow"
+        and config.static_preflight_audit_file is None
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_STATIC_PREFLIGHT_AUDIT_FILE is required in shadow mode"
         )
     if config.l2_review_mode not in {"off", "shadow", "enforce"}:
         raise ScreenerConfigError(

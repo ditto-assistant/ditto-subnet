@@ -47,6 +47,8 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "source_review_base_url": "https://openrouter.ai/api/v1",
         "source_review_timeout_seconds": 180.0,
         "source_review_max_steps": 10,
+        "static_preflight_v2_mode": "off",
+        "static_preflight_audit_file": None,
         "l2_review_mode": "off",
         "l2_review_model": "moonshotai/kimi-k3",
         "l2_review_provider": "openrouter",

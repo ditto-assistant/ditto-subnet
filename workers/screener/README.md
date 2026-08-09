@@ -135,6 +135,18 @@ Required values are supplied through the production host's protected
   `ditto-screener-l2-analyzer:active` image.
 - `SCREENER_L2_CACHE_DIR` and `SCREENER_L2_AUDIT_JOURNAL_FILE`: protected
   sanitized cache/audit locations. Raw source and transcripts are never stored.
+- `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
+  `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
+  computes the reachability-and-causality v2 candidate for comparison.
+- `SCREENER_STATIC_PREFLIGHT_AUDIT_FILE`: protected mode-0600 JSONL journal for
+  bounded v1/v2 shadow comparisons. Configure it before selecting `shadow`;
+  an append failure is retryable infrastructure and prevents Docker execution.
+
+Static preflight v2 makes a source match decisive only when both its effective
+Docker/Cargo/runtime reachability and its category-specific source-to-sink flow
+are proven. Excluded or test-only code is inert. Dynamic and unsupported build
+or import forms remain advisory source-review leads. Roll out `shadow` first,
+inspect only the sanitized private journal, and promote to `enforce` explicitly.
 
 Static source matches remain pre-execution leads. In `shadow`/`enforce`, the
 inert reviewer resolves them before any submission Dockerfile runs; only an L3

@@ -80,6 +80,19 @@ def test_a_brace_inside_a_comment_cannot_open_a_test_region() -> None:
     assert citation_admissibility("src/main.rs", source, 6).admissible
 
 
+def test_cfg_not_test_body_remains_production_evidence() -> None:
+    source = (
+        "#[cfg(not(test))]\n"
+        "fn served() {\n"
+        '    let path = "/root/private";\n'
+        "    read(path);\n"
+        "}\n"
+    )
+
+    assert citation_admissibility("src/main.rs", source, 3).admissible
+    assert citation_admissibility("src/main.rs", source, 4).admissible
+
+
 def test_test_paths_are_inadmissible() -> None:
     verdict = citation_admissibility("tests/harness.rs", "fn t() { go(); }\n", 1)
     assert not verdict.admissible

@@ -75,6 +75,9 @@ the VM:
 - `SCREENER_AUDIT_SEED`, when the private random-control module is enabled.
 - The protected files referenced by `SCREENER_POLICY_MANIFEST_FILE`, private
   module `feed_path`/`pack_path` values, and `SCREENER_REVIEW_JOURNAL_FILE`.
+- `SCREENER_STATIC_PREFLIGHT_AUDIT_FILE`, when static preflight v2 runs in
+  `shadow`; the service creates and repairs the journal and its parent to
+  mode 0600 and 0700 respectively, and rejects symlink targets.
 - `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: mode-0400 OpenRouter key file readable
   only by the screener service user. The default reviewer model is
   `openai/gpt-5.6-luna`; every request enforces ZDR and denies data collection.

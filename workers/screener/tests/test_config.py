@@ -50,6 +50,8 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     # serve smoke.
     assert cfg.smoke_env == (("OPENROUTER_API_KEY", "sk-screener-smoke"),)
     assert cfg.signing_source_present()
+    assert cfg.static_preflight_v2_mode == "off"
+    assert cfg.static_preflight_audit_file is None
     assert cfg.l2_review_mode == "off"
     assert cfg.l2_review_model == "moonshotai/kimi-k3"
     assert cfg.l2_review_provider == "openrouter"
@@ -79,6 +81,11 @@ def test_image_build_memory_additively_replaces_legacy_name(
 @pytest.mark.parametrize(
     ("name", "value", "match"),
     [
+        (
+            "SCREENER_STATIC_PREFLIGHT_V2_MODE",
+            "always",
+            "off, shadow, or enforce",
+        ),
         ("SCREENER_L2_REVIEW_MODE", "always", "off, shadow, or enforce"),
         ("SCREENER_L2_REVIEW_MODEL", "openai/other", "moonshotai/kimi-k3"),
         ("SCREENER_L2_REVIEW_PROVIDER", "azure", "must be openrouter"),
@@ -176,3 +183,35 @@ def test_gh_token_file_threaded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SCREENER_GH_TOKEN_FILE", "/run/secrets/gh")
     cfg = parse_screener_config_from_env()
     assert cfg.gh_token_file == "/run/secrets/gh"
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
+def test_static_preflight_rollout_configuration(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_STATIC_PREFLIGHT_V2_MODE", mode)
+    monkeypatch.setenv(
+        "SCREENER_STATIC_PREFLIGHT_AUDIT_FILE",
+        "/opt/ditto/screener/state/static-preflight.jsonl",
+    )
+
+    config = parse_screener_config_from_env()
+
+    assert config.static_preflight_v2_mode == mode
+    assert config.static_preflight_audit_file == (
+        "/opt/ditto/screener/state/static-preflight.jsonl"
+    )
+
+
+def test_static_preflight_shadow_requires_audit_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_STATIC_PREFLIGHT_V2_MODE", "shadow")
+
+    with pytest.raises(
+        ScreenerConfigError,
+        match="SCREENER_STATIC_PREFLIGHT_AUDIT_FILE is required in shadow mode",
+    ):
+        parse_screener_config_from_env()

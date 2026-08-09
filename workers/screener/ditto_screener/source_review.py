@@ -28,6 +28,8 @@ from ditto_screener.category_guards import (
 )
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.source_causality import analyze_static_candidates_v2
+from ditto_screener.source_reachability import analyze_reachability
 from ditto_screener.source_signals import (
     find_decisive_malicious_source,
     find_source_review_leads,
@@ -56,6 +58,7 @@ _MAX_SEARCH_HITS = 80
 _MAX_LEAD_SCAN_BYTES = 64 * 1024 * 1024
 _MAX_LEAD_SCAN_FILES = 20_000
 _MAX_SOURCE_ARCHIVE_MEMBERS = 20_000
+_AFFIRMATIVE_SAFE_STATIC_BASES = frozenset({"loopback-only-sink"})
 # Every ``ValueError`` raised inside :meth:`OpenRouterSourceReviewAgent.review`
 # carries a static, non-miner-controlled message, so mapping it to a stable code
 # leaks nothing. Without this table all ~30 of them collapsed into the single
@@ -72,6 +75,7 @@ _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     "source archive contains a non-canonical path": "archive-invalid",
     "source archive contains a duplicate path": "archive-invalid",
     "provenance file could not be read": "archive-invalid",
+    "static preflight mode must be off, shadow, or enforce": "detector-config-invalid",
     # The reviewer exhausted a budget we set. Not infrastructure: the submission
     # was too large or too deep to review within the configured bounds.
     "source reviewer exceeded lease budget": "lease-budget-exhausted",
@@ -343,6 +347,12 @@ _REVIEW_ADAPTATION_MODEL_EFFECT = re.compile(
     re.IGNORECASE,
 )
 _REVIEW_ADAPTATION_WINDOW_LINES = 24
+
+
+def _bounded_sequence(value: object) -> list[object]:
+    if isinstance(value, (list, tuple)):
+        return list(value[:8])
+    return []
 
 
 def _is_generator_runtime_source(path: str) -> bool:
@@ -1037,8 +1047,13 @@ def _source_invoked_shell_paths(
 class TarSourceRepository:
     """A read-only, size-bounded view over regular files in a verified tarball."""
 
-    def __init__(self, archive_path: str) -> None:
+    def __init__(
+        self, archive_path: str, *, static_preflight_v2_mode: str = "off"
+    ) -> None:
+        if static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
+            raise ValueError("static preflight mode must be off, shadow, or enforce")
         self._archive_path = archive_path
+        self._static_preflight_v2_mode = static_preflight_v2_mode
         self._binary_analysis_cache: dict[str, dict[str, object]] = {}
         members: list[_Member] = []
         seen: set[str] = set()
@@ -1285,8 +1300,24 @@ class TarSourceRepository:
                     continue
                 readable.append((name, text))
                 files_scanned += 1
+        static_advisories: list[dict[str, object]] = []
+        if self._static_preflight_v2_mode != "off":
+            reachability = analyze_reachability(dict(readable))
+            static_v2 = analyze_static_candidates_v2(readable, reachability)
+            static_advisories = [
+                {
+                    "kind": f"static-malicious-advisory:{item['kind']}",
+                    "locations": item["locations"],
+                    "reachability_state": item["reachability_state"],
+                    "causal_state": item["causal_state"],
+                    "resolution_basis": item["resolution_basis"],
+                }
+                for item in static_v2.advisory[:16]
+            ]
         return {
-            "items": find_source_review_leads(readable),
+            "items": [*find_source_review_leads(readable), *static_advisories][
+                :_MAX_LEAD_SCAN_FILES
+            ],
             "unmatchable_category_guards": guard_report(
                 find_unmatchable_category_guards(
                     (path, mask_comments(text)) for path, text in readable
@@ -1379,8 +1410,12 @@ class TarSourceRepository:
         *,
         artifact_sha256: str,
         provenance_manifest_paths: tuple[str, ...] | None = None,
+        mode: str = "off",
+        audit_recorder: Callable[[Mapping[str, object]], None] | None = None,
     ) -> SourceReviewObservation | None:
         """Produce a signed, location-only finding before untrusted execution."""
+        if mode not in {"off", "shadow", "enforce"}:
+            raise ValueError("static preflight mode must be off, shadow, or enforce")
         readable: list[tuple[str, str]] = []
         manifests = provenance_manifest_paths or tuple(
             str(path)
@@ -1399,12 +1434,14 @@ class TarSourceRepository:
         bytes_scanned = 0
         members_considered = 0
         runtime_paths = self._explicit_runtime_paths()
+        all_readable: dict[str, str] = {}
+        trusted_paths: set[str] = set()
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
             # Spend the decisive-preflight budget only on executable/build
             # source. Full L1 review still sees the rest of the archive, but
             # inert padding cannot hide the pre-build safety surface.
             ordered_names = sorted(
-                runtime_paths,
+                runtime_paths if mode == "off" else self._members,
                 key=source_path_priority,
             )
             for name in ordered_names:
@@ -1422,16 +1459,111 @@ class TarSourceRepository:
                 if extracted is None:
                     continue
                 raw = extracted.read(member_info.size + 1)
-                if hashlib.sha256(raw).hexdigest() in trusted_digests.get(name, set()):
-                    continue
+                trusted = hashlib.sha256(raw).hexdigest() in trusted_digests.get(
+                    name, set()
+                )
+                if trusted:
+                    trusted_paths.add(name)
                 bytes_scanned += len(raw)
                 try:
-                    readable.append((name, raw.decode("utf-8")))
+                    text = raw.decode("utf-8")
                 except UnicodeDecodeError:
                     continue
-        matches = find_decisive_malicious_source(
+                all_readable[name] = text
+                if not trusted and name in runtime_paths:
+                    readable.append((name, text))
+        legacy_matches = find_decisive_malicious_source(
             readable, explicitly_executable_paths=runtime_paths
         )
+        matches = legacy_matches
+        detector_revision = "static-malicious-preflight-v1"
+        if mode != "off":
+            reachability = analyze_reachability(all_readable)
+            v2 = analyze_static_candidates_v2(
+                (
+                    (path, text)
+                    for path, text in all_readable.items()
+                    if path not in trusted_paths
+                ),
+                reachability,
+            )
+            v2_candidates = (*v2.decisive, *v2.advisory)
+
+            def candidate_paths(candidate: Mapping[str, object]) -> set[str]:
+                candidate_locations = candidate["locations"]
+                assert isinstance(candidate_locations, list)
+                return {str(location["path"]) for location in candidate_locations}
+
+            def unresolved_legacy_match(match: Mapping[str, object]) -> bool:
+                category = str(match["category"])
+                locations = match["locations"]
+                assert isinstance(locations, list)
+                legacy_paths = {str(item["path"]) for item in locations}
+                related = [
+                    item
+                    for item in v2_candidates
+                    if str(item["category"]) == category
+                    and candidate_paths(item) & legacy_paths
+                ]
+                if not related:
+                    return True
+                return not all(
+                    str(item["reachability_state"]) == "proven_inert"
+                    or str(item["resolution_basis"]) in _AFFIRMATIVE_SAFE_STATIC_BASES
+                    for item in related
+                )
+
+            legacy_requires_serial_review = any(
+                unresolved_legacy_match(match) for match in legacy_matches
+            )
+            if audit_recorder is not None:
+                audit_recorder(
+                    {
+                        "mode": mode,
+                        "legacy_revision": "static-malicious-preflight-v1",
+                        "legacy_decisive": bool(legacy_matches),
+                        "legacy_categories": sorted(
+                            {str(item["category"]) for item in legacy_matches}
+                        ),
+                        "legacy_requires_serial_review": (
+                            legacy_requires_serial_review
+                        ),
+                        "candidate_revision": "static-malicious-preflight-v2",
+                        "candidate_decisive": bool(v2.decisive),
+                        "candidate_categories": sorted(
+                            {str(item["category"]) for item in v2.decisive}
+                        ),
+                        "advisory_count": len(v2.advisory),
+                        "proofs": [
+                            {
+                                "category": str(item["category"]),
+                                "kind": str(item["kind"]),
+                                "reachability_state": str(item["reachability_state"]),
+                                "reachability_bases": _bounded_sequence(
+                                    item["reachability_bases"]
+                                ),
+                                "causal_state": str(item["causal_state"]),
+                                "causal_path": _bounded_sequence(item["causal_path"]),
+                                "resolution_basis": str(item["resolution_basis"]),
+                            }
+                            for item in (*v2.decisive, *v2.advisory)[:16]
+                        ],
+                    }
+                )
+            if mode == "enforce":
+                if v2.decisive:
+                    matches = list(v2.decisive)
+                    detector_revision = "static-malicious-preflight-v2"
+                elif legacy_requires_serial_review:
+                    # V2 may correctly withhold a decisive verdict when its
+                    # proof engine cannot establish causality.  That narrower
+                    # authority must not turn a v1-decisive build/runtime lead
+                    # into concurrent untrusted execution.  Preserve the v1
+                    # finding only as a serial review floor; the layered source
+                    # reviewer can still clear it before Docker starts.
+                    matches = legacy_matches
+                else:
+                    matches = []
         if not matches:
             return None
         categories = sorted({str(item["category"]) for item in matches})
@@ -1456,13 +1588,20 @@ class TarSourceRepository:
                 break
         finding = SourceReviewFinding(
             artifact_sha256=artifact_sha256,
-            prompt_revision="static-malicious-preflight-v1",
+            prompt_revision=detector_revision,
             risk_level="high",
             confidence=1.0,
             categories=categories,
             evidence=evidence,
             summary=(
-                "Static preflight found reachable source combinations for "
+                (
+                    "Static preflight found reachable source combinations for "
+                    if detector_revision == "static-malicious-preflight-v1"
+                    else (
+                        "Static preflight found reachable causal source "
+                        "combinations for "
+                    )
+                )
                 + ", ".join(sorted({str(item["kind"]) for item in matches}))
                 + "; execution was not started."
             )[:240],
@@ -1852,6 +1991,7 @@ class OpenRouterSourceReviewAgent:
         base_url: str,
         timeout_seconds: float,
         max_steps: int,
+        static_preflight_v2_mode: str = "off",
         provenance_manifest_file: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -1860,6 +2000,7 @@ class OpenRouterSourceReviewAgent:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._max_steps = max_steps
+        self._static_preflight_v2_mode = static_preflight_v2_mode
         self._provenance_manifest_files = (
             (provenance_manifest_file,)
             if provenance_manifest_file is not None
@@ -1884,7 +2025,10 @@ class OpenRouterSourceReviewAgent:
     ) -> SourceReviewObservation:
         try:
             api_key = self._read_api_key()
-            repository = TarSourceRepository(archive_path)
+            repository = TarSourceRepository(
+                archive_path,
+                static_preflight_v2_mode=self._static_preflight_v2_mode,
+            )
             result, clearance_certified = await self._run(
                 repository, api_key, progress=progress, deadline=deadline
             )

@@ -89,6 +89,10 @@ from ditto_screener.policy import (
     core_decision,
     load_policy_engine,
 )
+from ditto_screener.preflight_audit import (
+    StaticPreflightAuditError,
+    StaticPreflightAuditJournal,
+)
 from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     SourceReviewObservation,
@@ -521,6 +525,9 @@ class BuildGate:
         self._client = client
         self._policy = policy
         self._journal = journal
+        self._static_preflight_audit = StaticPreflightAuditJournal(
+            config.static_preflight_audit_file
+        )
         self._review_settings_key: tuple[int, str] | None = None
         self._executor_verified = False
         self._configure_source_reviewer(config)
@@ -532,6 +539,7 @@ class BuildGate:
             base_url=config.source_review_base_url,
             timeout_seconds=config.source_review_timeout_seconds,
             max_steps=config.source_review_max_steps,
+            static_preflight_v2_mode=config.static_preflight_v2_mode,
         )
         l2_reviewer = KimiSolSourceReviewAgent(
             api_key_file=config.source_review_api_key_file,
@@ -722,9 +730,31 @@ class BuildGate:
                 # image, but they are routing leads rather than proof. Resolve an
                 # elevated lead with the inert L2/L3 harness before deciding
                 # whether untrusted build execution may start.
-                preflight = TarSourceRepository(tmp_path).malicious_preflight(
-                    artifact_sha256=sha256.lower()
-                )
+                try:
+                    preflight = TarSourceRepository(tmp_path).malicious_preflight(
+                        artifact_sha256=sha256.lower(),
+                        mode=self._config.static_preflight_v2_mode,
+                        audit_recorder=lambda payload: (
+                            self._static_preflight_audit.record(
+                                agent_id=agent_id,
+                                attempt_id=attempt_id,
+                                artifact_sha256=sha256.lower(),
+                                payload=payload,
+                            )
+                        ),
+                    )
+                except StaticPreflightAuditError as error:
+                    logger.exception(
+                        "static preflight audit failed agent_id=%s attempt_id=%s",
+                        agent_id,
+                        attempt_id,
+                    )
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="static-preflight-audit-failed",
+                        summary="static preflight audit journal write failed",
+                        detail=f"screener error: {error}",
+                    )
                 if preflight is not None:
                     logger.warning(
                         "static-source review lead agent_id=%s attempt_id=%s "

