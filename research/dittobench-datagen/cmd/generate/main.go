@@ -37,14 +37,14 @@ func main() {
 		shaOnly bool
 		version int
 	)
-	flag.IntVar(&version, "bench-version", 0, "required benchmark generation version (2, 3, 4, or 5)")
+	flag.IntVar(&version, "bench-version", 0, "required benchmark generation version (2 through 9)")
 	flag.Int64Var(&seed, "seed", 0, "dataset seed (omit for a fresh random seed)")
 	flag.StringVar(&runSize, "run-size", "full", "profile: small | medium | full")
 	flag.StringVar(&outPath, "out", "", "write canonical JSON here (default: stdout)")
 	flag.BoolVar(&shaOnly, "sha", false, "print only the SHA-256 of the artifact, no JSON")
 	flag.Parse()
 	if !protocol.SupportedBenchVersion(version) {
-		fmt.Fprintln(os.Stderr, "-bench-version is required and must be 2 or 3")
+		fmt.Fprintln(os.Stderr, "-bench-version is required and must be 2 through 9")
 		os.Exit(2)
 	}
 

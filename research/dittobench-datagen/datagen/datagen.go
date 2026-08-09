@@ -7,6 +7,7 @@ package datagen
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"sort"
 	"strings"
@@ -996,6 +997,104 @@ func sampledCategoryOrderV8(r *rand.Rand, n int, weights []int) []int {
 	return order
 }
 
+// sampledCategoryOrderV9 keeps one explicit anti-extraction case in every
+// non-empty profile, samples the rest of a partial catalog without replacement,
+// and gives a full run one slot from every source family. Any slots left after
+// that floor are independent weighted draws. The caller supplies a dedicated
+// family-mix RNG so changes in prompt rendering, harness projection, or output
+// permutation cannot silently change the histogram.
+func sampledCategoryOrderV9(r *rand.Rand, n int, weights []int, mandatory int) []int {
+	if n <= 0 || len(weights) == 0 {
+		return nil
+	}
+	counts := make([]int, len(weights))
+	available := make([]bool, len(weights))
+	for i := range available {
+		available[i] = true
+	}
+	remaining := n
+	if mandatory >= 0 && mandatory < len(weights) {
+		counts[mandatory]++
+		available[mandatory] = false
+		remaining--
+	}
+
+	// A full catalog gets a hard floor. A smaller profile gets a weighted sample
+	// without replacement rather than the v8 uniform subset, so even its inclusion
+	// probabilities continue to reflect the published family weights.
+	floorSlots := len(weights) - 1
+	if mandatory < 0 || mandatory >= len(weights) {
+		floorSlots = len(weights)
+	}
+	if floorSlots > remaining {
+		floorSlots = remaining
+	}
+	for range floorSlots {
+		total := 0
+		for i, weight := range weights {
+			if available[i] {
+				total += positiveWeight(weight)
+			}
+		}
+		draw := r.Intn(total)
+		for i, weight := range weights {
+			if !available[i] {
+				continue
+			}
+			weight = positiveWeight(weight)
+			if draw < weight {
+				counts[i]++
+				available[i] = false
+				remaining--
+				break
+			}
+			draw -= weight
+		}
+	}
+
+	totalWeight := 0
+	for _, weight := range weights {
+		totalWeight += positiveWeight(weight)
+	}
+	for ; remaining > 0; remaining-- {
+		draw := r.Intn(totalWeight)
+		for i, weight := range weights {
+			weight = positiveWeight(weight)
+			if draw < weight {
+				counts[i]++
+				break
+			}
+			draw -= weight
+		}
+	}
+
+	order := make([]int, 0, n)
+	for i, count := range counts {
+		for range count {
+			order = append(order, i)
+		}
+	}
+	r.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+	return order
+}
+
+func positiveWeight(weight int) int {
+	if weight < 1 {
+		return 1
+	}
+	return weight
+}
+
+func toolCategoryMixRNG(seed int64, benchVersion, n int) *rand.Rand {
+	return toolMixRNG(seed, benchVersion, n, "family")
+}
+
+func toolMixRNG(seed int64, benchVersion, n int, domain string) *rand.Rand {
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "dittobench-tool-mix:%s:%d:%d:%d", domain, seed, benchVersion, n)
+	return rand.New(rand.NewSource(int64(h.Sum64() & ((1 << 63) - 1))))
+}
+
 // codeModeCategories are the bench_version 5 Code Mode categories: they exercise
 // run_code (the in-process JavaScript compute/orchestration sandbox) and the
 // discrimination between run_code (a pure in-context calculation, no side effects)
@@ -1160,8 +1259,63 @@ var difficultyCategoriesV7 = []category{
 // deterministic. MaxToolCalls describes the expected envelope; it is not a hard
 // cap and creative agents may legitimately exceed it.
 func applyV8WorldActions(seed int64, cases []protocol.ToolCase) {
+	applyWorldActions(seed, cases, false)
+}
+
+const (
+	// A full v9 run has 46 retained non-world families and seven world families.
+	// Their one-per-family floor consumes 53 of 100 slots, so the mathematical
+	// maximum world-action share is 54%. V9 targets 48% with a 43% hard floor,
+	// leaving six to eleven slots beyond the non-world floor for the seed-weighted
+	// residual source mix. Planted-context cases count toward the separate 50%
+	// composed/evidence-bound minimum.
+	V9FullToolCaseCount       = 100
+	V9FullWorldActionTarget   = 48
+	V9FullWorldActionMinimum  = 43
+	V9FullComposedCaseMinimum = 50
+)
+
+// applyV9WorldActions retains the final semantic-family floor and an explicit
+// full-run distribution contract. V8 deliberately converted at least 65% of
+// ordinary cases, which can erase a one-slot family. That target is impossible
+// alongside v9's 53-family/100-case floor: 46 non-world floors leave at most 54
+// slots for seven world families. V9 therefore targets 48 world actions with a
+// 43-action hard floor, preserving six to eleven non-world residual slots whose
+// source counts retain the published seed-sampled weights. Together with planted
+// stale-context and memory-fetch programs, at least half of the run remains
+// evidence-bound or composed. The explicit legacy replacements below remain
+// authoritative retirements of obsolete product behavior.
+func applyV9WorldActions(seed int64, cases []protocol.ToolCase) {
+	applyWorldActions(seed, cases, true)
+}
+
+func v9RetiredSourceFamily(category string) bool {
+	switch category {
+	case "email_send", "memory_delete", "memory_update", "link_read",
+		"multi_job_status", "job_chain_result_usage", "job_chain_recovery_result_usage":
+		return true
+	default:
+		return false
+	}
+}
+
+func v9WorldFamily(category string) bool {
+	return strings.HasPrefix(category, "world_")
+}
+
+func v9ComposedFamily(category string) bool {
+	return v9WorldFamily(category) || category == "stale_context_web" || category == "memory_fetch"
+}
+
+func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFloor bool) {
 	if len(cases) == 0 {
 		return
+	}
+	remainingByCategory := make(map[string]int, len(cases))
+	if preserveSemanticFloor {
+		for _, tc := range cases {
+			remainingByCategory[tc.Category]++
+		}
 	}
 	scale := 1
 	if len(cases) >= 80 {
@@ -1174,22 +1328,45 @@ func applyV8WorldActions(seed int64, cases []protocol.ToolCase) {
 	if target >= len(cases) {
 		target = len(cases) - 1 // retain at least one plain v7-style coverage case
 	}
+	if preserveSemanticFloor && len(cases) == V9FullToolCaseCount {
+		retired := 0
+		for _, tc := range cases {
+			if v9RetiredSourceFamily(tc.Category) {
+				retired++
+			}
+		}
+		// Retired families become world actions in the authoritative tail pass.
+		// Skip them in the generic converter and reserve only the additional
+		// non-retired conversions needed for the final world-action target.
+		target = V9FullWorldActionTarget - retired
+		if target < 0 {
+			target = 0
+		}
+	}
 	converted := 0
+	var worldMix *rand.Rand
+	var worldFloor []int
+	if preserveSemanticFloor {
+		worldMix = toolMixRNG(seed, protocol.BenchVersionV9, len(cases), "world-family")
+		worldFloor = worldMix.Perm(8)
+	}
 	attachedWorld := false
+	worldCarrier := -1
 	deleteTarget := 0
 	updateTarget := 0
-	for i := range cases {
-		if converted >= target {
-			break
-		}
-		// Preserve bespoke prerequisites only when they already prove a composed
-		// outcome; the shared world replaces ordinary/card-like cases first.
-		if len(cases[i].PrerequisitePairs) != 0 {
-			continue
-		}
+	convertAt := func(i int) {
 		caseID := cases[i].ID
+		sourceCategory := cases[i].Category
 		var tc protocol.ToolCase
-		switch converted % 8 {
+		worldKind := converted % 8
+		if preserveSemanticFloor {
+			if converted < len(worldFloor) {
+				worldKind = worldFloor[converted]
+			} else {
+				worldKind = worldMix.Intn(8)
+			}
+		}
+		switch worldKind {
 		case 0, 5: // resolve a vague referent, research a live fact, and email it
 			tc = v8WorldContactEmail(seed, caseID, world, converted+i)
 		case 1: // description -> target pair -> destructive action
@@ -1212,9 +1389,52 @@ func applyV8WorldActions(seed int64, cases []protocol.ToolCase) {
 		if !attachedWorld {
 			tc.PrerequisitePairs = append([]protocol.MemoryPair(nil), world.Pairs...)
 			attachedWorld = true
+			worldCarrier = i
 		}
 		cases[i] = tc
+		if preserveSemanticFloor {
+			remainingByCategory[sourceCategory]--
+		}
 		converted++
+	}
+	for i := range cases {
+		if converted >= target {
+			break
+		}
+		// Preserve bespoke prerequisites only when they already prove a composed
+		// outcome; the shared world replaces ordinary/card-like cases first.
+		if len(cases[i].PrerequisitePairs) != 0 {
+			continue
+		}
+		if preserveSemanticFloor && remainingByCategory[cases[i].Category] <= 1 {
+			continue
+		}
+		if preserveSemanticFloor && v9RetiredSourceFamily(cases[i].Category) {
+			continue
+		}
+		convertAt(i)
+	}
+	if preserveSemanticFloor && len(cases) == V9FullToolCaseCount {
+		retired := 0
+		for _, tc := range cases {
+			if v9RetiredSourceFamily(tc.Category) {
+				retired++
+			}
+		}
+		minimumConversions := V9FullWorldActionMinimum - retired
+		// An unusually large weighted draw of stale-context or memory-fetch cases
+		// can exhaust the ordinary duplicates before the pure-world floor. Convert
+		// only as many duplicate prerequisite cases as needed for that floor; at
+		// least eleven non-world residual slots remain at the 43-case minimum.
+		for i := range cases {
+			if converted >= minimumConversions {
+				break
+			}
+			if len(cases[i].PrerequisitePairs) == 0 || remainingByCategory[cases[i].Category] <= 1 || v9RetiredSourceFamily(cases[i].Category) {
+				continue
+			}
+			convertAt(i)
+		}
 	}
 
 	// The remaining legacy-coverage tail must not reintroduce the exact IDs,
@@ -1241,10 +1461,41 @@ func applyV8WorldActions(seed int64, cases []protocol.ToolCase) {
 			cases[i] = v8WorldAgentJob(caseID, world, i)
 		}
 	}
+	// V9 memory cases are grounded in this same coherent world and deliberately
+	// leave their own waves empty: the tool-prerequisite wave is the initial seed
+	// boundary. Small profiles can contain world memory cases while sampling no
+	// world tool at all (notably seeds 4, 6, and 9). Always nominate exactly one
+	// tool case as the world carrier without changing its semantic family. Prefer
+	// a world case, then an otherwise prerequisite-free case so bespoke programs
+	// retain their compact local evidence block.
+	if preserveSemanticFloor && !attachedWorld {
+		worldCarrier = -1
+		for i := range cases {
+			if strings.HasPrefix(cases[i].Category, "world_") {
+				worldCarrier = i
+				break
+			}
+		}
+		if worldCarrier < 0 {
+			for i := range cases {
+				if len(cases[i].PrerequisitePairs) == 0 {
+					worldCarrier = i
+					break
+				}
+			}
+		}
+		if worldCarrier < 0 {
+			worldCarrier = 0
+		}
+		cases[worldCarrier].PrerequisitePairs = append(cases[worldCarrier].PrerequisitePairs, world.Pairs...)
+		attachedWorld = true
+	}
 	protected := world.ProtectedTerms()
 	for i := range cases {
-		if strings.HasPrefix(cases[i].Category, "world_") {
+		if strings.HasPrefix(cases[i].Category, "world_") || i == worldCarrier {
 			cases[i].WritingProtected = append(cases[i].WritingProtected, protected...)
+		}
+		if strings.HasPrefix(cases[i].Category, "world_") {
 			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleForV8World(seed, cases[i].ID).Subject)
 		} else {
 			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleFor(seed, cases[i].ID).Subject)
@@ -1522,7 +1773,17 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 	}
 	cats := categoriesForVersion(benchVersion)
 	var order []int
-	if benchVersion >= protocol.BenchVersionV8 {
+	if benchVersion >= protocol.BenchVersionV9 {
+		weights := make([]int, len(cats))
+		mandatory := -1
+		for i, c := range cats {
+			weights[i] = toolCategoryWeightV7(c.name)
+			if c.name == "set_effort" {
+				mandatory = i
+			}
+		}
+		order = sampledCategoryOrderV9(toolCategoryMixRNG(seed, benchVersion, n), n, weights, mandatory)
+	} else if benchVersion >= protocol.BenchVersionV8 {
 		weights := make([]int, len(cats))
 		for i, c := range cats {
 			weights[i] = toolCategoryWeightV7(c.name)
@@ -1685,8 +1946,12 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		cases = append(cases, tc)
 		fillers = append(fillers, usedFiller)
 	}
-	if benchVersion >= protocol.BenchVersionV8 {
+	if benchVersion >= protocol.BenchVersionV9 {
+		applyV9WorldActions(seed, cases)
+	} else if benchVersion >= protocol.BenchVersionV8 {
 		applyV8WorldActions(seed, cases)
+	}
+	if benchVersion >= protocol.BenchVersionV8 {
 		applyV8WritingNoise(seed, cases)
 		applyV8AssistantVoice(seed, cases)
 	}

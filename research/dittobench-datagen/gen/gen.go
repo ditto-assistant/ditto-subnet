@@ -109,6 +109,16 @@ var profilesV8 = map[string]Profile{
 	"full":   {Tools: 100, Mem: 225, Waves: 5, RawPairsFrac: 0.5, IsoCases: 9},
 }
 
+// profilesV9 is a separately pinned pre-activation cost envelope. Its counts
+// deliberately equal v8 while v9 changes the scored family distribution, but
+// it must not inherit through a >= comparison: a future version needs an
+// explicit profile decision before generation can be supported.
+var profilesV9 = map[string]Profile{
+	"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
+	"medium": {Tools: 48, Mem: 64, Waves: 4, RawPairsFrac: 0.45, IsoCases: 5},
+	"full":   {Tools: 100, Mem: 225, Waves: 5, RawPairsFrac: 0.5, IsoCases: 9},
+}
+
 // ProfileFor returns the Profile for a run_size, defaulting to small. Uses the
 // historical (v2/v3/v4) sizes; canonical versioned callers use ProfileForVersion.
 func ProfileFor(runSize string) (Profile, bool) {
@@ -124,25 +134,26 @@ func ProfileFor(runSize string) (Profile, bool) {
 // their dataset bytes are unchanged. Deterministic, so any third party holding
 // (seed, run_size, bench_version) regenerates the identical dataset.
 func ProfileForVersion(runSize string, benchVersion int) (Profile, bool) {
-	if benchVersion >= protocol.BenchVersionV8 {
-		if p, ok := profilesV8[runSize]; ok {
-			return p, true
-		}
-		return profilesV8["small"], false
+	var profiles map[string]Profile
+	switch benchVersion {
+	case protocol.BenchVersionV2, protocol.BenchVersionV3, protocol.BenchVersionV4:
+		profiles = Profiles
+	case protocol.BenchVersionV5, protocol.BenchVersionV6:
+		profiles = profilesV5
+	case protocol.BenchVersionV7:
+		profiles = profilesV7
+	case protocol.BenchVersionV8:
+		profiles = profilesV8
+	case protocol.BenchVersionV9:
+		profiles = profilesV9
+	default:
+		return Profile{}, false
 	}
-	if benchVersion >= protocol.BenchVersionV7 {
-		if p, ok := profilesV7[runSize]; ok {
-			return p, true
-		}
-		return profilesV7["small"], false
+	p, ok := profiles[runSize]
+	if !ok {
+		return profiles["small"], false
 	}
-	if benchVersion >= protocol.BenchVersionV5 {
-		if p, ok := profilesV5[runSize]; ok {
-			return p, true
-		}
-		return profilesV5["small"], false
-	}
-	return ProfileFor(runSize)
+	return p, true
 }
 
 // FreshSeed returns a cryptographically-random int64 seed for a submission. The

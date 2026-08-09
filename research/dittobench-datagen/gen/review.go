@@ -93,7 +93,7 @@ func GenerateDatasetReview(seed int64, prof Profile, benchVersion int) (DatasetR
 		return DatasetReview{}, fmt.Errorf("generate isolation review annotations: %w", err)
 	}
 	plans = append(plans, iso.ReviewPlans...)
-	plans = append(plans, v8WorldIntegrityReviewPlans(seed, world)...)
+	plans = append(plans, v8WorldIntegrityReviewPlans(seed, world, benchVersion)...)
 	artifactCases := make(map[string]bool, len(artifact.MemoryCases))
 	for _, c := range artifact.MemoryCases {
 		artifactCases[c.ID] = true
@@ -141,8 +141,8 @@ func GenerateDatasetReview(seed int64, prof Profile, benchVersion int) (DatasetR
 	return review, nil
 }
 
-func v8WorldIntegrityReviewPlans(seed int64, world universe.World) []universe.QuestionPlan {
-	cases := v8WorldIntegrityCases(seed, world)
+func v8WorldIntegrityReviewPlans(seed int64, world universe.World, benchVersion int) []universe.QuestionPlan {
+	cases := v8WorldIntegrityCases(seed, world, benchVersion)
 	if len(cases) != v8WorldIntegrityCaseCount {
 		panic(fmt.Sprintf("v8 world integrity case count=%d, want %d", len(cases), v8WorldIntegrityCaseCount))
 	}

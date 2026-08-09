@@ -1,7 +1,8 @@
 // Command vstudy is the offline v7 variance-study driver (see
-// docs/v7-variance-study.md). It generates many full-profile datasets for
-// bench_version 6 and 7 and scores fixed, deterministic harness strategies
-// against each one, producing:
+// docs/v7-variance-study.md). It generates many full-profile datasets and
+// always reports structural tool/memory family distributions. For calibrated
+// historical contracts through v8 it also scores fixed deterministic harness
+// strategies, producing:
 //
 //   - per-strategy composite (0.5*tool_mean + 0.5*memory_mean) mean / SD /
 //     quantiles across seeds — the seed-to-seed spread the leaderboard's
@@ -19,10 +20,13 @@
 // (parrot / overlap / recency / dump / abstain memory answers + the fixed
 // keyword tool router), and the mid tier ("strong") is the oracle downgraded
 // by a deterministic per-case error draw keyed to case type — a stand-in for
-// a realistic top miner near the champion decision boundary. Everything is
-// LLM-free and byte-reproducible; nothing here touches generation bytes.
+// a realistic top miner near the champion decision boundary. These fallback
+// rates do not cover every v9 family, so v9 strategy and G-study output is
+// disabled until explicit measured rates and provenance are supplied for all
+// emitted families. Everything is LLM-free and byte-reproducible; nothing here
+// touches generation bytes.
 //
-// Usage: vstudy -seeds 300 -out /tmp/vstudy
+// Usage: vstudy -bench-versions 8,9 -run-size full -seeds 300
 package main
 
 import (
@@ -34,8 +38,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/ditto-assistant/dittobench-datagen/datagen"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -44,6 +50,8 @@ import (
 func main() {
 	seeds := flag.Int("seeds", 300, "number of dataset seeds per bench version")
 	firstSeed := flag.Int64("first-seed", 1, "first seed (seeds are first..first+n-1)")
+	benchVersions := flag.String("bench-versions", "6,7", "comma-separated benchmark contracts to compare")
+	runSize := flag.String("run-size", "full", "dataset profile: small, medium, or full")
 	outDir := flag.String("out", "", "directory for gstudy-format JSONL outputs (empty = skip)")
 	margin := flag.Float64("margin", 0.007, "live-fold protection margin in composite points")
 	flag.Parse()
@@ -55,13 +63,46 @@ func main() {
 		}
 	}
 
+	versions, err := parseBenchVersions(*benchVersions)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bench versions:", err)
+		os.Exit(2)
+	}
+	if _, ok := gen.ProfileForVersion(*runSize, versions[0]); !ok {
+		fmt.Fprintln(os.Stderr, "run size: must be small, medium, or full")
+		os.Exit(2)
+	}
+
 	summary := map[string]any{}
-	for _, bv := range []int{protocol.BenchVersionV6, protocol.BenchVersionV7} {
-		res := runVersion(bv, *firstSeed, *seeds, *outDir)
+	for _, bv := range versions {
+		res := runVersion(bv, *runSize, *firstSeed, *seeds, *outDir)
 		summary[fmt.Sprintf("v%d", bv)] = res.summarize(*margin)
 	}
 	b, _ := json.MarshalIndent(summary, "", "  ")
 	fmt.Println(string(b))
+}
+
+func parseBenchVersions(raw string) ([]int, error) {
+	var versions []int
+	seen := map[int]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		version, err := strconv.Atoi(part)
+		if err != nil || !protocol.SupportedBenchVersion(version) {
+			return nil, fmt.Errorf("unsupported bench_version %q", part)
+		}
+		if !seen[version] {
+			versions = append(versions, version)
+			seen[version] = true
+		}
+	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("at least one version is required")
+	}
+	return versions, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +158,8 @@ type caseScore struct {
 type versionResult struct {
 	BenchVersion int
 	Seeds        []int64
+	ToolMixes    []map[string]int
+	MemoryMixes  []map[string]int
 	// per strategy -> per seed
 	Runs map[string][]seedResult
 	// PairB: model tier -> per-seed composite of the salt-B equal-skill twin.
@@ -137,8 +180,8 @@ type versionResult struct {
 	OracleFailures     int
 }
 
-func runVersion(bv int, first int64, n int, outDir string) *versionResult {
-	prof, _ := gen.ProfileForVersion("full", bv)
+func runVersion(bv int, runSize string, first int64, n int, outDir string) *versionResult {
+	prof, _ := gen.ProfileForVersion(runSize, bv)
 	vr := &versionResult{
 		BenchVersion: bv,
 		Runs:         map[string][]seedResult{},
@@ -155,9 +198,21 @@ func runVersion(bv int, first int64, n int, outDir string) *versionResult {
 			os.Exit(1)
 		}
 		vr.Seeds = append(vr.Seeds, seed)
-		evalSeed(vr, a, bv, seed)
+		toolMix := map[string]int{}
+		for _, c := range a.ToolCases {
+			toolMix[c.Category]++
+		}
+		memoryMix := map[string]int{}
+		for _, c := range a.MemoryCases {
+			memoryMix[c.QuestionType]++
+		}
+		vr.ToolMixes = append(vr.ToolMixes, toolMix)
+		vr.MemoryMixes = append(vr.MemoryMixes, memoryMix)
+		if bv < protocol.BenchVersionV9 {
+			evalSeed(vr, a, bv, seed)
+		}
 	}
-	if outDir != "" {
+	if outDir != "" && bv < protocol.BenchVersionV9 {
 		for _, s := range []string{"overlap", "strong", "champS", "champW", "uniform", "oracle"} {
 			writeGstudyJSONL(filepath.Join(outDir, fmt.Sprintf("runs_v%d_%s.jsonl", bv, s)), vr.Seeds, vr.Cases[s], s)
 		}
@@ -626,11 +681,154 @@ type CatVar struct {
 	SD       float64 `json:"sd_of_contribution"`
 }
 
+type FamilyMixEntry struct {
+	Family      string  `json:"family"`
+	RunsPresent int     `json:"runs_present"`
+	Min         int     `json:"min"`
+	Max         int     `json:"max"`
+	Mean        float64 `json:"mean"`
+	Variance    float64 `json:"variance"`
+}
+
+type FamilyMixSummary struct {
+	Runs               int              `json:"runs"`
+	DistinctHistograms int              `json:"distinct_histograms"`
+	Families           []FamilyMixEntry `json:"families"`
+}
+
+func summarizeFamilyMix(mixes []map[string]int) FamilyMixSummary {
+	out := FamilyMixSummary{Runs: len(mixes)}
+	families := map[string]bool{}
+	distinct := map[string]bool{}
+	for _, mix := range mixes {
+		for family := range mix {
+			families[family] = true
+		}
+		keys := make([]string, 0, len(mix))
+		for family := range mix {
+			keys = append(keys, family)
+		}
+		sort.Strings(keys)
+		var key strings.Builder
+		for _, family := range keys {
+			key.WriteString(family)
+			key.WriteByte('=')
+			key.WriteString(strconv.Itoa(mix[family]))
+			key.WriteByte(';')
+		}
+		distinct[key.String()] = true
+	}
+	out.DistinctHistograms = len(distinct)
+	keys := make([]string, 0, len(families))
+	for family := range families {
+		keys = append(keys, family)
+	}
+	sort.Strings(keys)
+	for _, family := range keys {
+		entry := FamilyMixEntry{Family: family}
+		if len(mixes) > 0 {
+			entry.Min = mixes[0][family]
+		}
+		total := 0
+		for _, mix := range mixes {
+			count := mix[family]
+			if count > 0 {
+				entry.RunsPresent++
+			}
+			if count < entry.Min {
+				entry.Min = count
+			}
+			if count > entry.Max {
+				entry.Max = count
+			}
+			total += count
+		}
+		if len(mixes) > 0 {
+			mean := float64(total) / float64(len(mixes))
+			entry.Mean = r4(mean)
+			for _, mix := range mixes {
+				delta := float64(mix[family]) - mean
+				entry.Variance += delta * delta
+			}
+			entry.Variance = r4(entry.Variance / float64(len(mixes)))
+		}
+		out.Families = append(out.Families, entry)
+	}
+	return out
+}
+
+type CountDistribution struct {
+	Runs     int     `json:"runs"`
+	Min      int     `json:"min"`
+	Max      int     `json:"max"`
+	Mean     float64 `json:"mean"`
+	Variance float64 `json:"variance"`
+}
+
+func summarizeSelectedCounts(mixes []map[string]int, include func(string) bool) CountDistribution {
+	counts := make([]int, 0, len(mixes))
+	for _, mix := range mixes {
+		total := 0
+		for family, count := range mix {
+			if include(family) {
+				total += count
+			}
+		}
+		counts = append(counts, total)
+	}
+	out := CountDistribution{Runs: len(counts)}
+	if len(counts) == 0 {
+		return out
+	}
+	out.Min, out.Max = counts[0], counts[0]
+	total := 0
+	for _, count := range counts {
+		total += count
+		if count < out.Min {
+			out.Min = count
+		}
+		if count > out.Max {
+			out.Max = count
+		}
+	}
+	mean := float64(total) / float64(len(counts))
+	out.Mean = r4(mean)
+	for _, count := range counts {
+		delta := float64(count) - mean
+		out.Variance += delta * delta
+	}
+	out.Variance = r4(out.Variance / float64(len(counts)))
+	return out
+}
+
 func (vr *versionResult) summarize(margin float64) map[string]any {
 	out := map[string]any{
-		"seeds":           len(vr.Seeds),
-		"oracle_failures": vr.OracleFailures,
+		"seeds":             len(vr.Seeds),
+		"tool_family_mix":   summarizeFamilyMix(vr.ToolMixes),
+		"memory_family_mix": summarizeFamilyMix(vr.MemoryMixes),
 	}
+	if vr.BenchVersion >= protocol.BenchVersionV9 {
+		world := func(family string) bool { return strings.HasPrefix(family, "world_") }
+		composed := func(family string) bool {
+			return world(family) || family == "stale_context_web" || family == "memory_fetch"
+		}
+		out["final_distribution_contract"] = map[string]any{
+			"full_tool_cases":       datagen.V9FullToolCaseCount,
+			"world_action_target":   datagen.V9FullWorldActionTarget,
+			"world_action_minimum":  datagen.V9FullWorldActionMinimum,
+			"composed_case_minimum": datagen.V9FullComposedCaseMinimum,
+			"world_action_counts":   summarizeSelectedCounts(vr.ToolMixes, world),
+			"composed_case_counts":  summarizeSelectedCounts(vr.ToolMixes, composed),
+			"scored_family_floor":   1,
+			"final_scored_families": 53,
+		}
+		out["score_calibration"] = map[string]string{
+			"status": "pending",
+			"reason": "v9 strategy and G-study outputs are disabled until every emitted v9 family has an explicit measured rate and provenance",
+		}
+		return out
+	}
+	out["oracle_failures"] = vr.OracleFailures
 	strat := map[string]StratSummary{}
 	for name, runs := range vr.Runs {
 		var comp, mem, tool []float64

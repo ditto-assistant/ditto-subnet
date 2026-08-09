@@ -70,6 +70,11 @@ import (
 // valid free-form wording, raises the computed-memory floor, and tightens the
 // deterministic grader. Every lever is gated on bench_version >= 8 so v7 remains
 // independently reproducible.
+//
+// v9 is generated explicitly for pre-activation qualification. It inherits the
+// v8 product-semantic world and adds a final scored-family floor whose residual
+// mix varies by seed. CurrentBenchVersion deliberately remains v8: supporting
+// deterministic v9 generation is not the same as advertising or activating it.
 const (
 	BenchVersionV2      = 2
 	BenchVersionV3      = 3
@@ -78,6 +83,7 @@ const (
 	BenchVersionV6      = 6
 	BenchVersionV7      = 7
 	BenchVersionV8      = 8
+	BenchVersionV9      = 9
 	CurrentBenchVersion = BenchVersionV8
 
 	// BenchVersion is retained as a source-compatible alias for consumers that
@@ -94,6 +100,7 @@ var (
 	datasetEpochV6 = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV7 = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV8 = time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV9 = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	// DatasetEpoch and DatasetEpochRFC3339 retain the v2 values for legacy
 	// package callers. Canonical versioned generation uses DatasetEpochForVersion.
@@ -105,7 +112,8 @@ var (
 func SupportedBenchVersion(version int) bool {
 	return version == BenchVersionV2 || version == BenchVersionV3 ||
 		version == BenchVersionV4 || version == BenchVersionV5 ||
-		version == BenchVersionV6 || version == BenchVersionV7 || version == BenchVersionV8
+		version == BenchVersionV6 || version == BenchVersionV7 ||
+		version == BenchVersionV8 || version == BenchVersionV9
 }
 
 // DatasetEpochForVersion returns the immutable reference instant for version.
@@ -125,8 +133,10 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 		return datasetEpochV7, nil
 	case BenchVersionV8:
 		return datasetEpochV8, nil
+	case BenchVersionV9:
+		return datasetEpochV9, nil
 	default:
-		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8)", version)
+		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9)", version)
 	}
 }
 
@@ -134,7 +144,7 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 // It is deterministic and retains the exact historical v2 mixing function.
 func RotateSeedForVersion(seed int64, version int) (int64, error) {
 	if !SupportedBenchVersion(version) {
-		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8)", version)
+		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9)", version)
 	}
 	v := uint64(version)
 	x := uint64(seed) ^ (v * 0x9E3779B97F4A7C15)

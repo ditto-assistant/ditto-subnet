@@ -68,7 +68,7 @@ func GenerateIsolationForVersion(seed int64, primaryN, nWaves, isoCases, benchVe
 		nWaves = 1
 	}
 	if benchVersion >= protocol.BenchVersionV8 {
-		return generateV8WorldIsolation(seed, primaryN, isoCases)
+		return generateV8WorldIsolation(seed, primaryN, isoCases, benchVersion)
 	}
 	pPlan, err := persona.BuildPlanForVersion(seed, personaOptsFor(primaryN), benchVersion)
 	if err != nil {
@@ -229,7 +229,7 @@ func GenerateIsolationForVersion(seed int64, primaryN, nWaves, isoCases, benchVe
 // cities, events, full identities, work histories, nicknames, employers, and
 // addresses remain different, so the transcript does not manufacture two
 // near-clones merely to make the question text byte-identical.
-func generateV8WorldIsolation(seed int64, primaryN, isoCases int) (IsolationSuite, error) {
+func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) (IsolationSuite, error) {
 	scale, _ := v8WorldProfile(primaryN)
 	primary := universe.Generate(seed, scale)
 	secondary := universe.Generate(seed^isolationSalt, scale)
@@ -260,6 +260,9 @@ func generateV8WorldIsolation(seed int64, primaryN, isoCases int) (IsolationSuit
 		usedSecondaryPeople[sourceIndex] = true
 		source := secondaryPeople[sourceIndex]
 		projected := projectIsolationPerson(source, anchor)
+		if benchVersion >= protocol.BenchVersionV9 {
+			projected = disambiguateIsolationPerson(projected, source, secondary.People, i)
+		}
 
 		ids := []struct {
 			old     string
@@ -313,7 +316,7 @@ func generateV8WorldIsolation(seed int64, primaryN, isoCases int) (IsolationSuit
 		plan.Case.QuestionType = "world-isolation-contact-current"
 		plan.Case.Question = "For this contact list: " + plan.Case.Question
 		plan.Case.ForbiddenAnswer = forbidden
-		plan.Case.BenchVersion = protocol.BenchVersionV8
+		plan.Case.BenchVersion = benchVersion
 		plan.Case.WritingProtected = append([]string(nil), plan.Constraints...)
 		suite.Cases = append(suite.Cases, StagedCase{
 			Case: plan.Case, RunAfterWave: 0, UserID: userID,
@@ -349,6 +352,44 @@ func projectIsolationPerson(source, anchor universe.Person) universe.Person {
 		local, domain, _ := strings.Cut(projected.Email, "@")
 		projected.Email = local + ".work@" + domain
 	}
+	return projected
+}
+
+// disambiguateIsolationPerson closes a rare coherent-world edge case without
+// changing the frozen v8 contract. Projecting the anchor's given name can make
+// the resulting (name, employer, event) tuple equal to another person already
+// in the secondary world. The question oracle correctly rejects that ambiguity.
+// V9 retains the shared given name but adds deterministic middle-name material
+// from the unprojected source until the tuple is unique, then derives the email
+// from the final name so the planted correction remains internally coherent.
+func disambiguateIsolationPerson(projected, source universe.Person, people []universe.Person, target int) universe.Person {
+	conflicts := func(candidate universe.Person) bool {
+		for i, person := range people {
+			if i != target && person.Name == candidate.Name && person.Employer == candidate.Employer && person.Context == candidate.Context {
+				return true
+			}
+		}
+		return false
+	}
+	if !conflicts(projected) {
+		return projected
+	}
+
+	fields := strings.Fields(projected.Name)
+	sourceFields := strings.Fields(source.Name)
+	if len(fields) == 0 || len(sourceFields) == 0 {
+		return projected
+	}
+	first, last := fields[0], fields[len(fields)-1]
+	middle := sourceFields[0]
+	for attempt := 0; conflicts(projected); attempt++ {
+		if attempt == 0 {
+			projected.Name = strings.Join([]string{first, middle, last}, " ")
+		} else {
+			projected.Name = strings.Join([]string{first, middle, fmt.Sprintf("%d", attempt+1), last}, " ")
+		}
+	}
+	projected.Email = projectIsolationEmail(projected.Name, source.Email)
 	return projected
 }
 

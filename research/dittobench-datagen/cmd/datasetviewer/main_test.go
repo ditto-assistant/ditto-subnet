@@ -13,7 +13,7 @@ import (
 func testConfig() viewerConfig {
 	return viewerConfig{
 		DefaultSeed: 42, DefaultRunSize: "small", DefaultBenchVersion: protocol.BenchVersionV8,
-		SupportedVersions: []int{protocol.BenchVersionV7, protocol.BenchVersionV8},
+		SupportedVersions: []int{protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9},
 	}
 }
 

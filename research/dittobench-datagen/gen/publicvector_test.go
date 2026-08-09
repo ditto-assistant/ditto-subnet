@@ -350,9 +350,34 @@ func TestV8KnownVector(t *testing.T) {
 	}
 }
 
+// TestV9KnownVector pins the pre-activation family-mix contract. V9 inherits
+// the coherent v8 world but selects its tool histogram from an independent
+// seed stream, preserves one of every final full-run semantic family after the
+// world conversion, and carries set_effort in every public profile. This vector
+// may move while the v9 stack is still being assembled, but a change must always
+// be explicit and must never repin any v2-v8 vector above.
+func TestV9KnownVector(t *testing.T) {
+	const (
+		seed = int64(123456789)
+		want = "b12edd3649dece3af415ad289a24a1a8615b7d906773e718ee637da14cbd541f"
+	)
+	prof, _ := ProfileForVersion("full", protocol.BenchVersionV9)
+	artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV9)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	got, _, err := artifact.SHA256Hex()
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if got != want {
+		t.Fatalf("v9 known-vector hash drift for seed %d full:\n got %s\nwant %s", seed, got, want)
+	}
+}
+
 func TestUnsupportedVersionRejected(t *testing.T) {
 	prof, _ := ProfileFor("small")
-	if _, err := GenerateDataset(42, prof, 9); err == nil {
+	if _, err := GenerateDataset(42, prof, 10); err == nil {
 		t.Fatal("unsupported version accepted")
 	}
 }
@@ -360,7 +385,7 @@ func TestUnsupportedVersionRejected(t *testing.T) {
 // TestSameSeedSameBytes is the core determinism guarantee: one seed, one artifact.
 func TestSameSeedSameBytes(t *testing.T) {
 	prof, _ := ProfileFor("full")
-	for _, version := range []int{protocol.BenchVersionV2, protocol.BenchVersionV3, protocol.BenchVersionV4, protocol.BenchVersionV5, protocol.BenchVersionV6, protocol.BenchVersionV7, protocol.BenchVersionV8} {
+	for _, version := range []int{protocol.BenchVersionV2, protocol.BenchVersionV3, protocol.BenchVersionV4, protocol.BenchVersionV5, protocol.BenchVersionV6, protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9} {
 		artifactA, err := GenerateDataset(42, prof, version)
 		if err != nil {
 			t.Fatalf("v%d generate a: %v", version, err)

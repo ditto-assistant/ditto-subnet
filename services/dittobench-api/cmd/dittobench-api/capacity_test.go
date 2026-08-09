@@ -60,8 +60,9 @@ func TestFullRunConcurrencyIsOnePerScorer(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/submit", nil)
 	s.submitRunSize(recorder, request, submitRequest{
-		HarnessURL: "http://127.0.0.1:8080",
-		RunSize:    "full",
+		HarnessURL:   "http://127.0.0.1:8080",
+		RunSize:      "full",
+		BenchVersion: protocol.CurrentBenchVersion,
 	})
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429: %s", recorder.Code, recorder.Body.String())

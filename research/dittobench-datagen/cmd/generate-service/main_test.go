@@ -9,7 +9,7 @@ import (
 
 func TestHandleGenerateRequiresSupportedVersion(t *testing.T) {
 	for _, path := range []string{
-		"/generate?seed=42&run_size=small&bench_version=9",
+		"/generate?seed=42&run_size=small&bench_version=10",
 		"/generate?seed=42&run_size=small&bench_version=garbage",
 	} {
 		rr := httptest.NewRecorder()
@@ -17,7 +17,7 @@ func TestHandleGenerateRequiresSupportedVersion(t *testing.T) {
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("%s: got %d, want 400", path, rr.Code)
 		}
-		if !strings.Contains(rr.Body.String(), "supported: 2, 3, 4, 5, 6, 7, 8") {
+		if !strings.Contains(rr.Body.String(), "supported: 2, 3, 4, 5, 6, 7, 8, 9") {
 			t.Errorf("%s: stale supported-version response: %q", path, rr.Body.String())
 		}
 	}
@@ -38,7 +38,7 @@ func TestHandleGenerateOmittedVersionIsDeprecatedV2Compatibility(t *testing.T) {
 }
 
 func TestHandleGenerateVersionedVectors(t *testing.T) {
-	for _, version := range []string{"2", "3", "4", "5", "6", "7", "8"} {
+	for _, version := range []string{"2", "3", "4", "5", "6", "7", "8", "9"} {
 		rr := httptest.NewRecorder()
 		handleGenerate(rr, httptest.NewRequest(http.MethodPost, "/generate?seed=42&run_size=small&bench_version="+version, nil))
 		if rr.Code != http.StatusOK {

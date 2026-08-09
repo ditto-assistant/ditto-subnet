@@ -2,9 +2,12 @@ package main
 
 import (
 	"math"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/ditto-assistant/dittobench-datagen/datagen"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -147,5 +150,100 @@ func TestSeedsForMath(t *testing.T) {
 	}
 	if got := seedsFor(0.001, 0.5, 1.645, 1.645); got != 1 {
 		t.Errorf("tiny sd must floor at 1 seed, got %d", got)
+	}
+}
+
+func TestParseBenchVersions(t *testing.T) {
+	got, err := parseBenchVersions(" 8,9,8 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []int{protocol.BenchVersionV8, protocol.BenchVersionV9}) {
+		t.Fatalf("versions=%v, want [8 9]", got)
+	}
+	for _, raw := range []string{"", ",", "9,garbage", "10"} {
+		if _, err := parseBenchVersions(raw); err == nil {
+			t.Errorf("parseBenchVersions(%q) unexpectedly succeeded", raw)
+		}
+	}
+}
+
+func TestSummarizeFamilyMixCountsAbsenceAndVariation(t *testing.T) {
+	mixes := []map[string]int{
+		{"set_effort": 1, "stale_context_web": 4},
+		{"set_effort": 1, "stale_context_web": 6},
+		{"set_effort": 1, "world_memory_update": 2},
+	}
+	got := summarizeFamilyMix(mixes)
+	if got.Runs != 3 || got.DistinctHistograms != 3 {
+		t.Fatalf("summary header=%+v", got)
+	}
+	byFamily := map[string]FamilyMixEntry{}
+	for _, entry := range got.Families {
+		byFamily[entry.Family] = entry
+	}
+	if entry := byFamily["set_effort"]; entry.RunsPresent != 3 || entry.Min != 1 || entry.Max != 1 || entry.Mean != 1 {
+		t.Errorf("set_effort=%+v", entry)
+	}
+	if entry := byFamily["stale_context_web"]; entry.RunsPresent != 2 || entry.Min != 0 || entry.Max != 6 || entry.Mean != 3.3333 {
+		t.Errorf("stale_context_web=%+v", entry)
+	}
+	if entry := byFamily["stale_context_web"]; entry.Variance != 6.2222 {
+		t.Errorf("stale_context_web variance=%v, want 6.2222", entry.Variance)
+	}
+	if entry := byFamily["world_memory_update"]; entry.RunsPresent != 1 || entry.Min != 0 || entry.Max != 2 || entry.Mean != 0.6667 {
+		t.Errorf("world_memory_update=%+v", entry)
+	}
+}
+
+func TestV9StudyRunReportsFinalFamilyMix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates several full datasets")
+	}
+	result := runVersion(protocol.BenchVersionV9, "full", 1, 3, "")
+	tool := summarizeFamilyMix(result.ToolMixes)
+	memory := summarizeFamilyMix(result.MemoryMixes)
+	if tool.Runs != 3 || len(tool.Families) != 53 || tool.DistinctHistograms < 2 {
+		t.Errorf("tool mix summary=%+v", tool)
+	}
+	if memory.Runs != 3 || len(memory.Families) != 22 || memory.DistinctHistograms < 2 {
+		t.Errorf("memory mix summary=%+v", memory)
+	}
+	for _, entry := range tool.Families {
+		if entry.Min < 1 || entry.RunsPresent != 3 {
+			t.Errorf("tool family lacks full-run floor: %+v", entry)
+		}
+	}
+	summary := result.summarize(0.007)
+	if _, ok := summary["strategies"]; ok {
+		t.Fatal("uncalibrated v9 study published simulated strategy evidence")
+	}
+	calibration := summary["score_calibration"].(map[string]string)
+	if calibration["status"] != "pending" || !strings.Contains(calibration["reason"], "explicit measured rate") {
+		t.Fatalf("v9 calibration warning=%v", calibration)
+	}
+	contract := summary["final_distribution_contract"].(map[string]any)
+	worldCounts := contract["world_action_counts"].(CountDistribution)
+	composedCounts := contract["composed_case_counts"].(CountDistribution)
+	if worldCounts.Min < datagen.V9FullWorldActionMinimum || worldCounts.Max > datagen.V9FullWorldActionTarget {
+		t.Errorf("world counts=%+v", worldCounts)
+	}
+	if composedCounts.Min < datagen.V9FullComposedCaseMinimum {
+		t.Errorf("composed counts=%+v", composedCounts)
+	}
+}
+
+func TestV9StudyDoesNotWriteUncalibratedGStudyInput(t *testing.T) {
+	dir := t.TempDir()
+	result := runVersion(protocol.BenchVersionV9, "small", 1, 2, dir)
+	if len(result.Runs) != 0 || len(result.Cases) != 0 {
+		t.Fatalf("v9 populated uncalibrated score runs: runs=%d cases=%d", len(result.Runs), len(result.Cases))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("v9 wrote uncalibrated G-study files: %v", entries)
 	}
 }

@@ -119,7 +119,7 @@ func GenerateMemorySuiteForVersion(r *rand.Rand, seed int64, n int, nWaves int, 
 		return suite, nil
 	}
 	if benchVersion >= protocol.BenchVersionV8 {
-		return generateV8WorldMemorySuite(seed, n, nWaves)
+		return generateV8WorldMemorySuite(seed, n, nWaves, benchVersion)
 	}
 
 	plan, err := persona.BuildPlanForVersion(seed, personaOptsFor(n), benchVersion)
@@ -634,7 +634,7 @@ func GenerateMemorySuiteForVersion(r *rand.Rand, seed int64, n int, nWaves int, 
 // derived from the same coherent world used by its tool cases. That world is
 // seeded once through the tool prerequisite boundary, so the memory waves stay
 // as empty staging markers and never duplicate ingestion.
-func generateV8WorldMemorySuite(seed int64, n, nWaves int) (MemorySuite, error) {
+func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (MemorySuite, error) {
 	if nWaves < 1 {
 		nWaves = 1
 	}
@@ -651,7 +651,7 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves int) (MemorySuite, error) 
 		return MemorySuite{}, fmt.Errorf("v8 world questions: %w", err)
 	}
 
-	integrity := v8WorldIntegrityCases(seed, world)
+	integrity := v8WorldIntegrityCases(seed, world, benchVersion)
 	suite := MemorySuite{
 		SeedingWaves:           nWaves,
 		WorldCases:             len(plans) + len(integrity) - v8WorldConversationalCaseCount,
@@ -664,7 +664,7 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves int) (MemorySuite, error) 
 		suite.Waves[i] = protocol.SeedRequest{UserID: PrimaryUser, Wave: i}
 	}
 	for _, plan := range plans {
-		plan.Case.BenchVersion = protocol.BenchVersionV8
+		plan.Case.BenchVersion = benchVersion
 		plan.Case.WritingProtected = append([]string(nil), plan.Constraints...)
 		suite.Cases = append(suite.Cases, StagedCase{
 			Case: plan.Case, RunAfterWave: 0,
@@ -691,7 +691,7 @@ const (
 // The three conversational slices deliberately carry three samples each. The
 // scorer takes the weakest slice, so one sample per slice would make a single
 // ordinary miss flip the entire factor between zero and one.
-func v8WorldIntegrityCases(seed int64, world universe.World) []StagedCase {
+func v8WorldIntegrityCases(seed int64, world universe.World, benchVersion int) []StagedCase {
 	const (
 		worldCanary    = "world-canary"
 		worldInjection = "world-injection-resistance"
@@ -702,7 +702,7 @@ func v8WorldIntegrityCases(seed int64, world universe.World) []StagedCase {
 		id := protocol.OpaqueCaseID(seed, "world-integrity", ordinal)
 		ordinal++
 		staged = append(staged, StagedCase{Case: protocol.MemoryCase{
-			BenchVersion: protocol.BenchVersionV8,
+			BenchVersion: benchVersion,
 			ID:           id, QuestionID: id, QuestionType: questionType,
 			Question: question, ExpectedAnswer: expected, AnswerKind: answerKind,
 		}, RunAfterWave: 0})

@@ -54,9 +54,9 @@ func main() {
 	flag.StringVar(&addr, "addr", "127.0.0.1:8787", "loopback listen address")
 	flag.Int64Var(&cfg.DefaultSeed, "seed", 123456789, "default dataset seed")
 	flag.StringVar(&cfg.DefaultRunSize, "run-size", "full", "default run size: small | medium | full")
-	flag.IntVar(&cfg.DefaultBenchVersion, "bench-version", protocol.BenchVersionV8, "default benchmark version: 7 | 8")
+	flag.IntVar(&cfg.DefaultBenchVersion, "bench-version", protocol.BenchVersionV8, "default benchmark version: 7 | 8 | 9")
 	flag.Parse()
-	cfg.SupportedVersions = []int{protocol.BenchVersionV7, protocol.BenchVersionV8}
+	cfg.SupportedVersions = []int{protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9}
 	if err := validateConfig(addr, cfg); err != nil {
 		log.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func validateConfig(addr string, cfg viewerConfig) error {
 		return fmt.Errorf("-addr must bind to loopback, got %q", host)
 	}
 	if !supportedViewerVersion(cfg.DefaultBenchVersion) {
-		return fmt.Errorf("-bench-version must be 7 or 8")
+		return fmt.Errorf("-bench-version must be 7, 8, or 9")
 	}
 	if _, ok := gen.ProfileForVersion(cfg.DefaultRunSize, cfg.DefaultBenchVersion); !ok {
 		return fmt.Errorf("-run-size must be small, medium, or full")
@@ -135,7 +135,7 @@ func datasetHandler(defaults viewerConfig) http.HandlerFunc {
 		}
 		version, err := parseInt(r.URL.Query().Get("bench_version"), defaults.DefaultBenchVersion)
 		if err != nil || !supportedViewerVersion(version) {
-			writeAPIError(w, http.StatusBadRequest, "bench_version must be 7 or 8")
+			writeAPIError(w, http.StatusBadRequest, "bench_version must be 7, 8, or 9")
 			return
 		}
 		runSize := strings.TrimSpace(r.URL.Query().Get("run_size"))
@@ -203,7 +203,7 @@ func memoryRecordSignature(userID string, pair protocol.MemoryPair) string {
 }
 
 func supportedViewerVersion(version int) bool {
-	return version == protocol.BenchVersionV7 || version == protocol.BenchVersionV8
+	return version == protocol.BenchVersionV7 || version == protocol.BenchVersionV8 || version == protocol.BenchVersionV9
 }
 
 func parseInt64(raw string, fallback int64) (int64, error) {

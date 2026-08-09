@@ -81,8 +81,9 @@ metadata. V7 remains available for side-by-side historical inspection.
 Run sizes: `small` (smoke), `medium`, `full` (the scored profile).
 
 `-bench-version` is required. Use the version published with the score you are
-auditing; never substitute the latest version. Supported immutable contracts are
-v2 through v8. For the public full-profile seed `123456789`, the canonical
+auditing; never substitute the latest version. Explicit generation supports v2
+through the pre-activation v9 contract; `CurrentBenchVersion` and the advertised
+runtime capability remain v8. For the public full-profile seed `123456789`, the canonical
 SHA-256 vectors are:
 
 | Version | Dataset epoch | SHA-256 |
@@ -94,6 +95,7 @@ SHA-256 vectors are:
 | 6 | `2026-10-01T00:00:00Z` | `38a0df83a95bdad271f80a271d59d676509290e2fd762683abd960952ff84016` |
 | 7 | `2026-11-01T00:00:00Z` | `f5f42f7a550e0bfef8ef2b14f810cbbd4b140ca5985e9f0cceaa509689d9e218` |
 | 8 | `2026-12-01T00:00:00Z` | `6a09587706c95b5f61d3e65e0e34b317fc8ce24d0c927c66864d2869c8728e98` |
+| 9 (pre-activation) | `2027-01-01T00:00:00Z` | `b12edd3649dece3af415ad289a24a1a8615b7d906773e718ee637da14cbd541f` |
 
 Each is regenerated and asserted by CI (`TestV2KnownVector` and friends), so a
 value here that disagrees with `cmd/generate` is a bug in this table, not in the
@@ -126,7 +128,7 @@ than keeping their own copies.
 
 - `cmd/generate`: the CLI entry point.
 - `cmd/generate-service`: the same generation behind HTTP
-  (`POST /generate?seed=&run_size=&bench_version=2|3|4|5|6|7` → DatasetArtifact JSON +
+  (`POST /generate?seed=&run_size=&bench_version=2|3|4|5|6|7|8|9` → DatasetArtifact JSON +
   `X-Dataset-SHA256` and `X-Bench-Version` headers), with the
   `Dockerfile`/`cloudbuild.yaml` the SN118 platform deploys it
   from. The deployment is private (IAM-gated) so platform infrastructure cannot
@@ -146,6 +148,11 @@ than keeping their own copies.
   it reports a G-study variance decomposition (seed vs. item vs. residual) and
   per-category difficulty/discrimination estimates, flagging saturated and floor
   categories; pure analysis, no LLM.
+- `cmd/vstudy`: deterministic multi-version generation and structural mix audit.
+  `-bench-versions 8,9 -run-size full` compares the frozen v8 contract with the
+  pre-activation v9 family mix and reports per-family minima, presence counts,
+  means, variances, and distinct histograms. V9 strategy and G-study outputs are
+  disabled until every emitted family has an explicit measured rate and source.
 - `gen`: the generation pipeline (tool cases, memory suite, write-then-read
   lifecycle chains, isolation graphs, artifact assembly and hashing).
   `gen.GenerateDataset(seed, profile, benchVersion)` is the canonical entry
