@@ -1,0 +1,112 @@
+[
+  {
+    "seeds": [
+      {
+        "user_id": "938fd4fd-7026-4126-b84d-5f2ef7e88656",
+        "pairs": [
+          {
+            "pair_id": "0ee9007f-546a-4b1b-afa6-82e9a039b069",
+            "session_id": "104d0687-d5e3-468c-8aa7-4e8a73efd426",
+            "timestamp": "2025-01-01T10:00:00Z",
+            "prompt": "Remember passphrase passphrase-05-01",
+            "response": "I stored it."
+          }
+        ]
+      }
+    ],
+    "run": {
+      "case_id": "cdb823cc-7a00-4532-ab18-bf3f6c98cceb",
+      "system_prompt": "Answer the question using the user's stored conversation memory. The current date is 2026/01/02 (Fri) 12:00. Use the available native memory tools as needed to search, scope, and fetch the relevant stored conversations before answering. Give a concise, direct answer. If the stored conversations do not contain enough information, explicitly say that the question cannot be answered from memory. Do not use external knowledge.",
+      "user_input": "What passphrase did I ask you to remember?",
+      "tools": [
+        {
+          "name": "search_memories",
+          "description": "Search past conversations and return compact memory summaries. Use fetch_memories for selected IDs that need full text. For named entities/topics, prefer search_subjects -\u003e search_memories_in_subjects.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "queries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Memory search queries"
+              }
+            },
+            "required": [
+              "queries"
+            ]
+          }
+        },
+        {
+          "name": "search_subjects",
+          "description": "Search the user's subject graph and return subject objects with id, name, description, and similarity.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "queries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Subject search queries"
+              }
+            },
+            "required": [
+              "queries"
+            ]
+          }
+        },
+        {
+          "name": "fetch_memories",
+          "description": "Fetch full conversation text for selected memory pair IDs.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "pairIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Memory pair IDs to fetch"
+              },
+              "stripImages": {
+                "type": "boolean",
+                "description": "Exclude images, default true"
+              }
+            },
+            "required": [
+              "pairIds"
+            ]
+          }
+        },
+        {
+          "name": "search_memories_in_subjects",
+          "description": "Semantic memory search inside one subject. Use focused queries; fetch selected IDs for full text.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "subject_id": {
+                "type": "string",
+                "description": "Subject ID from search_subjects or the prompt"
+              },
+              "queries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Focused queries within the subject"
+              }
+            },
+            "required": [
+              "subject_id",
+              "queries"
+            ]
+          }
+        }
+      ],
+      "bench_version": 9,
+      "user_id": "938fd4fd-7026-4126-b84d-5f2ef7e88656"
+    }
+  }
+]
