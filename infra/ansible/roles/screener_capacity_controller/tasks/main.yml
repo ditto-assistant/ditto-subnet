@@ -6,6 +6,7 @@
       - screener_capacity_source_review_secret_resource | length > 0
       - screener_capacity_builder_registry_service_account | length > 0
       - screener_capacity_builder_kaniko_image | length > 0
+      - screener_capacity_targon_org_slug | length > 0
       - screener_capacity_global_cap | int > 0
     fail_msg: "capacity controller bootstrap identity and source-review resource are required"
 

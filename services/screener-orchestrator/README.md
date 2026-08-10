@@ -37,6 +37,10 @@ scripts/targon-smoke.sh inventory
 scripts/targon-smoke.sh list
 ```
 
+Authenticated workload operations use Targon's organization-scoped v3 API.
+Production is pinned to the non-secret `ditto` organization slug; operators may
+override it for smoke tests with `TARGON_ORG_SLUG`.
+
 Production runs `python -m screener_capacity.controller` as a separate systemd
 unit from Platform so provider retries, spend controls, and capacity locks do
 not share the API process lifecycle.

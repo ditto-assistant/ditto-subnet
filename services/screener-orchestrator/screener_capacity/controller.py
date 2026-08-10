@@ -590,6 +590,7 @@ class Settings:
     interval_seconds: int
     targon_capability_file: Path | None
     targon_api_key_file: Path | None
+    targon_org_slug: str
     targon_prefix: str
     targon_resource: str
     targon_worker_env_file: Path | None
@@ -712,7 +713,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_error_at: str | None = None
     if settings.targon_api_key_file is not None:
         key = _read_secret_file(settings.targon_api_key_file)
-        targon_client = TargonClient(api_key=key)
+        targon_client = TargonClient(api_key=key, org_slug=settings.targon_org_slug)
         try:
             targon_rows = _owned_targon_workloads(targon_client, settings.targon_prefix)
             try:
@@ -1281,6 +1282,7 @@ def _settings(args: argparse.Namespace) -> Settings:
         targon_api_key_file=(
             Path(args.targon_api_key_file) if args.targon_api_key_file else None
         ),
+        targon_org_slug=args.targon_org_slug,
         targon_prefix=args.targon_prefix,
         targon_resource=args.targon_resource,
         targon_worker_env_file=(
@@ -1313,6 +1315,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval-seconds", type=int, default=30)
     parser.add_argument("--targon-capability-file")
     parser.add_argument("--targon-api-key-file")
+    parser.add_argument("--targon-org-slug", required=True)
     parser.add_argument("--targon-prefix", default="ditto-screener-prod-")
     parser.add_argument("--targon-resource", default="cpu-medium")
     parser.add_argument("--targon-worker-env-file")

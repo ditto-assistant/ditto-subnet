@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT="${TARGON_GCP_PROJECT:-ditto-app-dev}"
 SECRET="${TARGON_SECRET_NAME:-TARGON_API_KEY}"
+ORG_SLUG="${TARGON_ORG_SLUG:-ditto}"
 
 usage() {
   cat <<'EOF'
@@ -36,7 +37,7 @@ case "${command}" in
       --project="${PROJECT}" \
       --secret="${SECRET}" \
       | PYTHONPATH="${REPO_ROOT}" python3 -m screener_capacity.targon_cli \
-          --api-key-stdin "${command}" "$@"
+          --api-key-stdin --org-slug="${ORG_SLUG}" "${command}" "$@"
     ;;
   *)
     usage

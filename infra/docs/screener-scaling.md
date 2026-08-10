@@ -53,6 +53,8 @@ Manager resource metadata. Ansible reads the version with the capacity VM's
 attached identity under `no_log` and writes a mode-0600 file. Local operator
 probes use the monorepo's `services/screener-orchestrator/scripts/targon-smoke.sh`,
 which streams the secret directly from Secret Manager to the client process.
+The provider client uses Targon's organization-scoped v3 workload API and pins
+the non-secret production organization slug to `ditto`.
 
 ## Stand-up order
 

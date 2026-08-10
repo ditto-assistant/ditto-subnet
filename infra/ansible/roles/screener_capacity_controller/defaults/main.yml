@@ -17,6 +17,7 @@ screener_capacity_targon_platform_url: "{{ screener_capacity_platform_url }}"
 screener_capacity_global_cap: 6
 screener_capacity_jobs_per_slot: 6
 screener_capacity_interval_seconds: 30
+screener_capacity_targon_org_slug: ditto
 screener_capacity_targon_prefix: ditto-screener-prod-
 screener_capacity_targon_resource: cpu-medium
 screener_capacity_targon_provisioning_timeout_seconds: 600

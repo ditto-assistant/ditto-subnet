@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import sys
 import time
@@ -22,6 +23,7 @@ def _client(args: argparse.Namespace, *, authenticated: bool) -> TargonClient:
             raise SystemExit("Secret Manager returned an empty Targon API key")
     return TargonClient(
         api_key=api_key,
+        org_slug=args.org_slug,
         base_url=args.base_url,
         timeout_seconds=args.timeout_seconds,
     )
@@ -573,7 +575,8 @@ def _add_builder_probe(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="https://api.targon.com/tha/v2")
+    parser.add_argument("--base-url", default="https://api.targon.com/tha/v3")
+    parser.add_argument("--org-slug", default=os.environ.get("TARGON_ORG_SLUG"))
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
     parser.add_argument("--api-key-stdin", action="store_true")
     subparsers = parser.add_subparsers(dest="command", required=True)

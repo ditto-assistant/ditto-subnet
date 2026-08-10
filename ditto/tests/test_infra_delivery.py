@@ -76,3 +76,27 @@ def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
     assert '"compute.regionInstanceGroupManagers.get"' in terraform
     assert '"compute.regionInstanceGroupManagers.update"' in terraform
     assert "only_ditto_screener_fleet" in terraform
+
+
+def test_capacity_controller_activation_uses_org_scoped_targon_v3() -> None:
+    intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
+    assert re.search(
+        r"^enable_screener_capacity_controller\s*=\s*true$", intent, re.MULTILINE
+    )
+    role = ROOT / "infra" / "ansible" / "roles" / "screener_capacity_controller"
+    defaults = (role / "defaults" / "main.yml").read_text()
+    controller_unit = (
+        role / "templates" / "ditto-screener-capacity.service.j2"
+    ).read_text()
+    builder_unit = (role / "templates" / "ditto-image-builder.service.j2").read_text()
+    assert "screener_capacity_targon_org_slug: ditto" in defaults
+    assert (
+        "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in controller_unit
+    )
+    assert "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in builder_unit
+
+    targon_client = (
+        ROOT / "services" / "screener-orchestrator" / "screener_capacity" / "targon.py"
+    ).read_text()
+    assert 'base_url: str = "https://api.targon.com/tha/v3"' in targon_client
+    assert 'return f"/orgs/{slug}/workloads{suffix}"' in targon_client

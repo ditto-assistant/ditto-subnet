@@ -267,6 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--environment", default="prod")
     parser.add_argument("--controller-epoch")
     parser.add_argument("--targon-api-key-file", required=True)
+    parser.add_argument("--targon-org-slug", required=True)
     parser.add_argument("--targon-resource", default="cpu-small")
     parser.add_argument("--kaniko-image", required=True)
     parser.add_argument("--registry-service-account", required=True)
@@ -300,7 +301,7 @@ def main() -> int:
         environment=args.environment,
         epoch=epoch,
     )
-    client = TargonClient(api_key=targon_key)
+    client = TargonClient(api_key=targon_key, org_slug=args.targon_org_slug)
     settings.lock_file.parent.mkdir(parents=True, exist_ok=True)
     with settings.lock_file.open("w") as lock:
         try:

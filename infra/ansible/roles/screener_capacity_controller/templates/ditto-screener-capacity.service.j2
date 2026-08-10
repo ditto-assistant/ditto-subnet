@@ -20,6 +20,7 @@ ExecStart={{ screener_capacity_venv }}/bin/python -m screener_capacity.controlle
   --interval-seconds {{ screener_capacity_interval_seconds }} \
   --targon-capability-file {{ screener_capacity_config_dir }}/targon-capability.json \
   --targon-api-key-file {{ screener_capacity_config_dir }}/targon-api-key \
+  --targon-org-slug {{ screener_capacity_targon_org_slug }} \
   --targon-prefix {{ screener_capacity_targon_prefix }} \
   --targon-resource {{ screener_capacity_targon_resource }} \
   --targon-worker-env-file {{ screener_capacity_config_dir }}/worker-env.json \

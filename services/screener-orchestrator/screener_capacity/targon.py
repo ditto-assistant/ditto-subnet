@@ -1,4 +1,4 @@
-"""Small, dependency-free client for Targon's v2 workload API.
+"""Small, dependency-free client for Targon's v3 workload API.
 
 The API key is intentionally accepted only as an in-memory constructor value.
 Callers must obtain it from Secret Manager or a mode-0600 file; this module
@@ -8,6 +8,7 @@ never places it in argv, environment variables, exception text, or logs.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -43,13 +44,28 @@ class TargonClient:
         self,
         *,
         api_key: str | None,
-        base_url: str = "https://api.targon.com/tha/v2",
+        org_slug: str | None = None,
+        base_url: str = "https://api.targon.com/tha/v3",
         timeout_seconds: float = 15.0,
     ) -> None:
         key = api_key.strip() if api_key is not None else None
+        slug = org_slug.strip() if org_slug is not None else None
+        if slug and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug) is None:
+            raise ValueError("invalid Targon organization slug")
         self._api_key = key or None
+        self._org_slug = slug or None
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+
+    def _workload_path(self, suffix: str = "") -> str:
+        if self._org_slug is None:
+            raise TargonAPIError(
+                operation="resolve organization",
+                status=None,
+                reason="organization slug unavailable",
+            )
+        slug = urllib.parse.quote(self._org_slug, safe="")
+        return f"/orgs/{slug}/workloads{suffix}"
 
     def _request(
         self,
@@ -131,15 +147,32 @@ class TargonClient:
         return value
 
     def list_workloads(self, *, name: str | None = None) -> list[dict[str, Any]]:
-        query = "?limit=1000"
+        parameters = {"limit": "1000"}
         if name:
-            query += "&" + urllib.parse.urlencode({"name": name})
-        value = self._request("GET", f"/workloads{query}", retryable=True)
-        if not isinstance(value, dict) or not isinstance(value.get("items"), list):
-            raise TargonAPIError(
-                operation="GET /workloads", status=None, reason="invalid response shape"
-            )
-        return cast(list[dict[str, Any]], value["items"])
+            parameters["name"] = name
+        rows: list[dict[str, Any]] = []
+        seen_cursors: set[str] = set()
+        while True:
+            query = "?" + urllib.parse.urlencode(parameters)
+            value = self._request("GET", self._workload_path(query), retryable=True)
+            if not isinstance(value, dict) or not isinstance(value.get("items"), list):
+                raise TargonAPIError(
+                    operation="GET /workloads",
+                    status=None,
+                    reason="invalid response shape",
+                )
+            rows.extend(cast(list[dict[str, Any]], value["items"]))
+            cursor = value.get("next_cursor")
+            if cursor is None:
+                return rows
+            if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                raise TargonAPIError(
+                    operation="GET /workloads",
+                    status=None,
+                    reason="invalid pagination cursor",
+                )
+            seen_cursors.add(cursor)
+            parameters["cursor"] = cursor
 
     def create_rental(
         self,
@@ -164,7 +197,7 @@ class TargonClient:
             payload["commands"] = commands
         if args:
             payload["args"] = args
-        value = self._request("POST", "/workloads", payload=payload)
+        value = self._request("POST", self._workload_path(), payload=payload)
         if not isinstance(value, dict) or not isinstance(value.get("uid"), str):
             raise TargonAPIError(
                 operation="POST /workloads",
@@ -174,17 +207,22 @@ class TargonClient:
         return value
 
     def deploy(self, uid: str) -> dict[str, Any]:
-        value = self._request("POST", f"/workloads/{uid}/deploy")
+        value = self._request("POST", self._workload_path(f"/{uid}/deploy"))
         return value if isinstance(value, dict) else {}
 
     def update(self, uid: str, *, envs: list[dict[str, str]]) -> dict[str, Any]:
         value = self._request(
-            "PATCH", f"/workloads/{uid}", payload={"envs": envs}, retryable=True
+            "PATCH",
+            self._workload_path(f"/{uid}"),
+            payload={"envs": envs},
+            retryable=True,
         )
         return value if isinstance(value, dict) else {}
 
     def state(self, uid: str) -> dict[str, Any]:
-        value = self._request("GET", f"/workloads/{uid}/state", retryable=True)
+        value = self._request(
+            "GET", self._workload_path(f"/{uid}/state"), retryable=True
+        )
         if not isinstance(value, dict):
             raise TargonAPIError(
                 operation="GET /workloads/state",
@@ -196,7 +234,7 @@ class TargonClient:
     def exec(self, uid: str, command: list[str]) -> str:
         query = urllib.parse.urlencode([("command", part) for part in command])
         value = self._request(
-            "POST", f"/workloads/{uid}/exec?{query}", expect_text=True
+            "POST", self._workload_path(f"/{uid}/exec?{query}"), expect_text=True
         )
         return value if isinstance(value, str) else ""
 
@@ -204,19 +242,19 @@ class TargonClient:
         query = urllib.parse.urlencode({"tail": tail})
         value = self._request(
             "GET",
-            f"/workloads/{uid}/logs?{query}",
+            self._workload_path(f"/{uid}/logs?{query}"),
             expect_text=True,
             retryable=True,
         )
         return value if isinstance(value, str) else ""
 
     def suspend(self, uid: str) -> dict[str, Any]:
-        value = self._request("POST", f"/workloads/{uid}/suspend")
+        value = self._request("POST", self._workload_path(f"/{uid}/suspend"))
         return value if isinstance(value, dict) else {}
 
     def delete(self, uid: str) -> None:
         try:
-            self._request("DELETE", f"/workloads/{uid}", retryable=True)
+            self._request("DELETE", self._workload_path(f"/{uid}"), retryable=True)
         except TargonAPIError as error:
             if error.status != 404:
                 raise
