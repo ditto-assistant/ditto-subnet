@@ -101,3 +101,11 @@ def test_capacity_controller_activation_uses_org_scoped_targon_v3() -> None:
     ).read_text()
     assert 'base_url: str = "https://api.targon.com/tha/v3"' in targon_client
     assert 'return f"/orgs/{slug}/workloads{suffix}"' in targon_client
+
+    platform_prod = (
+        ROOT / "infra" / "ansible" / "host_vars" / "ditto-platform-prod.yml"
+    ).read_text()
+    assert (
+        'secret_screener_controller_api_token: "screener-controller-api-token-prod"'
+        in platform_prod
+    )
