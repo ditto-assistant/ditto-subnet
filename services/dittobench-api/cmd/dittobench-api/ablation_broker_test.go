@@ -206,9 +206,13 @@ func TestV9InterventionsReplayNonTargetLaneWithoutUpstream(t *testing.T) {
 		model := llm.HarnessModelForVersion(ablation.BenchVersionV9)
 		requestBody := `{"model":"` + model + `","messages":[{"role":"user","content":"same selected content"}]}`
 		ordinaryResponse := []byte(`{"choices":[{"message":{"role":"assistant","content":"ordinary"}}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`)
+		normalizedRequest, err := normalizeChatRequest([]byte(requestBody), model, ablation.BenchVersionV9)
+		if err != nil {
+			t.Fatal(err)
+		}
 		seedV9AblationTrace(broker, id, "case-replay-chat")
 		trace := broker.sessions[id].ablationTraces["case-replay-chat"]
-		trace.chat = []brokerAblationCall{{requestSHA256: ablationCallSHA256([]byte(requestBody)), response: ordinaryResponse}}
+		trace.chat = []brokerAblationCall{{requestSHA256: ablationCallSHA256(normalizedRequest), response: ordinaryResponse}}
 		responder, err := ablation.NewResponder(ablation.InterventionEmbedding, ablation.Budget{
 			MaxEmbeddingRequests: 1, MaxEmbeddingInputs: 1, MaxEmbeddingInputBytes: 1024,
 		})
