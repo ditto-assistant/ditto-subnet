@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,8 +18,12 @@ import (
 )
 
 func serveTestBroker(t *testing.T, broker *inferenceBroker) (int, func()) {
+	return serveTestBrokerOn(t, broker, "127.0.0.1:0")
+}
+
+func serveTestBrokerOn(t *testing.T, broker *inferenceBroker, address string) (int, func()) {
 	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.Listen("tcp4", address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +106,82 @@ func TestLocalSandboxToolEndpointSurvivesDockerDesktopNAT(t *testing.T) {
 	observed := toolServer.Observed(toolCase.ID)
 	if len(observed) != 1 || observed[0].Name != "search_web" {
 		t.Fatalf("observed=%+v", observed)
+	}
+}
+
+func TestDockerDesktopNATToolObservationSmoke(t *testing.T) {
+	if os.Getenv("DITTOBENCH_DOCKER_NAT_TEST") != "1" {
+		t.Skip("set DITTOBENCH_DOCKER_NAT_TEST=1 for the Docker Desktop smoke")
+	}
+	broker := newInferenceBroker(1)
+	port, stopBroker := serveTestBrokerOn(t, broker, "0.0.0.0:0")
+	defer stopBroker()
+	t.Setenv("DITTOBENCH_BROKER_PORT", strconv.Itoa(port))
+
+	toolServer := toolexec.NewServer()
+	toolCase := protocol.ToolCase{
+		ID:            "docker-nat-case",
+		Category:      "web_search",
+		ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}},
+		MaxToolCalls:  1,
+	}
+	toolServer.Register(toolCase.ID, toolexec.BuildFixture(42, toolCase))
+	var observedRemoteAddr string
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observedRemoteAddr = r.RemoteAddr
+		toolServer.ServeHTTP(w, r)
+	})
+	server := &server{broker: broker, allowPrivate: true}
+	const inspectedContainerIP = "172.30.0.2"
+	endpoint, stopTool, err := server.startToolServer(handler, inspectedContainerIP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopTool()
+
+	caseEndpoint := endpoint.forCase(toolCase.ID, "docker-user")
+	body, err := json.Marshal(protocol.ToolExecRequest{
+		CaseID: toolCase.ID, UserID: "docker-user", Name: "search_web",
+		Args: json.RawMessage(`{"query":"veltrix"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerPost := func(target string) string {
+		t.Helper()
+		output, runErr := exec.Command(
+			"docker", "run", "--rm", "--pull=never", "--network=bridge",
+			"curlimages/curl:8.16.0", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+			"-H", "Content-Type: application/json", "--data-binary", string(body), target,
+		).Output()
+		if runErr != nil {
+			t.Fatalf("Docker Desktop tool POST failed: %v", runErr)
+		}
+		return string(output)
+	}
+
+	parsed, err := url.Parse(caseEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Set("cap", "cross-container-spoof")
+	parsed.RawQuery = query.Encode()
+	if status := dockerPost(parsed.String()); status != strconv.Itoa(http.StatusUnauthorized) {
+		t.Fatalf("spoof status=%s", status)
+	}
+	if got := toolServer.Observed(toolCase.ID); got != nil {
+		t.Fatalf("spoof was observed: %+v", got)
+	}
+
+	if status := dockerPost(caseEndpoint); status != strconv.Itoa(http.StatusOK) {
+		t.Fatalf("authorized NAT status=%s", status)
+	}
+	if sourceIP(observedRemoteAddr) == inspectedContainerIP {
+		t.Fatalf("smoke did not traverse Docker Desktop NAT: remote=%q", observedRemoteAddr)
+	}
+	if got := toolServer.Observed(toolCase.ID); len(got) != 1 || got[0].Name != "search_web" {
+		t.Fatalf("authorized NAT observation=%+v", got)
 	}
 }
 
