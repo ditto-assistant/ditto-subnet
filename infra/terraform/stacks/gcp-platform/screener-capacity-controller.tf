@@ -117,9 +117,6 @@ resource "google_project_iam_custom_role" "screener_controller_fleet_reconciler"
   role_id = "dittoScreenerFleetReconciler"
   title   = "Ditto screener fleet reconciler"
   permissions = [
-    # `gcloud ... managed describe` checks whether the regional MIG has an
-    # autoscaler before returning targetSize.
-    "compute.autoscalers.list",
     "compute.instanceGroupManagers.get",
     "compute.instanceGroupManagers.update",
   ]
@@ -136,6 +133,27 @@ resource "google_project_iam_member" "screener_controller_fleet_reconciler" {
     description = "Restrict controller mutations to the production screener MIG."
     expression  = "resource.name.endsWith('/regions/${var.region}/instanceGroupManagers/ditto-screener-fleet')"
   }
+}
+
+# `gcloud ... managed describe` checks the project-level autoscaler collection
+# before returning targetSize. Collection-list permissions cannot satisfy the
+# single-MIG resource condition above, so keep this one read-only permission in
+# a separate unconditional role rather than widening MIG update access.
+resource "google_project_iam_custom_role" "screener_controller_autoscaler_reader" {
+  count   = local.screener_capacity_controller_count
+  project = var.project
+  role_id = "dittoScreenerAutoscalerReader"
+  title   = "Ditto screener autoscaler reader"
+  permissions = [
+    "compute.autoscalers.list",
+  ]
+}
+
+resource "google_project_iam_member" "screener_controller_autoscaler_reader" {
+  count   = local.screener_capacity_controller_count
+  project = var.project
+  role    = google_project_iam_custom_role.screener_controller_autoscaler_reader[0].name
+  member  = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
 
 module "screener_capacity_controller_vm" {
