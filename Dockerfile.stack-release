@@ -2,6 +2,7 @@ FROM scratch
 
 ARG DITTO_VERSION
 ARG DITTO_REVISION
+ARG TARGETARCH
 ARG VALIDATOR_COMPATIBILITY_EPOCH=2
 ARG VALIDATOR_UPDATE_PROTOCOL=1
 ARG VALIDATOR_COMPOSE_SCHEMA=1
@@ -14,6 +15,11 @@ LABEL org.opencontainers.image.source="https://github.com/ditto-assistant/ditto-
       io.heyditto.validator.update-protocol="$VALIDATOR_UPDATE_PROTOCOL" \
       io.heyditto.validator.compose-schema="$VALIDATOR_COMPOSE_SCHEMA"
 
-COPY build/stack-release/ /release/
+# Each descriptor child binds single-platform runtime manifests. Frozen host
+# updaters authenticate component labels with `docker image inspect`; when the
+# containerd image store is enabled, inspecting a multi-platform index returns
+# the index itself (which has no image config or labels). BuildKit selects the
+# bundle matching the descriptor child's own target architecture.
+COPY build/stack-release-${TARGETARCH}/ /release/
 
 CMD ["/release/manifest.env"]

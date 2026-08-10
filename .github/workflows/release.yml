@@ -754,11 +754,13 @@ jobs:
           build-args: |
             DITTOBENCH_SOURCE_SHA=${{ steps.dittobench-source.outputs.revision }}
             DITTOBENCH_SOFTWARE_VERSION=${{ needs.release.outputs.version }}
-          # compat-2 is also consumed by frozen v0.44.4 host updaters. Keep
-          # their canonical component identity while recording the exact
-          # monorepo build provenance in separate immutable labels.
+          # Bridge the frozen v0.47 updater generation first. That client
+          # requires the monorepo source identity. The shipped updater accepts
+          # both this identity and the standalone compatibility identity, so a
+          # subsequent release can restore the v0.44 compatibility label after
+          # every observed v0.47 host has crossed this bridge.
           labels: |
-            org.opencontainers.image.source=https://github.com/ditto-assistant/dittobench-api
+            org.opencontainers.image.source=https://github.com/ditto-assistant/ditto-subnet
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
             org.opencontainers.image.revision=${{ steps.dittobench-source.outputs.revision }}
             io.heyditto.validator.build-source=https://github.com/ditto-assistant/ditto-subnet
@@ -1135,7 +1137,7 @@ jobs:
           declare -A sources=(
             ["$VALIDATOR_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
             ["$SANDBOX_DOCKER_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
-            ["$DITTOBENCH_API_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
+            ["$DITTOBENCH_API_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
             ["$MODEL_RELAY_REPOSITORY"]="https://github.com/ditto-assistant/dittobench-api"
           )
           declare -A revisions=(
@@ -1236,67 +1238,93 @@ jobs:
           docker run --rm --platform linux/amd64 --entrypoint python "$exact" -c \
             'from pathlib import Path; p=Path("/app/pylon_service/.venv/lib/python3.13/site-packages/turbobt/substrate/pallets/author.py"); s=p.read_text(); assert "isinstance(subscription_id_raw, str)" in s'
 
-      # Frozen compat-2 hosts use Docker's local image inspector to authenticate
-      # component labels before they drain. Keep the canonical release indexes
-      # (and their provenance/SBOM attachment manifests) intact, while binding
-      # a runtime-only index with the exact same platform children into the
-      # signed descriptor. This avoids old Docker engines selecting an
-      # attestation-only unknown/unknown child during local inspection.
-      - name: Publish frozen-updater runtime indexes
+      # Frozen compat-2 hosts authenticate components with Docker's local image
+      # inspector before they drain. Bind each descriptor architecture directly
+      # to the matching canonical child manifest: containerd-backed Docker
+      # stores inspect an index as an index, which has no config labels.
+      - name: Resolve frozen-updater runtime manifests
         id: compat-runtime
         env:
-          REVISION: ${{ needs.release.outputs.commit_sha }}
           VALIDATOR_DIGEST: ${{ needs.build-validator.outputs.digest }}
           SANDBOX_DOCKER_DIGEST: ${{ needs.build-sandbox-docker.outputs.digest }}
           DITTOBENCH_API_DIGEST: ${{ needs.build-dittobench.outputs.scorer_digest }}
           MODEL_RELAY_DIGEST: ${{ needs.build-dittobench.outputs.relay_digest }}
           PYLON_DIGEST: ${{ needs.build-pylon.outputs.digest }}
         run: |
-          runtime_tag="compat-runtime-$COMPATIBILITY_EPOCH-$REVISION"
-          publish() {
-            local output="$1" repository="$2" digest="$3" runtime_digest
-            shift 3
-            runtime_digest="$(
-              scripts/publish-compat-runtime-index.sh \
-                "$repository" "$digest" "$runtime_tag" "$@"
+          resolve() {
+            local output="$1" repository="$2" digest="$3" architecture="$4"
+            local raw child_digest
+            raw="$(docker buildx imagetools inspect --raw "$repository@$digest")"
+            child_digest="$(
+              jq -er --arg architecture "$architecture" '
+                [.manifests[] |
+                  select(.platform.os == "linux" and .platform.architecture == $architecture)] |
+                if length == 1 then .[0].digest
+                else error("expected exactly one canonical child for linux/" + $architecture)
+                end
+              ' <<<"$raw"
             )"
-            printf '%s=%s\n' "$output" "$runtime_digest" >>"$GITHUB_OUTPUT"
+            [[ "$child_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf '%s=%s\n' "$output" "$child_digest" >>"$GITHUB_OUTPUT"
           }
-          publish validator_digest "$VALIDATOR_REPOSITORY" "$VALIDATOR_DIGEST" \
-            linux/amd64 linux/arm64
-          publish sandbox_docker_digest "$SANDBOX_DOCKER_REPOSITORY" \
-            "$SANDBOX_DOCKER_DIGEST" linux/amd64 linux/arm64
-          publish dittobench_api_digest "$DITTOBENCH_API_REPOSITORY" \
-            "$DITTOBENCH_API_DIGEST" linux/amd64 linux/arm64
-          publish model_relay_digest "$MODEL_RELAY_REPOSITORY" \
-            "$MODEL_RELAY_DIGEST" linux/amd64 linux/arm64
-          publish pylon_digest "$PYLON_REPOSITORY" "$PYLON_DIGEST" linux/amd64
+          for architecture in amd64 arm64; do
+            resolve "validator_${architecture}_digest" "$VALIDATOR_REPOSITORY" \
+              "$VALIDATOR_DIGEST" "$architecture"
+            resolve "sandbox_docker_${architecture}_digest" \
+              "$SANDBOX_DOCKER_REPOSITORY" "$SANDBOX_DOCKER_DIGEST" "$architecture"
+            resolve "dittobench_api_${architecture}_digest" \
+              "$DITTOBENCH_API_REPOSITORY" "$DITTOBENCH_API_DIGEST" "$architecture"
+            resolve "model_relay_${architecture}_digest" \
+              "$MODEL_RELAY_REPOSITORY" "$MODEL_RELAY_DIGEST" "$architecture"
+          done
+          # Pylon is currently published for amd64 only. Both descriptor
+          # children keep its exact runtime manifest; arm64 stack activation
+          # remains a separately supervised boundary, as it was before this
+          # bridge.
+          resolve pylon_digest "$PYLON_REPOSITORY" "$PYLON_DIGEST" amd64
 
-      - name: Render the digest-bound stack bundle
+      - name: Render the architecture-bound stack bundles
         run: |
-          uv run python scripts/build-stack-release.py \
-            --compose docker-compose.yml \
-            --output build/stack-release \
-            --version "${{ needs.release.outputs.version }}" \
-            --revision "${{ needs.release.outputs.commit_sha }}" \
-            --dittobench-revision "${{ needs.build-dittobench.outputs.revision }}" \
-            --compatibility-epoch "$COMPATIBILITY_EPOCH" \
-            --update-protocol "$UPDATE_PROTOCOL" \
-            --heartbeat-protocol "$HEARTBEAT_PROTOCOL" \
-            --compose-schema "$COMPOSE_SCHEMA" \
-            --validator-image "$VALIDATOR_REPOSITORY@${{ steps.compat-runtime.outputs.validator_digest }}" \
-            --sandbox-docker-image "$SANDBOX_DOCKER_REPOSITORY@${{ steps.compat-runtime.outputs.sandbox_docker_digest }}" \
-            --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@${{ steps.compat-runtime.outputs.dittobench_api_digest }}" \
-            --model-relay-image "$MODEL_RELAY_REPOSITORY@${{ steps.compat-runtime.outputs.model_relay_digest }}" \
-            --ollama-image "$OLLAMA_IMAGE" \
-            --pylon-image "$PYLON_REPOSITORY@${{ steps.compat-runtime.outputs.pylon_digest }}"
-          test "$(grep -c '^' build/stack-release/manifest.env)" = 14
-          ! grep -qE '(^|[[:space:]])build:' build/stack-release/compose.yml
+          for architecture in amd64 arm64; do
+            case "$architecture" in
+              amd64)
+                validator_digest='${{ steps.compat-runtime.outputs.validator_amd64_digest }}'
+                sandbox_digest='${{ steps.compat-runtime.outputs.sandbox_docker_amd64_digest }}'
+                api_digest='${{ steps.compat-runtime.outputs.dittobench_api_amd64_digest }}'
+                relay_digest='${{ steps.compat-runtime.outputs.model_relay_amd64_digest }}'
+                ;;
+              arm64)
+                validator_digest='${{ steps.compat-runtime.outputs.validator_arm64_digest }}'
+                sandbox_digest='${{ steps.compat-runtime.outputs.sandbox_docker_arm64_digest }}'
+                api_digest='${{ steps.compat-runtime.outputs.dittobench_api_arm64_digest }}'
+                relay_digest='${{ steps.compat-runtime.outputs.model_relay_arm64_digest }}'
+                ;;
+            esac
+            uv run python scripts/build-stack-release.py \
+              --compose docker-compose.yml \
+              --output "build/stack-release-$architecture" \
+              --version "${{ needs.release.outputs.version }}" \
+              --revision "${{ needs.release.outputs.commit_sha }}" \
+              --dittobench-revision "${{ needs.build-dittobench.outputs.revision }}" \
+              --compatibility-epoch "$COMPATIBILITY_EPOCH" \
+              --update-protocol "$UPDATE_PROTOCOL" \
+              --heartbeat-protocol "$HEARTBEAT_PROTOCOL" \
+              --compose-schema "$COMPOSE_SCHEMA" \
+              --validator-image "$VALIDATOR_REPOSITORY@$validator_digest" \
+              --sandbox-docker-image "$SANDBOX_DOCKER_REPOSITORY@$sandbox_digest" \
+              --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@$api_digest" \
+              --model-relay-image "$MODEL_RELAY_REPOSITORY@$relay_digest" \
+              --ollama-image "$OLLAMA_IMAGE" \
+              --pylon-image "$PYLON_REPOSITORY@${{ steps.compat-runtime.outputs.pylon_digest }}"
+            test "$(grep -c '^' "build/stack-release-$architecture/manifest.env")" = 14
+            ! grep -qE '(^|[[:space:]])build:' \
+              "build/stack-release-$architecture/compose.yml"
+          done
 
       - name: Boot the exact release runtime dependencies
         run: |
           scripts/test-validator-stack-release-runtime.sh \
-            build/stack-release/compose.yml
+            build/stack-release-amd64/compose.yml
 
       - name: Build and publish the immutable stack descriptor
         id: stack
@@ -1338,8 +1366,8 @@ jobs:
             docker create --platform "$platform" --name "$container" "$child_exact"
             trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
             docker cp "$container:/release/." "build/stack-smoke-${platform#linux/}"
-            cmp build/stack-release/manifest.env "build/stack-smoke-${platform#linux/}/manifest.env"
-            cmp build/stack-release/compose.yml "build/stack-smoke-${platform#linux/}/compose.yml"
+            cmp "build/stack-release-${platform#linux/}/manifest.env" "build/stack-smoke-${platform#linux/}/manifest.env"
+            cmp "build/stack-release-${platform#linux/}/compose.yml" "build/stack-smoke-${platform#linux/}/compose.yml"
             docker rm "$container"
             trap - EXIT
           done

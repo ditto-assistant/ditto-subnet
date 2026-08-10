@@ -314,10 +314,20 @@ def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None
         "Promote only the authenticated stack descriptor",
     )["run"]
 
-    frozen_source = "https://github.com/ditto-assistant/dittobench-api"
+    # The first transition release must satisfy the frozen v0.47 updater,
+    # while the relay retains its standalone compatibility identity. The
+    # released updater accepts both scorer identities, allowing a subsequent
+    # release to switch compat-2 back for v0.44 hosts.
+    assert (
+        "org.opencontainers.image.source="
+        "https://github.com/ditto-assistant/ditto-subnet" in scorer["with"]["labels"]
+    )
+    assert (
+        "org.opencontainers.image.source="
+        "https://github.com/ditto-assistant/dittobench-api" in relay["with"]["labels"]
+    )
     for image in (scorer, relay):
         labels = image["with"]["labels"]
-        assert f"org.opencontainers.image.source={frozen_source}" in labels
         assert "org.opencontainers.image.version=" in labels
         assert "org.opencontainers.image.revision=" in labels
         assert "io.heyditto.validator.build-source=" in labels
@@ -327,32 +337,47 @@ def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None
     assert 'test "$promoted" = "$STACK_DIGEST"' in promotion
 
 
-def test_frozen_updater_descriptor_uses_attachment_free_runtime_indexes() -> None:
+def test_frozen_updater_descriptor_uses_direct_platform_manifests() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     assembly = workflow["jobs"]["assemble-stack"]
-    runtime = _step(assembly["steps"], "Publish frozen-updater runtime indexes")
-    render = _step(assembly["steps"], "Render the digest-bound stack bundle")["run"]
+    runtime = _step(assembly["steps"], "Resolve frozen-updater runtime manifests")
+    render = _step(assembly["steps"], "Render the architecture-bound stack bundles")[
+        "run"
+    ]
 
     assert runtime["id"] == "compat-runtime"
-    assert "scripts/publish-compat-runtime-index.sh" in runtime["run"]
-    assert "linux/amd64 linux/arm64" in runtime["run"]
-    assert '"$PYLON_DIGEST" linux/amd64' in runtime["run"]
-    assert "compat-runtime-$COMPATIBILITY_EPOCH-$REVISION" in runtime["run"]
+    assert "scripts/publish-compat-runtime-index.sh" not in runtime["run"]
+    assert 'select(.platform.os == "linux"' in runtime["run"]
+    assert "for architecture in amd64 arm64" in runtime["run"]
+    assert (
+        'resolve pylon_digest "$PYLON_REPOSITORY" "$PYLON_DIGEST" amd64'
+        in runtime["run"]
+    )
 
     outputs = {
-        "validator_digest",
-        "sandbox_docker_digest",
-        "dittobench_api_digest",
-        "model_relay_digest",
+        f"{component}_{architecture}_digest"
+        for component in (
+            "validator",
+            "sandbox_docker",
+            "dittobench_api",
+            "model_relay",
+        )
+        for architecture in ("amd64", "arm64")
+    } | {
         "pylon_digest",
     }
     for output in outputs:
         assert f"steps.compat-runtime.outputs.{output}" in render
 
-    # Canonical build indexes remain the provenance-bearing source. Only the
-    # signed descriptor switches to aliases composed from their exact runtime
-    # children.
+    # Canonical build indexes remain the provenance-bearing source. Each signed
+    # descriptor child binds direct runtime children selected from that index.
     assert "needs.build-validator.outputs.digest" not in render
+    assert "build/stack-release-$architecture" in render
+    dockerfile = (
+        RELEASE_WORKFLOW_PATH.parents[2] / "Dockerfile.stack-release"
+    ).read_text()
+    assert "ARG TARGETARCH" in dockerfile
+    assert "COPY build/stack-release-${TARGETARCH}/ /release/" in dockerfile
     verify = _step(assembly["steps"], "Verify every first-party multi-platform index")[
         "run"
     ]
@@ -439,10 +464,13 @@ def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     assembly = workflow["jobs"]["assemble-stack"]
     verify = _step(assembly["steps"], "Verify the patched Pylon artifact")
     assert "isinstance(subscription_id_raw, str)" in verify["run"]
-    runtime = _step(assembly["steps"], "Publish frozen-updater runtime indexes")
+    runtime = _step(assembly["steps"], "Resolve frozen-updater runtime manifests")
     assert runtime["env"]["PYLON_DIGEST"] == "${{ needs.build-pylon.outputs.digest }}"
-    assert '"$PYLON_DIGEST" linux/amd64' in runtime["run"]
-    render = _step(assembly["steps"], "Render the digest-bound stack bundle")
+    assert (
+        'resolve pylon_digest "$PYLON_REPOSITORY" "$PYLON_DIGEST" amd64'
+        in runtime["run"]
+    )
+    render = _step(assembly["steps"], "Render the architecture-bound stack bundles")
     assert "steps.compat-runtime.outputs.pylon_digest" in render["run"]
 
 
@@ -452,7 +480,7 @@ def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> 
     render_index = next(
         index
         for index, step in enumerate(steps)
-        if step.get("name") == "Render the digest-bound stack bundle"
+        if step.get("name") == "Render the architecture-bound stack bundles"
     )
     smoke_index = next(
         index
@@ -469,7 +497,7 @@ def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> 
     assert (
         "scripts/test-validator-stack-release-runtime.sh" in steps[smoke_index]["run"]
     )
-    assert "build/stack-release/compose.yml" in steps[smoke_index]["run"]
+    assert "build/stack-release-amd64/compose.yml" in steps[smoke_index]["run"]
 
 
 def test_release_scopes_each_docker_layer_cache_to_one_image() -> None:
