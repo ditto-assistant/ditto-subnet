@@ -1580,38 +1580,55 @@ func TestInferenceBrokerPrunesUnactivatedSessionsBeforeCapacityCheck(t *testing.
 	}
 }
 
-func TestToolRouteIsSourceBoundAndRemoved(t *testing.T) {
+func toolRouteRequest(
+	t *testing.T,
+	route registeredToolRoute,
+	method, remoteAddr, capabilityCaseID, capabilityUserID, bodyCaseID, bodyUserID string,
+) *http.Request {
+	t.Helper()
+	base := "http://broker.test/v1/tools/" + route.id + "/tool"
+	endpoint := route.endpoint(base, capabilityCaseID, capabilityUserID)
+	var body io.Reader
+	if method == http.MethodPost {
+		raw, err := json.Marshal(protocol.ToolExecRequest{
+			CaseID: bodyCaseID, UserID: bodyUserID, Name: "search_web",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = bytes.NewReader(raw)
+	}
+	request := httptest.NewRequest(method, endpoint, body)
+	request.SetPathValue("id", route.id)
+	request.RemoteAddr = remoteAddr
+	return request
+}
+
+func TestToolRouteRequiresSourceAndCaseCapabilityInProduction(t *testing.T) {
 	broker := newInferenceBroker(1)
 	called := 0
-	id, stop, err := broker.registerTool(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	route, stop, err := broker.registerTool(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called++
 		if r.URL.Path != "/tool" {
 			t.Errorf("forwarded path = %q", r.URL.Path)
 		}
+		if r.URL.RawQuery != "" {
+			t.Errorf("capability query forwarded to tool handler: %q", r.URL.RawQuery)
+		}
 		w.WriteHeader(http.StatusNoContent)
-	}), "192.0.2.20")
+	}), "192.0.2.20", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/tools/route/tool", nil)
-	request.SetPathValue("id", id)
-	request.RemoteAddr = "192.0.2.21:1234"
+	request := toolRouteRequest(t, route, http.MethodPost, "192.0.2.21:1234", "case-a", "user-a", "case-a", "user-a")
 	recorder := httptest.NewRecorder()
 	broker.handleTool(recorder, request)
 	if recorder.Code != http.StatusUnauthorized || called != 0 {
 		t.Fatalf("sibling source status=%d called=%d", recorder.Code, called)
 	}
 
-	request.Method = http.MethodGet
-	recorder = httptest.NewRecorder()
-	broker.handleTool(recorder, request)
-	if recorder.Code != http.StatusNoContent || called != 0 {
-		t.Fatalf("self-check status=%d called=%d", recorder.Code, called)
-	}
-
-	request.Method = http.MethodPost
-	request.RemoteAddr = "192.0.2.20:1234"
+	request = toolRouteRequest(t, route, http.MethodPost, "192.0.2.20:1234", "case-a", "user-a", "case-a", "user-a")
 	recorder = httptest.NewRecorder()
 	broker.handleTool(recorder, request)
 	if recorder.Code != http.StatusNoContent || called != 1 {
@@ -1626,25 +1643,158 @@ func TestToolRouteIsSourceBoundAndRemoved(t *testing.T) {
 	}
 }
 
+func TestToolRouteHealthCheckRequiresDedicatedCapability(t *testing.T) {
+	broker := newInferenceBroker(1)
+	route, stop, err := broker.registerTool(http.NotFoundHandler(), "192.0.2.20", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	request := httptest.NewRequest(http.MethodGet, "http://broker.test/v1/tools/"+route.id+"/tool", nil)
+	request.SetPathValue("id", route.id)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated health status=%d", recorder.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, route.healthEndpoint("http://broker.test/v1/tools/"+route.id+"/tool"), nil)
+	request.SetPathValue("id", route.id)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder = httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("authenticated health status=%d", recorder.Code)
+	}
+}
+
+func TestToolRouteAllowsDockerDesktopNATOnlyWithCaseCapability(t *testing.T) {
+	broker := newInferenceBroker(1)
+	called := 0
+	route, stop, err := broker.registerTool(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called++
+		w.WriteHeader(http.StatusNoContent)
+	}), "172.30.0.2", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	request := toolRouteRequest(t, route, http.MethodPost, "192.168.65.1:1234", "case-a", "user-a", "case-a", "user-a")
+	recorder := httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusNoContent || called != 1 {
+		t.Fatalf("NAT capability status=%d called=%d", recorder.Code, called)
+	}
+
+	request = toolRouteRequest(t, route, http.MethodPost, "192.168.65.1:1234", "case-a", "user-a", "case-a", "user-a")
+	query := request.URL.Query()
+	query.Set("cap", "not-the-capability")
+	request.URL.RawQuery = query.Encode()
+	recorder = httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusUnauthorized || called != 1 {
+		t.Fatalf("NAT spoof status=%d called=%d", recorder.Code, called)
+	}
+}
+
+func TestToolRouteCapabilityIsBoundToRunCaseAndUser(t *testing.T) {
+	broker := newInferenceBroker(1)
+	called := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called++
+		w.WriteHeader(http.StatusNoContent)
+	})
+	runA, stopA, err := broker.registerTool(handler, "172.30.0.2", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopA()
+	runB, stopB, err := broker.registerTool(handler, "172.30.0.3", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopB()
+
+	tests := []struct {
+		name               string
+		capCase, capUser   string
+		bodyCase, bodyUser string
+		mutate             func(*http.Request)
+	}{
+		{name: "wrong case", capCase: "case-a", capUser: "user-a", bodyCase: "case-b", bodyUser: "user-a"},
+		{name: "wrong user", capCase: "case-a", capUser: "user-a", bodyCase: "case-a", bodyUser: "user-b"},
+		{name: "wrong run", capCase: "case-a", capUser: "user-a", bodyCase: "case-a", bodyUser: "user-a", mutate: func(r *http.Request) {
+			r.SetPathValue("id", runB.id)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := toolRouteRequest(t, runA, http.MethodPost, "192.168.65.1:1234", test.capCase, test.capUser, test.bodyCase, test.bodyUser)
+			if test.mutate != nil {
+				test.mutate(request)
+			}
+			recorder := httptest.NewRecorder()
+			broker.handleTool(recorder, request)
+			if recorder.Code != http.StatusUnauthorized || called != 0 {
+				t.Fatalf("status=%d called=%d", recorder.Code, called)
+			}
+		})
+	}
+}
+
+func TestToolRouteRejectsMalformedAndOversizedAuthenticatedBodies(t *testing.T) {
+	broker := newInferenceBroker(1)
+	route, stop, err := broker.registerTool(http.NotFoundHandler(), "172.30.0.2", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	base := route.endpoint("http://broker.test/v1/tools/"+route.id+"/tool", "case-a", "user-a")
+
+	for _, test := range []struct {
+		name string
+		body io.Reader
+		want int
+	}{
+		{name: "malformed", body: strings.NewReader(`{"case_id":`), want: http.StatusBadRequest},
+		{name: "oversized", body: strings.NewReader(strings.Repeat("x", toolRouteBodyLimit+1)), want: http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, base, test.body)
+			request.SetPathValue("id", route.id)
+			request.RemoteAddr = "192.168.65.1:1234"
+			recorder := httptest.NewRecorder()
+			broker.handleTool(recorder, request)
+			if recorder.Code != test.want {
+				t.Fatalf("status=%d want=%d", recorder.Code, test.want)
+			}
+		})
+	}
+}
+
 func TestToolRouteRejectsOverCapacityBeforeReadingBody(t *testing.T) {
 	broker := newInferenceBroker(1)
 	called := false
-	id, stop, err := broker.registerTool(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	registration, stop, err := broker.registerTool(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		called = true
-	}), "192.0.2.80")
+	}), "192.0.2.80", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stop()
 	broker.mu.RLock()
-	route := broker.tools[id]
+	route := broker.tools[registration.id]
 	broker.mu.RUnlock()
 	for range brokerPerSourceConcurrency {
 		route.slots <- struct{}{}
 	}
 	body := &readTrackingBody{}
-	request := httptest.NewRequest(http.MethodPost, "/v1/tools/route/tool", body)
-	request.SetPathValue("id", id)
+	endpoint := registration.endpoint("http://broker.test/v1/tools/"+registration.id+"/tool", "case-a", "user-a")
+	request := httptest.NewRequest(http.MethodPost, endpoint, body)
+	request.SetPathValue("id", registration.id)
 	request.RemoteAddr = "192.0.2.80:1234"
 	recorder := httptest.NewRecorder()
 	broker.handleTool(recorder, request)

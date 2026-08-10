@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -54,6 +55,7 @@ const (
 	embeddingMaximumInputs     = 256
 	embeddingBodyLimit         = 1 << 20
 	embeddingResponseLimit     = 16 << 20
+	toolRouteBodyLimit         = 64 << 10
 	embeddingSessionRequests   = 100000
 	embeddingSessionInputs     = 1000000
 	embeddingSessionInputBytes = 1 << 30
@@ -258,8 +260,19 @@ func (b *inferenceBroker) beginRelayWait(session *brokerSession) func() {
 
 type toolRoute struct {
 	expectedSourceIP string
+	allowNATFallback bool
+	capabilityKey    []byte
 	handler          http.Handler
 	slots            chan struct{}
+}
+
+// registeredToolRoute is a short-lived capability mint owned by one benchmark
+// run. The key never crosses the trust boundary: callers receive only a
+// case/user-bound MAC in the endpoint URL, and unregistering the route revokes
+// every outstanding capability at once.
+type registeredToolRoute struct {
+	id            string
+	capabilityKey []byte
 }
 
 // platformGrantDenied marks a platform inference response that declined to
@@ -827,14 +840,24 @@ func validLegacyRelayIdentity(relay relayHealthSnapshot) error {
 	return nil
 }
 
-func (b *inferenceBroker) registerTool(h http.Handler, expectedSourceIP string) (string, func(), error) {
+func (b *inferenceBroker) registerTool(
+	h http.Handler,
+	expectedSourceIP string,
+	allowNATFallback bool,
+) (registeredToolRoute, func(), error) {
 	id, err := randomToken(18)
 	if err != nil {
-		return "", func() {}, err
+		return registeredToolRoute{}, func() {}, err
+	}
+	key := make([]byte, sha256.Size)
+	if _, err := rand.Read(key); err != nil {
+		return registeredToolRoute{}, func() {}, err
 	}
 	b.mu.Lock()
 	b.tools[id] = toolRoute{
 		expectedSourceIP: expectedSourceIP,
+		allowNATFallback: allowNATFallback,
+		capabilityKey:    key,
 		handler:          h,
 		slots:            make(chan struct{}, brokerPerSourceConcurrency),
 	}
@@ -844,7 +867,7 @@ func (b *inferenceBroker) registerTool(h http.Handler, expectedSourceIP string) 
 		delete(b.tools, id)
 		b.mu.Unlock()
 	}
-	return id, stop, nil
+	return registeredToolRoute{id: id, capabilityKey: key}, stop, nil
 }
 
 func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
@@ -856,10 +879,21 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
+		if !validToolCapability(route.capabilityKey, "health", "", r.URL.Query().Get("cap")) {
+			writeError(w, http.StatusUnauthorized, "tool route unavailable")
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if route.expectedSourceIP == "" || sourceIP(r.RemoteAddr) != route.expectedSourceIP {
+	caseID := r.URL.Query().Get("case_id")
+	userID := r.URL.Query().Get("user_id")
+	if !validToolCapability(route.capabilityKey, caseID, userID, r.URL.Query().Get("cap")) {
+		writeError(w, http.StatusUnauthorized, "tool route unavailable")
+		return
+	}
+	if route.expectedSourceIP == "" ||
+		(sourceIP(r.RemoteAddr) != route.expectedSourceIP && !route.allowNATFallback) {
 		writeError(w, http.StatusUnauthorized, "tool route unavailable")
 		return
 	}
@@ -871,9 +905,63 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "tool source is at capacity")
 		return
 	}
+	if !toolRequestMatchesCapability(w, r, caseID, userID) {
+		return
+	}
 	forwarded := r.Clone(r.Context())
 	forwarded.URL.Path = "/tool"
+	forwarded.URL.RawQuery = ""
 	route.handler.ServeHTTP(w, forwarded)
+}
+
+func (r registeredToolRoute) endpoint(baseURL, caseID, userID string) string {
+	values := url.Values{
+		"case_id": {caseID},
+		"user_id": {userID},
+		"cap":     {toolCapability(r.capabilityKey, caseID, userID)},
+	}
+	return baseURL + "?" + values.Encode()
+}
+
+func (r registeredToolRoute) healthEndpoint(baseURL string) string {
+	return baseURL + "?cap=" + url.QueryEscape(toolCapability(r.capabilityKey, "health", ""))
+}
+
+func toolCapability(key []byte, caseID, userID string) string {
+	mac := hmac.New(sha256.New, key)
+	_, _ = fmt.Fprintf(mac, "dittobench-tool-v1\n%d:%s\n%d:%s", len(caseID), caseID, len(userID), userID)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func validToolCapability(key []byte, caseID, userID, provided string) bool {
+	want := toolCapability(key, caseID, userID)
+	return len(provided) == len(want) && subtle.ConstantTimeCompare([]byte(provided), []byte(want)) == 1
+}
+
+func toolRequestMatchesCapability(w http.ResponseWriter, r *http.Request, caseID, userID string) bool {
+	body, err := io.ReadAll(io.LimitReader(r.Body, toolRouteBodyLimit+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tool request")
+		return false
+	}
+	if len(body) > toolRouteBodyLimit {
+		writeError(w, http.StatusRequestEntityTooLarge, "tool request too large")
+		return false
+	}
+	var identity struct {
+		CaseID string `json:"case_id"`
+		UserID string `json:"user_id"`
+	}
+	if err := json.Unmarshal(body, &identity); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tool request")
+		return false
+	}
+	if identity.CaseID != caseID || identity.UserID != userID {
+		writeError(w, http.StatusUnauthorized, "tool route unavailable")
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return true
 }
 
 func randomToken(n int) (string, error) {

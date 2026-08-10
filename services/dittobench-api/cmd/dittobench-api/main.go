@@ -1499,7 +1499,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	}
 	defer stopToolSrv()
 
-	if toolEndpoint == "" {
+	if !toolEndpoint.available() {
 		if scope == scorer.ScopeScored {
 			// Observed execution is mandatory on the scored path: without the mock
 			// endpoint reachable, observable tool cases can never be watched execute
@@ -1565,7 +1565,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	}
 	runBounded(ctx, len(toolCases), effectiveCaseConcurrency, func(i int) {
 		c := toolCases[i]
-		resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: toolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
+		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
+		resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
 		observed := toolSrv.Observed(c.ID)
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		fixture := toolFixtureByInternalID[c.ID]
@@ -1716,7 +1717,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			if uid == "" {
 				uid = wave.UserID
 			}
-			resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: toolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
+			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
+			resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
 			observedCalls := toolSrv.Observed(mc.ID)
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
@@ -2123,17 +2125,35 @@ func withObservedTrajectory(resp protocol.RunResponse, observed []protocol.Obser
 // harness_url with the SSRF guard on — in which case observable tool cases are
 // scored capped (the harness simply won't call it). Listens on all interfaces so
 // a Docker-sandboxed container reaches it via host.docker.internal.
-func (s *server) startToolServer(h http.Handler, sandboxSourceIP string) (endpoint string, stop func(), err error) {
+type observedToolEndpoint struct {
+	baseURL     string
+	brokerRoute *registeredToolRoute
+}
+
+func (e observedToolEndpoint) available() bool { return e.baseURL != "" }
+
+func (e observedToolEndpoint) forCase(caseID, userID string) string {
+	if e.brokerRoute == nil || e.baseURL == "" {
+		return e.baseURL
+	}
+	return e.brokerRoute.endpoint(e.baseURL, caseID, userID)
+}
+
+func (s *server) startToolServer(h http.Handler, sandboxSourceIP string) (endpoint observedToolEndpoint, stop func(), err error) {
 	if sandboxSourceIP != "" {
-		id, unregister, registerErr := s.broker.registerTool(h, sandboxSourceIP)
+		route, unregister, registerErr := s.broker.registerTool(h, sandboxSourceIP, s.allowPrivate)
 		if registerErr != nil {
-			return "", func() {}, registerErr
+			return observedToolEndpoint{}, func() {}, registerErr
 		}
 		port := envIntDefault("DITTOBENCH_BROKER_PORT", 11436)
-		endpoint = fmt.Sprintf("http://host.docker.internal:%d/v1/tools/%s/tool", port, id)
-		if err := verifyToolEndpoint(fmt.Sprintf("http://127.0.0.1:%d/v1/tools/%s/tool", port, id)); err != nil {
+		endpoint = observedToolEndpoint{
+			baseURL:     fmt.Sprintf("http://host.docker.internal:%d/v1/tools/%s/tool", port, route.id),
+			brokerRoute: &route,
+		}
+		checkBaseURL := fmt.Sprintf("http://127.0.0.1:%d/v1/tools/%s/tool", port, route.id)
+		if err := verifyToolEndpoint(route.healthEndpoint(checkBaseURL)); err != nil {
 			unregister()
-			return "", func() {}, err
+			return observedToolEndpoint{}, func() {}, err
 		}
 		return endpoint, unregister, nil
 	}
@@ -2144,7 +2164,7 @@ func (s *server) startToolServer(h http.Handler, sandboxSourceIP string) (endpoi
 	// IPv4, so this loses nothing.
 	ln, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
-		return "", func() {}, err
+		return observedToolEndpoint{}, func() {}, err
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	mux := http.NewServeMux()
@@ -2168,15 +2188,15 @@ func (s *server) startToolServer(h http.Handler, sandboxSourceIP string) (endpoi
 		// lets the operator advertise a container-reachable host (host.docker.internal)
 		// for tool observation. Defaults to loopback for a same-host process harness.
 		host := envOr("DITTOBENCH_TOOL_HOST", "127.0.0.1")
-		endpoint = fmt.Sprintf("http://%s:%d/tool", host, port)
+		endpoint.baseURL = fmt.Sprintf("http://%s:%d/tool", host, port)
 	default:
 		// Hosted practice with a remote harness_url: it cannot reach our loopback
 		// port. Leave the endpoint unadvertised; observable cases score capped.
-		endpoint = ""
+		endpoint.baseURL = ""
 	}
 	if err := verifyToolEndpoint(fmt.Sprintf("http://127.0.0.1:%d/tool", port)); err != nil {
 		stop()
-		return "", func() {}, err
+		return observedToolEndpoint{}, func() {}, err
 	}
 	return endpoint, stop, nil
 }
