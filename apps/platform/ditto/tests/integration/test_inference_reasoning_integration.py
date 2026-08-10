@@ -491,9 +491,7 @@ async def test_v9_reasoning_strategy_reaches_provider_and_invalid_aliases_spend_
     async with session_maker() as session:
         requests = list(
             await session.scalars(
-                select(InferenceRequest).where(
-                    InferenceRequest.grant_id == grant_id
-                )
+                select(InferenceRequest).where(InferenceRequest.grant_id == grant_id)
             )
         )
         assert len(requests) == 3

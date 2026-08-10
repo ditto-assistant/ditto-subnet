@@ -764,9 +764,7 @@ def test_v9_equal_reasoning_aliases_collapse_to_one_field(effort: str) -> None:
         ("high", "medium"),
     ],
 )
-def test_v9_conflicting_reasoning_aliases_fail_closed(
-    nested: str, flat: str
-) -> None:
+def test_v9_conflicting_reasoning_aliases_fail_closed(nested: str, flat: str) -> None:
     payload = {
         "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "hello"}],

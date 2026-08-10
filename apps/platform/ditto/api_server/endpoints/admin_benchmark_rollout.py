@@ -190,9 +190,7 @@ async def _require_rollout_start_capacity(
                 ),
                 (
                     InferenceProviderRoute.profile_revision
-                    == aggregate_profile_revision(
-                        model, bench_version=desired_version
-                    )
+                    == aggregate_profile_revision(model, bench_version=desired_version)
                     if routing_mode == "aggregate_throughput"
                     else InferenceProviderRoute.provider.is_not(None)
                 ),
