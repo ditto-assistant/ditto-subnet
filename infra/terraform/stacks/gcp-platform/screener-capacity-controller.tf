@@ -166,6 +166,7 @@ resource "google_project_iam_custom_role" "screener_controller_autoscaler_update
   role_id = "dittoScreenerAutoscalerUpdater"
   title   = "Ditto screener autoscaler updater"
   permissions = [
+    "compute.autoscalers.get",
     "compute.autoscalers.update",
   ]
 }
