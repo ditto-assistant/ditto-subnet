@@ -351,15 +351,17 @@ jobs:
       - run: pnpm generate-routes
       - run: pnpm check
       - run: pnpm test
-      - run: pnpm build
       # The OAuth KV namespace holds live operator grants and tokens, so its id
-      # is supplied here rather than committed to this public repository. The
-      # value is the cloudflare-dittobench Terraform output
+      # is supplied before Vite snapshots wrangler.jsonc into its deploy
+      # config, rather than committed to this public repository. The value is
+      # the cloudflare-dittobench Terraform output
       # `backroom_oauth_kv_namespace_id`.
       - name: Bind the OAuth KV namespace
         env:
           BACKROOM_OAUTH_KV_ID: ${{ vars.BACKROOM_OAUTH_KV_ID }}
         run: node scripts/inject-oauth-kv.mjs
+
+      - run: pnpm build
 
       - name: Deploy the subnet-only worker
         env:

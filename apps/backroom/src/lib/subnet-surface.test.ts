@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const appRoot = join(import.meta.dirname, '..', '..')
+const repoRoot = join(appRoot, '..', '..')
 
 describe('public subnet Backroom boundary', () => {
   it('does not ship Ditto product-control routes', () => {
@@ -107,5 +108,24 @@ describe('public subnet Backroom boundary', () => {
     expect(runtime).toContain('OAUTH_KV_NAMESPACE_ID_INJECTED_AT_DEPLOY')
     // Cloudflare namespace ids are 32 lowercase hex characters.
     expect(runtime).not.toMatch(/\b[0-9a-f]{32}\b/)
+  })
+
+  it('binds the OAuth KV namespace before Vite snapshots the deploy config', () => {
+    const workflow = readFileSync(
+      join(repoRoot, '.github', 'workflows', 'release.yml'),
+      'utf8',
+    )
+    const deployBackroom = workflow.slice(
+      workflow.indexOf('  deploy-backroom:'),
+      workflow.indexOf('  deploy-screener-controller:'),
+    )
+
+    const bind = deployBackroom.indexOf('name: Bind the OAuth KV namespace')
+    const build = deployBackroom.indexOf('run: pnpm build')
+    const deploy = deployBackroom.indexOf('name: Deploy the subnet-only worker')
+
+    expect(bind).toBeGreaterThanOrEqual(0)
+    expect(build).toBeGreaterThan(bind)
+    expect(deploy).toBeGreaterThan(build)
   })
 })
