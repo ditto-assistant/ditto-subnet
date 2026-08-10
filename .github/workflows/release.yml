@@ -1236,6 +1236,42 @@ jobs:
           docker run --rm --platform linux/amd64 --entrypoint python "$exact" -c \
             'from pathlib import Path; p=Path("/app/pylon_service/.venv/lib/python3.13/site-packages/turbobt/substrate/pallets/author.py"); s=p.read_text(); assert "isinstance(subscription_id_raw, str)" in s'
 
+      # Frozen compat-2 hosts use Docker's local image inspector to authenticate
+      # component labels before they drain. Keep the canonical release indexes
+      # (and their provenance/SBOM attachment manifests) intact, while binding
+      # a runtime-only index with the exact same platform children into the
+      # signed descriptor. This avoids old Docker engines selecting an
+      # attestation-only unknown/unknown child during local inspection.
+      - name: Publish frozen-updater runtime indexes
+        id: compat-runtime
+        env:
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+          VALIDATOR_DIGEST: ${{ needs.build-validator.outputs.digest }}
+          SANDBOX_DOCKER_DIGEST: ${{ needs.build-sandbox-docker.outputs.digest }}
+          DITTOBENCH_API_DIGEST: ${{ needs.build-dittobench.outputs.scorer_digest }}
+          MODEL_RELAY_DIGEST: ${{ needs.build-dittobench.outputs.relay_digest }}
+          PYLON_DIGEST: ${{ needs.build-pylon.outputs.digest }}
+        run: |
+          runtime_tag="compat-runtime-$COMPATIBILITY_EPOCH-$REVISION"
+          publish() {
+            local output="$1" repository="$2" digest="$3" runtime_digest
+            shift 3
+            runtime_digest="$(
+              scripts/publish-compat-runtime-index.sh \
+                "$repository" "$digest" "$runtime_tag" "$@"
+            )"
+            printf '%s=%s\n' "$output" "$runtime_digest" >>"$GITHUB_OUTPUT"
+          }
+          publish validator_digest "$VALIDATOR_REPOSITORY" "$VALIDATOR_DIGEST" \
+            linux/amd64 linux/arm64
+          publish sandbox_docker_digest "$SANDBOX_DOCKER_REPOSITORY" \
+            "$SANDBOX_DOCKER_DIGEST" linux/amd64 linux/arm64
+          publish dittobench_api_digest "$DITTOBENCH_API_REPOSITORY" \
+            "$DITTOBENCH_API_DIGEST" linux/amd64 linux/arm64
+          publish model_relay_digest "$MODEL_RELAY_REPOSITORY" \
+            "$MODEL_RELAY_DIGEST" linux/amd64 linux/arm64
+          publish pylon_digest "$PYLON_REPOSITORY" "$PYLON_DIGEST" linux/amd64
+
       - name: Render the digest-bound stack bundle
         run: |
           uv run python scripts/build-stack-release.py \
@@ -1248,12 +1284,12 @@ jobs:
             --update-protocol "$UPDATE_PROTOCOL" \
             --heartbeat-protocol "$HEARTBEAT_PROTOCOL" \
             --compose-schema "$COMPOSE_SCHEMA" \
-            --validator-image "$VALIDATOR_REPOSITORY@${{ needs.build-validator.outputs.digest }}" \
-            --sandbox-docker-image "$SANDBOX_DOCKER_REPOSITORY@${{ needs.build-sandbox-docker.outputs.digest }}" \
-            --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@${{ needs.build-dittobench.outputs.scorer_digest }}" \
-            --model-relay-image "$MODEL_RELAY_REPOSITORY@${{ needs.build-dittobench.outputs.relay_digest }}" \
+            --validator-image "$VALIDATOR_REPOSITORY@${{ steps.compat-runtime.outputs.validator_digest }}" \
+            --sandbox-docker-image "$SANDBOX_DOCKER_REPOSITORY@${{ steps.compat-runtime.outputs.sandbox_docker_digest }}" \
+            --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@${{ steps.compat-runtime.outputs.dittobench_api_digest }}" \
+            --model-relay-image "$MODEL_RELAY_REPOSITORY@${{ steps.compat-runtime.outputs.model_relay_digest }}" \
             --ollama-image "$OLLAMA_IMAGE" \
-            --pylon-image "$PYLON_REPOSITORY@${{ needs.build-pylon.outputs.digest }}"
+            --pylon-image "$PYLON_REPOSITORY@${{ steps.compat-runtime.outputs.pylon_digest }}"
           test "$(grep -c '^' build/stack-release/manifest.env)" = 14
           ! grep -qE '(^|[[:space:]])build:' build/stack-release/compose.yml
 

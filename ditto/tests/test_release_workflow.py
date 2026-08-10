@@ -327,6 +327,41 @@ def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None
     assert 'test "$promoted" = "$STACK_DIGEST"' in promotion
 
 
+def test_frozen_updater_descriptor_uses_attachment_free_runtime_indexes() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    assembly = workflow["jobs"]["assemble-stack"]
+    runtime = _step(assembly["steps"], "Publish frozen-updater runtime indexes")
+    render = _step(assembly["steps"], "Render the digest-bound stack bundle")["run"]
+
+    assert runtime["id"] == "compat-runtime"
+    assert "scripts/publish-compat-runtime-index.sh" in runtime["run"]
+    assert "linux/amd64 linux/arm64" in runtime["run"]
+    assert '"$PYLON_DIGEST" linux/amd64' in runtime["run"]
+    assert "compat-runtime-$COMPATIBILITY_EPOCH-$REVISION" in runtime["run"]
+
+    outputs = {
+        "validator_digest",
+        "sandbox_docker_digest",
+        "dittobench_api_digest",
+        "model_relay_digest",
+        "pylon_digest",
+    }
+    for output in outputs:
+        assert f"steps.compat-runtime.outputs.{output}" in render
+
+    # Canonical build indexes remain the provenance-bearing source. Only the
+    # signed descriptor switches to aliases composed from their exact runtime
+    # children.
+    assert "needs.build-validator.outputs.digest" not in render
+    verify = _step(assembly["steps"], "Verify every first-party multi-platform index")[
+        "run"
+    ]
+    assert (
+        '"$VALIDATOR_REPOSITORY"]="${{ needs.build-validator.outputs.digest }}"'
+        in verify
+    )
+
+
 def test_validator_release_smokes_each_architecture_natively_before_promotion() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
@@ -404,8 +439,11 @@ def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     assembly = workflow["jobs"]["assemble-stack"]
     verify = _step(assembly["steps"], "Verify the patched Pylon artifact")
     assert "isinstance(subscription_id_raw, str)" in verify["run"]
+    runtime = _step(assembly["steps"], "Publish frozen-updater runtime indexes")
+    assert runtime["env"]["PYLON_DIGEST"] == "${{ needs.build-pylon.outputs.digest }}"
+    assert '"$PYLON_DIGEST" linux/amd64' in runtime["run"]
     render = _step(assembly["steps"], "Render the digest-bound stack bundle")
-    assert "needs.build-pylon.outputs.digest" in render["run"]
+    assert "steps.compat-runtime.outputs.pylon_digest" in render["run"]
 
 
 def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> None:

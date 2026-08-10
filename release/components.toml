@@ -185,6 +185,7 @@ paths = [
   "pyproject.toml",
   "release/components.toml",
   "scripts/build-stack-release.py",
+  "scripts/publish-compat-runtime-index.sh",
   "scripts/release-plan.py",
   "uv.lock",
 ]
