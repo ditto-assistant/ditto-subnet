@@ -52,6 +52,17 @@ def test_relay_release_enables_accelerated_iap_uploads() -> None:
     assert "import numpy" in acceleration
 
 
+def test_relay_build_uses_the_self_contained_artifact_builder() -> None:
+    build = _workflow()["jobs"]["relay-build"]
+    steps = {step.get("name"): step for step in build["steps"]}
+
+    command = steps["Build immutable relay artifact"]["run"]
+    assert (
+        './scripts/build-relay-release.sh relay-artifact "$DEPLOY_REVISION"' in command
+    )
+    assert "uv export" not in command
+
+
 def _relay_changed(*paths: str) -> bool:
     result = subprocess.run(
         [str(RELAY_PATH_FILTER)],
@@ -73,5 +84,6 @@ def test_relay_change_filter_detects_runtime_and_release_changes() -> None:
     assert _relay_changed("ditto/api_server/inference.py")
     assert _relay_changed("alembic/versions/123_add_column.py")
     assert _relay_changed("uv.lock")
+    assert _relay_changed("scripts/build-relay-release.sh")
     assert _relay_changed("scripts/deploy-relay-release.sh")
     assert _relay_changed(".github/workflows/deploy.yml")

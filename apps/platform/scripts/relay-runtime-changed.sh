@@ -11,7 +11,7 @@ while IFS= read -r path || [[ -n "$path" ]]; do
     ditto/tests/*)
       continue
       ;;
-    ditto/* | alembic/* | pyproject.toml | uv.lock | scripts/ecosystem.config.js | scripts/deploy-relay-release.sh | .github/workflows/deploy.yml)
+    ditto/* | alembic/* | pyproject.toml | uv.lock | scripts/ecosystem.config.js | scripts/build-relay-release.sh | scripts/deploy-relay-release.sh | .github/workflows/deploy.yml)
       exit 0
       ;;
   esac

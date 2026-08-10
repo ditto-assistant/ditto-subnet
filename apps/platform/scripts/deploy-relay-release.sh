@@ -29,6 +29,24 @@ start_timeout="${DITTO_RELAY_START_TIMEOUT_SECONDS:-120}"
 [ -r "$artifact_dir/requirements.lock" ] || { echo "ERROR: artifact has no requirements.lock" >&2; exit 1; }
 [ -r "$artifact_dir/ecosystem.config.js" ] || { echo "ERROR: artifact has no ecosystem config" >&2; exit 1; }
 [ -r "$platform_env" ] || { echo "ERROR: missing $platform_env" >&2; exit 1; }
+if grep -Eq 'file:|packages/ditto-screening-protocol|ditto-screening-protocol' \
+  "$artifact_dir/requirements.lock"; then
+  echo "ERROR: requirements.lock contains a local shared-package reference" >&2
+  exit 1
+fi
+
+shopt -s nullglob
+platform_wheels=("$artifact_dir"/ditto_platform-*.whl)
+protocol_wheels=("$artifact_dir"/ditto_screening_protocol-*.whl)
+shopt -u nullglob
+[ "${#platform_wheels[@]}" -eq 1 ] || {
+  echo "ERROR: artifact must contain exactly one platform wheel" >&2
+  exit 1
+}
+[ "${#protocol_wheels[@]}" -eq 1 ] || {
+  echo "ERROR: artifact must contain exactly one screening-protocol wheel" >&2
+  exit 1
+}
 
 mkdir -p "$release_root" "$state_root/logs"
 exec 9>"$state_root/deploy.lock"
@@ -41,11 +59,10 @@ if [ ! -d "$release_dir" ]; then
   uv venv --python 3.12 "$staging/.venv"
   uv pip install --python "$staging/.venv/bin/python" \
     --requirement "$artifact_dir/requirements.lock"
-  shopt -s nullglob
-  wheels=("$artifact_dir"/ditto_platform-*.whl)
-  shopt -u nullglob
-  [ "${#wheels[@]}" -eq 1 ] || { echo "ERROR: artifact must contain exactly one platform wheel" >&2; exit 1; }
-  uv pip install --python "$staging/.venv/bin/python" --no-deps "${wheels[0]}"
+  uv pip install --python "$staging/.venv/bin/python" --no-deps \
+    "${protocol_wheels[0]}"
+  uv pip install --python "$staging/.venv/bin/python" --no-deps \
+    "${platform_wheels[0]}"
   mkdir -p "$staging/scripts" "$staging/logs"
   cp "$artifact_dir/ecosystem.config.js" "$staging/scripts/ecosystem.config.js"
   mv "$staging" "$release_dir"

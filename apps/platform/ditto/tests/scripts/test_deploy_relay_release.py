@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[3]
 COMMIT = "a" * 40
 
@@ -15,7 +17,15 @@ def _write_executable(path: Path, source: str) -> None:
     path.chmod(0o755)
 
 
-def _run_release(tmp_path: Path, *, fail_relay_2: bool = False):
+def _run_release(
+    tmp_path: Path,
+    *,
+    fail_relay_2: bool = False,
+    platform_wheel_count: int = 1,
+    protocol_wheel_count: int = 1,
+    requirements: str = "# locked in CI\n",
+    artifact_commit: str = COMMIT,
+):
     artifact = tmp_path / "artifact"
     fake_bin = tmp_path / "bin"
     state = tmp_path / "state"
@@ -24,9 +34,18 @@ def _run_release(tmp_path: Path, *, fail_relay_2: bool = False):
     fake_bin.mkdir()
     (old / "scripts").mkdir(parents=True)
 
-    (artifact / "source-commit").write_text(f"{COMMIT}\n")
-    (artifact / "requirements.lock").write_text("# locked in CI\n")
-    (artifact / "ditto_platform-0.0.1-py3-none-any.whl").write_text("wheel")
+    (artifact / "source-commit").write_text(f"{artifact_commit}\n")
+    (artifact / "requirements.lock").write_text(requirements)
+    for index in range(platform_wheel_count):
+        platform_version = index + 1
+        (
+            artifact / f"ditto_platform-0.0.{platform_version}-py3-none-any.whl"
+        ).write_text("wheel")
+    for index in range(protocol_wheel_count):
+        protocol_version = f"0.13.{index}"
+        (
+            artifact / f"ditto_screening_protocol-{protocol_version}-py3-none-any.whl"
+        ).write_text("wheel")
     (artifact / "ecosystem.config.js").write_text("module.exports = {apps: []};\n")
     platform_env = tmp_path / "platform.env"
     platform_env.write_text("PYLON_URL=http://127.0.0.1:1\n")
@@ -109,7 +128,8 @@ fi
         timeout=15,
         check=False,
     )
-    return result, command_log.read_text(), state, old
+    commands = command_log.read_text() if command_log.exists() else ""
+    return result, commands, state, old
 
 
 def test_release_builds_once_and_rolls_slots_in_order(tmp_path: Path) -> None:
@@ -119,6 +139,10 @@ def test_release_builds_once_and_rolls_slots_in_order(tmp_path: Path) -> None:
     assert (state / "ditto-api-relay-1.commit").read_text().strip() == COMMIT
     assert (state / "ditto-api-relay-2.commit").read_text().strip() == COMMIT
     assert commands.count("uv venv") == 1
+    assert "--requirement" in commands
+    assert commands.index("ditto_screening_protocol-0.13.0") < commands.index(
+        "ditto_platform-0.0.1"
+    )
     assert commands.index("pm2 delete ditto-api-relay-1") < commands.index(
         "--only ditto-api-relay-1"
     )
@@ -137,3 +161,47 @@ def test_release_restores_failed_second_slot(tmp_path: Path) -> None:
     restored = f"pm2 start {old}/scripts/ecosystem.config.js --only ditto-api-relay-2"
     assert restored in commands
     assert "restoring ditto-api-relay-2" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("platform_count", "protocol_count", "error"),
+    [
+        (0, 1, "exactly one platform wheel"),
+        (2, 1, "exactly one platform wheel"),
+        (1, 0, "exactly one screening-protocol wheel"),
+        (1, 2, "exactly one screening-protocol wheel"),
+    ],
+)
+def test_release_rejects_missing_or_ambiguous_wheels(
+    tmp_path: Path, platform_count: int, protocol_count: int, error: str
+) -> None:
+    result, commands, _, _ = _run_release(
+        tmp_path,
+        platform_wheel_count=platform_count,
+        protocol_wheel_count=protocol_count,
+    )
+
+    assert result.returncode != 0
+    assert error in result.stderr
+    assert "uv venv" not in commands
+
+
+def test_release_rejects_local_path_requirements_before_install(tmp_path: Path) -> None:
+    result, commands, _, _ = _run_release(
+        tmp_path,
+        requirements="ditto-screening-protocol @ file:///packages/ditto-screening-protocol\n",
+    )
+
+    assert result.returncode != 0
+    assert "local shared-package reference" in result.stderr
+    assert "uv venv" not in commands
+
+
+def test_release_rejects_artifact_commit_mismatch_before_install(
+    tmp_path: Path,
+) -> None:
+    result, commands, _, _ = _run_release(tmp_path, artifact_commit="b" * 40)
+
+    assert result.returncode != 0
+    assert "artifact commit does not match" in result.stderr
+    assert "uv venv" not in commands
