@@ -141,11 +141,16 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
 # old validator's terminal default is already the intended outcome for them --
 # which is why only this direction needs the care.
 #
-# ``inference_allowance_exhausted`` is what the scorer now emits when the
-# harness spent the request-count or token allowance its own ticket granted, or
-# sent a single request too large to reserve (platform decline codes
-# 4102/4104/4109). The lease was alive and the platform healthy in every one of
-# those; the agent simply spent what it was given.
+# The scorer emits two terminal, agent-attributable inference codes:
+#
+# - ``inference_allowance_exhausted`` when the harness spent the request-count
+#   or token allowance its own ticket granted, or sent one request too large to
+#   reserve (platform decline codes 4102/4104/4109).
+# - ``model_inference_required`` when the broker stayed healthy but observed no
+#   authoritative chat request during the scored interval.
+#
+# The lease and broker were healthy in both cases. A fresh grant therefore
+# cannot repair the same harness behaviour.
 #
 # It MUST NOT be added to ``_SANDBOX_INFRASTRUCTURE_CODES``. Every code in that
 # set is no-fault: it mints a retry grant, RAISES the attempt cap, and
@@ -158,7 +163,9 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
 # ``validator_infrastructure`` AND ``retryable is True`` before it even looks at
 # the code. So the agent codes are excluded three independent ways. The test
 # ``test_agent_attributable_inference_failures_stay_the_agents`` pins all three.
-_AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset({"inference_allowance_exhausted"})
+_AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
+    {"inference_allowance_exhausted", "model_inference_required"}
+)
 
 assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
 
@@ -1081,8 +1088,13 @@ class DittobenchClient:
                     agent_failure_code = _agent_attributable_failure_code(data)
                     infrastructure_code = _sandbox_infrastructure_failure_code(data)
                     if agent_failure_code is not None:
+                        message = (
+                            f"run {run_id} made no authoritative model call"
+                            if agent_failure_code == "model_inference_required"
+                            else f"run {run_id} exhausted its inference allowance"
+                        )
                         raise DittobenchError(
-                            f"run {run_id} exhausted its inference allowance",
+                            message,
                             code=agent_failure_code,
                         )
                     # `code=` is what stops the scorer's own classifier from

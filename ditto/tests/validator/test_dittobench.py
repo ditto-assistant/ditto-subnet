@@ -1556,6 +1556,12 @@ def test_a_structured_code_still_wins_over_the_message() -> None:
             "code": "inference_allowance_exhausted",
             "retryable": False,
         },
+        # A healthy broker observed no authoritative chat request at all.
+        {
+            "kind": "sandbox_failure",
+            "code": "model_inference_required",
+            "retryable": False,
+        },
         # The same code smuggled under the no-fault KIND. Rejected because the
         # code is not in the allowlist.
         {
@@ -1568,12 +1574,13 @@ def test_a_structured_code_still_wins_over_the_message() -> None:
 async def test_agent_attributable_inference_failures_stay_the_agents(
     failure: dict[str, object],
 ) -> None:
-    """The bound on the decline split: only the platform's half is no-fault.
+    """Terminal agent inference outcomes never become no-fault retries.
 
     ``inference_allowance_exhausted`` means the harness spent the request-count
     or token allowance its own ticket granted, or sent one request too large to
     reserve (platform decline codes 4102/4104/4109). The lease was alive and the
-    platform healthy throughout.
+    platform healthy throughout. ``model_inference_required`` means the broker
+    was healthy but the harness made no authoritative chat request.
 
     ``infrastructure`` mints a retry grant, RAISES the attempt cap, and
     re-leases, so an agent that reliably exhausts its own allowance would
@@ -1600,13 +1607,14 @@ async def test_agent_attributable_inference_failures_stay_the_agents(
             )
         assert not isinstance(raised.value, ValidatorInfrastructureError)
         expected_code = (
-            "inference_allowance_exhausted"
-            if failure["kind"] == "sandbox_failure"
-            else None
+            str(failure["code"]) if failure["kind"] == "sandbox_failure" else None
         )
         assert raised.value.code == expected_code
         if expected_code is not None:
             assert failure_detail(raised.value) == expected_code
+        if expected_code == "model_inference_required":
+            assert "made no authoritative model call" in str(raised.value)
+            assert "exhausted" not in str(raised.value)
 
 
 def test_agent_inference_codes_are_never_no_fault() -> None:

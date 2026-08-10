@@ -5788,7 +5788,11 @@ class TestFailJob:
         failed = await client.post(
             "/api/v1/validator/job/fail",
             headers=_AUTH_HEADER,
-            json=_job_fail_payload(agent_id, reason="scoring_error"),
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                failure_detail="model_inference_required",
+            ),
         )
         assert failed.status_code == 200, failed.text
         async with session_maker() as s:
@@ -5797,6 +5801,9 @@ class TestFailJob:
             )
             assert ticket is not None
             assert ticket.infra_retry_grants == 0
+            assert ticket.attempt_count == 1
+            assert ticket.failure_reason == "scoring_error"
+            assert ticket.failure_detail == "model_inference_required"
 
     async def test_platform_revoked_lease_is_not_billed_to_the_agent(
         self,

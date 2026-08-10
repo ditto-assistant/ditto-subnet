@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,6 +95,71 @@ func TestProbeLockedModelRelay(t *testing.T) {
 				t.Fatalf("probe exposed upstream response: %v", err)
 			}
 		})
+	}
+}
+
+func TestRelayRunBaselineExcludesTrustedPreflightFromUsage(t *testing.T) {
+	var requests, successes, usageAvailable, promptTokens, completionTokens uint64
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			requests++
+			successes++
+			usageAvailable++
+			promptTokens += 3
+			completionTokens++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []any{map[string]any{"message": map[string]string{"content": "OK"}}},
+			})
+		case "/health":
+			_ = json.NewEncoder(w).Encode(relayHealthSnapshot{
+				AccountingVersion: 2,
+				Status:            "ok",
+				Requests:          requests,
+				Successes:         successes,
+				UsageAvailable:    usageAvailable,
+				PromptTokens:      promptTokens,
+				CompletionTokens:  completionTokens,
+				Provider:          "openrouter",
+				ProfileRevision:   "openrouter-route-0123456789abcdef-v1",
+				Model:             llm.V7HarnessModel,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer relay.Close()
+
+	s := &server{}
+	start, ok := s.relayRunStart(
+		context.Background(), "run", protocol.BenchVersionV8, "full", relay.URL, "",
+	)
+	if !ok {
+		t.Fatal("healthy trusted preflight failed")
+	}
+	if start.Requests != 1 || start.Successes != 1 {
+		t.Fatalf("run baseline was not taken after preflight: %+v", start)
+	}
+
+	// With no harness request after the baseline, the scored interval is exactly
+	// zero even though the lease-level relay counters include the trusted probe.
+	end, err := readRelayHealth(context.Background(), relay.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage, err := relayUsageSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := relayExecutionSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Status != "complete" || usage.Requests != 0 || execution.Requests != 0 {
+		t.Fatalf("trusted preflight entered run evidence: usage=%+v execution=%+v", usage, execution)
+	}
+	if err := requireCompleteV7Usage(protocol.BenchVersionV8, usage, execution); !errors.Is(err, errAgentModelUseMissing) {
+		t.Fatalf("post-preflight zero interval = %v, want model-use sentinel", err)
 	}
 }
 
@@ -429,6 +495,233 @@ func TestV8ZeroUsageStillFailsClosedAfterAChatAttempt(t *testing.T) {
 		if err := requireCompleteV7Usage(protocol.BenchVersionV8, unused, execution); err == nil {
 			t.Fatalf("v8 accepted inconsistent zero usage after a chat attempt: %+v", execution)
 		}
+	}
+}
+
+type postRunRouteFixture struct {
+	server          *server
+	harnessURL      string
+	sessionID       string
+	start           relayHealthSnapshot
+	cooperate       *atomic.Bool
+	upstreamHealthy *atomic.Bool
+	harnessRuns     *atomic.Int64
+}
+
+func newPostRunRouteFixture(t *testing.T) postRunRouteFixture {
+	t.Helper()
+	upstreamHealthy := &atomic.Bool{}
+	upstreamHealthy.Store(true)
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !upstreamHealthy.Load() {
+			http.Error(w, "provider unavailable", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"probe","object":"chat.completion","created":1,"model":"openai/gpt-oss-20b","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(
+		t,
+		broker,
+		prepared,
+		proxyURL,
+		"openrouter",
+		"openrouter-route-0123456789abcdef-v1",
+		llm.V7HarnessModel,
+	)
+	claimAndBindBrokerSession(
+		t,
+		broker,
+		prepared["session_id"],
+		"127.0.0.1",
+		protocol.BenchVersionV8,
+	)
+
+	brokerMux := http.NewServeMux()
+	brokerMux.HandleFunc("POST /v1/inference/{rest...}", broker.handle)
+	brokerServer := httptest.NewServer(brokerMux)
+	t.Cleanup(brokerServer.Close)
+
+	cooperate := &atomic.Bool{}
+	cooperate.Store(true)
+	harnessRuns := &atomic.Int64{}
+	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/run" {
+			http.NotFound(w, r)
+			return
+		}
+		harnessRuns.Add(1)
+		if cooperate.Load() {
+			response, err := http.Post(
+				brokerServer.URL+"/v1/inference/v1/chat/completions",
+				"application/json",
+				strings.NewReader(`{"model":"ignored","messages":[{"role":"user","content":"probe"}],"max_tokens":1}`),
+			)
+			if err != nil {
+				t.Errorf("route probe could not call broker: %v", err)
+			} else {
+				_ = response.Body.Close()
+				if response.StatusCode != http.StatusOK && upstreamHealthy.Load() {
+					t.Errorf("route probe broker status = %d", response.StatusCode)
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, protocol.RunResponse{FinalText: "OK"})
+	}))
+	t.Cleanup(harness.Close)
+
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return postRunRouteFixture{
+		server: &server{broker: broker}, harnessURL: harness.URL,
+		sessionID: prepared["session_id"], start: start,
+		cooperate: cooperate, upstreamHealthy: upstreamHealthy,
+		harnessRuns: harnessRuns,
+	}
+}
+
+func TestPostRunRouteReprobeSkipsSessionlessDirectHarness(t *testing.T) {
+	err := (&server{}).requireCompleteModelUsageAfterRun(
+		context.Background(),
+		"http://unused.invalid",
+		"",
+		relayHealthSnapshot{},
+		catalog.CatalogForVersion(protocol.BenchVersionV8),
+		protocol.BenchVersionV8,
+		protocol.TokenUsage{Status: "complete"},
+		relayExecutionSummary{},
+	)
+	if !errors.Is(err, errAgentModelUseMissing) {
+		t.Fatalf("sessionless all-zero route error = %v, want original model-use sentinel", err)
+	}
+	failure := relayFinalizeFailure(err)
+	if failure.Kind != "sandbox_failure" || failure.Code != "model_inference_required" || failure.Retryable {
+		t.Fatalf("sessionless all-zero route failure = %+v", failure)
+	}
+}
+
+func TestPostRunRouteReprobeKeepsHealthyAllZeroV8AgentAttributable(t *testing.T) {
+	fixture := newPostRunRouteFixture(t)
+	ctx := runner.TrustSandbox(context.Background())
+	tools := catalog.CatalogForVersion(protocol.BenchVersionV8)
+	afterPreflight, routed, err := fixture.server.probeHarnessModelRoute(
+		ctx, fixture.harnessURL, fixture.sessionID, fixture.start, tools, protocol.BenchVersionV8,
+	)
+	if err != nil || !routed {
+		t.Fatalf("pre-run route probe = routed %t, error %v", routed, err)
+	}
+
+	err = fixture.server.requireCompleteModelUsageAfterRun(
+		ctx,
+		fixture.harnessURL,
+		fixture.sessionID,
+		afterPreflight,
+		tools,
+		protocol.BenchVersionV8,
+		protocol.TokenUsage{Status: "complete"},
+		relayExecutionSummary{},
+	)
+	if !errors.Is(err, errAgentModelUseMissing) {
+		t.Fatalf("healthy all-zero route error = %v", err)
+	}
+	failure := relayFinalizeFailure(err)
+	if failure.Kind != "sandbox_failure" || failure.Code != "model_inference_required" || failure.Retryable {
+		t.Fatalf("healthy all-zero route failure = %+v", failure)
+	}
+	if fixture.harnessRuns.Load() != 2 {
+		t.Fatalf("route probes = %d, want pre-run + post-run", fixture.harnessRuns.Load())
+	}
+}
+
+func TestPostRunRouteReprobeDoesNotRewardSelectiveHarnessCooperation(t *testing.T) {
+	fixture := newPostRunRouteFixture(t)
+	ctx := runner.TrustSandbox(context.Background())
+	tools := catalog.CatalogForVersion(protocol.BenchVersionV8)
+	afterPreflight, routed, err := fixture.server.probeHarnessModelRoute(
+		ctx, fixture.harnessURL, fixture.sessionID, fixture.start, tools, protocol.BenchVersionV8,
+	)
+	if err != nil || !routed {
+		t.Fatalf("pre-run route probe = routed %t, error %v", routed, err)
+	}
+	fixture.cooperate.Store(false)
+
+	err = fixture.server.requireCompleteModelUsageAfterRun(
+		ctx,
+		fixture.harnessURL,
+		fixture.sessionID,
+		afterPreflight,
+		tools,
+		protocol.BenchVersionV8,
+		protocol.TokenUsage{Status: "complete"},
+		relayExecutionSummary{},
+	)
+	if !errors.Is(err, errAgentModelUseMissing) {
+		t.Fatalf("withheld post-run route error = %v, want model-use sentinel", err)
+	}
+	failure := relayFinalizeFailure(err)
+	if failure.Kind != "sandbox_failure" || failure.Code != "model_inference_required" || failure.Retryable {
+		t.Fatalf("withheld post-run route failure = %+v", failure)
+	}
+	afterWithholding, snapshotErr := fixture.server.broker.snapshot(fixture.sessionID)
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
+	}
+	if afterWithholding.Requests != afterPreflight.Requests ||
+		afterWithholding.InfrastructureFailures != afterPreflight.InfrastructureFailures {
+		t.Fatalf("withheld probe changed broker health: before=%+v after=%+v", afterPreflight, afterWithholding)
+	}
+	if fixture.harnessRuns.Load() != 2 {
+		t.Fatalf("route probes = %d, want pre-run + post-run", fixture.harnessRuns.Load())
+	}
+}
+
+func TestPostRunRouteReprobePreservesInfrastructureRetryForObservedDegradation(t *testing.T) {
+	fixture := newPostRunRouteFixture(t)
+	ctx := runner.TrustSandbox(context.Background())
+	tools := catalog.CatalogForVersion(protocol.BenchVersionV8)
+	afterPreflight, routed, err := fixture.server.probeHarnessModelRoute(
+		ctx, fixture.harnessURL, fixture.sessionID, fixture.start, tools, protocol.BenchVersionV8,
+	)
+	if err != nil || !routed {
+		t.Fatalf("pre-run route probe = routed %t, error %v", routed, err)
+	}
+	fixture.upstreamHealthy.Store(false)
+
+	err = fixture.server.requireCompleteModelUsageAfterRun(
+		ctx,
+		fixture.harnessURL,
+		fixture.sessionID,
+		afterPreflight,
+		tools,
+		protocol.BenchVersionV8,
+		protocol.TokenUsage{Status: "complete"},
+		relayExecutionSummary{},
+	)
+	if err == nil || errors.Is(err, errAgentModelUseMissing) {
+		t.Fatalf("degraded post-run route error = %v", err)
+	}
+	failure := relayFinalizeFailure(err)
+	if failure.Kind != "validator_infrastructure" || failure.Code != "model_relay_unavailable" || !failure.Retryable {
+		t.Fatalf("degraded post-run route failure = %+v", failure)
+	}
+	afterDegradation, snapshotErr := fixture.server.broker.snapshot(fixture.sessionID)
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
+	}
+	if afterDegradation.Requests != afterPreflight.Requests+1 ||
+		afterDegradation.InfrastructureFailures != afterPreflight.InfrastructureFailures+1 {
+		t.Fatalf("degraded probe was not recorded by broker: before=%+v after=%+v", afterPreflight, afterDegradation)
+	}
+	if fixture.harnessRuns.Load() != 2 {
+		t.Fatalf("route probes = %d, want pre-run + post-run", fixture.harnessRuns.Load())
 	}
 }
 

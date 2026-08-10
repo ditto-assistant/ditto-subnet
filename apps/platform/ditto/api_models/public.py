@@ -2211,7 +2211,9 @@ class PublicValidationAttempt(BaseModel):
     failure_reason: Literal["infrastructure", "scoring_error", "sandbox_oom"] | None = (
         None
     )
-    failure_code: Literal["inference_allowance_exhausted"] | None = None
+    failure_code: (
+        Literal["inference_allowance_exhausted", "model_inference_required"] | None
+    ) = None
     """Allowlisted terminal cause behind ``failure_reason``.
 
     The validator's free-form diagnostic remains private. This field publishes

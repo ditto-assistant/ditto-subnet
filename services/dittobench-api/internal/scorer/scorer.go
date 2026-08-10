@@ -925,6 +925,45 @@ func Aggregate(runID string, perCase []protocol.CaseScore) protocol.ScoreReport 
 	return AggregateForVersion(runID, perCase, protocol.CurrentBenchVersion)
 }
 
+// ModelRoutePreflightCaseID is the reserved scorer-owned broker reachability
+// probe. It is exported so the caller and population filter cannot drift onto
+// different spellings.
+const ModelRoutePreflightCaseID = "__dittobench_model_route_preflight__"
+
+// IsProtocolPreflightCaseID identifies mechanical reachability probes that are
+// outside the benchmark population. The legacy prefix remains part of the
+// public harness contract; the exact model-route id is the scorer-owned probe
+// used to verify that a harness reaches the ticket broker. Neither is a graded
+// question, even if a compatible harness returns a perfect answer or executes
+// a served tool while answering it.
+func IsProtocolPreflightCaseID(caseID string) bool {
+	return strings.HasPrefix(caseID, "preflight:") || caseID == ModelRoutePreflightCaseID
+}
+
+// ScoredPopulation removes protocol preflights before any mean, category,
+// uncertainty estimate, or gate population is computed. Ordinary runs return
+// the original slice, preserving every pre-v9 report byte and allocation.
+func ScoredPopulation(perCase []protocol.CaseScore) []protocol.CaseScore {
+	first := -1
+	for i, cs := range perCase {
+		if IsProtocolPreflightCaseID(cs.CaseID) {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return perCase
+	}
+	filtered := make([]protocol.CaseScore, 0, len(perCase)-1)
+	filtered = append(filtered, perCase[:first]...)
+	for _, cs := range perCase[first+1:] {
+		if !IsProtocolPreflightCaseID(cs.CaseID) {
+			filtered = append(filtered, cs)
+		}
+	}
+	return filtered
+}
+
 // AggregateForVersion folds per-case scores into a ScoreReport under an explicit
 // bench version's contract: composite, per-category breakdown, and median
 // latency.
@@ -937,6 +976,7 @@ func Aggregate(runID string, perCase []protocol.CaseScore) protocol.ScoreReport 
 // cases, so three of the four factors already evaluate to 1.0), but it makes the
 // contract explicit rather than incidental.
 func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersion int) protocol.ScoreReport {
+	perCase = ScoredPopulation(perCase)
 	var toolSum, toolN, memSum, memN float64
 	var toolSumSq, memSumSq float64
 	latencies := make([]int64, 0, len(perCase))

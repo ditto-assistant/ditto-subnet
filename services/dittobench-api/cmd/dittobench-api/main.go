@@ -1680,13 +1680,27 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		if !ok {
 			return
 		}
-		if err := requireCompleteV7Usage(req.BenchVersion, tokenUsage, relayExecution); err != nil {
+		if err := s.requireCompleteModelUsageAfterRun(
+			ctx,
+			harnessURL,
+			inferenceSessionID,
+			relayStart,
+			tools,
+			req.BenchVersion,
+			tokenUsage,
+			relayExecution,
+		); err != nil {
 			s.failRelayUnavailable(runID, err)
 			return
 		}
 	}
 
-	// 6. scoring — aggregate + finish.
+	// 6. scoring — aggregate + finish. Protocol reachability probes are
+	// mechanical checks, not benchmark questions. They are currently discarded
+	// at their call sites; filter again at the population boundary so a future
+	// compatibility path cannot put a hard-coded preflight answer or tool call
+	// into any mean, uncertainty estimate, or gate.
+	perCase = scorer.ScoredPopulation(perCase)
 	s.store.SetStage(runID, store.StatusScoring, len(perCase), total)
 	// Score under the contract this run was GENERATED for, not the module's
 	// current release: a v2 run's composite is pure accuracy, and the v3+ gate
@@ -2365,10 +2379,10 @@ func (s *server) probeHarnessModelRoute(
 	_, _, _ = runner.RunCaseWithTelemetry(
 		ctx,
 		harnessURL,
-		"__dittobench_model_route_preflight__",
+		scorer.ModelRoutePreflightCaseID,
 		"Use the configured chat model and reply with exactly OK.",
 		tools,
-		runner.CaseOptions{UserID: "__dittobench_model_route_preflight__", BenchVersion: benchVersion},
+		runner.CaseOptions{UserID: scorer.ModelRoutePreflightCaseID, BenchVersion: benchVersion},
 	)
 	end, err := s.broker.snapshot(inferenceSessionID)
 	if err != nil {
@@ -2378,6 +2392,54 @@ func (s *server) probeHarnessModelRoute(
 		return relayHealthSnapshot{}, false, err
 	}
 	return end, end.Requests > start.Requests, nil
+}
+
+// requireCompleteModelUsageAfterRun closes the only ambiguous v8 accounting
+// shape: a complete interval with no broker-observed chat attempt. Sessionless
+// development runs use the shared relay's start/end health snapshots directly;
+// there is no ticket broker route to re-probe, so their original terminal
+// agent attribution is already complete.
+//
+// Ticket-scoped runs repeat the discarded route challenge after an all-zero
+// scored interval. An observed broker degradation remains retryable validator
+// infrastructure. A healthy broker snapshot with no challenge request does
+// not: the harness controls whether it honors /run and could otherwise mint a
+// no-fault retry merely by recognizing and withholding the documented probe.
+func (s *server) requireCompleteModelUsageAfterRun(
+	ctx context.Context,
+	harnessURL string,
+	inferenceSessionID string,
+	start relayHealthSnapshot,
+	tools []protocol.ToolDefinition,
+	benchVersion int,
+	usage protocol.TokenUsage,
+	execution relayExecutionSummary,
+) error {
+	usageErr := requireCompleteV7Usage(benchVersion, usage, execution)
+	if !errors.Is(usageErr, errAgentModelUseMissing) {
+		return usageErr
+	}
+	if inferenceSessionID == "" {
+		return usageErr
+	}
+	_, routed, probeErr := s.probeHarnessModelRoute(
+		ctx,
+		harnessURL,
+		inferenceSessionID,
+		start,
+		tools,
+		benchVersion,
+	)
+	if probeErr != nil {
+		return fmt.Errorf("post-run model-route probe failed: %w", probeErr)
+	}
+	if !routed {
+		return fmt.Errorf(
+			"%w: post-run model-route probe did not reach the healthy ticket broker",
+			usageErr,
+		)
+	}
+	return usageErr
 }
 
 func harnessGateway(inferenceSessionID string) string {

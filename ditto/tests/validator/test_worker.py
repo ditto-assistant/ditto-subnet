@@ -2024,6 +2024,36 @@ class TestRunOnce:
         assert failed_job is jobs[0]
         assert reason == "scoring_error"
 
+    async def test_zero_inference_hands_back_exact_agent_fault_without_a_grant(
+        self,
+    ) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=DittobenchError(
+                "run made no authoritative model call",
+                code="model_inference_required",
+            )
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(set_weights=False)
+
+        assert outcome.queue_depth == 1
+        assert platform.request_job.await_count == 2  # failed job + empty queue
+        platform.report_ticket_failed.assert_awaited_once_with(
+            job, "scoring_error", "model_inference_required"
+        )
+        platform.submit_score.assert_not_awaited()
+
     async def test_sandbox_oom_defers_harness_without_disabling_slot(self) -> None:
         jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]
         platform = _platform_with_ledger(jobs=jobs, ledger=[])

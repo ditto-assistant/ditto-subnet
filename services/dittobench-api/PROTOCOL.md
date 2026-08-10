@@ -158,28 +158,35 @@ categories the endpoint would have served.
 { "error": "tool not available via this endpoint: search_memories" }
 ```
 
-### Reachability preflight (as of bench_version 3)
+### Reachability preflights
 
-Before any case is scored on the scored path, the validator sends one probe
-turn: an ordinary `POST /run` whose `case_id` carries the reserved prefix
-`preflight:` and whose `tool_endpoint` is set. **On seeing that prefix a harness
-MUST issue one call to a served catalog tool through `tool_endpoint`**
-(`search_web` with any args is sufficient) before responding; the turn is never
-scored, and its prompt restates the requirement for harnesses that treat it as a
-normal case. Hard-code the probe rather than routing it through your model — the
-requirement is mechanical, not a reasoning task.
+`preflight:` remains a reserved compatibility prefix from bench_version 3.
+Older validators may send an ordinary `POST /run` under that prefix with a
+`tool_endpoint`; compatible harnesses answer it by executing one served catalog
+tool (`search_web` with any args is sufficient). The response and its observed
+tool call are mechanical reachability evidence only: they contribute to no
+case count, suite mean, category, or score-gate population.
 
-The probe exists to distinguish two situations that look identical from
-validator state alone (zero observed calls): a harness that legitimately never
-calls tools, and an advertised endpoint that is unreachable from the harness's
-network namespace (Docker routing, network policy, a runtime fault). Without it,
-the second case would complete a scored run as an all-zero report. With it, a
-scored run whose probe is never observed **fails** (and is rescheduled) instead
-of being scored as zeros; the probe is attempted several times before the run is
-failed, so a single transient hiccup does not cost a healthy run. Practice runs
-are never failed by the preflight — an unobserved probe leaves them scored
-selection-only and capped, exactly as before. The preflight can only prevent an
-unfair zero score; there is no way to raise a score with it.
+Current validators verify the tool listener directly and do not send the
+legacy turn. Bench v8 also uses an isolated model-route probe with case id
+`__dittobench_model_route_preflight__` to verify that the harness reaches its
+ticket-bound broker before scoring. If a ticket-scoped interval later contains
+zero broker-observed chat attempts, the validator repeats the same route probe
+after the run before assigning fault. Both probes are discarded: the initial
+broker snapshot advances past the first, and accounting closes before the
+conditional second, so neither contributes to score populations or the
+published model-request count. The sessionless direct-harness development path
+has no ticket broker; its already-validated shared-relay snapshots determine
+the all-zero outcome without this second probe.
+
+These checks distinguish broker degradation observable before or immediately
+after the scored interval from a healthy broker the harness simply did not use.
+If the post-run probe records a provider, grant, capacity, recovery, restart, or
+snapshot failure, the all-zero run remains retryable validator infrastructure.
+If the broker stays healthy but observes no post-run request, the outcome is
+terminal: the harness controls whether it honors `/run` and cannot gain a
+no-fault retry by selectively withholding the documented probe. Practice runs
+remain outside this enforcement path.
 
 **`user_id`**: the memory graph the case must be answered from. The haystack is
 seeded per user (`SeedRequest.user_id`); some runs seed a **second** persona
