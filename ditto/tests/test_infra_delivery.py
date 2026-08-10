@@ -122,6 +122,7 @@ def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
     assert "/autoscalers/ditto-screener-fleet" in updater_binding
     assert '"compute.instanceGroupManagers.get"' in terraform
     assert '"compute.instanceGroupManagers.update"' in terraform
+    assert '"compute.instanceGroupManagers.use"' in terraform
     assert "compute.regionInstanceGroupManagers" not in terraform
     assert "only_ditto_screener_fleet" in terraform
 

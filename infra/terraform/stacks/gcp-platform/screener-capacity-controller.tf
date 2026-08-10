@@ -108,9 +108,9 @@ resource "google_service_account_iam_member" "screener_controller_mint_bootstrap
   member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
 
-# Only the two permissions used by `gcloud compute instance-groups managed
-# describe/list-instances/resize`; the controller cannot create VMs, images,
-# disks, networks, or mutate any other fleet.
+# Only the permissions used by `gcloud compute instance-groups managed
+# describe/list-instances/resize` and the autoscaler handoff; the controller
+# cannot create VMs, images, disks, networks, or mutate any other fleet.
 resource "google_project_iam_custom_role" "screener_controller_fleet_reconciler" {
   count   = local.screener_capacity_controller_count
   project = var.project
@@ -119,6 +119,7 @@ resource "google_project_iam_custom_role" "screener_controller_fleet_reconciler"
   permissions = [
     "compute.instanceGroupManagers.get",
     "compute.instanceGroupManagers.update",
+    "compute.instanceGroupManagers.use",
   ]
 }
 
