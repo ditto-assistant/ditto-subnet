@@ -117,8 +117,8 @@ resource "google_project_iam_custom_role" "screener_controller_fleet_reconciler"
   role_id = "dittoScreenerFleetReconciler"
   title   = "Ditto screener fleet reconciler"
   permissions = [
-    "compute.regionInstanceGroupManagers.get",
-    "compute.regionInstanceGroupManagers.update",
+    "compute.instanceGroupManagers.get",
+    "compute.instanceGroupManagers.update",
   ]
 }
 

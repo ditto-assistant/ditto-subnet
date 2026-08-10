@@ -73,8 +73,9 @@ def test_controller_deploy_proves_exact_fresh_controller_heartbeat() -> None:
 def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
     terraform = (GCP_ROOT / "screener-capacity-controller.tf").read_text()
     assert 'role    = "roles/compute.instanceAdmin.v1"' not in terraform
-    assert '"compute.regionInstanceGroupManagers.get"' in terraform
-    assert '"compute.regionInstanceGroupManagers.update"' in terraform
+    assert '"compute.instanceGroupManagers.get"' in terraform
+    assert '"compute.instanceGroupManagers.update"' in terraform
+    assert "compute.regionInstanceGroupManagers" not in terraform
     assert "only_ditto_screener_fleet" in terraform
 
 
