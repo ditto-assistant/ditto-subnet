@@ -354,15 +354,20 @@ function PolicyEditor({
   policy,
   readOnly,
   aggregateMode,
+  gatewayProviders,
   onUpdated,
 }: {
   policy: InferenceRoutingPolicy
   readOnly: boolean
   aggregateMode: boolean
+  gatewayProviders: InferenceRoutingInventory['gateway_providers']
   onUpdated: (inventory: InferenceRoutingInventory) => void
 }) {
   const updatePolicy = useServerFn(updateInferenceRoutingPolicy)
   const [enabled, setEnabled] = useState(policy.enabled)
+  const [gatewayProviderOrder, setGatewayProviderOrder] = useState([
+    ...policy.gateway_provider_order,
+  ])
   const [draft, setDraft] = useState<PolicyDraft>({
     speedWeight: String(policy.speed_weight),
     costWeight: String(policy.cost_weight),
@@ -381,6 +386,12 @@ function PolicyEditor({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const expected = inferencePolicyConfirmation(policy.model)
+  const configuredGatewayProviders = gatewayProviders
+    .filter((provider) => provider.configured)
+    .map((provider) => provider.provider)
+  const unavailableGatewayProviders = gatewayProviders
+    .filter((provider) => !provider.configured)
+    .map((provider) => (provider.provider === 'instant' ? 'Instant' : 'OpenRouter'))
   const numbers = Object.fromEntries(
     Object.entries(draft).map(([key, value]) => [key, Number(value)]),
   ) as Record<keyof PolicyDraft, number>
@@ -396,7 +407,21 @@ function PolicyEditor({
     )
   })
   const ready =
-    !readOnly && !aggregateMode && fieldsValid && weights > 0 && confirmation === expected
+    !readOnly &&
+    gatewayProviderOrder.length > 0 &&
+    fieldsValid &&
+    weights > 0 &&
+    confirmation === expected
+
+  const moveGateway = (index: number, offset: -1 | 1) => {
+    setGatewayProviderOrder((current) => {
+      const destination = index + offset
+      if (destination < 0 || destination >= current.length) return current
+      const next = [...current]
+      ;[next[index], next[destination]] = [next[destination], next[index]]
+      return next
+    })
+  }
 
   const submit = async () => {
     if (!ready) return
@@ -408,6 +433,7 @@ function PolicyEditor({
           model: policy.model,
           expectedRevision: policy.revision,
           enabled,
+          gatewayProviderOrder,
           speedWeight: numbers.speedWeight,
           costWeight: numbers.costWeight,
           explorationWeight: numbers.explorationWeight,
@@ -441,6 +467,7 @@ function PolicyEditor({
             <Status value={policy.enabled ? 'enabled' : 'disabled'} />
           </div>
           <p className="mt-2 text-xs text-[var(--muted)]">
+            Gateway priority {policy.gateway_provider_order.join(' → ')} ·{' '}
             Speed {policy.speed_weight.toFixed(2)} · Cost {policy.cost_weight.toFixed(2)} ·
             Exploration {policy.exploration_weight.toFixed(2)} · {policy.exploration_ticket_budget}{' '}
             exploration tickets
@@ -455,25 +482,95 @@ function PolicyEditor({
         <button
           type="button"
           onClick={() => setExpanded((value) => !value)}
-          disabled={readOnly || aggregateMode}
+          disabled={readOnly}
           aria-expanded={expanded}
           className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] px-3 text-xs font-semibold text-[var(--muted-strong)] hover:bg-white/[0.04] disabled:opacity-35"
         >
-          {aggregateMode
-            ? 'Locked in aggregate mode'
-            : expanded
-              ? 'Close policy editor'
-              : 'Review policy'}
+          {expanded ? 'Close policy editor' : 'Review policy'}
         </button>
       </div>
-      {expanded && !aggregateMode ? (
+      {expanded ? (
         <div className="border-t border-[var(--line)] bg-[var(--panel-soft)] px-4 py-4">
+          <div className="border-b border-[var(--line)] pb-4">
+            <p className="text-xs font-semibold text-white">Gateway priority and fallback</p>
+            <p className="mt-1 text-[10px] leading-4 text-[var(--muted)]">
+              The first configured gateway is tried first. A later gateway is used only after all
+              bounded phases of the earlier gateway fail.
+            </p>
+            {unavailableGatewayProviders.length > 0 ? (
+              <p className="mt-1 text-[10px] leading-4 text-[var(--amber)]">
+                Unavailable until its credential is configured:{' '}
+                {unavailableGatewayProviders.join(', ')}.
+              </p>
+            ) : null}
+            <ol className="mt-3 space-y-2">
+              {gatewayProviderOrder.map((provider, index) => (
+                <li
+                  key={provider}
+                  className="flex min-h-10 items-center justify-between gap-3 rounded-lg border border-[var(--line)] px-3"
+                >
+                  <span className="text-xs font-medium text-white">
+                    {index + 1}. {provider === 'instant' ? 'Instant' : 'OpenRouter'}
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      aria-label={`Move ${provider} earlier`}
+                      onClick={() => moveGateway(index, -1)}
+                      disabled={pending || index === 0}
+                      className="rounded-md border border-[var(--line)] p-2 disabled:opacity-30"
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Move ${provider} later`}
+                      onClick={() => moveGateway(index, 1)}
+                      disabled={pending || index === gatewayProviderOrder.length - 1}
+                      className="rounded-md border border-[var(--line)] p-2 disabled:opacity-30"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${provider}`}
+                      onClick={() =>
+                        setGatewayProviderOrder((current) =>
+                          current.filter((candidate) => candidate !== provider),
+                        )
+                      }
+                      disabled={pending || gatewayProviderOrder.length === 1}
+                      className="rounded-md border border-[var(--line)] p-2 disabled:opacity-30"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {configuredGatewayProviders
+                .filter((provider) => !gatewayProviderOrder.includes(provider))
+                .map((provider) => (
+                  <button
+                    key={provider}
+                    type="button"
+                    onClick={() => setGatewayProviderOrder((current) => [...current, provider])}
+                    disabled={pending}
+                    className="rounded-lg border border-[var(--line)] px-3 py-2 text-[10px] font-semibold text-[var(--muted-strong)]"
+                  >
+                    Add {provider === 'instant' ? 'Instant' : 'OpenRouter'} fallback
+                  </button>
+                ))}
+            </div>
+          </div>
+
           <label className="inline-flex min-h-10 items-center gap-2 text-xs font-medium text-[var(--muted-strong)]">
             <input
               type="checkbox"
               checked={enabled}
               onChange={(event) => setEnabled(event.target.checked)}
-              disabled={pending}
+              disabled={pending || aggregateMode}
               className="h-4 w-4 accent-[var(--acid)]"
             />
             Dynamic routing enabled for this model
@@ -495,7 +592,7 @@ function PolicyEditor({
                       [field.key]: event.target.value,
                     }))
                   }
-                  disabled={pending}
+                  disabled={pending || aggregateMode}
                   className="mt-1.5 min-h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm text-white disabled:opacity-45"
                 />
               </label>
@@ -610,7 +707,7 @@ export function InferenceRoutingPanel({
             </p>
             <p className="mt-1 text-xs leading-5 text-[var(--muted-strong)]">
               {aggregateMode
-                ? 'OpenRouter starts with its fastest-throughput eligible provider, then the platform retries through a bounded reliability route. Individual provider admission controls stay locked in aggregate mode.'
+                ? 'The platform follows the Backroom gateway priority. OpenRouter keeps its throughput-first and bounded reliability phases inside its own turn.'
                 : 'The platform selects among individually calibrated provider profiles using the active model policy.'}
             </p>
             {aggregateMode && inventory.aggregate_route ? (
@@ -678,6 +775,7 @@ export function InferenceRoutingPanel({
               policy={policy}
               readOnly={readOnly}
               aggregateMode={aggregateMode}
+              gatewayProviders={inventory.gateway_providers}
               onUpdated={setInventory}
             />
           ))
@@ -933,7 +1031,7 @@ function ProviderTelemetryPanel({ rows }: { rows: InferenceProviderTelemetry[] }
                         : `${row.observed_output_tps.toFixed(1)} tok/s`}
                     </td>
                     <td className="px-4 py-3 text-right font-medium text-white">
-                      {providerCost(row.cost_microusd)}
+                      {row.cost_available ? providerCost(row.cost_microusd) : 'Unavailable'}
                     </td>
                   </tr>
                 ))}
@@ -948,6 +1046,7 @@ function ProviderTelemetryPanel({ rows }: { rows: InferenceProviderTelemetry[] }
 
 const visibleAuditFields = new Set([
   'enabled',
+  'gateway_provider_order',
   'expected_revision',
   'speed_weight',
   'cost_weight',
@@ -970,6 +1069,13 @@ const visibleAuditFields = new Set([
 function auditValue(key: string, value: unknown) {
   if (key === 'manifest_sha256' && typeof value === 'string') {
     return `${value.slice(0, 12)}…${value.slice(-8)}`
+  }
+  if (
+    key === 'gateway_provider_order' &&
+    Array.isArray(value) &&
+    value.every((provider) => typeof provider === 'string')
+  ) {
+    return value.join(' → ')
   }
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     return String(value)

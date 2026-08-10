@@ -45,6 +45,7 @@ locals {
   platform_secret_ids = concat(
     [
       "ADMIN_API_PASSWORD",
+      "INSTANT_API_KEY",
       google_secret_manager_secret.db_password.secret_id,
       google_secret_manager_secret.hmac_secret.secret_id,
       google_secret_manager_secret.github_deploy_key.secret_id,

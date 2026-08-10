@@ -192,6 +192,9 @@ platform_cloudrun_invoker_sa: ""
 platform_inference_proxy_enabled: false
 platform_inference_proxy_required: false
 secret_platform_openrouter_key: validator-openrouter-key
+# Optional second chat gateway. Terraform grants both platform runtime identities
+# read access to this externally populated Secret Manager value.
+secret_platform_instant_key: "INSTANT_API_KEY"
 platform_inference_allowed_models: qwen/qwen3-32b,openai/gpt-oss-20b
 platform_inference_provider: nebius
 # Initial v7 mode: one reviewed logical route, OpenRouter speed sorting, and

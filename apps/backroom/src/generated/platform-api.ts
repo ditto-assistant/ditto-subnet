@@ -5806,6 +5806,8 @@ export interface components {
             aggregate_route: components["schemas"]["AggregateRouteView"] | null;
             /** Audits */
             audits: components["schemas"]["InferenceRoutingAuditView"][];
+            /** Gateway Providers */
+            gateway_providers: components["schemas"]["GatewayProviderView"][];
             /** Policies */
             policies: components["schemas"]["InferenceRoutingPolicyView"][];
             /** Provider Telemetry */
@@ -10396,6 +10398,16 @@ export interface components {
              */
             reopened: boolean;
         };
+        /**
+         * GatewayProviderView
+         * @description A code-reviewed gateway and whether this process has its credential.
+         */
+        GatewayProviderView: {
+            /** Configured */
+            configured: boolean;
+            /** Provider */
+            provider: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -10758,6 +10770,8 @@ export interface components {
             exploration_ticket_budget: number;
             /** Exploration Weight */
             exploration_weight: number;
+            /** Gateway Provider Order */
+            gateway_provider_order: string[];
             /** Max Error Rate */
             max_error_rate: number;
             /** Max Timeout Rate */
@@ -12014,6 +12028,8 @@ export interface components {
             completed_count: number;
             /** Completion Tokens */
             completion_tokens: number;
+            /** Cost Available */
+            cost_available: boolean;
             /** Cost Microusd */
             cost_microusd: number;
             /** Failed Count */
@@ -16099,6 +16115,8 @@ export interface components {
             exploration_ticket_budget: number;
             /** Exploration Weight */
             exploration_weight: number;
+            /** Gateway Provider Order */
+            gateway_provider_order: string[];
             /** Max Error Rate */
             max_error_rate: number;
             /** Max Timeout Rate */

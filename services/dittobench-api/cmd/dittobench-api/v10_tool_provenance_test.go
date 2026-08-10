@@ -150,7 +150,7 @@ func TestV10BrokerResponseRecordsModelToolCallsForActiveCase(t *testing.T) {
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(
 		t, broker, prepared, proxyURL,
-		"openrouter", llm.V9AggregateProfileRevision, llm.V7HarnessModel,
+		llm.V10AggregateProvider, llm.V10AggregateProfileRevision, llm.V7HarnessModel,
 	)
 	claimAndBindBrokerSession(
 		t, broker, prepared["session_id"], "192.0.2.91", protocol.BenchVersionV10,

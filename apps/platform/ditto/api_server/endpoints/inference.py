@@ -79,6 +79,7 @@ from ditto.api_server.inference_concurrency_settings import (
 from ditto.api_server.inference_routing import (
     BENCH_V9_DEFAULT_REASONING_EFFORT,
     BENCH_V9_REASONING_EFFORTS,
+    V10_AGGREGATE_PROFILE_REVISION,
     benchmark_reasoning,
     record_route_observation,
 )
@@ -89,6 +90,7 @@ from ditto.db.queries.confirmation_inference import (
 )
 from ditto.db.queries.inference import (
     InferenceDecline,
+    InferenceGatewayObservation,
     activate_inference_grant,
     begin_inference_request,
     finish_inference_request,
@@ -416,6 +418,7 @@ class _ChatCompletionResult:
     upstream_attempts: int
     openrouter_attempts: int
     fallback_phase: int
+    gateway_attempts: tuple[InferenceGatewayObservation, ...]
 
 
 class _ChatProviderExhausted(Exception):
@@ -431,6 +434,7 @@ class _ChatProviderExhausted(Exception):
         timed_out: bool,
         upstream_provider: str | None,
         route_observable: bool,
+        gateway_attempts: tuple[InferenceGatewayObservation, ...],
     ) -> None:
         super().__init__(terminal_error_code)
         self.upstream_attempts = upstream_attempts
@@ -440,6 +444,7 @@ class _ChatProviderExhausted(Exception):
         self.timed_out = timed_out
         self.upstream_provider = upstream_provider
         self.route_observable = route_observable
+        self.gateway_attempts = gateway_attempts
 
 
 async def _post_provider_with_retry(
@@ -925,6 +930,96 @@ def _reliability_provider_preferences() -> dict[str, Any]:
     }
 
 
+def _instant_provider_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Translate the locked chat payload to Instant's accepted OpenAI aliases."""
+    translated = dict(payload)
+    reasoning = translated.pop("reasoning", None)
+    if (
+        isinstance(reasoning, dict)
+        and reasoning.get("effort") in BENCH_V9_REASONING_EFFORTS
+    ):
+        translated["reasoning_effort"] = reasoning["effort"]
+    if "max_tokens" in translated:
+        translated["max_completion_tokens"] = translated.pop("max_tokens")
+    return translated
+
+
+def _instant_headers(api_key: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+@dataclass(frozen=True)
+class _GatewayPhase:
+    gateway_provider: str
+    url: str
+    headers: dict[str, str]
+    payload: dict[str, Any]
+    openrouter: bool
+
+
+def _gateway_phases(
+    config: InferenceProxyConfig,
+    *,
+    provider_order: tuple[str, ...],
+    payload: dict[str, Any],
+    expected_provider: str,
+    expected_quantization: str | None,
+) -> list[_GatewayPhase]:
+    """Expand operator gateway priority into bounded provider-specific phases."""
+    configured = {provider.name: provider for provider in config.chat_providers}
+    phases: list[_GatewayPhase] = []
+    for name in provider_order:
+        provider = configured.get(name)
+        if provider is None:
+            continue
+        if name == "instant":
+            phases.append(
+                _GatewayPhase(
+                    gateway_provider=name,
+                    url=provider.upstream_url,
+                    headers=_instant_headers(provider.api_key),
+                    payload=_instant_provider_payload(payload),
+                    openrouter=False,
+                )
+            )
+            continue
+        if name != "openrouter":
+            continue
+        primary = dict(payload)
+        primary["provider"] = _provider_preferences(
+            routing_mode=config.routing_mode,
+            provider=expected_provider,
+            quantization=expected_quantization,
+        )
+        phases.append(
+            _GatewayPhase(
+                gateway_provider=name,
+                url=provider.upstream_url,
+                headers=_openrouter_headers(provider.api_key, include_metadata=True),
+                payload=primary,
+                openrouter=True,
+            )
+        )
+        if config.routing_mode == "aggregate_throughput":
+            reliable = dict(payload)
+            reliable["provider"] = _reliability_provider_preferences()
+            phases.append(
+                _GatewayPhase(
+                    gateway_provider=name,
+                    url=provider.upstream_url,
+                    headers=_openrouter_headers(
+                        provider.api_key, include_metadata=True
+                    ),
+                    payload=reliable,
+                    openrouter=True,
+                )
+            )
+    return phases
+
+
 def _openrouter_attempt_count(payload: object) -> int:
     """Extract a bounded count of OpenRouter-internal provider attempts."""
     if not isinstance(payload, dict):
@@ -980,59 +1075,34 @@ async def _complete_chat_with_recovery(
     expected_quantization: str | None,
     expected_prompt_price: float | None,
     expected_completion_price: float | None,
+    provider_order: tuple[str, ...] = ("openrouter",),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> _ChatCompletionResult:
-    """Run fast OpenRouter, then the bounded reliable OpenRouter route.
-
-    Each phase is bounded. The first phase retains throughput routing; the
-    second restricts recovery to the reviewed reliable providers. No request
-    or response content is retained by this orchestration layer.
-    """
+    """Run the Backroom-ordered gateways with bounded adapter-local recovery."""
     aggregate = config.routing_mode == "aggregate_throughput"
-    phases: list[tuple[int, str, dict[str, str], dict[str, Any]]] = []
-    primary = dict(payload)
-    primary["provider"] = _provider_preferences(
-        routing_mode=config.routing_mode,
-        provider=expected_provider,
-        quantization=expected_quantization,
+    phases = _gateway_phases(
+        config,
+        provider_order=provider_order,
+        payload=payload,
+        expected_provider=expected_provider,
+        expected_quantization=expected_quantization,
     )
-    phases.append(
-        (
-            0,
-            config.upstream_url,
-            _openrouter_headers(config.openrouter_api_key or "", include_metadata=True),
-            primary,
-        )
-    )
-    if aggregate:
-        reliable = dict(payload)
-        reliable["provider"] = _reliability_provider_preferences()
-        phases.append(
-            (
-                1,
-                config.upstream_url,
-                _openrouter_headers(
-                    config.openrouter_api_key or "", include_metadata=True
-                ),
-                reliable,
-            )
-        )
 
     total_attempts = 0
     router_attempts = 0
     last_code = "provider_unavailable"
     last_timed_out = False
-    last_phase = 0
     last_provider: str | None = None
     route_observable = False
-    for phase, url, headers, phase_payload in phases:
-        last_phase = phase
+    observations: list[InferenceGatewayObservation] = []
+    for phase_index, phase in enumerate(phases):
+        phase_started = time.monotonic()
         try:
             provider_result = await _post_provider_with_retry(
                 client,
-                url,
-                payload=phase_payload,
-                headers=headers,
+                phase.url,
+                payload=phase.payload,
+                headers=phase.headers,
                 sleep=sleep,
             )
         except _ProviderCallError as error:
@@ -1040,20 +1110,62 @@ async def _complete_chat_with_recovery(
             last_timed_out = error.timed_out
             last_code = "provider_timeout" if error.timed_out else "provider_transport"
             route_observable = True
+            observations.append(
+                InferenceGatewayObservation(
+                    phase=phase_index,
+                    gateway_provider=phase.gateway_provider,
+                    upstream_provider=None,
+                    status="failed",
+                    upstream_attempts=error.attempts,
+                    openrouter_attempts=0,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cost_microusd=0,
+                    cost_available=False,
+                    latency_ms=max(0, round((time.monotonic() - phase_started) * 1000)),
+                    timed_out=error.timed_out,
+                    terminal_error_code=last_code,
+                )
+            )
             continue
 
         total_attempts += provider_result.attempts
+        last_timed_out = False
         response = provider_result.response
         raw = response.content
         if len(raw) > config.response_body_bytes:
             last_code = "response_too_large"
+            route_observable = True
+            observations.append(
+                InferenceGatewayObservation(
+                    phase=phase_index,
+                    gateway_provider=phase.gateway_provider,
+                    upstream_provider=None,
+                    status="failed",
+                    upstream_attempts=provider_result.attempts,
+                    openrouter_attempts=0,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cost_microusd=0,
+                    cost_available=False,
+                    latency_ms=max(0, round((time.monotonic() - phase_started) * 1000)),
+                    timed_out=False,
+                    terminal_error_code=last_code,
+                )
+            )
             continue
         try:
             decoded = response.json()
         except ValueError:
             decoded = None
-        router_attempts += _openrouter_attempt_count(decoded)
-        last_provider = _openrouter_last_attempted_provider(decoded) or last_provider
+        phase_router_attempts = (
+            _openrouter_attempt_count(decoded) if phase.openrouter else 0
+        )
+        router_attempts += phase_router_attempts
+        if phase.openrouter:
+            last_provider = (
+                _openrouter_last_attempted_provider(decoded) or last_provider
+            )
         if response.status_code >= 400:
             last_timed_out = response.status_code in {408, 504}
             last_code = f"upstream_http_{response.status_code}"
@@ -1061,18 +1173,74 @@ async def _complete_chat_with_recovery(
                 route_observable
                 or _provider_rejection_is_route_observable(response.status_code)
             )
+            observations.append(
+                InferenceGatewayObservation(
+                    phase=phase_index,
+                    gateway_provider=phase.gateway_provider,
+                    upstream_provider=last_provider if phase.openrouter else None,
+                    status="failed",
+                    upstream_attempts=provider_result.attempts,
+                    openrouter_attempts=phase_router_attempts,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cost_microusd=0,
+                    cost_available=False,
+                    latency_ms=max(0, round((time.monotonic() - phase_started) * 1000)),
+                    timed_out=last_timed_out,
+                    terminal_error_code=last_code,
+                )
+            )
             continue
         route_observable = True
         if not isinstance(decoded, dict):
             last_code = "invalid_provider_response"
+            observations.append(
+                InferenceGatewayObservation(
+                    phase=phase_index,
+                    gateway_provider=phase.gateway_provider,
+                    upstream_provider=None,
+                    status="failed",
+                    upstream_attempts=provider_result.attempts,
+                    openrouter_attempts=phase_router_attempts,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cost_microusd=0,
+                    cost_available=False,
+                    latency_ms=max(0, round((time.monotonic() - phase_started) * 1000)),
+                    timed_out=False,
+                    terminal_error_code=last_code,
+                )
+            )
             continue
         if decoded.get("model") != model:
             last_code = "provider_identity_mismatch"
+            observations.append(
+                InferenceGatewayObservation(
+                    phase=phase_index,
+                    gateway_provider=phase.gateway_provider,
+                    upstream_provider=None,
+                    status="failed",
+                    upstream_attempts=provider_result.attempts,
+                    openrouter_attempts=phase_router_attempts,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cost_microusd=0,
+                    cost_available=False,
+                    latency_ms=max(0, round((time.monotonic() - phase_started) * 1000)),
+                    timed_out=False,
+                    terminal_error_code=last_code,
+                )
+            )
             continue
+        provider_value: str | None = None
         try:
-            provider_value = _upstream_provider(decoded)
+            provider_value = (
+                _upstream_provider(decoded) if phase.openrouter else "instant"
+            )
             if provider_value is None or (
-                not aggregate and provider_value != expected_provider
+                phase.openrouter
+                and not aggregate
+                and provider_value != expected_provider
             ):
                 raise HTTPException(
                     status_code=502, detail="provider identity mismatch"
@@ -1081,14 +1249,14 @@ async def _complete_chat_with_recovery(
             if bounded is None:
                 raise HTTPException(status_code=502, detail="invalid provider response")
             prompt, completion, _ = bounded
-            if aggregate:
+            if phase.openrouter and aggregate:
                 provider_cost = _bounded_provider_cost(decoded)
                 if provider_cost is None:
                     raise HTTPException(
                         status_code=502, detail="invalid provider response"
                     )
                 cost = provider_cost
-            else:
+            elif phase.openrouter:
                 if expected_prompt_price is None or expected_completion_price is None:
                     raise HTTPException(
                         status_code=502, detail="invalid provider response"
@@ -1100,27 +1268,67 @@ async def _complete_chat_with_recovery(
                     )
                     * 1_000_000
                 )
+            else:
+                # Instant does not expose a trusted price receipt. Keep token
+                # accounting authoritative and cost explicitly zero until a
+                # reviewed catalog price is configured.
+                cost = 0
             public_response = _public_provider_response(decoded)
         except HTTPException as error:
             last_code = _phase_error_code(error)
+            observations.append(
+                InferenceGatewayObservation(
+                    phase=phase_index,
+                    gateway_provider=phase.gateway_provider,
+                    upstream_provider=provider_value,
+                    status="failed",
+                    upstream_attempts=provider_result.attempts,
+                    openrouter_attempts=phase_router_attempts,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cost_microusd=0,
+                    cost_available=False,
+                    latency_ms=max(0, round((time.monotonic() - phase_started) * 1000)),
+                    timed_out=False,
+                    terminal_error_code=last_code,
+                )
+            )
             continue
+        phase_observation = InferenceGatewayObservation(
+            phase=phase_index,
+            gateway_provider=phase.gateway_provider,
+            upstream_provider=provider_value,
+            status="completed",
+            upstream_attempts=provider_result.attempts,
+            openrouter_attempts=phase_router_attempts,
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            cost_microusd=cost,
+            cost_available=phase.openrouter,
+            latency_ms=max(0, round((time.monotonic() - phase_started) * 1000)),
+            timed_out=False,
+            terminal_error_code=None,
+        )
+        observations.append(phase_observation)
         return _ChatCompletionResult(
             raw=json.dumps(public_response, separators=(",", ":")).encode(),
             usage=(prompt, completion, cost),
             upstream_provider=provider_value,
             upstream_attempts=total_attempts,
             openrouter_attempts=router_attempts,
-            fallback_phase=phase,
+            fallback_phase=1 if phase_index > 0 else 0,
+            gateway_attempts=tuple(observations),
         )
 
     raise _ChatProviderExhausted(
         upstream_attempts=total_attempts,
         openrouter_attempts=router_attempts,
-        fallback_phase=last_phase,
-        terminal_error_code=last_code,
+        fallback_phase=1 if len(phases) > 1 else 0,
+        terminal_error_code=(last_code if phases else "provider_unconfigured"),
         timed_out=last_timed_out,
         upstream_provider=last_provider,
         route_observable=route_observable,
+        gateway_attempts=tuple(observations),
     )
 
 
@@ -2105,7 +2313,7 @@ async def proxy_chat_completions(
     session_maker = request.app.state.session_maker
     now = datetime.now(UTC)
     async with session_maker() as session, session.begin():
-        from ditto.db.models import InferenceGrant
+        from ditto.db.models import InferenceGrant, InferenceRoutingPolicy
 
         grant = await session.get(InferenceGrant, x_ditto_grant)
         if (
@@ -2169,8 +2377,16 @@ async def proxy_chat_completions(
         # was retried until the run died with hours left on the lease.
         if isinstance(reserved, InferenceDecline):
             raise InferenceDeclinedError(reserved, lane="inference")
+        reserved_grant = reserved[0]
+        provider_order = ("openrouter",)
+        if (
+            reserved_grant.bench_version >= 10
+            and reserved_grant.route_profile == V10_AGGREGATE_PROFILE_REVISION
+        ):
+            policy = await session.get(InferenceRoutingPolicy, model)
+            if policy is not None:
+                provider_order = tuple(policy.gateway_provider_order)
 
-    reserved_grant = reserved[0]
     upstream_payload = _locked_upstream_payload(
         payload,
         model=model,
@@ -2191,6 +2407,7 @@ async def proxy_chat_completions(
     openrouter_attempts = 0
     fallback_phase = 0
     terminal_error_code: str | None = None
+    gateway_attempts: tuple[InferenceGatewayObservation, ...] = ()
     try:
         recovered = await _complete_chat_with_recovery(
             request.app.state.inference_client,
@@ -2201,6 +2418,7 @@ async def proxy_chat_completions(
             expected_quantization=reserved_grant.route_quantization,
             expected_prompt_price=reserved_grant.route_prompt_price_per_token,
             expected_completion_price=(reserved_grant.route_completion_price_per_token),
+            provider_order=provider_order,
         )
         raw = recovered.raw
         usage = recovered.usage
@@ -2208,6 +2426,7 @@ async def proxy_chat_completions(
         upstream_attempts = recovered.upstream_attempts
         openrouter_attempts = recovered.openrouter_attempts
         fallback_phase = recovered.fallback_phase
+        gateway_attempts = recovered.gateway_attempts
         route_observable = True
         status = "completed"
     except _ChatProviderExhausted as error:
@@ -2218,6 +2437,7 @@ async def proxy_chat_completions(
         timed_out = error.timed_out
         upstream_provider = error.upstream_provider
         route_observable = error.route_observable
+        gateway_attempts = error.gateway_attempts
         detail = (
             "inference provider timed out"
             if timed_out
@@ -2247,6 +2467,7 @@ async def proxy_chat_completions(
                 openrouter_attempts=openrouter_attempts,
                 fallback_phase=fallback_phase,
                 terminal_error_code=terminal_error_code,
+                gateway_attempts=gateway_attempts,
             )
             from ditto.db.models import InferenceGrant
 

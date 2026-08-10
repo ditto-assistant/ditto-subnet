@@ -225,6 +225,23 @@
   no_log: true
   when: platform_inference_proxy_enabled | bool
 
+- name: Read platform Instant key when configured
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_platform_instant_key }} --project={{ gcp_project }}"
+  register: platform_instant_read
+  changed_when: false
+  no_log: true
+  when:
+    - platform_inference_proxy_enabled | bool
+    - secret_platform_instant_key | length > 0
+
+- name: Fold the platform Instant key into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'instant_api_key': platform_instant_read.stdout}) }}"
+  no_log: true
+  when:
+    - platform_inference_proxy_enabled | bool
+    - secret_platform_instant_key | length > 0
+
 # The screener token is optional (only where a screener is allowlisted), so it is
 # read + folded in separately rather than in the required-secrets loop above.
 - name: Read screener API token from Secret Manager (when a screener is configured)

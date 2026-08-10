@@ -459,18 +459,35 @@ func TestV7RequiresExactModelProfileAndAdmitsQualityOnly(t *testing.T) {
 	}
 }
 
-func TestV9AndV10RequireReviewedVariableReasoningProfile(t *testing.T) {
-	snapshot := relayHealthSnapshot{
+func TestV9AndV10PlusRequireExactEraRouteIdentity(t *testing.T) {
+	v9 := relayHealthSnapshot{
 		AccountingVersion: 2,
 		Status:            "ok",
 		Provider:          "openrouter",
 		ProfileRevision:   llm.V9AggregateProfileRevision,
 		Model:             llm.V7HarnessModel,
 	}
-	for _, version := range []int{protocol.BenchVersionV9, protocol.BenchVersionV10} {
-		if err := requireTokenAccounting(snapshot, version, "full"); err != nil {
-			t.Fatalf("v%d rejected reviewed variable-reasoning profile: %v", version, err)
+	if err := requireTokenAccounting(v9, protocol.BenchVersionV9, "full"); err != nil {
+		t.Fatalf("v9 rejected its frozen OpenRouter profile: %v", err)
+	}
+
+	v10 := v9
+	v10.Provider = llm.V10AggregateProvider
+	v10.ProfileRevision = llm.V10AggregateProfileRevision
+	if err := requireTokenAccounting(v10, protocol.BenchVersionV10, "full"); err != nil {
+		t.Fatalf("v10 rejected reviewed provider-list profile: %v", err)
+	}
+	for _, version := range []int{protocol.BenchVersionV11, protocol.BenchVersionV12} {
+		if err := requireTokenAccounting(v10, version, "full"); err != nil {
+			t.Fatalf("v%d rejected reviewed provider-list profile: %v", version, err)
 		}
+	}
+
+	if err := requireTokenAccounting(v10, protocol.BenchVersionV9, "full"); err == nil || !strings.Contains(err.Error(), "profile") {
+		t.Fatalf("v9 accepted v10 provider-list identity: %v", err)
+	}
+	if err := requireTokenAccounting(v9, protocol.BenchVersionV10, "full"); err == nil || !strings.Contains(err.Error(), "profile") {
+		t.Fatalf("v10 accepted v9 OpenRouter identity: %v", err)
 	}
 
 	for _, profile := range []string{
@@ -478,9 +495,14 @@ func TestV9AndV10RequireReviewedVariableReasoningProfile(t *testing.T) {
 		"openrouter-route-0123456789abcdef-v1", // merely well formed
 		"local-v9-variable-reasoning",
 	} {
-		wrong := snapshot
+		wrong := v10
 		wrong.ProfileRevision = profile
-		for _, version := range []int{protocol.BenchVersionV9, protocol.BenchVersionV10} {
+		for _, version := range []int{
+			protocol.BenchVersionV9,
+			protocol.BenchVersionV10,
+			protocol.BenchVersionV11,
+			protocol.BenchVersionV12,
+		} {
 			if err := requireTokenAccounting(wrong, version, "full"); err == nil || !strings.Contains(err.Error(), "profile") {
 				t.Fatalf("v%d accepted unreviewed profile %q: %v", version, profile, err)
 			}
@@ -488,7 +510,7 @@ func TestV9AndV10RequireReviewedVariableReasoningProfile(t *testing.T) {
 	}
 
 	// Historical contracts deliberately keep their old acceptance rules.
-	fixed := snapshot
+	fixed := v9
 	fixed.ProfileRevision = "openrouter-route-a471cd87ae7df5b9-v1"
 	for _, version := range []int{protocol.BenchVersionV7, protocol.BenchVersionV8} {
 		if err := requireTokenAccounting(fixed, version, "full"); err != nil {

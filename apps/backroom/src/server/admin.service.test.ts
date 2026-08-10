@@ -537,6 +537,7 @@ describe('inference route administration', () => {
   }
   const policy = {
     model: route.model, revision: 3, enabled: false, speed_weight: 0.5, cost_weight: 0.4,
+    gateway_provider_order: ['openrouter'],
     exploration_weight: 0.1, exploration_ticket_budget: 5,
     min_tool_accuracy: 0.8, min_composite: 0.7, min_calibration_samples: 60,
     max_error_rate: 0.05, max_timeout_rate: 0.03, cooldown_seconds: 300,
@@ -544,6 +545,10 @@ describe('inference route administration', () => {
   }
   const inventory = {
     routing_mode: 'adaptive', aggregate_route: null,
+    gateway_providers: [
+      { provider: 'instant', configured: true },
+      { provider: 'openrouter', configured: true },
+    ],
     policies: [policy], routes: [route], audits: [],
     provider_telemetry: [],
     relay_recovery_telemetry: {
@@ -608,6 +613,7 @@ describe('inference route administration', () => {
     await updateInferenceRoutingPolicy('operator@omniaura.ai', {
       model: route.model, expectedRevision: policy.revision,
       enabled: true, speedWeight: 0.7, costWeight: 0.3,
+      gatewayProviderOrder: ['instant', 'openrouter'],
       explorationWeight: 0, explorationTicketBudget: 5, minToolAccuracy: 0.8,
       minComposite: 0.7, minCalibrationSamples: 60, maxErrorRate: 0.05,
       maxTimeoutRate: 0.03, cooldownSeconds: 300, ewmaAlpha: 0.2,
@@ -620,7 +626,10 @@ describe('inference route administration', () => {
     )
     expect(request.method).toBe('PUT')
     expect(request.headers).toMatchObject({ 'X-Admin-Actor': 'operator@omniaura.ai' })
-    expect(JSON.parse(String(request.body))).toMatchObject({ expected_revision: policy.revision })
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      expected_revision: policy.revision,
+      gateway_provider_order: ['instant', 'openrouter'],
+    })
   })
 })
 

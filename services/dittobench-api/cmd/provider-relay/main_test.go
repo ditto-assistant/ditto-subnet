@@ -165,3 +165,27 @@ func TestGPTOSSRelayHealsConflictingReasoningAliases(t *testing.T) {
 		t.Fatalf("reasoning = %#v", reasoning)
 	}
 }
+
+func TestInstantRelayUsesFlatReasoningEffortAndNoProviderObject(t *testing.T) {
+	body := map[string]any{
+		"reasoning":  map[string]any{"effort": "low", "exclude": true},
+		"provider":   map[string]any{"only": []string{"attacker"}},
+		"max_tokens": float64(4096),
+	}
+	translateInstantPayload(body)
+	if body["reasoning_effort"] != "low" {
+		t.Fatalf("reasoning_effort = %#v", body["reasoning_effort"])
+	}
+	if _, present := body["reasoning"]; present {
+		t.Fatalf("nested reasoning escaped translation: %#v", body)
+	}
+	if _, present := body["provider"]; present {
+		t.Fatalf("OpenRouter provider object escaped translation: %#v", body)
+	}
+	if body["max_completion_tokens"] != float64(4096) {
+		t.Fatalf("max_completion_tokens = %#v", body["max_completion_tokens"])
+	}
+	if _, present := body["max_tokens"]; present {
+		t.Fatalf("unsupported max_tokens escaped translation: %#v", body)
+	}
+}

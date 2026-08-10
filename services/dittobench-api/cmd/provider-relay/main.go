@@ -1,7 +1,6 @@
-// Command provider-relay is a local-only model-pinning relay for comparing one
-// explicit OpenRouter provider with the production Chutes baseline. It keeps the
-// OpenRouter key on the host, forces Qwen3-32B with thinking disabled, and
-// disables provider fallbacks so every result is attributable.
+// Command provider-relay is a local-only model-pinning relay for controlled
+// provider comparisons. It keeps the provider key on the host, forces one model,
+// and disables OpenRouter fallbacks when an exact provider slug is selected.
 package main
 
 import (
@@ -162,7 +161,9 @@ func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 		body["reasoning"] = map[string]any{"enabled": false, "exclude": false}
 		body["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
 	}
-	if r.provider != "" {
+	if isInstantUpstream(r.upstream) {
+		translateInstantPayload(body)
+	} else if r.provider != "" {
 		body["provider"] = map[string]any{
 			"only": []string{r.provider}, "order": []string{r.provider},
 			"allow_fallbacks": false, "require_parameters": false,
@@ -202,6 +203,25 @@ func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(responseBody)
+}
+
+func isInstantUpstream(upstream string) bool {
+	return strings.EqualFold(strings.TrimSpace(upstream), "https://api.instantsubnet.com/v1/chat/completions")
+}
+
+func translateInstantPayload(body map[string]any) {
+	reasoning, ok := body["reasoning"].(map[string]any)
+	if ok {
+		if effort, valid := reasoning["effort"].(string); valid {
+			body["reasoning_effort"] = effort
+		}
+	}
+	if maxTokens, present := body["max_tokens"]; present {
+		body["max_completion_tokens"] = maxTokens
+		delete(body, "max_tokens")
+	}
+	delete(body, "reasoning")
+	delete(body, "provider")
 }
 
 func normalizeReasoning(body map[string]any) error {

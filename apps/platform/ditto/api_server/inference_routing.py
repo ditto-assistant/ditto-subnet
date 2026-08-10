@@ -1,10 +1,10 @@
-"""DB-backed OpenRouter route admission, selection, and telemetry.
+"""DB-backed benchmark route admission, selection, and telemetry.
 
-Aggregate mode admits one versioned logical OpenRouter route and lets
-OpenRouter select from an operator-ordered healthy provider set for each
-request. V7 retains its reviewed-calibration gate; v8/v9 use operational route
-health and measured efficiency. Adaptive mode retains exact provider-per-ticket
-selection behind an explicit flag.
+Aggregate mode admits one versioned logical route. V7 through v9 retain their
+historical OpenRouter identities. V10 admits a distinct reviewed provider-list
+route whose trusted gateways are ordered in Backroom; OpenRouter keeps its own
+throughput routing inside that adapter. Adaptive mode retains exact
+provider-per-ticket selection behind an explicit flag.
 """
 
 from __future__ import annotations
@@ -30,10 +30,12 @@ from ditto.db.models import (
 
 logger = logging.getLogger(__name__)
 AGGREGATE_PROVIDER = "openrouter"
+V10_AGGREGATE_PROVIDER = "provider-list"
 AGGREGATE_CALIBRATION_SAMPLES = 60
 V7_MODEL = "openai/gpt-oss-20b"
 V7_AGGREGATE_PROFILE_REVISION = "openrouter-route-a471cd87ae7df5b9-v1"
 V9_AGGREGATE_PROFILE_REVISION = "openrouter-route-6a097486af3c178d-v1"
+V10_AGGREGATE_PROFILE_REVISION = "provider-list-route-bf48ee4a39ff8119-v1"
 BENCH_V9_DEFAULT_REASONING_EFFORT = "medium"
 BENCH_V9_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
 
@@ -53,11 +55,12 @@ def aggregate_profile_revision(model: str, *, bench_version: int = 7) -> str:
     """Return the immutable identity for the calibrated aggregate route."""
     # Reasoning is part of benchmark semantics and therefore part of the route
     # identity. V7/V8 pin medium. V9 and later let the agent select
-    # low/medium/high with a medium default, which is a distinct
-    # provider-capability and calibration contract even though model and
-    # privacy posture are unchanged.
+    # low/medium/high with a medium default. V10 additionally changes the
+    # trusted gateway boundary, so it receives its own provider-list identity.
     if model == V7_MODEL:
-        if bench_version >= 9:
+        if bench_version >= 10:
+            return V10_AGGREGATE_PROFILE_REVISION
+        if bench_version == 9:
             return V9_AGGREGATE_PROFILE_REVISION
         return V7_AGGREGATE_PROFILE_REVISION
     # Exact upstream membership was already dynamic in aggregate mode: the
@@ -76,11 +79,17 @@ def aggregate_profile_revision(model: str, *, bench_version: int = 7) -> str:
     return f"openrouter-route-{hashlib.sha256(identity.encode()).hexdigest()[:16]}-v1"
 
 
+def aggregate_provider(*, bench_version: int = 7) -> str:
+    """Return the immutable logical gateway identity for a benchmark era."""
+    return V10_AGGREGATE_PROVIDER if bench_version >= 10 else AGGREGATE_PROVIDER
+
+
 def aggregate_profile_revisions(model: str) -> tuple[str, ...]:
     """Every aggregate profile discovery must keep visible for ``model``."""
     revisions = {
         aggregate_profile_revision(model, bench_version=7),
         aggregate_profile_revision(model, bench_version=9),
+        aggregate_profile_revision(model, bench_version=10),
     }
     return tuple(sorted(revisions))
 
@@ -143,7 +152,7 @@ def rank_routes(
         reliability = max(0.0, 1.0 - (route.ewma_error_rate or 0.0)) * max(
             0.0, 1.0 - (route.ewma_timeout_rate or 0.0)
         )
-        # V7 multiplies by reviewed calibration quality. V8/V9 intentionally
+        # V7 multiplies by reviewed calibration quality. V8+ intentionally
         # omit that retired gate and rank only operational reliability,
         # throughput, and cost. Raw miner scores never influence either path.
         quality = (
@@ -196,9 +205,10 @@ async def select_route(
     ).requires_inference_route_calibration
     if routing_mode == "aggregate_throughput":
         profile = aggregate_profile_revision(model, bench_version=bench_version)
+        provider = aggregate_provider(bench_version=bench_version)
         route = await session.get(
             InferenceProviderRoute,
-            (model, AGGREGATE_PROVIDER, profile),
+            (model, provider, profile),
             with_for_update=True,
         )
         if (
@@ -519,14 +529,22 @@ class ProviderRouteRefresher:
                         endpoint.get("status") == 0 for endpoint in deduped.values()
                     )
                     for aggregate_profile in aggregate_profile_revisions(model):
+                        aggregate_bench_version = 7
+                        if aggregate_profile == V9_AGGREGATE_PROFILE_REVISION:
+                            aggregate_bench_version = 9
+                        elif aggregate_profile == V10_AGGREGATE_PROFILE_REVISION:
+                            aggregate_bench_version = 10
+                        aggregate_route_provider = aggregate_provider(
+                            bench_version=aggregate_bench_version
+                        )
                         aggregate_route = await session.get(
                             InferenceProviderRoute,
-                            (model, AGGREGATE_PROVIDER, aggregate_profile),
+                            (model, aggregate_route_provider, aggregate_profile),
                         )
                         if aggregate_route is None:
                             aggregate_route = InferenceProviderRoute(
                                 model=model,
-                                provider=AGGREGATE_PROVIDER,
+                                provider=aggregate_route_provider,
                                 profile_revision=aggregate_profile,
                                 status=(
                                     "discovered" if aggregate_active else "offline"
@@ -546,7 +564,7 @@ class ProviderRouteRefresher:
                             aggregate_route.status = "offline"
                         aggregate_route.quantization = None
                         aggregate_route.updated_at = now
-                        seen.add((AGGREGATE_PROVIDER, aggregate_profile))
+                        seen.add((aggregate_route_provider, aggregate_profile))
                 for (provider, profile), endpoint in deduped.items():
                     quantization = endpoint.get("quantization")
                     if not isinstance(quantization, str):
@@ -611,6 +629,8 @@ class ProviderRouteRefresher:
 __all__ = [
     "AGGREGATE_CALIBRATION_SAMPLES",
     "AGGREGATE_PROVIDER",
+    "V10_AGGREGATE_PROVIDER",
+    "aggregate_provider",
     "ProviderRouteRefresher",
     "aggregate_profile_revision",
     "benchmark_model",

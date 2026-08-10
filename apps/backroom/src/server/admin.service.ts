@@ -284,6 +284,7 @@ export async function updateInferenceRoutingPolicy(actor: string, rawInput: unkn
       actor,
       body: {
         enabled: input.enabled,
+        gateway_provider_order: input.gatewayProviderOrder,
         expected_revision: input.expectedRevision,
         speed_weight: input.speedWeight,
         cost_weight: input.costWeight,
