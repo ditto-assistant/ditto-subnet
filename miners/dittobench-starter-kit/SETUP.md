@@ -18,7 +18,7 @@ miners/dittobench-starter-kit  ──depends on──►  ditto-harness
 ```
 
 You iterate with the kit's built-in `evaluate` (fixed benchmark), then run the
-monorepo's real v8 generator/scorer locally with one command. The hosted service
+monorepo's real v9 generator/scorer locally with one command. The hosted service
 is a useful reachability rehearsal, but remote harness tool calls cannot be
 observed through its loopback tool endpoint; see §2.
 
@@ -27,7 +27,7 @@ observed through its loopback tool endpoint; see §2.
 ## 0. Prerequisites
 
 - Rust (latest stable; this reference needs >= 1.85). Install via [rustup](https://rustup.rs).
-- Go >= 1.23 for the one-command local v8 rehearsal, which builds the
+- Go >= 1.23 for the one-command local v9 practice, which builds the
   monorepo's scorer. The standalone harness commands do not need Go.
 - Ollama, for memory embeddings (`embeddinggemma`, 768-dim):
   ```bash
@@ -36,7 +36,7 @@ observed through its loopback tool endpoint; see §2.
   ```
 - An OpenRouter API key, for the chat model (free local Ollama also works; see below).
 
-Hosted DittoBench v8 scoring supplies both chat and embeddings through the
+Hosted DittoBench v9 scoring supplies both chat and embeddings through the
 validator's ticket-bound gateway. These local Ollama and OpenRouter-key steps
 remain the practice setup; scored containers receive neither provider key.
 
@@ -50,7 +50,7 @@ cd ditto-subnet/miners/dittobench-starter-kit
 
 cp .env.example .env
 #   edit .env, paste your key:   OPENROUTER_API_KEY=sk-or-v1-...
-#   (chat model defaults to openai/gpt-oss-20b, the benchmark v8 scored model;
+#   (chat model defaults to openai/gpt-oss-20b, the benchmark v9 scored model;
 #    canonical scoring serves it through ticket-scoped platform inference.
 #    Embeddings use Ollama.)
 
@@ -71,11 +71,11 @@ cargo run -- evaluate            # FIXED local submission test: static user + sa
 cargo run -- practice --n 20     # ROTATING random dataset (anti-overfit), like the hosted validator
 cargo run -- serve --port 8080   # expose GET /health, POST /run, POST /seed for the validator
 
-# Recommended before submission: full local v8 path with observed tools.
-python3 scripts/local-rehearsal.py --run-size small
+# Recommended before submission: full local v9 path with observed tools.
+cd ../.. && uv run ditto practice --run-size small
 ```
 
-> `evaluate` is fixed; the local v8 and hosted rehearsal paths generate a fresh
+> `evaluate` is fixed; the local v9 and hosted rehearsal paths generate a fresh
 > dataset per submission. See the README's *Choose the right practice loop*
 > section.
 
@@ -84,7 +84,7 @@ python3 scripts/local-rehearsal.py --run-size small
 ```ini
 OPENROUTER_API_KEY=sk-or-v1-...          # chat model key
 DITTOBENCH_PROVIDER=openrouter           # or `ollama` locally (free)
-DITTOBENCH_MODEL=openai/gpt-oss-20b      # benchmark v8 scored model
+DITTOBENCH_MODEL=openai/gpt-oss-20b      # benchmark v9 scored model
 OLLAMA_BASE_URL=http://localhost:11434   # embeddings (and ollama chat) endpoint
 DITTOBENCH_DB=./dittobench.db            # local Turso DB; keep the same path across seed-user + commands
 ```
@@ -94,7 +94,7 @@ reference kit always calls Ollama `embeddinggemma` through `OLLAMA_BASE_URL` and
 expects 768 dimensions. It does not read `DITTOBENCH_EMBED_PROVIDER`,
 `DITTOBENCH_EMBED_MODEL`, or `DITTOBENCH_EMBED_BASE_URL`.
 
-Canonical v8 scoring is different: the validator replaces `OLLAMA_BASE_URL`
+Canonical v9 scoring is different: the validator replaces `OLLAMA_BASE_URL`
 with a ticket-bound Ollama-compatible gateway that locks profile
 `dittobench-v7-openrouter-pplx-embed-v1-0.6b-768-v1`, backed only by
 `perplexity/pplx-embed-v1-0.6b`. The harness receives neither an OpenRouter key

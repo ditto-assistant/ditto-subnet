@@ -41,7 +41,7 @@ python3 integrations/longmemeval/longmemeval_adapter.py \
   --dataset-sha256 <sha256> \
   --harness-url http://127.0.0.1:18081 \
   --agent-label agent-1 \
-  --bench-version 8 \
+  --bench-version 9 \
   --retrieval-mode native-memory-tools \
   --answer-model openai/gpt-4.1 \
   --answer-model-profile longmemeval-openrouter-gpt41-reader-v1 \

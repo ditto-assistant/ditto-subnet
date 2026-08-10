@@ -520,8 +520,8 @@ fn submit() -> anyhow::Result<()> {
     println!("excluded (secrets + local state): {}", excludes.join(", "));
     println!();
     println!("next steps:");
-    println!("  * Local v8 rehearsal with observed tools:");
-    println!("      python3 scripts/local-rehearsal.py --run-size small");
+    println!("  * Local v9 practice with observed tools:");
+    println!("      cd ../.. && uv run ditto practice --run-size small");
     println!("  * Hosted reachability rehearsal: run `dittobench-miner playground` and use");
     println!("    its Submit tab (see README \"Hosted rehearsal\").");
     println!("  * On-chain submission (SN118): register your miner hotkey, then upload the");

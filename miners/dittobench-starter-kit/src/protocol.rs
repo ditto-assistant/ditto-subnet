@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The benchmark contract selected by local practice and playground flows.
-pub const ACTIVE_BENCH_VERSION: u32 = 8;
+pub const ACTIVE_BENCH_VERSION: u32 = 9;
 
 /// Wire-compatible contracts this starter can execute. V8 remains the active
 /// local/practice selection until validator activation; accepting V9 here lets
@@ -289,7 +289,7 @@ mod tests {
             Some("http://host.docker.internal:49222/tool")
         );
         assert_eq!(req.user_id.as_deref(), Some("colleague"));
-        assert_eq!(req.bench_version, ACTIVE_BENCH_VERSION);
+        assert_eq!(req.bench_version, 8);
     }
 
     #[test]
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn supported_versions_do_not_implicitly_activate_v9_practice() {
-        assert_eq!(ACTIVE_BENCH_VERSION, 8);
+        assert_eq!(ACTIVE_BENCH_VERSION, 9);
         assert!(supports_bench_version(8));
         assert!(supports_bench_version(9));
         assert!(!supports_bench_version(7));

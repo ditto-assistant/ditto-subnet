@@ -42,6 +42,24 @@ cargo run -- evaluate           # fixed local benchmark for iteration
 cargo run -- practice --n 20   # rotating cases, closer to production
 ```
 
+For the production-shaped generator, scorer, tool observer, and optional
+LongMemEval adapter in one command, run from the monorepo root:
+
+```sh
+uv run ditto practice --run-size small
+
+# Add the separate cleaned LongMemEval-S score (500 questions by default).
+uv run ditto practice --run-size small --longmem-eval
+
+# Fast adapter smoke; this is labeled partial practice, not the official score.
+uv run ditto practice --run-size small --longmem-eval --longmem-limit 5
+```
+
+The command starts and tears down the harness, Bench v9 scorer, trusted local
+reader/judge proxies, and isolated LongMemEval stores. Nothing is exposed to the
+public internet. LongMemEval remains a separately labeled offline score and is
+never folded into the Bench composite, KOTH rank, confirmation, or payout.
+
 Edit and test this repository until you are ready to submit. If you implement
 the contract in another language, use its normal build and test tools. Docker
 is required by the submission contract because production screening builds the
@@ -198,10 +216,11 @@ result.
 
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to one consensus model, so model
-  choice is not a miner lever: on the current contract (**Bench v7**) that is
+  choice is not a miner lever: on the current contract (**Bench v9**) that is
   **`openai/gpt-oss-20b`**, served through the platform-owned OpenRouter
-  inference boundary with reasoning pinned on. Tune your prompting and
-  reasoning budget for the active benchmark model; `GET
+  inference boundary. Reasoning effort is an intentional v9 strategy: a harness
+  may request `low`, `medium`, or `high`; omission defaults to `medium`. Tune
+  your prompting and reasoning budget for the active benchmark model; `GET
   /api/v1/public/bench/config` reports the authoritative contract. Your local
   practice key and model are not included in the submitted build context.
 - The validator self-checks its `tool_endpoint` before scoring. A platform

@@ -223,9 +223,9 @@ mod hosted_rehearsal_copy_tests {
 
     #[test]
     fn banner_explains_the_remote_tool_observation_boundary() {
-        assert!(INDEX_HTML.contains("Hosted v8 rehearsal."));
+        assert!(INDEX_HTML.contains("Hosted v9 rehearsal."));
         assert!(INDEX_HTML.contains("remote harness cannot reach"));
-        assert!(INDEX_HTML.contains("scripts/local-rehearsal.py --run-size small"));
+        assert!(INDEX_HTML.contains("uv run ditto practice --run-size small"));
         assert!(INDEX_HTML.contains("neither rehearsal is submission certification"));
     }
 }

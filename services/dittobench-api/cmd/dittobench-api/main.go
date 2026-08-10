@@ -479,7 +479,7 @@ func verifyDatasetHash(expected, actual string, hashErr error) error {
 }
 
 func (s *server) handleCatalog(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(protocol.BenchVersionV8))
+	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(protocol.BenchVersionV9))
 }
 
 // handleDataset returns a fresh dataset for practice. Seed is random unless
@@ -540,10 +540,12 @@ func redactDataset(ds protocol.Dataset) publicDataset {
 	return pub
 }
 
-// submitRequest carries the explicit v8 contract and exactly one harness source.
+// submitRequest carries an explicit executable benchmark contract and exactly
+// one harness source. Public practice currently selects v9; canonical scoring
+// remains explicit and continues to accept the supported v8 compatibility path.
 type submitRequest struct {
 	// BenchVersion selects the deterministic dataset/scoring contract. The
-	// Every scoring and practice request must set this field to 8.
+	// field is always explicit on scoring and practice requests.
 	BenchVersion int    `json:"bench_version,omitempty"`
 	HarnessURL   string `json:"harness_url,omitempty"`
 	GitURL       string `json:"git_url,omitempty"`
@@ -801,7 +803,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid or oversized JSON body")
 		return
 	}
-	version, msg := requestedBenchVersion(req.BenchVersion)
+	version, msg := requestedPracticeBenchVersion(req.BenchVersion)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -1169,6 +1171,23 @@ func runScope(req submitRequest) scorer.Scope {
 		return scorer.ScopeScored
 	}
 	return scorer.ScopePractice
+}
+
+func requestedPracticeBenchVersion(version int) (int, string) {
+	if version == 0 {
+		version = protocol.BenchVersionV9
+	}
+	return requestedBenchVersion(version)
+}
+
+// requiresV9BaseEvidence separates an ordinary practice report from a
+// signature-bound validator report. Practice has no platform-issued artifact
+// or provider-accounting ticket, so manufacturing a v9 evidence root would
+// either fail at finalization or falsely claim canonical provenance. The same
+// v9 dataset and grader still run; only the activation/confirmation evidence is
+// intentionally absent.
+func requiresV9BaseEvidence(req submitRequest) bool {
+	return req.BenchVersion == protocol.BenchVersionV9 && runScope(req) == scorer.ScopeScored
 }
 
 // runSizeJob is the full SN118 pipeline: building → generating → seeding →
@@ -1940,7 +1959,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		log.Printf("run %s: transcript hashing failed: %v", runID, tErr)
 	} else {
-		if req.BenchVersion == protocol.BenchVersionV9 {
+		if requiresV9BaseEvidence(req) {
 			report, tErr = applyV9BaseEvidence(report, req, perCase, tokenUsage, relayExecution, tSHA)
 			if tErr != nil {
 				s.store.Fail(runID, tErr.Error())

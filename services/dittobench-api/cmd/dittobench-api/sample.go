@@ -36,7 +36,7 @@ const maxSampleIndex = 9
 
 // handleSample serves a full run-size dataset from a reserved public seed. Query:
 // ?run_size=small|medium|full (default small), ?sample=<0..maxSampleIndex>
-// (default 0), ?bench_version=8 (default v8).
+// (default 0), ?bench_version=8|9 (default v9).
 // No key required, generation is deterministic and LLM-free.
 func (s *server) handleSample(w http.ResponseWriter, r *http.Request) {
 	runSize := r.URL.Query().Get("run_size")
@@ -48,11 +48,11 @@ func (s *server) handleSample(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "sample must be between 0 and 9")
 		return
 	}
-	version := protocol.BenchVersionV8
+	version := protocol.BenchVersionV9
 	if rawVersion := r.URL.Query().Get("bench_version"); rawVersion != "" {
 		parsed, err := strconv.Atoi(rawVersion)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "bench_version must be an integer (supported: 8)")
+			writeError(w, http.StatusBadRequest, "bench_version must be an integer (supported: 8, 9)")
 			return
 		}
 		version = parsed

@@ -7,12 +7,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from longmemeval_adapter import (
+    NATIVE_MEMORY_TOOLS,
     AdapterError,
     HarnessClient,
-    NATIVE_MEMORY_TOOLS,
     entry_to_pairs,
-    normalize_timestamp,
     iter_json_array,
+    normalize_timestamp,
     parse_args,
     retrieval_condition,
     run,
@@ -22,7 +22,11 @@ from longmemeval_adapter import (
 from openrouter_judge_proxy import OFFICIAL_MODEL, OPENROUTER_MODEL, rewrite_request
 from openrouter_reader_proxy import (
     PROFILE_REVISION as READER_PROFILE_REVISION,
+)
+from openrouter_reader_proxy import (
     READER_MODEL,
+)
+from openrouter_reader_proxy import (
     rewrite_request as rewrite_reader_request,
 )
 from summarize_results import summarize_agent
@@ -54,7 +58,9 @@ def fixture_entry():
 
 class PairEncodingTests(unittest.TestCase):
     def test_timestamp_is_rfc3339(self):
-        self.assertEqual(normalize_timestamp("2025/02/02 (Sun) 11:00"), "2025-02-02T11:00:00Z")
+        self.assertEqual(
+            normalize_timestamp("2025/02/02 (Sun) 11:00"), "2025-02-02T11:00:00Z"
+        )
 
     def test_irregular_roles_are_preserved_without_labels(self):
         pairs = entry_to_pairs(fixture_entry())
@@ -74,16 +80,20 @@ class PairEncodingTests(unittest.TestCase):
         self.assertTrue(all(pair["timestamp"].endswith(":00Z") for pair in pairs))
 
     def test_pair_ids_are_deterministic(self):
-        self.assertEqual(entry_to_pairs(fixture_entry()), entry_to_pairs(fixture_entry()))
+        self.assertEqual(
+            entry_to_pairs(fixture_entry()), entry_to_pairs(fixture_entry())
+        )
 
     def test_contentless_pairs_are_omitted(self):
         entry = fixture_entry()
         entry["haystack_session_ids"] = ["empty"]
         entry["haystack_dates"] = ["2025/01/01 (Wed) 10:00"]
-        entry["haystack_sessions"] = [[
-            {"role": "user", "content": ""},
-            {"role": "assistant", "content": ""},
-        ]]
+        entry["haystack_sessions"] = [
+            [
+                {"role": "user", "content": ""},
+                {"role": "assistant", "content": ""},
+            ]
+        ]
         self.assertEqual(entry_to_pairs(entry), [])
 
     def test_exact_repeated_sessions_are_deduplicated(self):
@@ -152,11 +162,11 @@ class RetrievalConditionTests(unittest.TestCase):
         )
         self.assertEqual(tools, NATIVE_MEMORY_TOOLS)
         self.assertEqual(tools[0]["parameters"]["required"], ["queries"])
-        self.assertEqual(tools[0]["parameters"]["properties"]["queries"]["type"], "array")
-        self.assertEqual(tools[2]["parameters"]["required"], ["pairIds"])
         self.assertEqual(
-            tools[3]["parameters"]["required"], ["subject_id", "queries"]
+            tools[0]["parameters"]["properties"]["queries"]["type"], "array"
         )
+        self.assertEqual(tools[2]["parameters"]["required"], ["pairIds"])
+        self.assertEqual(tools[3]["parameters"]["required"], ["subject_id", "queries"])
 
     def test_no_tool_condition_remains_reproducible(self):
         condition, prompt, tools = retrieval_condition("no-tools")
@@ -167,7 +177,9 @@ class RetrievalConditionTests(unittest.TestCase):
 
 class JudgeProxyTests(unittest.TestCase):
     def test_only_official_model_is_rewritten(self):
-        value = rewrite_request({"model": OFFICIAL_MODEL, "messages": [], "temperature": 0})
+        value = rewrite_request(
+            {"model": OFFICIAL_MODEL, "messages": [], "temperature": 0}
+        )
         self.assertEqual(value["model"], OPENROUTER_MODEL)
         self.assertFalse(value["stream"])
 
@@ -187,7 +199,9 @@ class ReaderProxyTests(unittest.TestCase):
         self.assertFalse(value["provider"]["allow_fallbacks"])
         self.assertEqual(value["provider"]["data_collection"], "deny")
         self.assertNotIn("zdr", value["provider"])
-        self.assertEqual(READER_PROFILE_REVISION, "longmemeval-openrouter-gpt41-reader-v1")
+        self.assertEqual(
+            READER_PROFILE_REVISION, "longmemeval-openrouter-gpt41-reader-v1"
+        )
 
     def test_other_reader_models_are_rejected(self):
         with self.assertRaises(ValueError):
@@ -205,8 +219,14 @@ class SummaryTests(unittest.TestCase):
             {"question_id": "q2_abs", "hypothesis": ""},
         ]
         evaluations = [
-            {"question_id": "q1", "autoeval_label": {"model": OFFICIAL_MODEL, "label": True}},
-            {"question_id": "q2_abs", "autoeval_label": {"model": OFFICIAL_MODEL, "label": False}},
+            {
+                "question_id": "q1",
+                "autoeval_label": {"model": OFFICIAL_MODEL, "label": True},
+            },
+            {
+                "question_id": "q2_abs",
+                "autoeval_label": {"model": OFFICIAL_MODEL, "label": False},
+            },
         ]
         result = summarize_agent(hypotheses, evaluations, references)
         self.assertEqual(result["accuracy"], 0.5)
@@ -282,7 +302,10 @@ class EndToEndTests(unittest.TestCase):
             self.assertNotIn('"answer"', sent)
             self.assertNotIn("knowledge-update", sent)
             self.assertNotIn("has_answer", sent)
-            run_body = next(body for path, body in RecordingHandler.requests if path == "/run")
+            run_body = next(
+                body for path, body in RecordingHandler.requests if path == "/run"
+            )
+            self.assertEqual(run_body["bench_version"], 8)
             self.assertEqual(
                 [tool["name"] for tool in run_body["tools"]],
                 [
@@ -292,7 +315,10 @@ class EndToEndTests(unittest.TestCase):
                     "search_memories_in_subjects",
                 ],
             )
-            self.assertEqual(json.loads(output.read_text()), {"question_id": "q-1", "hypothesis": "Lisbon"})
+            self.assertEqual(
+                json.loads(output.read_text()),
+                {"question_id": "q-1", "hypothesis": "Lisbon"},
+            )
             manifest = json.loads(Path(str(output) + ".manifest.json").read_text())
             self.assertEqual(manifest["adapter"]["bench_version"], 8)
             self.assertEqual(manifest["answer_model"], "anthropic/claude-sonnet-4")
@@ -301,7 +327,7 @@ class EndToEndTests(unittest.TestCase):
                 "longmemeval-v8-claude-sonnet-4-v1",
             )
 
-    def test_cli_defaults_to_v8_and_accepts_an_audited_reader_model(self):
+    def test_cli_defaults_to_v9_and_accepts_an_audited_reader_model(self):
         args = parse_args(
             [
                 "--dataset",
@@ -320,11 +346,54 @@ class EndToEndTests(unittest.TestCase):
                 "longmemeval-v8-gemini-2-5-pro-v1",
             ]
         )
-        self.assertEqual(args.bench_version, 8)
+        self.assertEqual(args.bench_version, 9)
         self.assertEqual(args.answer_model, "google/gemini-2.5-pro")
 
+    def test_cli_accepts_explicit_isolated_harness_urls(self):
+        args = parse_args(
+            [
+                "--dataset",
+                "dataset.json",
+                "--dataset-sha256",
+                "0" * 64,
+                "--harness-urls",
+                "http://127.0.0.1:8081,http://127.0.0.1:8082",
+                "--output",
+                "results.jsonl",
+                "--agent-label",
+                "agent",
+            ]
+        )
+        self.assertEqual(
+            args.harness_urls,
+            "http://127.0.0.1:8081,http://127.0.0.1:8082",
+        )
+        self.assertIsNone(args.harness_url)
+        self.assertIsNone(args.harness_url_template)
+
+    def test_cli_rejects_multiple_harness_source_flags(self):
+        with self.assertRaises(SystemExit):
+            parse_args(
+                [
+                    "--dataset",
+                    "dataset.json",
+                    "--dataset-sha256",
+                    "0" * 64,
+                    "--harness-url",
+                    "http://127.0.0.1:8081",
+                    "--harness-urls",
+                    "http://127.0.0.1:8082",
+                    "--output",
+                    "results.jsonl",
+                    "--agent-label",
+                    "agent",
+                ]
+            )
+
     def test_client_requires_final_text(self):
-        client = HarnessClient(f"http://127.0.0.1:{self.server.server_port}", attempts=1)
+        client = HarnessClient(
+            f"http://127.0.0.1:{self.server.server_port}", attempts=1
+        )
         self.assertEqual(client.request("GET", "/health"), {"status": "ok"})
 
     def test_resume_namespace_uses_fresh_isolated_user(self):
@@ -356,15 +425,21 @@ class EndToEndTests(unittest.TestCase):
                 if path in {"/seed", "/run"}
             }
             self.assertEqual(len(user_ids), 1)
-            self.assertEqual(next(iter(user_ids)), "lme-" + stable_id("resume-1", "q-1", size=24))
-            self.assertNotEqual(next(iter(user_ids)), "lme-" + stable_id("q-1", size=24))
+            self.assertEqual(
+                next(iter(user_ids)), "lme-" + stable_id("resume-1", "q-1", size=24)
+            )
+            self.assertNotEqual(
+                next(iter(user_ids)), "lme-" + stable_id("q-1", size=24)
+            )
             seeded_pair_ids = {
                 pair["pair_id"]
                 for path, body in RecordingHandler.requests
                 if path == "/seed"
                 for pair in body["pairs"]
             }
-            default_pair_ids = {pair["pair_id"] for pair in entry_to_pairs(fixture_entry())}
+            default_pair_ids = {
+                pair["pair_id"] for pair in entry_to_pairs(fixture_entry())
+            }
             self.assertTrue(seeded_pair_ids.isdisjoint(default_pair_ids))
 
 

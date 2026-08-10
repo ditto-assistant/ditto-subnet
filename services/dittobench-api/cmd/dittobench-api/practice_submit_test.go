@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-api/internal/ratelimit"
+	"github.com/ditto-assistant/dittobench-api/internal/scorer"
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 // newPracticeTestServer models the hosted practice deployment: public (SSRF
@@ -45,6 +47,22 @@ func TestPracticeSubmitAcceptsDirectHarnessOnV8(t *testing.T) {
 	}
 }
 
+func TestPracticeSubmitDefaultsOmittedVersionToV9(t *testing.T) {
+	version, message := requestedPracticeBenchVersion(0)
+	if message != "" || version != protocol.BenchVersionV9 {
+		t.Fatalf("practice default = (%d, %q), want (9, empty)", version, message)
+	}
+
+	rr := submitOn(newPracticeTestServer(),
+		`{"run_size":"small","harness_url":"http://127.0.0.1:9"}`)
+	if strings.Contains(rr.Body.String(), "bench_version") {
+		t.Fatalf("omitted practice version was rejected instead of defaulted: %s", rr.Body.String())
+	}
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected the later SSRF guard to answer 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // The exemption is keyed on the source kind, so both build modes stay gated on
 // the same deployment.
 func TestPracticeSubmitStillRejectsV8SourceBuilds(t *testing.T) {
@@ -78,5 +96,34 @@ func TestCanonicalScoreStillRejectsDirectHarnessOnV8(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "screener-built image") {
 		t.Fatalf("expected the screened-image contract, got %s", rr.Body.String())
+	}
+}
+
+func TestV9PracticeDoesNotClaimCanonicalBaseEvidence(t *testing.T) {
+	req := submitRequest{
+		BenchVersion: protocol.BenchVersionV9,
+		HarnessURL:   "http://127.0.0.1:8080",
+		RunSize:      "small",
+	}
+	if runScope(req) != scorer.ScopePractice {
+		t.Fatal("v9 practice request was not classified as practice")
+	}
+	if requiresV9BaseEvidence(req) {
+		t.Fatal("v9 practice must not manufacture signature-bound base evidence")
+	}
+}
+
+func TestV9ScoredRequestStillRequiresCanonicalBaseEvidence(t *testing.T) {
+	req := submitRequest{
+		BenchVersion:          protocol.BenchVersionV9,
+		ExpectedDatasetSHA256: strings.Repeat("a", 64),
+		TarballSHA256:         strings.Repeat("b", 64),
+		RunSize:               "full",
+	}
+	if runScope(req) != scorer.ScopeScored {
+		t.Fatal("v9 dataset-pinned request was not classified as scored")
+	}
+	if !requiresV9BaseEvidence(req) {
+		t.Fatal("canonical v9 scoring must retain signature-bound base evidence")
 	}
 }

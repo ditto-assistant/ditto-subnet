@@ -13,11 +13,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 NO_TOOL_SYSTEM_PROMPT = (
     "Answer the question using the user's stored conversation memory. "
@@ -198,7 +198,8 @@ def _memory_pair(
     response: str,
 ) -> dict[str, str]:
     return {
-        "pair_id": "lme-" + stable_id(question_id, session_id, str(first_turn), str(last_turn)),
+        "pair_id": "lme-"
+        + stable_id(question_id, session_id, str(first_turn), str(last_turn)),
         "session_id": session_id,
         "timestamp": timestamp,
         "prompt": prompt,
@@ -218,13 +219,19 @@ def entry_to_pairs(entry: dict[str, Any]) -> list[dict[str, str]]:
     session_ids = entry.get("haystack_session_ids")
     dates = entry.get("haystack_dates")
     sessions = entry.get("haystack_sessions")
-    if not isinstance(session_ids, list) or not isinstance(dates, list) or not isinstance(sessions, list):
+    if (
+        not isinstance(session_ids, list)
+        or not isinstance(dates, list)
+        or not isinstance(sessions, list)
+    ):
         raise AdapterError(f"{question_id}: history fields must be arrays")
     if not (len(session_ids) == len(dates) == len(sessions)):
         raise AdapterError(f"{question_id}: history arrays have different lengths")
 
     pairs: list[dict[str, str]] = []
-    for raw_session_id, raw_date, turns in zip(session_ids, dates, sessions):
+    for raw_session_id, raw_date, turns in zip(
+        session_ids, dates, sessions, strict=True
+    ):
         session_id = str(raw_session_id)
         timestamp = normalize_timestamp(str(raw_date))
         if not isinstance(turns, list):
@@ -233,11 +240,15 @@ def entry_to_pairs(entry: dict[str, Any]) -> list[dict[str, str]]:
         pending_user: tuple[int, str] | None = None
         for turn_index, turn in enumerate(turns):
             if not isinstance(turn, dict):
-                raise AdapterError(f"{question_id}/{session_id}: turn must be an object")
+                raise AdapterError(
+                    f"{question_id}/{session_id}: turn must be an object"
+                )
             role = turn.get("role")
             content = turn.get("content")
             if role not in {"user", "assistant"} or not isinstance(content, str):
-                raise AdapterError(f"{question_id}/{session_id}: unsupported role or content")
+                raise AdapterError(
+                    f"{question_id}/{session_id}: unsupported role or content"
+                )
 
             if role == "user":
                 if pending_user is not None:
@@ -300,7 +311,9 @@ def entry_to_pairs(entry: dict[str, Any]) -> list[dict[str, str]]:
     # Some cleaned LongMemEval sessions contain turns whose content is an empty
     # string. A pair with neither user nor assistant content carries no memory,
     # and native harness embedders correctly reject it as an empty query.
-    pairs = [pair for pair in pairs if pair["prompt"].strip() or pair["response"].strip()]
+    pairs = [
+        pair for pair in pairs if pair["prompt"].strip() or pair["response"].strip()
+    ]
 
     # The cleaned dataset also reuses some session/pair identities. Keep the
     # last occurrence so rejecting and upserting native stores receive the same
@@ -334,9 +347,16 @@ class HarnessClient:
     base_url: str
     timeout_seconds: float = 180.0
     attempts: int = 3
+    bench_version: int = 9
 
-    def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
-        body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    def request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> Any:
+        body = (
+            None
+            if payload is None
+            else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        )
         request = urllib.request.Request(
             self.base_url.rstrip("/") + path,
             data=body,
@@ -346,7 +366,9 @@ class HarnessClient:
         last_error: Exception | None = None
         for attempt in range(1, self.attempts + 1):
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                with urllib.request.urlopen(
+                    request, timeout=self.timeout_seconds
+                ) as response:
                     raw = response.read()
                     if not raw:
                         return None
@@ -365,7 +387,9 @@ class HarnessClient:
                 last_error = exc
                 if attempt < self.attempts:
                     time.sleep(min(2 ** (attempt - 1), 4))
-        raise AdapterError(f"{method} {path} failed after {self.attempts} attempts: {last_error}")
+        raise AdapterError(
+            f"{method} {path} failed after {self.attempts} attempts: {last_error}"
+        )
 
     def health(self) -> None:
         self.request("GET", "/health")
@@ -374,10 +398,18 @@ class HarnessClient:
         return self.request(
             "POST",
             "/seed",
-            {"user_id": user_id, "wave": wave, "pairs": pairs, "subjects": [], "links": []},
+            {
+                "user_id": user_id,
+                "wave": wave,
+                "pairs": pairs,
+                "subjects": [],
+                "links": [],
+            },
         )
 
-    def run(self, entry: dict[str, Any], user_id: str, retrieval_mode: str) -> dict[str, Any]:
+    def run(
+        self, entry: dict[str, Any], user_id: str, retrieval_mode: str
+    ) -> dict[str, Any]:
         question_id = _required_string(entry, "question_id")
         question = _required_string(entry, "question")
         question_date = _required_string(entry, "question_date")
@@ -391,9 +423,12 @@ class HarnessClient:
                 "user_input": question,
                 "tools": tools,
                 "user_id": user_id,
+                "bench_version": self.bench_version,
             },
         )
-        if not isinstance(result, dict) or not isinstance(result.get("final_text"), str):
+        if not isinstance(result, dict) or not isinstance(
+            result.get("final_text"), str
+        ):
             raise AdapterError(f"{question_id}: harness response is missing final_text")
         return result
 
@@ -410,7 +445,9 @@ def read_completed(path: Path) -> set[str]:
                 entry = json.loads(line)
                 completed.add(_required_string(entry, "question_id"))
             except (json.JSONDecodeError, AdapterError) as exc:
-                raise AdapterError(f"invalid resume output at line {line_number}: {exc}") from exc
+                raise AdapterError(
+                    f"invalid resume output at line {line_number}: {exc}"
+                ) from exc
     return completed
 
 
@@ -443,14 +480,18 @@ def iter_json_array(path: Path, chunk_size: int = 1024 * 1024) -> Iterable[Any]:
                 if position < len(buffer) and buffer[position] == "]":
                     trailing = buffer[position + 1 :] + handle.read()
                     if trailing.strip():
-                        raise AdapterError("dataset has content after the top-level array")
+                        raise AdapterError(
+                            "dataset has content after the top-level array"
+                        )
                     return
                 value_start = position
                 try:
                     value, value_end = decoder.raw_decode(buffer, value_start)
                 except json.JSONDecodeError as exc:
                     if eof:
-                        raise AdapterError(f"invalid dataset JSON array: {exc}") from exc
+                        raise AdapterError(
+                            f"invalid dataset JSON array: {exc}"
+                        ) from exc
                     position = value_start
                     break
                 separator = value_end
@@ -468,7 +509,9 @@ def iter_json_array(path: Path, chunk_size: int = 1024 * 1024) -> Iterable[Any]:
                 if buffer[separator] == "]":
                     trailing = buffer[position:] + handle.read()
                     if trailing.strip():
-                        raise AdapterError("dataset has content after the top-level array")
+                        raise AdapterError(
+                            "dataset has content after the top-level array"
+                        )
                     return
             buffer = buffer[position:]
             if eof:
@@ -478,14 +521,16 @@ def iter_json_array(path: Path, chunk_size: int = 1024 * 1024) -> Iterable[Any]:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def run(args: argparse.Namespace) -> None:
     dataset_path = Path(args.dataset)
     actual_sha = sha256_file(dataset_path)
     if actual_sha != args.dataset_sha256:
-        raise AdapterError(f"dataset SHA-256 mismatch: got {actual_sha}, want {args.dataset_sha256}")
+        raise AdapterError(
+            f"dataset SHA-256 mismatch: got {actual_sha}, want {args.dataset_sha256}"
+        )
 
     # Keeping all 500 decoded histories alive expands the 265 MB source file to
     # roughly 3 GB in CPython. Retain compact JSON strings and materialize only
@@ -514,15 +559,34 @@ def run(args: argparse.Namespace) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     completed = read_completed(output_path) if args.resume else set()
     if output_path.exists() and not args.resume:
-        raise AdapterError(f"output already exists: {output_path}; use --resume or choose another path")
+        raise AdapterError(
+            f"output already exists: {output_path}; use --resume or choose another path"
+        )
 
     harness_url_template = getattr(args, "harness_url_template", None)
+    explicit_harness_urls = getattr(args, "harness_urls", None)
     shards = getattr(args, "shards", 1)
-    if harness_url_template:
-        harness_urls = [harness_url_template.format(shard=index + 1) for index in range(shards)]
+    if explicit_harness_urls:
+        harness_urls = [value.strip() for value in explicit_harness_urls.split(",")]
+        if not all(harness_urls):
+            raise AdapterError("--harness-urls contains an empty URL")
+        if shards != 1:
+            raise AdapterError("--shards cannot be combined with --harness-urls")
+    elif harness_url_template:
+        harness_urls = [
+            harness_url_template.format(shard=index + 1) for index in range(shards)
+        ]
     else:
         harness_urls = [args.harness_url]
-    clients = [HarnessClient(url, args.timeout, args.attempts) for url in harness_urls]
+    clients = [
+        HarnessClient(
+            url,
+            args.timeout,
+            args.attempts,
+            getattr(args, "bench_version", 9),
+        )
+        for url in harness_urls
+    ]
     for client in clients:
         client.health()
     retrieval_mode = getattr(args, "retrieval_mode", "native-memory-tools")
@@ -546,10 +610,13 @@ def run(args: argparse.Namespace) -> None:
     ]
 
     with output_path.open("a", encoding="utf-8") as output:
+
         def process_shard(shard_index: int) -> None:
             client = clients[shard_index]
             for pending_index, (local_index, entry_json) in enumerate(pending):
-                assignment_index = pending_index if args.rebalance_pending else local_index
+                assignment_index = (
+                    pending_index if args.rebalance_pending else local_index
+                )
                 if assignment_index % len(clients) != shard_index:
                     continue
                 entry = json.loads(entry_json)
@@ -557,7 +624,9 @@ def run(args: argparse.Namespace) -> None:
                 question_id = _required_string(entry, "question_id")
                 user_id_namespace = getattr(args, "user_id_namespace", "")
                 user_id_parts = (
-                    (question_id,) if not user_id_namespace else (user_id_namespace, question_id)
+                    (question_id,)
+                    if not user_id_namespace
+                    else (user_id_namespace, question_id)
                 )
                 user_id = "lme-" + stable_id(*user_id_parts, size=24)
                 pairs = entry_to_pairs(entry)
@@ -591,7 +660,8 @@ def run(args: argparse.Namespace) -> None:
                         calls_by_name[name] = calls_by_name.get(name, 0) + 1
                     print(
                         f"[{position + 1}/{args.offset + len(selected)}] {question_id} "
-                        f"shard={shard_index + 1} pairs={len(pairs)} waves={len(waves)} "
+                        f"shard={shard_index + 1} pairs={len(pairs)} "
+                        f"waves={len(waves)} "
                         f"latency_ms={latency_ms}",
                         file=sys.stderr,
                         flush=True,
@@ -600,8 +670,13 @@ def run(args: argparse.Namespace) -> None:
         if len(clients) == 1:
             process_shard(0)
         else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(clients)) as executor:
-                futures = [executor.submit(process_shard, index) for index in range(len(clients))]
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(clients)
+            ) as executor:
+                futures = [
+                    executor.submit(process_shard, index)
+                    for index in range(len(clients))
+                ]
                 for future in futures:
                     future.result()
 
@@ -657,8 +732,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     harness = parser.add_mutually_exclusive_group(required=True)
     harness.add_argument("--harness-url")
     harness.add_argument(
+        "--harness-urls",
+        help="Comma-separated explicit URLs for isolated local harness shards",
+    )
+    harness.add_argument(
         "--harness-url-template",
-        help="Harness URL containing {shard}; used with --shards for isolated parallelism",
+        help=(
+            "Harness URL containing {shard}; used with --shards for isolated "
+            "parallelism"
+        ),
     )
     parser.add_argument("--shards", type=int, default=1)
     parser.add_argument("--output", required=True)
@@ -667,7 +749,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--bench-version",
         type=int,
-        default=8,
+        default=9,
         help="Agent benchmark generation recorded in the research manifest",
     )
     parser.add_argument(
@@ -684,7 +766,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--retrieval-mode",
         choices=("native-memory-tools", "no-tools"),
         default="native-memory-tools",
-        help="Advertise the native Ditto memory tool catalog, or reproduce the original no-tool ablation",
+        help=(
+            "Advertise the native Ditto memory tool catalog, or reproduce the "
+            "original no-tool ablation"
+        ),
     )
     parser.add_argument(
         "--user-id-namespace",
@@ -705,7 +790,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.offset < 0 or (args.limit is not None and args.limit < 1):
         parser.error("--offset must be non-negative and --limit must be positive")
-    if args.seed_wave_pairs < 1 or args.attempts < 1 or args.timeout <= 0 or args.shards < 1:
+    if (
+        args.seed_wave_pairs < 1
+        or args.attempts < 1
+        or args.timeout <= 0
+        or args.shards < 1
+    ):
         parser.error("wave size, attempts, and timeout must be positive")
     if args.bench_version < 1:
         parser.error("--bench-version must be positive")
@@ -723,4 +813,4 @@ if __name__ == "__main__":
         run(parse_args())
     except (AdapterError, OSError, ValueError) as exc:
         print(f"longmemeval adapter: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc

@@ -133,7 +133,7 @@ The loop is: edit this kit, test locally, submit this kit. In order:
    the per-category tool means, and the slowest cases. Run this after any change
    to the prompt or tools.
 4. Rehearse through the real v8 generator/scorer (recommended before you
-   submit): `python3 scripts/local-rehearsal.py --run-size small`. One command
+   submit): `uv run ditto practice --run-size small` from the monorepo root. One command
    builds and starts your harness plus the local validator, supplies a
    validator-visible `tool_endpoint`, runs fresh v8 data including staged
    seeding, prints observed/capped tool counts, and tears both down. Move to
@@ -160,7 +160,7 @@ when you build.
 | `src/datagen.rs`              | Deterministic-per-seed dataset generator.                                                                   |
 | `src/scorer.rs`               | Local score report (tool accuracy + memory + latency).                                                      |
 | `src/bin/dittobench-miner.rs` | CLI: `serve`, `playground`, `seed-user`, `mem-eval`, `evaluate`, `practice`, `submit`.                      |
-| `scripts/local-rehearsal.py`  | One-command local v8 generator/scorer run with validator-observed tool execution.                           |
+| `scripts/local-rehearsal.py`  | One-command local v9 generator/scorer run with optional LongMemEval-S.                                      |
 | `fixtures/seed-user/`         | The seed user: pairs + pre-synced subjects + subject graph + LongMemEval questions.                         |
 | `fixtures/models/`            | Shipped weights: `mlp-weights.bin` (217K-param MLP) + `cross-encoder.onnx` (TinyBERT-L2 INT8) + BERT vocab. |
 | `scripts/build-seed-user.py`  | Regenerates the seed-user slice from the LongMemEval fixture (maintainers only, inputs not distributed).   |
@@ -200,9 +200,9 @@ cargo run -- mem-eval --k 10        # retrieval recall over the seed user (no LL
 cargo run -- evaluate               # FIXED local submission test (static user + same questions)
 cargo run -- practice --n 20        # ROTATING random dataset (anti-overfit, like the hosted validator)
 
-# Run the actual local v8 generator + staged seeding + observed-tool scorer.
+# Run the actual local v9 generator + staged seeding + observed-tool scorer.
 # This starts and stops both the harness and local scorer for you.
-python3 scripts/local-rehearsal.py --run-size small
+uv run ditto practice --run-size small
 
 # 4. Serve the harness for the validator.
 cargo run -- serve --port 8080
@@ -244,43 +244,57 @@ below.
 
 - `evaluate` (local, fixed): scores your submission against the same inputs every run: the static seed user, the same bundled LongMemEval questions, and a fixed-seed tool set. Inputs are reproducible and model output is still stochastic.
 - `practice` (local, rotating): re-rolls prompts per run, but from a small fixed template pool (10 memory facts). It varies wording, not substance, and never exercises the seeding tiers/waves.
-- `scripts/local-rehearsal.py` (local, full v8 path): starts your harness and the monorepo's v8 scorer together, generates a fresh version-8 dataset, exercises staged seeding and graph isolation for the selected run size, and gives the harness a reachable validator-owned `tool_endpoint`. Use this when debugging tool arguments, order, result use, or `observed_tool_cases` / `capped_tool_cases`.
+- `uv run ditto practice` (local, full v9 path): starts your harness and the monorepo's v9 scorer together, generates a fresh version-9 dataset, exercises staged seeding and graph isolation for the selected run size, and gives the harness a reachable validator-owned `tool_endpoint`. Use this when debugging tool arguments, order, result use, or `observed_tool_cases` / `capped_tool_cases`.
 - Hosted rehearsal (remote): generates a fresh v8 dataset and exercises the seeding/question mix, but a publicly tunneled harness cannot reach a loopback-only tool endpoint on the hosted scorer. Observable tool cases are therefore self-report-capped. Use it for reachability and hosted orchestration, not for an exact tool score or screening/submission certification.
 - On-chain scoring: runs the screened image with locked, ticket-bound chat and Perplexity embedding routes. Neither local nor hosted rehearsal proves that boundary.
 
 Use `evaluate` to develop.
 
-#### One-command local v8 rehearsal
+#### One-command local Bench v9 practice
 
-From this directory:
+From the monorepo root, the supported miner CLI starts every local component:
 
 ```bash
-python3 scripts/local-rehearsal.py --run-size small
+uv run ditto practice --run-size small
 ```
 
 The command requires Rust and Go, plus the same local provider setup as
 `serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
 provider selected in `.env`. It builds both binaries, uses an isolated temporary
-database, selects free loopback ports, submits a version-8 run, displays
+database, selects free loopback ports, submits a version-9 run, displays
 progress and the final score/provenance counts, and cleans up on exit.
 
 Useful variants:
 
 ```bash
 # Reproduce the same generated dataset.
-python3 scripts/local-rehearsal.py --run-size small --seed 12345
+uv run ditto practice --run-size small --seed 12345
 
 # Exercise Tier B/C seeding and isolation more deeply; expect a longer run.
-python3 scripts/local-rehearsal.py --run-size medium
+uv run ditto practice --run-size medium
 
 # Keep the complete run envelope for comparing changes.
-python3 scripts/local-rehearsal.py --run-size small --report /tmp/dittobench-report.json
+uv run ditto practice --run-size small --report /tmp/dittobench-report.json
+
+# Append the separate, official 500-question LongMemEval-S adapter score.
+uv run ditto practice --run-size small --longmem-eval
+
+# One-question adapter/judge smoke (explicitly labeled partial practice).
+uv run ditto practice --run-size small --longmem-eval --longmem-limit 1
 ```
 
-This runs the real public v8 generator and scorer, including observed tool
+This runs the real public v9 generator and scorer, including observed tool
 execution. It is still a rehearsal: the harness uses your `.env` chat and
 embedding configuration, runs as a local process rather than a screened
 container, and does not receive canonical ticket-bound inference.
+
+`--longmem-eval` downloads and SHA-verifies the pinned cleaned LongMemEval-S
+dataset, starts isolated harness stores plus trusted local GPT-4.1 reader and
+official GPT-4o judge proxies, and runs the unmodified evaluator from the pinned
+upstream revision. Export `OPENROUTER_API_KEY` for that option; the key remains
+in the trusted proxy processes and is removed from build, harness, scorer, and
+judge-container environments. The LongMemEval accuracy is reported separately
+and never changes the Bench v9 composite.
 
 ### Hosted rehearsal
 
@@ -304,7 +318,7 @@ above to put the harness and observer on the same host, then check both
 `observed_tool_cases` and `capped_tool_cases` in the report.
 
 The active submission target is the uploaded tarball. Hosted `harness_url`
-practice can drive any already-running implementation. Production v8 validators
+practice can drive any already-running implementation. Production v9 validators
 never build miner repositories and never provide a GitHub credential to a build.
 
 `seed-user` and `mem-eval` need only Ollama (`embeddinggemma`). No chat model
@@ -479,9 +493,10 @@ Important security boundaries:
 - A source directory is mutable and cannot be pinned by this script. Prefer the
   exact reviewed tarball plus `--submission-sha256` for reproducible tests.
 
-### DittoBench v8 scoring
+### DittoBench v9 scoring
 
-The starter harness and active validators serve benchmark version 8 only.
+The starter harness defaults practice to benchmark version 9 while retaining
+version 8 compatibility during the fleet transition.
 Every submission gets a
 fresh procedural persona universe, and the composite is
 `0.5 × tool + 0.5 × memory`. The wire contract lives in
@@ -526,8 +541,9 @@ using more than 15 tool calls, and miners may tune the harness turn bound.
 
 ### What isn't scored, and why
 
-Two things you might expect to tune do not affect your score: the model and
-latency. Both are held out on purpose.
+Model identity and latency do not affect your score. Bench v9 does intentionally
+let the harness choose `low`, `medium`, or `high` reasoning effort; omission
+defaults to `medium`, so that budget choice is a miner strategy.
 
 Model. Every miner is scored on the same frozen model. A scored crate run builds
 your image and serves it under the lock: the validator's relay overrides
@@ -589,7 +605,7 @@ On the bundled seed user this lifts retrieval from hit@10 0.90 → 0.96 vs the
 Vertex-trained weights. The cross-encoder rerank is embedder-independent (it
 scores raw text), so it is identical to production.
 
-DittoBench v8 keeps this exact 768-dimensional `OllamaEmbedder` interface, but
+DittoBench v9 keeps this exact 768-dimensional `OllamaEmbedder` interface, but
 the trusted validator gateway serves it with the reviewed OpenRouter profile
 `dittobench-v7-openrouter-pplx-embed-v1-0.6b-768-v1`
 (`perplexity/pplx-embed-v1-0.6b`, Perplexity only, no fallback). The harness
@@ -597,7 +613,7 @@ does not receive an OpenRouter key and cannot select a sibling model or
 provider. Local practice and historical benchmark versions continue to use
 `embeddinggemma`.
 
-The v8 efficiency contract intentionally retains this embedding profile (whose
+The v9 contract intentionally retains this embedding profile (whose
 immutable revision name includes `v7`) and the existing MLP weights. A model or
 dimension change requires a new profile and calibration.
 

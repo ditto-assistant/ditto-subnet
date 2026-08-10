@@ -125,7 +125,7 @@ pub(super) async fn submit_start_handler(
                 .into_response();
         }
     }
-    // Practice explicitly selects the active v8 dataset and scoring contract.
+    // Practice explicitly selects the active v9 dataset and scoring contract.
     // The submitted harness still uses its own local model configuration; the
     // canonical scored path supplies ticket-bound inference separately.
     let body = if req.target == "crate" {
@@ -163,7 +163,7 @@ mod tests {
         assert!(supports_git_subdir(&json!({"features": ["git_subdir"]})));
         assert!(!supports_git_subdir(&json!({"features": []})));
         assert!(!supports_git_subdir(&json!({
-            "supported_bench_versions": [8]
+            "supported_bench_versions": [8, 9]
         })));
     }
 }

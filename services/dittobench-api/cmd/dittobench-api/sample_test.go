@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 func getSample(t *testing.T, s *server, query string) (*httptest.ResponseRecorder, gen.DatasetArtifact) {
@@ -145,8 +148,8 @@ func TestSampleDefaultsToSmall(t *testing.T) {
 	if len(art.ToolCases) != 6 {
 		t.Fatalf("small profile should have 6 tool cases, got %d", len(art.ToolCases))
 	}
-	if art.BenchVersion != 8 {
-		t.Fatalf("omitted practice version must select v8, got %d", art.BenchVersion)
+	if art.BenchVersion != 9 {
+		t.Fatalf("omitted practice version must select v9, got %d", art.BenchVersion)
 	}
 }
 
@@ -155,6 +158,23 @@ func TestSampleCanExplicitlySelectV8(t *testing.T) {
 	_, art := getSample(t, s, "?run_size=small&sample=2&bench_version=8")
 	if art.BenchVersion != 8 {
 		t.Fatalf("wrong version: %d", art.BenchVersion)
+	}
+}
+
+func TestPracticeCatalogDefaultsToV9(t *testing.T) {
+	s := &server{}
+	rr := httptest.NewRecorder()
+	s.handleCatalog(rr, httptest.NewRequest(http.MethodGet, "/v1/catalog", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("catalog status = %d, want 200: %s", rr.Code, rr.Body.String())
+	}
+	var got []protocol.ToolDefinition
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+	want := catalog.CatalogForVersion(protocol.BenchVersionV9)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("practice catalog does not match v9: got %#v want %#v", got, want)
 	}
 }
 
