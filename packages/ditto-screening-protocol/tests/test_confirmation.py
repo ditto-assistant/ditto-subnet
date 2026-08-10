@@ -84,7 +84,7 @@ def test_real_go_fixture_has_pinned_normalized_canonical_digests() -> None:
         report.embedding_ablation.evidence
     )
     assert hashlib.sha256(canonical_json(report)).hexdigest() == (
-        "8e5bec30c1937c9df2e20bda216db7b18808ab61320f6c451ca26e99fb05d95c"
+        "e3922b21cd67a377a4f9d481d82a334c25c567a2a704517b188c27e83cccdd3a"
     )
 
 
@@ -114,7 +114,7 @@ def test_native_longmem_capability_order_is_frozen_before_normalization() -> Non
     ("field", "value", "message"),
     [
         ("delta_micros", 499_999, "paired means"),
-        ("semantic_factor_bps", 0, "semantic factor"),
+        ("semantic_factor_bps", 10_000, "semantic factor"),
         ("affected_call_count", 0, "affected-call count"),
     ],
 )
@@ -142,3 +142,60 @@ def test_go_dimension_digest_is_verified_before_normalization() -> None:
             fixture,
             ablation_coordinator_latency_ms=444,
         )
+
+
+def test_shared_go_adapter_rejects_self_consistent_v1_positive_claim() -> None:
+    fixture = copy.deepcopy(_fixture())
+    dimension = fixture["inference_ablation"]
+    assert isinstance(dimension, dict)
+    evidence = dimension["evidence"]
+    assert isinstance(evidence, dict)
+    evidence.update(
+        {
+            "status": "passed",
+            "reason": "threshold_met",
+            "ablated_mean": 0.7,
+            "delta": 0.2,
+            "semantic_factor": 1,
+        }
+    )
+    dimension["go_evidence_sha256"] = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    with pytest.raises(ConfirmationWireError, match="unsupported Go ablation"):
+        completion_report_from_go_fixture(
+            fixture,
+            ablation_coordinator_latency_ms=444,
+        )
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_active_counterfactual_unavailability_has_no_numeric_gate(mode: str) -> None:
+    evidence = _report().inference_ablation.evidence.model_dump(mode="json")
+    evidence.update(
+        {
+            "mode": mode,
+            "status": "unavailable",
+            "reason": "counterfactual_proof_unavailable",
+            "baseline_scores_sha256": None,
+            "ablated_scores_sha256": None,
+            "baseline_mean_micros": None,
+            "ablated_mean_micros": None,
+            "delta_micros": None,
+            "semantic_factor_bps": None,
+            "applied_factor_bps": None,
+        }
+    )
+
+    parsed = AblationEvidence.model_validate(evidence)
+    assert parsed.status == "unavailable"
+    assert parsed.delta_micros is None
+
+
+def test_counterfactual_reason_cannot_label_a_completed_result() -> None:
+    evidence = _report().inference_ablation.evidence.model_dump(mode="json")
+    evidence["reason"] = "counterfactual_proof_unavailable"
+
+    with pytest.raises(ValidationError, match="active unavailable"):
+        AblationEvidence.model_validate(evidence)

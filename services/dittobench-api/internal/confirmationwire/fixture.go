@@ -193,7 +193,7 @@ func (fixtureRunner) RunCase(
 		if _, err := request.Responder.Chat("openai/gpt-oss-20b", 24); err != nil {
 			return ablation.CaseRunResult{}, err
 		}
-		return ablation.CaseRunResult{Score: 0.4}, nil
+		return ablation.CaseRunResult{Score: 0.8}, nil
 	case ablation.LaneEmbedding:
 		if request.Responder == nil {
 			return ablation.CaseRunResult{}, fmt.Errorf("embedding fixture lane lacks responder")
@@ -204,7 +204,7 @@ func (fixtureRunner) RunCase(
 		if _, err := request.Responder.Embeddings([]string{"independent bounded text"}); err != nil {
 			return ablation.CaseRunResult{}, err
 		}
-		return ablation.CaseRunResult{Score: 0.5}, nil
+		return ablation.CaseRunResult{Score: 0.8}, nil
 	default:
 		return ablation.CaseRunResult{}, fmt.Errorf("unexpected fixture lane %q", request.Lane)
 	}

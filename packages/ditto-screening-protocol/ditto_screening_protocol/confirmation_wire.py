@@ -297,10 +297,10 @@ def ablation_envelope_from_go(
     if canonical["intervention"] != expected_intervention:
         raise ConfirmationWireError("ablation intervention drift")
     status = canonical["status"]
-    if status not in {"passed", "failed", "unavailable"}:
+    if status not in {"failed", "unavailable"}:
         raise ConfirmationWireError("unsupported Go ablation evidence status")
 
-    completed = status in {"passed", "failed"}
+    completed = status == "failed"
 
     usage_raw = _mapping(canonical["synthetic_usage"], "ablation synthetic usage")
     budget_raw = _mapping(usage_raw["budget"], "ablation synthetic budget")

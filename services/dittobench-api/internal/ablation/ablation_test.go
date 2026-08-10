@@ -891,6 +891,8 @@ func TestGateStatusThresholdsAndFactors(t *testing.T) {
 		{"enforce fails closed on observed drop", ModeEnforce, 0.5, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
 		{"enforce fails closed at threshold", ModeEnforce, 0.5, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
 		{"enforce fails closed below threshold", ModeEnforce, 0.500001, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
+		{"shadow drop is not causal proof", ModeShadow, 0.2, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 1},
+		{"shadow threshold boundary is not causal proof", ModeShadow, 0.5, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 1},
 		{"shadow failure neutral", ModeShadow, 0.500001, 6, nil, StatusFailed, ReasonDeltaBelowThreshold, 0, 1},
 		{"negative delta remains shadow failure", ModeShadow, 0.1, 6, func(input *EvaluateInput) {
 			input.Baseline = []CaseScore{{CaseID: "a", Score: 0.1}}
@@ -930,10 +932,10 @@ func TestGateThresholdDecisionUsesUnroundedMeansAndDelta(t *testing.T) {
 		want      Status
 	}{
 		{
-			name: "raw delta passes although separately rounded means would fail",
+			name: "raw delta is ambiguous although separately rounded means would fail",
 			// Raw delta is 0.50000098. The published means are 0.8 and 0.3,
 			// whose subtraction is only 0.5.
-			baseline: 0.80000049, ablated: 0.29999951, threshold: 0.5000005, want: StatusPassed,
+			baseline: 0.80000049, ablated: 0.29999951, threshold: 0.5000005, want: StatusUnavailable,
 		},
 		{
 			name: "raw delta fails although published delta and threshold are equal",
@@ -1192,9 +1194,13 @@ func TestAdaptiveTreatmentDetectionIsContainedToShadow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if shadow.Evidence.Status != StatusPassed || shadow.Evidence.Reason != ReasonThresholdMet ||
-			shadow.Evidence.AppliedFactor != 1 {
-			t.Fatalf("shadow did not retain observational result for %s: %+v", intervention, shadow.Evidence)
+		if shadow.Evidence.Status != StatusUnavailable || shadow.Evidence.Reason != ReasonEnforceProofUnavailable ||
+			shadow.Evidence.SemanticFactor != 0 || shadow.Evidence.AppliedFactor != 1 {
+			t.Fatalf("adaptive shadow treatment was promoted for %s: %+v", intervention, shadow.Evidence)
+		}
+		if shadow.Evidence.BaselineScoresSHA256 != "" || shadow.Evidence.AblatedScoresSHA256 != "" ||
+			shadow.Evidence.BaselineMean != 0 || shadow.Evidence.AblatedMean != 0 || shadow.Evidence.Delta != 0 {
+			t.Fatalf("ambiguous shadow treatment published a numeric gate for %s: %+v", intervention, shadow.Evidence)
 		}
 		enforce, err := Evaluate(evaluateInputFromReport(t, config, report, intervention, ModeEnforce))
 		if err != nil {
@@ -1210,12 +1216,14 @@ func TestAdaptiveTreatmentDetectionIsContainedToShadow(t *testing.T) {
 func TestGatePublishesPairedMeansAndTrustedCounts(t *testing.T) {
 	usage := usageWithCalls(t, InterventionInference, 7)
 	input := evaluationInput(InterventionInference, ModeShadow, usage)
+	input.Threshold = 0.6
+	rebindEvaluationThreshold(&input)
 	got, err := Evaluate(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Evidence.BaselineMean != 0.9 || got.Evidence.AblatedMean != 0.4 || got.Evidence.Delta != 0.5 ||
-		got.Evidence.SampleCount != 3 || got.Evidence.AffectedCallCount != 7 || got.Evidence.Threshold != 0.2 {
+		got.Evidence.SampleCount != 3 || got.Evidence.AffectedCallCount != 7 || got.Evidence.Threshold != 0.6 {
 		t.Fatalf("evidence=%+v", got.Evidence)
 	}
 	if got.Evidence.ArtifactSHA256 != testArtifactSHA ||
@@ -1225,7 +1233,7 @@ func TestGatePublishesPairedMeansAndTrustedCounts(t *testing.T) {
 		got.Evidence.CaseSetSHA256 != input.Coordinator.SelectedCaseSetSHA256 ||
 		got.Evidence.BenchVersion != BenchVersionV9 || got.Evidence.DatasetSHA256 != testDatasetSHA ||
 		got.Evidence.ThresholdManifestSHA256 != testManifestSHA ||
-		got.Evidence.SemanticFactor != 1 || got.Evidence.AppliedFactor != 1 {
+		got.Evidence.SemanticFactor != 0 || got.Evidence.AppliedFactor != 1 {
 		t.Fatalf("evidence omitted frozen bindings or factors: %+v", got.Evidence)
 	}
 	if !canonicalSHA256(got.SHA256) || !canonicalSHA256(got.Evidence.CaseSetSHA256) ||
@@ -1246,6 +1254,62 @@ func TestGatePublishesPairedMeansAndTrustedCounts(t *testing.T) {
 		bytes.Contains(got.CanonicalJSON, []byte("upstream_provider_cost_usd")) {
 		t.Fatalf("synthetic telemetry schema is not namespaced/integer-safe: %s", got.CanonicalJSON)
 	}
+}
+
+func TestProbeOnlyPositiveDeltasNeverPublishACompletedGate(t *testing.T) {
+	t.Parallel()
+	for _, intervention := range []Intervention{InterventionInference, InterventionEmbedding} {
+		for _, threshold := range []float64{0, 0.000001, 0.2, 0.5} {
+			t.Run(string(intervention)+"/threshold", func(t *testing.T) {
+				input := evaluationInput(intervention, ModeShadow, usageWithCalls(t, intervention, 6))
+				input.Threshold = threshold
+				rebindEvaluationThreshold(&input)
+				got, err := Evaluate(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.Evidence.Status != StatusUnavailable || got.Evidence.Reason != ReasonEnforceProofUnavailable {
+					t.Fatalf("probe-only positive delta qualified: %+v", got.Evidence)
+				}
+				if got.Evidence.BaselineScoresSHA256 != "" || got.Evidence.AblatedScoresSHA256 != "" ||
+					got.Evidence.BaselineMean != 0 || got.Evidence.AblatedMean != 0 || got.Evidence.Delta != 0 {
+					t.Fatalf("ambiguous probe result published numeric evidence: %+v", got.Evidence)
+				}
+				if got.Evidence.SampleCount != len(input.Baseline) || got.Evidence.AffectedCallCount != 6 ||
+					got.Evidence.CoordinatorSHA256 != input.Coordinator.CoordinatorSHA256 {
+					t.Fatalf("ambiguous result lost private audit commitment: %+v", got.Evidence)
+				}
+			})
+		}
+	}
+}
+
+func FuzzPositiveShadowDeltaIsNeverPassingEvidence(f *testing.F) {
+	f.Add(uint16(9000), uint16(1000), uint16(2000))
+	f.Add(uint16(5000), uint16(5000), uint16(0))
+	f.Add(uint16(65535), uint16(0), uint16(65535))
+	f.Fuzz(func(t *testing.T, baselineRaw, ablatedRaw, thresholdRaw uint16) {
+		baseline := float64(baselineRaw) / float64(^uint16(0))
+		ablated := float64(ablatedRaw) / float64(^uint16(0))
+		threshold := float64(thresholdRaw) / float64(^uint16(0))
+		if baseline-ablated < threshold {
+			t.Skip()
+		}
+		input := evaluationInput(InterventionInference, ModeShadow, usageWithCalls(t, InterventionInference, 2))
+		input.Baseline = []CaseScore{{CaseID: "fuzz", Score: baseline}}
+		input.Ablated = []CaseScore{{CaseID: "fuzz", Score: ablated}}
+		rebindEvaluationPopulation(&input)
+		input.Threshold = threshold
+		rebindEvaluationThreshold(&input)
+		got, err := Evaluate(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Evidence.Status == StatusPassed || got.Evidence.Reason == ReasonThresholdMet ||
+			got.Evidence.BaselineScoresSHA256 != "" || got.Evidence.AblatedScoresSHA256 != "" {
+			t.Fatalf("positive synthetic delta escaped fail-closed classification: %+v", got.Evidence)
+		}
+	})
 }
 
 func resignCoordinatorForTest(input *EvaluateInput) {

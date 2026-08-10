@@ -109,12 +109,12 @@ def test_real_go_evidence_converts_and_rebuilds_confirmation_root() -> None:
     assert report.longmemeval.evidence.schema_version == 2
     assert report.longmemeval.evidence.score.longmem_mean_micros == 500_000
     assert report.longmemeval.evidence.score.longmem_stderr_micros == 204_124
-    assert report.inference_ablation.evidence.delta_micros == 500_000
-    assert report.embedding_ablation.evidence.delta_micros == 400_000
+    assert report.inference_ablation.evidence.delta_micros == 100_000
+    assert report.embedding_ablation.evidence.delta_micros == 100_000
     assert verified.longmem_mean_micros == 500_000
     assert verified.longmem_stderr_micros == 204_124
     assert verified.ablations_complete is True
-    assert verified.ablation_semantic_factor_bps == 10_000
+    assert verified.ablation_semantic_factor_bps == 0
     assert verified.root.totals.model_dump() == {
         "request_count": 12,
         "input_tokens": 1_200,
@@ -126,7 +126,7 @@ def test_real_go_evidence_converts_and_rebuilds_confirmation_root() -> None:
     assert report.embedding_ablation.latency_ms == 222
     assert verified.root.ablation_coordinator_latency_ms == 444
     assert verified.evidence_sha256 == (
-        "844ea582b138dff8264ea97c2e70c75a3ca8cc23eb72240433f59d7bb7fda3dc"
+        "eb0daa39e43617bea27c0b6d7fd5409f33c15bf8fcf8549148ed59c6b7e0175f"
     )
 
 
@@ -148,14 +148,19 @@ def test_adapter_drops_only_verified_private_go_fields() -> None:
     assert usage["upstream_provider_cost_microusd"] == 0
 
 
-def test_real_go_shape_unavailable_evidence_is_preserved_fail_closed() -> None:
+@pytest.mark.parametrize(
+    "mode", [ConfirmationBundleMode.SHADOW, ConfirmationBundleMode.ENFORCE]
+)
+def test_real_go_shape_unavailable_evidence_is_preserved_fail_closed(
+    mode: ConfirmationBundleMode,
+) -> None:
     fixture = _fixture()
     for dimension_name in ("inference_ablation", "embedding_ablation"):
         dimension = fixture[dimension_name]
         assert isinstance(dimension, dict)
         evidence = dimension["evidence"]
         assert isinstance(evidence, dict)
-        evidence["mode"] = "enforce"
+        evidence["mode"] = mode.value
         evidence["status"] = "unavailable"
         evidence["reason"] = "counterfactual_proof_unavailable"
         evidence.pop("baseline_scores_sha256")
@@ -192,11 +197,37 @@ def test_real_go_shape_unavailable_evidence_is_preserved_fail_closed() -> None:
         settings_revision=7,
         settings_checksum=SETTINGS_SHA256,
         retest_generation=3,
-        mode=ConfirmationBundleMode.ENFORCE,
+        mode=mode,
         profile=profile,
     )
     assert verified.ablations_complete is False
     assert verified.ablation_semantic_factor_bps is None
+
+
+def test_self_consistent_v1_passed_wire_evidence_is_rejected() -> None:
+    fixture = _fixture()
+    dimension = fixture["inference_ablation"]
+    assert isinstance(dimension, dict)
+    evidence = dimension["evidence"]
+    assert isinstance(evidence, dict)
+    evidence.update(
+        {
+            "status": "passed",
+            "reason": "threshold_met",
+            "ablated_mean": 0.7,
+            "delta": 0.2,
+            "semantic_factor": 1,
+        }
+    )
+    dimension["go_evidence_sha256"] = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    with pytest.raises(ConfirmationWireError, match="unsupported Go ablation"):
+        completion_report_from_go_fixture(
+            fixture,
+            ablation_coordinator_latency_ms=ABLATION_COORDINATOR_LATENCY_MS,
+        )
 
 
 def _legacy_schema_one(payload: dict[str, object]) -> None:

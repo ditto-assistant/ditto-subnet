@@ -1039,13 +1039,17 @@ func Evaluate(input EvaluateInput) (Evaluation, error) {
 	affected := usage.affectedCalls()
 	switch {
 	case input.Mode == ModeEnforce:
-		// Contract v1 can observe a counterfactual score drop, but it does not
-		// cryptographically bind the target request trace or hide the treatment
-		// from an adaptive miner. It is therefore shadow-only and must fail
-		// closed when an operator requests enforcement.
+		// Contract v1 does not hide the treatment from an adaptive miner. It
+		// therefore cannot prove a positive counterfactual in enforce mode.
 		status, reason = StatusUnavailable, ReasonEnforceProofUnavailable
 	case deltaRaw >= input.Threshold:
-		status, reason = StatusPassed, ReasonThresholdMet
+		// A score drop is observationally ambiguous: it can mean genuine model
+		// dependence, or it can be manufactured after recognizing the synthetic
+		// lane. Never promote that ambiguity to a passing shadow result. The
+		// committed coordinator report remains available for private research,
+		// while signed evidence carries no numeric gate that could be mistaken
+		// for causal proof.
+		status, reason = StatusUnavailable, ReasonEnforceProofUnavailable
 	}
 	semanticFactor := 1.0
 	if status != StatusPassed {
@@ -1064,10 +1068,15 @@ func Evaluate(input EvaluateInput) (Evaluation, error) {
 		CoordinatorSHA256:     input.Coordinator.CoordinatorSHA256,
 		SelectedCasesSHA256:   input.Coordinator.SelectedCasesSHA256,
 		DatasetSHA256:         input.DatasetSHA256, CaseSetSHA256: caseSetSHA,
-		BaselineScoresSHA256: baselineSHA, AblatedScoresSHA256: ablatedSHA,
-		BaselineMean: baselineMean, AblatedMean: ablatedMean, Delta: delta,
 		Threshold: threshold, SampleCount: len(baseline), AffectedCallCount: affected,
 		SemanticFactor: semanticFactor, AppliedFactor: appliedFactor, SyntheticUsage: usage,
+	}
+	if status == StatusFailed {
+		evidence.BaselineScoresSHA256 = baselineSHA
+		evidence.AblatedScoresSHA256 = ablatedSHA
+		evidence.BaselineMean = baselineMean
+		evidence.AblatedMean = ablatedMean
+		evidence.Delta = delta
 	}
 	return digestEvidence(evidence)
 }

@@ -264,8 +264,12 @@ class AblationEvidence(BaseModel):
             and not self.synthetic_usage.budget_exhausted
         ):
             raise ValueError("budget-exhausted evidence lacks rejected usage")
-        if self.reason == "counterfactual_proof_unavailable" and self.mode != "enforce":
-            raise ValueError("counterfactual proof is only unavailable in enforce mode")
+        if self.reason == "counterfactual_proof_unavailable" and (
+            self.status != "unavailable" or self.mode == "off"
+        ):
+            raise ValueError(
+                "counterfactual proof reason requires an active unavailable result"
+            )
         affected = (
             self.synthetic_usage.chat_applied
             if self.intervention == "inference"
