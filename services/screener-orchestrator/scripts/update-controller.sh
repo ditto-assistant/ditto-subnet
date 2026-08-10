@@ -103,7 +103,8 @@ activate_revision() {
   systemctl start "$CONTROLLER_UNIT" || return 1
   systemctl start "$BUILDER_UNIT" || return 1
   verify_services "$revision" "$prior_epoch" || return 1
-  test "$(git -C "$CONTROLLER_ROOT" rev-parse HEAD)" = "$revision" || return 1
+  test "$(as_deploy git -C "$CONTROLLER_ROOT" rev-parse HEAD)" = "$revision" \
+    || return 1
 }
 
 install -d -o "$CONTROLLER_USER" -g "$CONTROLLER_GROUP" -m 0700 "$state_dir"
@@ -116,12 +117,13 @@ if ! as_deploy git -C "$CONTROLLER_ROOT" merge-base --is-ancestor \
   exit 1
 fi
 
-previous_sha="$(git -C "$CONTROLLER_ROOT" rev-parse HEAD)"
+previous_sha="$(as_deploy git -C "$CONTROLLER_ROOT" rev-parse HEAD)"
 previous_epoch="$(health_epoch 2>/dev/null || true)"
 if [[ -s "$deployed_marker" ]]; then
   marker_sha="$(<"$deployed_marker")"
   if [[ "$marker_sha" =~ ^[0-9a-f]{40}$ ]] \
-    && git -C "$CONTROLLER_ROOT" cat-file -e "$marker_sha^{commit}" 2>/dev/null; then
+    && as_deploy git -C "$CONTROLLER_ROOT" cat-file -e \
+      "$marker_sha^{commit}" 2>/dev/null; then
     previous_sha="$marker_sha"
   fi
 fi

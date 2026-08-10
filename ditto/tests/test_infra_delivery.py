@@ -68,6 +68,16 @@ def test_controller_deploy_proves_exact_fresh_controller_heartbeat() -> None:
         assert contract in updater
     assert ".activate_fallback == false" not in updater
     assert ".provider_ready == true" not in updater
+    assert '$(git -C "$CONTROLLER_ROOT"' not in updater
+    assert (
+        'previous_sha="$(as_deploy git -C "$CONTROLLER_ROOT" rev-parse HEAD)"'
+        in updater
+    )
+    assert (
+        'test "$(as_deploy git -C "$CONTROLLER_ROOT" rev-parse HEAD)" = "$revision"'
+        in updater
+    )
+    assert 'as_deploy git -C "$CONTROLLER_ROOT" cat-file -e' in updater
 
 
 def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
