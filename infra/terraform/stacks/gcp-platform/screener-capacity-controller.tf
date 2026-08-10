@@ -156,6 +156,33 @@ resource "google_project_iam_member" "screener_controller_autoscaler_reader" {
   member  = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
 
+# Compute rejects manual MIG resizing even in ONLY_SCALE_OUT mode. The
+# controller pauses this one emergency autoscaler around a fenced resize and
+# restores it in a finally path. Keep that update permission conditioned to the
+# exact production autoscaler; the unconditional role above remains list-only.
+resource "google_project_iam_custom_role" "screener_controller_autoscaler_updater" {
+  count   = local.screener_capacity_controller_count
+  project = var.project
+  role_id = "dittoScreenerAutoscalerUpdater"
+  title   = "Ditto screener autoscaler updater"
+  permissions = [
+    "compute.autoscalers.update",
+  ]
+}
+
+resource "google_project_iam_member" "screener_controller_autoscaler_updater" {
+  count   = local.screener_capacity_controller_count
+  project = var.project
+  role    = google_project_iam_custom_role.screener_controller_autoscaler_updater[0].name
+  member  = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
+
+  condition {
+    title       = "only_ditto_screener_autoscaler"
+    description = "Restrict controller autoscaler mode changes to the production screener fleet."
+    expression  = "resource.name.endsWith('/regions/${var.region}/autoscalers/ditto-screener-fleet')"
+  }
+}
+
 module "screener_capacity_controller_vm" {
   source   = "../../modules/compute/gcp"
   count    = local.screener_capacity_controller_count

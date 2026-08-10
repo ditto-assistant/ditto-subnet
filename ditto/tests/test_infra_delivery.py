@@ -74,12 +74,29 @@ def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
     terraform = (GCP_ROOT / "screener-capacity-controller.tf").read_text()
     assert 'role    = "roles/compute.instanceAdmin.v1"' not in terraform
     assert '"compute.autoscalers.list"' in terraform
+    assert '"compute.autoscalers.update"' in terraform
     assert 'role_id = "dittoScreenerAutoscalerReader"' in terraform
-    autoscaler_binding = terraform.split(
+    reader_role = terraform.split(
+        'resource "google_project_iam_custom_role" '
+        '"screener_controller_autoscaler_reader"',
+        1,
+    )[1].split(
         'resource "google_project_iam_member" "screener_controller_autoscaler_reader"',
         1,
+    )[0]
+    assert '"compute.autoscalers.list"' in reader_role
+    assert '"compute.autoscalers.update"' not in reader_role
+    reader_binding = terraform.split(
+        'resource "google_project_iam_member" "screener_controller_autoscaler_reader"',
+        1,
+    )[1].split("\n}\n", 1)[0]
+    assert "condition" not in reader_binding
+    updater_binding = terraform.split(
+        'resource "google_project_iam_member" "screener_controller_autoscaler_updater"',
+        1,
     )[1].split('module "screener_capacity_controller_vm"', 1)[0]
-    assert "condition" not in autoscaler_binding
+    assert "only_ditto_screener_autoscaler" in updater_binding
+    assert "/autoscalers/ditto-screener-fleet" in updater_binding
     assert '"compute.instanceGroupManagers.get"' in terraform
     assert '"compute.instanceGroupManagers.update"' in terraform
     assert "compute.regionInstanceGroupManagers" not in terraform

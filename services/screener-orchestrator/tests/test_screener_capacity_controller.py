@@ -9,6 +9,7 @@ from unittest.mock import patch
 from screener_capacity.controller import (
     ControllerError,
     Demand,
+    GCEFleet,
     GCPBootstrapTokenMinter,
     PlatformControl,
     ProviderCounts,
@@ -115,6 +116,9 @@ class _GCE:
     def counts(self) -> ProviderCounts:
         return ProviderCounts(healthy=self._target)
 
+    def ensure_watchdog(self) -> None:
+        return None
+
     def resize(self, target: int) -> None:
         self.resized.append(target)
         if self.operations is not None:
@@ -169,6 +173,106 @@ class _Targon:
 
 
 class CapacityDecisionTests(unittest.TestCase):
+    @patch("screener_capacity.controller.subprocess.run")
+    def test_gce_resize_pauses_and_restores_scale_out_watchdog(
+        self, run: object
+    ) -> None:
+        run.return_value = SimpleNamespace(stdout="")  # type: ignore[attr-defined]
+        fleet = GCEFleet(project="test", region="region", mig="fleet")
+
+        fleet.resize(0)
+
+        commands = [call.args[0] for call in run.call_args_list]  # type: ignore[attr-defined]
+        self.assertIn("--mode", commands[0])
+        self.assertIn("off", commands[0])
+        self.assertIn("resize", commands[1])
+        self.assertIn("--size", commands[1])
+        self.assertIn("0", commands[1])
+        self.assertIn("--mode", commands[2])
+        self.assertIn("only-scale-out", commands[2])
+
+    @patch("screener_capacity.controller.subprocess.run")
+    def test_gce_resize_restores_watchdog_after_resize_failure(
+        self, run: object
+    ) -> None:
+        from subprocess import CalledProcessError
+
+        run.side_effect = [
+            SimpleNamespace(stdout=""),
+            CalledProcessError(1, ["gcloud", "resize"]),
+            SimpleNamespace(stdout=""),
+        ]
+        fleet = GCEFleet(project="test", region="region", mig="fleet")
+
+        with self.assertRaisesRegex(ControllerError, "managed-group operation"):
+            fleet.resize(1)
+
+        restore = run.call_args_list[-1].args[0]  # type: ignore[attr-defined]
+        self.assertIn("only-scale-out", restore)
+
+    @patch("screener_capacity.controller.subprocess.run")
+    def test_gce_resize_fails_closed_when_watchdog_restore_fails(
+        self, run: object
+    ) -> None:
+        from subprocess import CalledProcessError
+
+        run.side_effect = [
+            SimpleNamespace(stdout=""),
+            SimpleNamespace(stdout=""),
+            CalledProcessError(1, ["gcloud", "update-autoscaling"]),
+        ]
+        fleet = GCEFleet(project="test", region="region", mig="fleet")
+
+        with self.assertRaisesRegex(ControllerError, "watchdog restore failed"):
+            fleet.resize(0)
+
+        self.assertEqual(run.call_count, 3)  # type: ignore[attr-defined]
+
+    @patch("screener_capacity.controller.subprocess.run")
+    def test_gce_watchdog_recovery_is_idempotent(self, run: object) -> None:
+        run.side_effect = [SimpleNamespace(stdout="OFF\n"), SimpleNamespace(stdout="")]
+        fleet = GCEFleet(project="test", region="region", mig="fleet")
+
+        fleet.ensure_watchdog()
+
+        self.assertEqual(run.call_count, 2)  # type: ignore[attr-defined]
+        self.assertIn("only-scale-out", run.call_args_list[-1].args[0])  # type: ignore[attr-defined]
+
+    @patch("screener_capacity.controller.subprocess.run")
+    def test_gce_watchdog_ready_requires_no_mutation(self, run: object) -> None:
+        run.return_value = SimpleNamespace(stdout="ONLY_SCALE_OUT\n")  # type: ignore[attr-defined]
+        fleet = GCEFleet(project="test", region="region", mig="fleet")
+
+        fleet.ensure_watchdog()
+
+        self.assertEqual(run.call_count, 1)  # type: ignore[attr-defined]
+
+    def test_reconcile_reports_watchdog_recovery_failure(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory), capability="nogo")
+            platform = _Platform(Demand(runnable=0, active=0, desired=0))
+            gce = _GCE()
+
+            def fail_watchdog() -> None:
+                raise ControllerError("test watchdog failure")
+
+            gce.ensure_watchdog = fail_watchdog  # type: ignore[method-assign]
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                self.assertRaisesRegex(ControllerError, "watchdog failure"),
+            ):
+                reconcile(settings)
+
+            self.assertFalse(platform.renewed[-1]["provider_ready"])
+            self.assertEqual(
+                platform.renewed[-1]["last_provider_error_code"],
+                "GCE_WATCHDOG_RESTORE_FAILED",
+            )
+
     def test_provider_visible_worker_env_rejects_durable_credentials(self) -> None:
         _validate_public_worker_env({"LOG_LEVEL": "info", "PUBLIC_MODE": "true"})
         with self.assertRaisesRegex(ControllerError, "SOURCE_API_TOKEN"):
@@ -348,6 +452,7 @@ class CapacityDecisionTests(unittest.TestCase):
             gce = SimpleNamespace(
                 target=lambda: 0,
                 counts=lambda: ProviderCounts(),
+                ensure_watchdog=lambda: None,
                 resize=resized.append,
             )
             with (

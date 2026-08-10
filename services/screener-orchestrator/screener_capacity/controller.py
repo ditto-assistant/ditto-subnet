@@ -294,6 +294,8 @@ class PlatformControl:
 
 
 class GCEFleet:
+    WATCHDOG_MODE = "ONLY_SCALE_OUT"
+
     def __init__(
         self,
         *,
@@ -373,18 +375,68 @@ class GCEFleet:
                 pending += 1
         return ProviderCounts(healthy=healthy, pending=pending, draining=draining)
 
-    def resize(self, target: int) -> None:
+    def _autoscaler_mode(self) -> str:
+        output = self._run(
+            "compute",
+            "instance-groups",
+            "managed",
+            "describe",
+            self.mig,
+            "--region",
+            self.region,
+            "--format=value(autoscaler.autoscalingPolicy.mode)",
+        )
+        mode = output.strip().upper()
+        if not mode:
+            raise ControllerError("GCE autoscaler mode is missing")
+        return mode
+
+    def _set_autoscaler_mode(self, mode: str) -> None:
         self._run(
             "compute",
             "instance-groups",
             "managed",
-            "resize",
+            "update-autoscaling",
             self.mig,
             "--region",
             self.region,
-            "--size",
-            str(target),
+            "--mode",
+            mode,
         )
+
+    def ensure_watchdog(self) -> None:
+        """Recover the independent scale-out watchdog after an interrupted resize."""
+        if self._autoscaler_mode() != self.WATCHDOG_MODE:
+            self._set_autoscaler_mode("only-scale-out")
+
+    def resize(self, target: int) -> None:
+        # Compute rejects manual resize while any autoscaler mode is active,
+        # including ONLY_SCALE_OUT. Keep the emergency policy configured, pause
+        # it only around the fenced mutation, and restore it even on failure.
+        resize_error: ControllerError | None = None
+        try:
+            self._set_autoscaler_mode("off")
+            self._run(
+                "compute",
+                "instance-groups",
+                "managed",
+                "resize",
+                self.mig,
+                "--region",
+                self.region,
+                "--size",
+                str(target),
+            )
+        except ControllerError as error:
+            resize_error = error
+        try:
+            self._set_autoscaler_mode("only-scale-out")
+        except ControllerError as restore_error:
+            raise ControllerError(
+                "GCE autoscaler watchdog restore failed"
+            ) from restore_error
+        if resize_error is not None:
+            raise resize_error
 
 
 class GCPBootstrapTokenMinter:
@@ -902,6 +954,18 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     # Lease acquisition/renewal fences every mutation below.  A concurrent
     # epoch receives 409 while the existing lease remains live.
     platform.renew(snapshot)
+    try:
+        platform.fence(epoch=settings.epoch)
+        gce_fleet.ensure_watchdog()
+    except ControllerError:
+        _record_provider_failure(
+            platform,
+            snapshot,
+            state_file=settings.state_file,
+            code="GCE_WATCHDOG_RESTORE_FAILED",
+            detail="GCE emergency autoscaler restore failed",
+        )
+        raise
     deleted_targon_uids: set[str] = set()
     if target > current_target:
         # Bring fallback capacity up before touching Targon. A teardown failure
