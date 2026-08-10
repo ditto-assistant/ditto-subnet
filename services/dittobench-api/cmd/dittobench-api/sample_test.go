@@ -68,16 +68,22 @@ func TestSampleIncludesAnswerKeys(t *testing.T) {
 
 // TestSampleShapeMatchesProfile checks the sample is a real full-profile dataset
 // (60 tool cases), so the community sees the real size, and it pins the
-// active v8 contract at the API surface.
+// two executable contracts at the API surface without changing the generator's
+// separate CurrentBenchVersion activation boundary.
 func TestSampleShapeMatchesProfile(t *testing.T) {
 	s := &server{}
 
-	_, v8 := getSample(t, s, "?run_size=full&bench_version=8")
-	if len(v8.ToolCases) == 0 || userScopedCases(v8) == 0 {
-		t.Fatal("full v8 profile must include tool and user-scoped memory cases")
-	}
-	if len(v8.MemoryWaves) < 1 {
-		t.Fatalf("expected at least one memory wave, got %d", len(v8.MemoryWaves))
+	for _, version := range []int{8, 9} {
+		_, artifact := getSample(t, s, "?run_size=full&bench_version="+itoa(version))
+		if artifact.BenchVersion != version {
+			t.Fatalf("sample version = %d, want %d", artifact.BenchVersion, version)
+		}
+		if len(artifact.ToolCases) == 0 || userScopedCases(artifact) == 0 {
+			t.Fatalf("full v%d profile must include tool and user-scoped memory cases", version)
+		}
+		if len(artifact.MemoryWaves) < 1 {
+			t.Fatalf("v%d expected at least one memory wave, got %d", version, len(artifact.MemoryWaves))
+		}
 	}
 }
 
@@ -114,7 +120,7 @@ func TestSampleRejectsBadInput(t *testing.T) {
 		{"index too high", "?sample=99", "sample must be between"},
 		{"negative index", "?sample=-1", "sample must be between"},
 		{"retired bench version", "?bench_version=7", "unsupported bench_version"},
-		{"unsupported bench version", "?bench_version=9", "unsupported bench_version"},
+		{"unsupported bench version", "?bench_version=10", "unsupported bench_version"},
 		{"non-integer bench version", "?bench_version=latest", "bench_version must be an integer"},
 	}
 	for _, c := range cases {

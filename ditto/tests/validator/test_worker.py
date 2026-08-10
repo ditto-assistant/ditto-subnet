@@ -3088,7 +3088,7 @@ class TestRunOnce:
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
 
-        with pytest.raises(PlatformError, match="only v8 is active"):
+        with pytest.raises(PlatformError, match="supported versions are"):
             await worker._evaluate(uuid4(), "ab" * 32, seed=7)
         dittobench.score_tarball.assert_not_awaited()
 
@@ -3130,10 +3130,10 @@ class TestRunOnce:
             "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
         )
 
-    async def test_v8_ticket_artifact_scorer_and_signature_are_version_bound(
-        self,
+    @pytest.mark.parametrize("bench_version", [8, 9])
+    async def test_ticket_artifact_scorer_and_signature_are_version_bound(
+        self, bench_version: int
     ) -> None:
-        bench_version = 8
         job = _job("5MinerA" + "x" * 41).model_copy(
             update={
                 "bench_version": bench_version,
@@ -3156,12 +3156,24 @@ class TestRunOnce:
             }
         )
         platform.get_artifact = AsyncMock(return_value=artifact)
-        report = _report("run-v8", 0.9).model_copy(
-            update={"bench_version": bench_version}
-        )
+        report_update: dict[str, object] = {"bench_version": bench_version}
+        transcript = b'{"v9":"transcript"}'
+        if bench_version == 9:
+            report_update.update(
+                {
+                    "details": {
+                        "bench_version": 9,
+                        "transcript_sha256": hashlib.sha256(transcript).hexdigest(),
+                    },
+                    "base_evidence_sha256": "56" * 32,
+                }
+            )
+            platform.submit_transcript = AsyncMock()
+        report = _report(f"run-v{bench_version}", 0.9).model_copy(update=report_update)
         dittobench = MagicMock(
             score_tarball=AsyncMock(return_value=report),
             last_details={"bench_version": bench_version},
+            take_transcript=MagicMock(return_value=transcript),
         )
         keypair = MagicMock(sign=MagicMock(return_value=b"\x01" * 64))
         worker = ValidatorWorker(
@@ -3177,13 +3189,13 @@ class TestRunOnce:
         kwargs = dittobench.score_tarball.await_args.kwargs
         assert kwargs["bench_version"] == bench_version
         domain = f":{bench_version}".encode()
-        assert any(
-            call.args[0].endswith(domain) for call in keypair.sign.call_args_list
-        )
+        assert any(domain in call.args[0] for call in keypair.sign.call_args_list)
         assert (
             platform.submit_score.await_args.kwargs["report"].bench_version
             == bench_version
         )
+        if bench_version == 9:
+            platform.submit_transcript.assert_awaited_once()
 
     async def test_ticket_artifact_benchmark_version_mismatch_is_terminal(self) -> None:
         job = _job("5MinerA" + "x" * 41).model_copy(

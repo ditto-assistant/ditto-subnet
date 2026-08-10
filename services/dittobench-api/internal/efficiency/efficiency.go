@@ -270,15 +270,17 @@ func ProductionReady() bool {
 // manifest is embedded (scoring_enabled=false, permanent — usage is audited but
 // never scored); v5/v6 retain the existing Qwen calibration. Whether a ready
 // version is actually dispatched/scored is the platform's benchmark rollout
-// decision (backroom-controlled active bench, rollback to v6 supported); there
-// is deliberately no validator-side activation flag.
+// decision (backroom-controlled active bench); there is deliberately no
+// validator-side activation flag. V9 retains the reviewed v8 quality-only
+// authority while adding its own request-normalization and score-gate contract
+// in the scorer pipeline.
 func ProductionReadyForVersion(benchVersion int) bool {
 	switch benchVersion {
 	case protocol.BenchVersionV5, protocol.BenchVersionV6:
 		return ProductionReady()
 	case protocol.BenchVersionV7:
 		return ReadyForV7QualityOnly(productionV7Manifest)
-	case protocol.BenchVersionV8:
+	case protocol.BenchVersionV8, protocol.BenchVersionV9:
 		return ReadyForV8QualityOnly(productionV8Contract)
 	default:
 		return false

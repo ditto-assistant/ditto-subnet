@@ -360,11 +360,16 @@ type capabilitiesResponse struct {
 // shared with the version command so an operator can ask an unstarted container
 // exactly what a validator would negotiate with it.
 func supportedBenchVersions() []int {
-	if efficiency.ProductionReadyForVersion(protocol.BenchVersionV8) &&
-		efficiency.ValidV8Readiness(efficiency.V8Readiness()) {
-		return []int{protocol.BenchVersionV8}
+	if !efficiency.ValidV8Readiness(efficiency.V8Readiness()) {
+		return nil
 	}
-	return nil
+	versions := make([]int, 0, 2)
+	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9} {
+		if protocol.SupportedBenchVersion(version) && efficiency.ProductionReadyForVersion(version) {
+			versions = append(versions, version)
+		}
+	}
+	return versions
 }
 
 type v8IsolationReporter interface {
@@ -981,12 +986,14 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 
 func requestedBenchVersion(requested int) (int, string) {
 	if requested == 0 {
-		return 0, "bench_version is required (supported: 8)"
+		return 0, "bench_version is required (supported: 8, 9)"
 	}
-	if requested != protocol.BenchVersionV8 {
-		return 0, "unsupported bench_version (supported: 8)"
+	for _, version := range supportedBenchVersions() {
+		if requested == version {
+			return requested, ""
+		}
 	}
-	return requested, ""
+	return 0, "unsupported bench_version (supported: 8, 9)"
 }
 
 func toolPrerequisiteWave(toolCases []protocol.ToolCase) (protocol.SeedRequest, error) {

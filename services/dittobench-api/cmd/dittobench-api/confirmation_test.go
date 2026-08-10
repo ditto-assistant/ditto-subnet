@@ -852,7 +852,7 @@ func TestConfirmationRoutesRequireControlCredential(t *testing.T) {
 	}
 }
 
-func TestConfirmationExecutorDoesNotActivatePublicV9Capability(t *testing.T) {
+func TestConfirmationExecutorDoesNotControlOrdinaryV9Capability(t *testing.T) {
 	base := &server{
 		softwareVersion: "0.10.0",
 		sourceRevision:  testSourceRevision,
@@ -888,8 +888,8 @@ func TestConfirmationExecutorDoesNotActivatePublicV9Capability(t *testing.T) {
 	if err := json.Unmarshal(qualifiedRecorder.Body.Bytes(), &capabilities); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(capabilities.SupportedBenchVersions, []int{8}) {
-		t.Fatalf("supported versions = %v, want v8 only", capabilities.SupportedBenchVersions)
+	if !reflect.DeepEqual(capabilities.SupportedBenchVersions, []int{8, 9}) {
+		t.Fatalf("supported versions = %v, want ordinary v8 and v9", capabilities.SupportedBenchVersions)
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(qualifiedRecorder.Body.Bytes(), &raw); err != nil {
@@ -900,8 +900,8 @@ func TestConfirmationExecutorDoesNotActivatePublicV9Capability(t *testing.T) {
 			t.Fatalf("internal v9 readiness leaked into public capabilities as %q", key)
 		}
 	}
-	if got, message := requestedBenchVersion(9); got != 0 || !strings.Contains(message, "unsupported") {
-		t.Fatalf("public v9 score request accepted: (%d, %q)", got, message)
+	if got, message := requestedBenchVersion(9); got != 9 || message != "" {
+		t.Fatalf("ordinary v9 score request rejected: (%d, %q)", got, message)
 	}
 }
 

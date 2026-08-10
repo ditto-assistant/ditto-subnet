@@ -54,6 +54,7 @@ from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
 from ditto.validator.config import lease_budget_seconds
 from ditto.validator.crn import confirmation_seeds
+from ditto.validator.dittobench import SUPPORTED_BENCH_VERSIONS
 from ditto.validator.errors import (
     DittobenchError,
     LeaseDeadlineError,
@@ -141,6 +142,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _ACTIVE_BENCH_VERSION = 8
+
+
+def _supports_bench_version(bench_version: int | None) -> bool:
+    """Return whether this validator can execute a platform-issued contract."""
+
+    return bench_version in SUPPORTED_BENCH_VERSIONS
+
 
 _DRAIN_HEARTBEAT_SECONDS = 5.0
 _BOOTSTRAP_SELF_RESUME_SECONDS = 30.0
@@ -2002,7 +2010,7 @@ class ValidatorWorker:
                 received_seeds = tuple(
                     dataset.seed for dataset in job.confirmation_datasets
                 )
-                if job.bench_version != _ACTIVE_BENCH_VERSION:
+                if not _supports_bench_version(job.bench_version):
                     logger.warning(
                         "top-five confirmation received unsupported benchmark "
                         "version agent=%s version=%r",
@@ -2618,11 +2626,12 @@ class ValidatorWorker:
     async def _activate_ticket_inference(
         self, job: JobResponse
     ) -> InferenceBrokerSession | None:
-        """Exchange and bind inference for an active v8 ticket."""
+        """Exchange and bind inference for an executable benchmark ticket."""
         bench_version = job.bench_version or DEFAULT_BENCH_VERSION
-        if bench_version != _ACTIVE_BENCH_VERSION:
+        if not _supports_bench_version(bench_version):
             raise ValidatorInfrastructureError(
-                f"unsupported benchmark version {bench_version!r}; only v8 is active"
+                f"unsupported benchmark version {bench_version!r}; "
+                f"supported versions are {SUPPORTED_BENCH_VERSIONS}"
             )
         if self._config.dittobench_mock:
             return None
@@ -2776,10 +2785,10 @@ class ValidatorWorker:
         than lend the ticket a signature. Tickets without a block hash
         (pre-derivation agents) proceed as before.
         """
-        if job.bench_version != _ACTIVE_BENCH_VERSION:
+        if not _supports_bench_version(job.bench_version):
             raise PlatformError(
                 f"unsupported benchmark version {job.bench_version!r}; "
-                "only v8 is active"
+                f"supported versions are {SUPPORTED_BENCH_VERSIONS}"
             )
         if (
             job.minimum_screening_policy_version != 9
@@ -2917,9 +2926,10 @@ class ValidatorWorker:
         ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
-        if bench_version != _ACTIVE_BENCH_VERSION:
+        if not _supports_bench_version(bench_version):
             raise PlatformError(
-                f"unsupported benchmark version {bench_version!r}; only v8 is active"
+                f"unsupported benchmark version {bench_version!r}; "
+                f"supported versions are {SUPPORTED_BENCH_VERSIONS}"
             )
         artifact = await self._platform.get_artifact(agent_id)
         # The caller and the artifact response both carry the registered digest; a

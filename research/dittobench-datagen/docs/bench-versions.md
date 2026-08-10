@@ -20,7 +20,7 @@ applied to an existing version. It ships as a new one.
 | 6 | `2026-10-01` | Memory-as-data and the complexity suite; retains the v5 scoring contract. |
 | 7 | `2026-11-01` | Platform-owned OpenRouter inference with locked `openai/gpt-oss-20b`, and the difficulty release: a version-gated hard-case suite roughly an order of magnitude harder for a non-reasoning harness while a correct trajectory still scores full marks. |
 | 8 | `2026-12-01` | The answering-machine-proof release: natural requests whose route depends on seeded prior context, semantic enum/identifier resolution without magic free-form strings, a larger computed-memory share, and stricter deterministic answer grading. |
-| 9 (pre-activation) | `2027-01-01` | A qualification contract for the Bench v9 family mix and launch gates. Explicit generation and offline audit are available; the advertised runtime contract remains v8 until activation. |
+| 9 (pre-activation) | `2027-01-01` | A qualification contract for the Bench v9 family mix and launch gates. Explicit generation, offline audit, and ordinary runtime execution are available; Platform activation remains separate and v8 stays current until rollout. |
 
 ## V9 grader hardening and canned-response audit
 

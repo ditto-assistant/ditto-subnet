@@ -1060,7 +1060,7 @@ jobs:
               .source_revision == $sha and
               .software_version == $version and
               (.source_revision_mismatch | not) and
-              (.supported_bench_versions | index(8) != null)
+              (.supported_bench_versions | sort == [8, 9])
             ' >/dev/null
 
   # ---------------------------------------------------------------------------

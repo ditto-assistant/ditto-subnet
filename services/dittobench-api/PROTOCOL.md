@@ -461,10 +461,11 @@ validator infrastructure and fails the run closed; it is never converted into
 an agent score. V7 artifacts carry no prerequisite facts and preserve their
 historical seed/tool ordering.
 
-Capability advertisement is not activation. A scorer advertises v8 only when
-its embedded quality-only manifest binds the exact dataset, route, model, and
-embedding identities. The platform's backroom-controlled benchmark target must
-separately select v8 before any v8 ticket can be dispatched.
+Capability advertisement is not activation. A scorer advertises v8 and v9 only
+when its embedded quality-only authority is technically ready; each execution
+path then enforces its exact dataset, route, model, embedding, and score-gate
+identities. The platform's backroom-controlled benchmark target remains the
+separate authority that selects which supported version is dispatched.
 
 ### Prohibited: content-keyed mutation of the graded response
 

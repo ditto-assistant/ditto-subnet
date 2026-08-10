@@ -84,9 +84,10 @@ _STABLE_COUNT_STATUSES = {"running", "waiting_for_relay", "scoring", "done"}
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 
-# The active validator drives v8 only. Earlier contracts remain readable in
-# historical ledger data, but are never negotiated or submitted for scoring.
-_SUPPORTED_BENCH_VERSIONS = (8,)
+# Executable scorer contracts. This is deliberately separate from the
+# platform-selected active benchmark: validators can advertise and execute v9
+# before the rollout control plane starts issuing v9 tickets.
+SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = (8, 9)
 
 
 # Scorer identity faults. Both stop benchmark advertisement and both
@@ -604,12 +605,12 @@ class DittobenchClient:
     async def _observe_scorer_benchmark_capability(
         self, stack: ValidatorStackIdentity
     ) -> ScorerBenchmarkCapability:
-        """Observe v8 scorer support and bind it to signed stack identity.
+        """Observe scorer support and bind it to signed stack identity.
 
         Missing routes, malformed replies, timeouts, source mismatches, and
-        pre-v8 capability claims advertise no work. Forward-version claims may
-        accompany v8, but this validator advertises only the v8 contract it can
-        drive.
+        retired-only capability claims advertise no work. Forward-version claims
+        may accompany v8/v9, but this validator publishes only the intersection
+        of contracts it can execute.
 
         The revision the scorer reports is only trustworthy when it is a
         property of the running binary. ``source_revision_origin`` says which it
@@ -725,13 +726,13 @@ class DittobenchClient:
         # Capability negotiation is an intersection, not an assertion that both
         # processes advertise identical histories. During a rolling update an
         # older scorer may still describe a retired contract alongside v8. The
-        # validator must ignore that extra metadata and expose only the v8
-        # contract it can actually execute; retired-only scorers still fail the
+        # validator must ignore that extra metadata and expose only contracts it
+        # can actually execute; retired-only scorers still fail the
         # empty-intersection check below.
         observed_versions = tuple(
             version
             for version in advertised_versions
-            if version in _SUPPORTED_BENCH_VERSIONS
+            if version in SUPPORTED_BENCH_VERSIONS
         )
         if not observed_versions:
             return ScorerBenchmarkCapability(
@@ -933,7 +934,7 @@ class DittobenchClient:
         dataset). The deprecated unversioned scoring and implicit practice
         routes are not used.
         """
-        if bench_version is None or bench_version not in _SUPPORTED_BENCH_VERSIONS:
+        if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         if self._config.dittobench_mock:
             self.last_details = {}
@@ -1001,7 +1002,7 @@ class DittobenchClient:
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
     ) -> str:
-        if bench_version is None or bench_version not in _SUPPORTED_BENCH_VERSIONS:
+        if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         body: dict[str, object] = {
             "tarball_url": tarball_url,
@@ -1115,7 +1116,7 @@ class DittobenchClient:
     ) -> ScoreReport:
         if (
             expected_bench_version is None
-            or expected_bench_version not in _SUPPORTED_BENCH_VERSIONS
+            or expected_bench_version not in SUPPORTED_BENCH_VERSIONS
         ):
             raise DittobenchError(
                 f"unsupported benchmark version {expected_bench_version!r}"

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -109,7 +110,7 @@ func TestVersionedScoreRequiresSupportedBenchVersion(t *testing.T) {
 	}{
 		{name: "omitted", body: `{` + base + `}`, want: "bench_version is required"},
 		{name: "old v1", body: `{"bench_version":1,` + base + `}`, want: "unsupported bench_version"},
-		{name: "future", body: `{"bench_version":9,` + base + `}`, want: "unsupported bench_version"},
+		{name: "future", body: `{"bench_version":10,` + base + `}`, want: "unsupported bench_version"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
@@ -150,26 +151,37 @@ func TestRetiredBenchmarkVersionsAreRejected(t *testing.T) {
 	}
 }
 
-func TestBenchmarkV8IntrinsicallyRequiresTicketInference(t *testing.T) {
-	s := newScoreTestServer()
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v2/score", strings.NewReader(`{"bench_version":8}`))
-	s.handleVersionedScore(rr, req)
-	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "ticket inference session is required") {
-		t.Fatalf("expected intrinsic v8 ticket inference 503, got %d %s", rr.Code, rr.Body.String())
+func TestCurrentBenchmarksIntrinsicallyRequireTicketInference(t *testing.T) {
+	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			s := newScoreTestServer()
+			rr := httptest.NewRecorder()
+			body := fmt.Sprintf(`{"bench_version":%d}`, version)
+			req := httptest.NewRequest(http.MethodPost, "/v2/score", strings.NewReader(body))
+			s.handleVersionedScore(rr, req)
+			if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "ticket inference session is required") {
+				t.Fatalf("expected intrinsic v%d ticket inference 503, got %d %s", version, rr.Code, rr.Body.String())
+			}
+		})
 	}
 }
 
-func TestRequestedBenchVersionSupportsOnlyV8(t *testing.T) {
+func TestRequestedBenchVersionSupportsV8AndV9WithoutImplicitDefault(t *testing.T) {
 	if got, msg := requestedBenchVersion(0); got != 0 || !strings.Contains(msg, "required") {
 		t.Fatalf("omitted version accepted: (%d, %q)", got, msg)
 	}
 	if got, msg := requestedBenchVersion(8); got != 8 || msg != "" {
 		t.Fatalf("explicit v8 rejected: (%d, %q)", got, msg)
 	}
+	if got, msg := requestedBenchVersion(9); got != 9 || msg != "" {
+		t.Fatalf("explicit v9 rejected: (%d, %q)", got, msg)
+	}
 	for version := 2; version <= 7; version++ {
 		if got, msg := requestedBenchVersion(version); got != 0 || !strings.Contains(msg, "unsupported") {
 			t.Fatalf("retired v%d accepted: (%d, %q)", version, got, msg)
 		}
+	}
+	if got, msg := requestedBenchVersion(10); got != 0 || !strings.Contains(msg, "unsupported") {
+		t.Fatalf("future v10 accepted: (%d, %q)", got, msg)
 	}
 }

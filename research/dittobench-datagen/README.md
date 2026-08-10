@@ -82,9 +82,10 @@ Run sizes: `small` (smoke), `medium`, `full` (the scored profile).
 
 `-bench-version` is required. Use the version published with the score you are
 auditing; never substitute the latest version. Explicit generation supports v2
-through the pre-activation v9 contract; `CurrentBenchVersion` and the advertised
-runtime capability remain v8. For the public full-profile seed `123456789`, the canonical
-SHA-256 vectors are:
+through the pre-activation v9 contract. `CurrentBenchVersion` remains v8 while
+the runtime advertises both executable contracts, v8 and v9; Platform rollout
+state separately controls which one is active. For the public full-profile seed
+`123456789`, the canonical SHA-256 vectors are:
 
 | Version | Dataset epoch | SHA-256 |
 | --- | --- | --- |

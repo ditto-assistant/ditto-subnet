@@ -335,6 +335,15 @@ func TestEmbeddedV7ManifestIsQualityOnlyProductionReady(t *testing.T) {
 	}
 }
 
+func TestV9TechnicalReadinessDoesNotActivateCurrentVersion(t *testing.T) {
+	if !ProductionReadyForVersion(protocol.BenchVersionV9) {
+		t.Fatal("v9 ordinary execution should inherit the reviewed quality-only authority")
+	}
+	if protocol.CurrentBenchVersion != protocol.BenchVersionV8 {
+		t.Fatalf("technical readiness changed active version to %d", protocol.CurrentBenchVersion)
+	}
+}
+
 func TestEmbeddingV7ManifestDoesNotChangeV6QwenLookup(t *testing.T) {
 	v5 := ManifestSnapshot()
 	baseline := v5.Baselines[0]

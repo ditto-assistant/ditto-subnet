@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,8 +56,10 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 		t.Fatalf("wrong feature set: %v", got.Features)
 	}
 	want := []int{}
-	if efficiency.ProductionReadyForVersion(8) {
-		want = append(want, 8)
+	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9} {
+		if efficiency.ProductionReadyForVersion(version) {
+			want = append(want, version)
+		}
 	}
 	if len(got.SupportedBenchVersions) != len(want) {
 		t.Fatalf("wrong supported versions: %v (want %v)", got.SupportedBenchVersions, want)
@@ -95,6 +98,19 @@ func TestV8CapabilityIsQualityOnlyAndFailClosed(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("technically ready v8 was not advertised")
+	}
+}
+
+func TestV9CapabilitySharesQualityAuthorityWithoutChangingCurrentVersion(t *testing.T) {
+	if protocol.CurrentBenchVersion != protocol.BenchVersionV8 {
+		t.Fatalf("capability support activated v9: current=%d", protocol.CurrentBenchVersion)
+	}
+	if !efficiency.ProductionReadyForVersion(protocol.BenchVersionV9) {
+		t.Fatal("v9 ordinary scoring contract is not technically ready")
+	}
+	got := capabilitiesOf(t, &server{softwareVersion: "0.10.0", sourceRevision: testSourceRevision})
+	if !reflect.DeepEqual(got.SupportedBenchVersions, []int{protocol.BenchVersionV8, protocol.BenchVersionV9}) {
+		t.Fatalf("supported versions = %v, want v8 and v9", got.SupportedBenchVersions)
 	}
 }
 
