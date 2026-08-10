@@ -32,6 +32,7 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi import HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -120,10 +121,14 @@ class _App:
         self.state = state
 
 
-async def _seed_v7_grant(
-    maker: Any, *, config: InferenceProxyConfig, public_key: str
+async def _seed_grant(
+    maker: Any,
+    *,
+    config: InferenceProxyConfig,
+    public_key: str,
+    bench_version: int = 7,
 ) -> tuple[UUID, str, int]:
-    """One agent + v7 ticket + a grant minted through the real v7 route path."""
+    """One agent, ticket, and grant minted through the real routed path."""
     now = datetime.now(UTC)
     async with maker() as session, session.begin():
         # A calibrated aggregate route, so ``select_route`` admits the v7 mint
@@ -150,7 +155,9 @@ async def _seed_v7_grant(
             InferenceProviderRoute(
                 model=V7_MODEL,
                 provider=AGGREGATE_PROVIDER,
-                profile_revision=aggregate_profile_revision(V7_MODEL),
+                profile_revision=aggregate_profile_revision(
+                    V7_MODEL, bench_version=bench_version
+                ),
                 status="healthy",
                 calibration_status="eligible",
                 calibration_tool_accuracy=1.0,
@@ -182,7 +189,7 @@ async def _seed_v7_grant(
             status=TicketStatus.ISSUED,
             issued_at=now,
             deadline=now + timedelta(minutes=20),
-            bench_version=7,
+            bench_version=bench_version,
             attempt_count=1,
         )
         session.add_all([agent, ticket])
@@ -201,7 +208,7 @@ async def _seed_v7_grant(
         live = activated[0]
         # Minted through the real v7 path, so these are the platform's own
         # values rather than anything this test arranged.
-        assert live.bench_version == 7
+        assert live.bench_version == bench_version
         assert live.allowed_models == [V7_MODEL]
         assert live.route_provider == AGGREGATE_PROVIDER
         return live.grant_id, activated[1], live.generation
@@ -265,7 +272,7 @@ async def test_caller_reasoning_effort_is_accepted_pinned_to_medium_and_charged(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-    grant_id, bearer, generation = await _seed_v7_grant(
+    grant_id, bearer, generation = await _seed_grant(
         session_maker,
         config=config,
         public_key=base64.urlsafe_b64encode(public).decode().rstrip("="),
@@ -372,6 +379,133 @@ async def test_caller_reasoning_effort_is_accepted_pinned_to_medium_and_charged(
 
 
 @pytest.mark.asyncio
+async def test_v9_reasoning_strategy_reaches_provider_and_invalid_aliases_spend_nothing(
+    session_maker: async_sessionmaker[Any],
+) -> None:
+    """The authenticated provider boundary applies the complete V9 contract."""
+    config = _config()
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    grant_id, bearer, generation = await _seed_grant(
+        session_maker,
+        config=config,
+        public_key=base64.urlsafe_b64encode(public).decode().rstrip("="),
+        bench_version=9,
+    )
+    seen: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": f"gen-{len(seen)}",
+                "object": "chat.completion",
+                "created": 1_700_000_000,
+                "model": V7_MODEL,
+                "openrouter_metadata": {
+                    "endpoints": {
+                        "available": [{"provider": "Fireworks", "selected": True}]
+                    }
+                },
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "ok"},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                    "cost": 0.000001,
+                },
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = _App(_State(config=config, session_maker=session_maker, client=client))
+
+    async def submit(payload: dict[str, Any]) -> Response:
+        body = json.dumps(payload).encode()
+        return await proxy_chat_completions(
+            **_signed_request(
+                app=app,
+                grant_id=grant_id,
+                bearer=bearer,
+                generation=generation,
+                private=private,
+                body=body,
+            )
+        )
+
+    try:
+        selected = await submit(
+            {
+                "model": V7_MODEL,
+                "messages": [{"role": "user", "content": "choose low"}],
+                "reasoning_effort": "low",
+            }
+        )
+        defaulted = await submit(
+            {
+                "model": V7_MODEL,
+                "messages": [{"role": "user", "content": "use the default"}],
+            }
+        )
+        broker_canonical = await submit(
+            {
+                "model": V7_MODEL,
+                "messages": [{"role": "user", "content": "broker canonical"}],
+                "reasoning": {"effort": "high", "exclude": True},
+            }
+        )
+        with pytest.raises(HTTPException) as conflicting:
+            await submit(
+                {
+                    "model": V7_MODEL,
+                    "messages": [{"role": "user", "content": "conflict"}],
+                    "reasoning": {"effort": "high"},
+                    "reasoning_effort": "low",
+                }
+            )
+    finally:
+        await client.aclose()
+
+    assert selected.status_code == 200
+    assert defaulted.status_code == 200
+    assert broker_canonical.status_code == 200
+    assert conflicting.value.status_code == 400
+    assert conflicting.value.detail == "conflicting reasoning effort"
+    assert [request["reasoning"] for request in seen] == [
+        {"effort": "low", "exclude": True},
+        {"effort": "medium", "exclude": True},
+        {"effort": "high", "exclude": True},
+    ]
+    assert all("reasoning_effort" not in request for request in seen)
+
+    async with session_maker() as session:
+        requests = list(
+            await session.scalars(
+                select(InferenceRequest).where(
+                    InferenceRequest.grant_id == grant_id
+                )
+            )
+        )
+        assert len(requests) == 3
+        assert all(request.status == "completed" for request in requests)
+        grant = await session.get(InferenceGrant, grant_id)
+        assert grant is not None
+        assert grant.request_count == 3
+        assert grant.prompt_tokens == 30
+        assert grant.completion_tokens == 15
+
+
+@pytest.mark.asyncio
 async def test_structured_outputs_reach_the_provider_and_return_unmangled(
     session_maker: async_sessionmaker[Any],
 ) -> None:
@@ -394,7 +528,7 @@ async def test_structured_outputs_reach_the_provider_and_return_unmangled(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-    grant_id, bearer, generation = await _seed_v7_grant(
+    grant_id, bearer, generation = await _seed_grant(
         session_maker,
         config=config,
         public_key=base64.urlsafe_b64encode(public).decode().rstrip("="),
@@ -519,7 +653,7 @@ async def test_unknown_request_field_names_itself_in_the_error(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-    grant_id, bearer, generation = await _seed_v7_grant(
+    grant_id, bearer, generation = await _seed_grant(
         session_maker,
         config=config,
         public_key=base64.urlsafe_b64encode(public).decode().rstrip("="),

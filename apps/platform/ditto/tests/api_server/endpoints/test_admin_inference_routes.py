@@ -255,23 +255,25 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
 ) -> None:
     await _install(app, session_maker, routing_mode="aggregate_throughput")
     profile = aggregate_profile_revision(_MODEL)
+    v9_profile = aggregate_profile_revision(_MODEL, bench_version=9)
     async with session_maker() as session, session.begin():
-        session.add(
-            InferenceProviderRoute(
-                model=_MODEL,
-                provider="openrouter",
-                profile_revision=profile,
-                status="healthy",
-                calibration_status="shadow",
-                ewma_error_rate=0,
-                ewma_timeout_rate=0,
-                sample_count=0,
-                selected_ticket_count=0,
-                exploration_ticket_count=0,
-                discovered_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
+        for route_profile in (profile, v9_profile):
+            session.add(
+                InferenceProviderRoute(
+                    model=_MODEL,
+                    provider="openrouter",
+                    profile_revision=route_profile,
+                    status="healthy",
+                    calibration_status="shadow",
+                    ewma_error_rate=0,
+                    ewma_timeout_rate=0,
+                    sample_count=0,
+                    selected_ticket_count=0,
+                    exploration_ticket_count=0,
+                    discovered_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
             )
-        )
         grant_id = await _seed_grant(session)
         session.add(
             InferenceRequest(
@@ -366,6 +368,19 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
         json=provider_payload,
     )
     assert admitted.status_code == 200, admitted.text
+
+    provider_payload.update(
+        {
+            "confirmation": f"ELIGIBLE INFERENCE ROUTE {v9_profile}",
+            "expected_revision": 0,
+        }
+    )
+    admitted_v9 = await client.post(
+        f"/api/v1/admin/inference-routes/{v9_profile}/calibration",
+        headers=_HEADERS,
+        json=provider_payload,
+    )
+    assert admitted_v9.status_code == 200, admitted_v9.text
 
 
 async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(

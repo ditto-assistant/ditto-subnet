@@ -76,6 +76,8 @@ from ditto.api_server.inference_concurrency_settings import (
     resolved_proxy_config,
 )
 from ditto.api_server.inference_routing import (
+    BENCH_V9_DEFAULT_REASONING_EFFORT,
+    BENCH_V9_REASONING_EFFORTS,
     benchmark_reasoning,
     record_route_observation,
 )
@@ -789,14 +791,12 @@ _PINNED_REQUEST_FIELDS = {
     "n",
     # Buys N server-side generations and bills for all of them.
     "best_of",
-    # Replaced with ``benchmark_reasoning(model)``, so ``{"effort": "high"}`` is
-    # served as the pinned ``medium`` -- and so is ``{"effort": "none"}``, which
-    # would otherwise let an agent opt out of v7's mandatory reasoning entirely.
+    # Replaced with the versioned benchmark reasoning contract. V7/V8 remain
+    # pinned to medium. V9 treats low/medium/high as an agent strategy while
+    # keeping provider-only controls pinned by the platform.
     "reasoning",
-    # The flat sibling. Removed rather than forwarded: OpenRouter hard-400s when
-    # it disagrees with ``reasoning.effort`` (verified), so forwarding it would
-    # break every harness that sets it. Removing it makes the pinned nested
-    # value the single source of truth, which is also the anti-cheat action.
+    # The flat sibling. Canonicalized into the nested block for V9 and removed
+    # before forwarding so OpenRouter never receives conflicting aliases.
     "reasoning_effort",
     # OpenRouter's legacy boolean for returning reasoning. Removed so the pinned
     # ``exclude: true`` cannot be overridden into echoing reasoning back.
@@ -1162,6 +1162,70 @@ def _output_token_limit(payload: dict[str, Any], maximum: int) -> int:
     return min(*requested, maximum) if requested else maximum
 
 
+def _benchmark_reasoning_for_request(
+    payload: dict[str, Any], *, model: str, bench_version: int
+) -> dict[str, Any] | None:
+    """Resolve the provider reasoning block without alias or privacy drift.
+
+    V7/V8 retain their immutable medium contract. Starting with V9, effort is
+    an agent-owned strategy: omission defaults to medium, and either OpenAI's
+    flat ``reasoning_effort`` alias or OpenRouter's nested
+    ``reasoning.effort`` spelling may select low, medium, or high. The provider
+    sees only one canonical nested field, while ``exclude`` remains a trusted
+    platform privacy control.
+    """
+    locked = benchmark_reasoning(model)
+    if locked is None:
+        return None
+    if bench_version < 9:
+        return locked
+
+    nested_present = "reasoning" in payload
+    flat_present = "reasoning_effort" in payload
+    nested_effort: str | None = None
+    flat_effort: str | None = None
+
+    if nested_present:
+        nested = payload["reasoning"]
+        # The scorer broker signs its canonical block with exclude=true after
+        # stripping the caller's object. Accept that exact trusted shape as
+        # well as the caller-facing effort-only shape; every other provider
+        # control (including exclude=false) fails closed.
+        allowed_shapes = ({"effort"}, {"effort", "exclude"})
+        if (
+            not isinstance(nested, dict)
+            or set(nested) not in allowed_shapes
+            or ("exclude" in nested and nested["exclude"] is not True)
+        ):
+            raise HTTPException(status_code=400, detail="invalid reasoning")
+        candidate = nested["effort"]
+        if (
+            not isinstance(candidate, str)
+            or candidate not in BENCH_V9_REASONING_EFFORTS
+        ):
+            raise HTTPException(status_code=400, detail="invalid reasoning effort")
+        nested_effort = candidate
+
+    if flat_present:
+        candidate = payload["reasoning_effort"]
+        if (
+            not isinstance(candidate, str)
+            or candidate not in BENCH_V9_REASONING_EFFORTS
+        ):
+            raise HTTPException(status_code=400, detail="invalid reasoning_effort")
+        flat_effort = candidate
+
+    if (
+        nested_effort is not None
+        and flat_effort is not None
+        and nested_effort != flat_effort
+    ):
+        raise HTTPException(status_code=400, detail="conflicting reasoning effort")
+
+    effort = nested_effort or flat_effort or BENCH_V9_DEFAULT_REASONING_EFFORT
+    return {"effort": effort, "exclude": True}
+
+
 def _locked_grant_model(grant: Any, *, requested: str, config: Any) -> str:
     """Resolve the model from the ticket, not from the caller's request body.
 
@@ -1195,7 +1259,7 @@ def _locked_grant_model(grant: Any, *, requested: str, config: Any) -> str:
 
 
 def _locked_upstream_payload(
-    payload: dict[str, Any], *, model: str, max_tokens: int
+    payload: dict[str, Any], *, model: str, max_tokens: int, bench_version: int = 7
 ) -> dict[str, Any]:
     """Force consensus model/reasoning fields before provider routing.
 
@@ -1242,11 +1306,12 @@ def _locked_upstream_payload(
     upstream["max_tokens"] = max_tokens
     upstream["n"] = 1
     upstream["stream"] = False
-    # Unconditional assignment, not a default: the caller's value is discarded
-    # whatever its shape, so ``{"effort": "high"}`` and a malformed reasoning
-    # object are both served as the pinned contract. On a bench version with no
-    # reasoning contract the field is removed outright rather than passed on.
-    reasoning = benchmark_reasoning(model)
+    # Unconditional assignment, not a merge: provider-only nested controls
+    # never survive. V7/V8 use the historical fixed-medium contract; V9 uses
+    # the validated agent effort (or medium when omitted).
+    reasoning = _benchmark_reasoning_for_request(
+        payload, model=model, bench_version=bench_version
+    )
     if reasoning is None:
         upstream.pop("reasoning", None)
     else:
@@ -1537,6 +1602,12 @@ async def proxy_chat_completions(
         # body asked for, so an agent cannot select a cheaper or stronger model
         # by editing its own code. Metering below uses the same locked value.
         model = _locked_grant_model(grant, requested=requested_model, config=config)
+        # V9 reasoning is an agent strategy, but it is still validated before
+        # reserving provider capacity or writing request accounting. Invalid or
+        # conflicting aliases therefore fail without spending the grant.
+        _benchmark_reasoning_for_request(
+            payload, model=model, bench_version=grant.bench_version
+        )
         reserved = await begin_inference_request(
             session,
             grant_id=x_ditto_grant,
@@ -1562,10 +1633,13 @@ async def proxy_chat_completions(
         if isinstance(reserved, InferenceDecline):
             raise InferenceDeclinedError(reserved, lane="inference")
 
-    upstream_payload = _locked_upstream_payload(
-        payload, model=model, max_tokens=max_tokens
-    )
     reserved_grant = reserved[0]
+    upstream_payload = _locked_upstream_payload(
+        payload,
+        model=model,
+        max_tokens=max_tokens,
+        bench_version=reserved_grant.bench_version,
+    )
     if not reserved_grant.route_provider:
         raise HTTPException(status_code=409, detail="inference route unavailable")
     status = "failed"

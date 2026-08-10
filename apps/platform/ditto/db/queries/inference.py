@@ -161,6 +161,7 @@ async def ensure_inference_grant(
                         supported_profiles=supported_profiles,
                         calibration_manifest_sha256=calibration_manifest_sha256,
                         routing_mode=config.routing_mode,
+                        bench_version=ticket.bench_version,
                     )
                     if route is None:
                         return None

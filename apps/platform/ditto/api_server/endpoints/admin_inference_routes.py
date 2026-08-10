@@ -26,6 +26,7 @@ from ditto.api_server.inference_routing import (
     AGGREGATE_CALIBRATION_SAMPLES,
     AGGREGATE_PROVIDER,
     aggregate_profile_revision,
+    aggregate_profile_revisions,
     benchmark_model,
 )
 from ditto.db.models import (
@@ -425,7 +426,7 @@ async def calibrate_inference_route(
     routing_mode = inference_config.routing_mode
     if routing_mode == "aggregate_throughput" and (
         payload.provider != AGGREGATE_PROVIDER
-        or profile_revision != aggregate_profile_revision(payload.model)
+        or profile_revision not in aggregate_profile_revisions(payload.model)
     ):
         raise HTTPException(
             status_code=409,

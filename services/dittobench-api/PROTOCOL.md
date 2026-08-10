@@ -64,6 +64,38 @@ blocks are permuted with chronological order retained inside a session, while
 subjects and links use separate domains. V7 and V8 do not use this path and
 retain exact historical bytes and environment behavior.
 
+### V9 reasoning effort is an agent strategy
+
+Bench v9 keeps the model, provider route, retention posture, and returned
+reasoning visibility validator-owned, but lets the agent choose reasoning
+effort on each OpenAI-compatible chat request. The accepted spellings are:
+
+```jsonc
+{"reasoning_effort": "low"}          // flat OpenAI alias
+{"reasoning": {"effort": "high"}}  // nested OpenRouter form
+```
+
+The allowed values are exactly `low`, `medium`, and `high`. Omitting both
+fields selects `medium`. Supplying both is accepted only when the values agree;
+conflicting aliases, unknown values, wrong types, and caller-supplied provider
+controls fail before provider capacity or request accounting is spent.
+
+The trusted scorer broker canonicalizes either spelling to one provider body:
+
+```json
+{"reasoning": {"effort": "low", "exclude": true}}
+```
+
+`exclude` is always `true` and cannot be changed by the agent, so private model
+reasoning is neither returned to nor persisted by the harness. Provider token
+usage still includes reasoning tokens in the ordinary completion-token total;
+the existing trusted budget and efficiency accounting therefore applies to the
+chosen strategy without exposing reasoning text. Bench v7 and v8 retain their
+historical fixed `medium` contract. The variable-strategy route is a distinct
+reviewed identity, `openrouter-route-6a097486af3c178d-v1`; a v9 scorer rejects
+the fixed-medium v7/v8 profile `openrouter-route-a471cd87ae7df5b9-v1` even
+though both serve the same model.
+
 ## Dataset
 
 The validator generates a `Dataset` of tool-calling cases. The harness never

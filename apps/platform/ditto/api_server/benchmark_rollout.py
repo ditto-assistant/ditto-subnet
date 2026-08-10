@@ -66,7 +66,9 @@ def inference_activation_requirements(
         routing_mode=config.routing_mode,  # type: ignore[arg-type]
         reviewed_manifest_sha256=config.reviewed_calibration_manifest_sha256,
         aggregate_provider=AGGREGATE_PROVIDER,
-        aggregate_profile_revision=aggregate_profile_revision(model),
+        aggregate_profile_revision=aggregate_profile_revision(
+            model, bench_version=bench_version
+        ),
         aggregate_calibration_samples=AGGREGATE_CALIBRATION_SAMPLES,
         route_observation_max_age=timedelta(
             seconds=max(60, config.discovery_interval_seconds)

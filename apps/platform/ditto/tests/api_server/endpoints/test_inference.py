@@ -1,4 +1,5 @@
 import base64
+import copy
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -656,6 +657,238 @@ def test_caller_reasoning_is_accepted_then_overwritten_with_the_pinned_effort() 
     )
     assert "reasoning_effort" not in upstream
     assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
+
+
+def test_v9_omitted_reasoning_defaults_to_medium_without_mutating_input() -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    before = copy.deepcopy(payload)
+
+    upstream = _locked_upstream_payload(
+        payload,
+        model="openai/gpt-oss-20b",
+        max_tokens=256,
+        bench_version=9,
+    )
+
+    assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
+    assert payload == before
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_v9_flat_reasoning_effort_is_canonicalized(effort: str) -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": effort,
+    }
+
+    upstream = _locked_upstream_payload(
+        payload,
+        model="openai/gpt-oss-20b",
+        max_tokens=256,
+        bench_version=9,
+    )
+
+    assert upstream["reasoning"] == {"effort": effort, "exclude": True}
+    assert "reasoning_effort" not in upstream
+    assert payload["reasoning_effort"] == effort
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_v9_nested_reasoning_effort_is_canonicalized(effort: str) -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning": {"effort": effort},
+    }
+
+    upstream = _locked_upstream_payload(
+        payload,
+        model="openai/gpt-oss-20b",
+        max_tokens=256,
+        bench_version=9,
+    )
+
+    assert upstream["reasoning"] == {"effort": effort, "exclude": True}
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_v9_broker_canonical_reasoning_block_is_idempotent(effort: str) -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning": {"effort": effort, "exclude": True},
+    }
+
+    upstream = _locked_upstream_payload(
+        payload,
+        model="openai/gpt-oss-20b",
+        max_tokens=256,
+        bench_version=9,
+    )
+
+    assert upstream["reasoning"] == {"effort": effort, "exclude": True}
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_v9_equal_reasoning_aliases_collapse_to_one_field(effort: str) -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning": {"effort": effort},
+        "reasoning_effort": effort,
+    }
+
+    upstream = _locked_upstream_payload(
+        payload,
+        model="openai/gpt-oss-20b",
+        max_tokens=256,
+        bench_version=9,
+    )
+
+    assert upstream["reasoning"] == {"effort": effort, "exclude": True}
+    assert "reasoning_effort" not in upstream
+
+
+@pytest.mark.parametrize(
+    ("nested", "flat"),
+    [
+        ("low", "medium"),
+        ("low", "high"),
+        ("medium", "low"),
+        ("medium", "high"),
+        ("high", "low"),
+        ("high", "medium"),
+    ],
+)
+def test_v9_conflicting_reasoning_aliases_fail_closed(
+    nested: str, flat: str
+) -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning": {"effort": nested},
+        "reasoning_effort": flat,
+    }
+
+    with pytest.raises(HTTPException) as raised:
+        _locked_upstream_payload(
+            payload,
+            model="openai/gpt-oss-20b",
+            max_tokens=256,
+            bench_version=9,
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "conflicting reasoning effort"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        False,
+        1,
+        1.0,
+        "",
+        "LOW",
+        " medium",
+        "medium ",
+        "none",
+        "minimal",
+        "xhigh",
+    ],
+)
+def test_v9_invalid_flat_reasoning_effort_fails_closed(value: object) -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": value,
+    }
+
+    with pytest.raises(HTTPException) as raised:
+        _locked_upstream_payload(
+            payload,
+            model="openai/gpt-oss-20b",
+            max_tokens=256,
+            bench_version=9,
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "invalid reasoning_effort"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        "low",
+        [],
+        {},
+        {"effort": None},
+        {"effort": True},
+        {"effort": "none"},
+        {"effort": "LOW"},
+        {"effort": "medium", "exclude": False},
+        {"effort": "medium", "enabled": True},
+        {"effort": "medium", "max_tokens": 1},
+        {"exclude": True},
+    ],
+)
+def test_v9_invalid_or_provider_controlled_reasoning_object_fails_closed(
+    value: object,
+) -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning": value,
+    }
+
+    with pytest.raises(HTTPException) as raised:
+        _locked_upstream_payload(
+            payload,
+            model="openai/gpt-oss-20b",
+            max_tokens=256,
+            bench_version=9,
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.detail in {"invalid reasoning", "invalid reasoning effort"}
+
+
+@pytest.mark.parametrize("bench_version", [7, 8])
+@pytest.mark.parametrize(
+    "caller_reasoning",
+    [
+        {"reasoning": {"effort": "low"}},
+        {"reasoning_effort": "high"},
+        {"reasoning": {"effort": "high"}, "reasoning_effort": "low"},
+        {"reasoning": {"enabled": False}},
+    ],
+)
+def test_v7_v8_reasoning_contract_remains_fixed_medium(
+    bench_version: int, caller_reasoning: dict[str, object]
+) -> None:
+    payload: dict[str, object] = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        **caller_reasoning,
+    }
+
+    upstream = _locked_upstream_payload(
+        payload,
+        model="openai/gpt-oss-20b",
+        max_tokens=256,
+        bench_version=bench_version,
+    )
+
+    assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
+    assert "reasoning_effort" not in upstream
 
 
 def test_identity_fields_are_accepted_and_never_reach_the_provider() -> None:

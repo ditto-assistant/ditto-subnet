@@ -427,6 +427,40 @@ func TestV7RequiresExactModelProfileAndAdmitsQualityOnly(t *testing.T) {
 	}
 }
 
+func TestV9RequiresReviewedVariableReasoningProfile(t *testing.T) {
+	snapshot := relayHealthSnapshot{
+		AccountingVersion: 2,
+		Status:            "ok",
+		Provider:          "openrouter",
+		ProfileRevision:   llm.V9AggregateProfileRevision,
+		Model:             llm.V7HarnessModel,
+	}
+	if err := requireTokenAccounting(snapshot, protocol.BenchVersionV9, "full"); err != nil {
+		t.Fatalf("v9 rejected reviewed variable-reasoning profile: %v", err)
+	}
+
+	for _, profile := range []string{
+		"openrouter-route-a471cd87ae7df5b9-v1", // fixed-medium v7/v8
+		"openrouter-route-0123456789abcdef-v1", // merely well formed
+		"local-v9-variable-reasoning",
+	} {
+		wrong := snapshot
+		wrong.ProfileRevision = profile
+		if err := requireTokenAccounting(wrong, protocol.BenchVersionV9, "full"); err == nil || !strings.Contains(err.Error(), "profile") {
+			t.Fatalf("v9 accepted unreviewed profile %q: %v", profile, err)
+		}
+	}
+
+	// Historical contracts deliberately keep their old acceptance rules.
+	fixed := snapshot
+	fixed.ProfileRevision = "openrouter-route-a471cd87ae7df5b9-v1"
+	for _, version := range []int{protocol.BenchVersionV7, protocol.BenchVersionV8} {
+		if err := requireTokenAccounting(fixed, version, "full"); err != nil {
+			t.Fatalf("v%d fixed-medium compatibility rejected: %v", version, err)
+		}
+	}
+}
+
 func TestV7RequiresCompleteProviderUsage(t *testing.T) {
 	incomplete := protocol.TokenUsage{
 		Provider:        "groq",

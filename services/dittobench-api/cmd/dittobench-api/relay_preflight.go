@@ -232,6 +232,13 @@ func validV7RouteProfile(profile string) bool {
 	return true
 }
 
+func validBenchmarkRouteProfile(benchVersion int, profile string) bool {
+	if benchVersion == protocol.BenchVersionV9 {
+		return profile == llm.V9AggregateProfileRevision
+	}
+	return validV7RouteProfile(profile)
+}
+
 // requireTokenAccounting is the admission gate on relay identity before a run.
 // v5/v6 additionally require a reviewed absolute token baseline (their
 // composite is discounted against it). v7 runs under the QUALITY-ONLY contract:
@@ -252,8 +259,8 @@ func requireTokenAccounting(snapshot relayHealthSnapshot, benchVersion int, runS
 		if snapshot.Model != llm.V7HarnessModel {
 			return fmt.Errorf("relay model does not match benchmark v7")
 		}
-		if !validV7RouteProfile(snapshot.ProfileRevision) {
-			return fmt.Errorf("relay profile does not match benchmark v7")
+		if !validBenchmarkRouteProfile(benchVersion, snapshot.ProfileRevision) {
+			return fmt.Errorf("relay profile does not match benchmark v%d", benchVersion)
 		}
 	}
 	return nil

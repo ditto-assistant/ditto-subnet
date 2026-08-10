@@ -180,6 +180,87 @@ async def test_aggregate_selection_uses_only_reviewed_logical_route(
 
 
 @pytest.mark.asyncio
+async def test_v9_aggregate_selection_requires_variable_reasoning_profile(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    model = "openai/gpt-oss-20b"
+    v7_profile = aggregate_profile_revision(model, bench_version=7)
+    v9_profile = aggregate_profile_revision(model, bench_version=9)
+    assert v7_profile == "openrouter-route-a471cd87ae7df5b9-v1"
+    assert v9_profile == "openrouter-route-6a097486af3c178d-v1"
+    assert v9_profile != v7_profile
+
+    async with session_maker() as session, session.begin():
+        session.add(
+            InferenceRoutingPolicy(
+                model=model,
+                enabled=False,
+                speed_weight=0.65,
+                cost_weight=0.25,
+                exploration_weight=0.10,
+                exploration_ticket_budget=3,
+                min_tool_accuracy=0.55,
+                min_composite=0.15,
+                min_calibration_samples=20,
+                max_error_rate=0.25,
+                max_timeout_rate=0.15,
+                cooldown_seconds=30,
+                ewma_alpha=0.20,
+                updated_at=now,
+            )
+        )
+        for profile in (v7_profile, v9_profile):
+            session.add(
+                InferenceProviderRoute(
+                    model=model,
+                    provider=AGGREGATE_PROVIDER,
+                    profile_revision=profile,
+                    status="healthy",
+                    calibration_status="eligible",
+                    calibration_manifest_sha256="ab" * 32,
+                    calibration_tool_accuracy=0.65,
+                    calibration_composite=0.20,
+                    calibration_sample_count=60,
+                    ewma_error_rate=0,
+                    ewma_timeout_rate=0,
+                    sample_count=0,
+                    selected_ticket_count=0,
+                    exploration_ticket_count=0,
+                    discovered_at=now,
+                    updated_at=now,
+                )
+            )
+
+    async with session_maker() as session, session.begin():
+        selected = await select_route(
+            session,
+            model=model,
+            now=now,
+            supported_profiles=(v7_profile, v9_profile),
+            calibration_manifest_sha256="ab" * 32,
+            routing_mode="aggregate_throughput",
+            bench_version=9,
+        )
+        assert selected is not None
+        assert selected.profile_revision == v9_profile
+
+    async with session_maker() as session, session.begin():
+        assert (
+            await select_route(
+                session,
+                model=model,
+                now=now,
+                supported_profiles=(v7_profile,),
+                calibration_manifest_sha256="ab" * 32,
+                routing_mode="aggregate_throughput",
+                bench_version=9,
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
 async def test_aggregate_discovery_tracks_active_model_endpoints(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -228,9 +309,13 @@ async def test_aggregate_discovery_tracks_active_model_endpoints(
         for expected in ("offline", "discovered", "offline"):
             await refresher.refresh()
             async with maker() as session:
-                route = await session.get(
-                    InferenceProviderRoute,
-                    (model, AGGREGATE_PROVIDER, profile),
-                )
-                assert route is not None
-                assert route.status == expected
+                for discovered_profile in (
+                    profile,
+                    aggregate_profile_revision(model, bench_version=9),
+                ):
+                    route = await session.get(
+                        InferenceProviderRoute,
+                        (model, AGGREGATE_PROVIDER, discovered_profile),
+                    )
+                    assert route is not None
+                    assert route.status == expected

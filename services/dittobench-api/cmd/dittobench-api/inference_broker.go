@@ -1040,7 +1040,7 @@ func (b *inferenceBroker) claimRun(id, runID string, identity brokerTicketIdenti
 			GrantID: session.grantID, AgentID: session.ticketAgentID,
 			SlotID: session.ticketSlotID, TicketDeadline: session.ticketDeadline,
 		}
-		if !validV7RouteProfile(session.profileRevision) || !validBrokerTicketIdentity(identity, now) ||
+		if !validBenchmarkRouteProfile(benchVersion, session.profileRevision) || !validBrokerTicketIdentity(identity, now) ||
 			identity.GrantID != expected.GrantID || identity.AgentID != expected.AgentID ||
 			identity.SlotID != expected.SlotID || !identity.TicketDeadline.Equal(expected.TicketDeadline) {
 			return false
@@ -1819,14 +1819,20 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 	// defaults to qwen/qwen3-32b) is scored on the locked model instead of
 	// failing closed with an error it cannot act on. The platform proxy re-locks
 	// the same value independently, so this is convenience, not the boundary.
-	if modelRequest.Model != session.requestModel {
-		rewritten, rewriteErr := rewriteRequestModel(body, session.requestModel)
+	requestedModel := modelRequest.Model
+	if requestedModel != session.requestModel || session.benchVersion == protocol.BenchVersionV9 {
+		rewritten, rewriteErr := normalizeChatRequest(body, session.requestModel, session.benchVersion)
 		if rewriteErr != nil {
+			if session.benchVersion == protocol.BenchVersionV9 {
+				session.agentRequestRejections++
+			}
 			session.mu.Unlock()
-			writeError(w, http.StatusBadRequest, "invalid inference request")
+			writeError(w, http.StatusBadRequest, rewriteErr.Error())
 			return
 		}
-		logSubstitutedModel(session.boundRunID, modelRequest.Model, session.requestModel)
+		if requestedModel != session.requestModel {
+			logSubstitutedModel(session.boundRunID, requestedModel, session.requestModel)
+		}
 		body = rewritten
 	}
 	grantID, bearer, proxyURL, generation := session.grantID, session.bearer, session.proxyURL, session.generation
@@ -2160,11 +2166,72 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 // re-encoding is deliberate: it normalises exactly one field and cannot smuggle
 // an unmodelled field past the schema the platform proxy validates downstream.
 func rewriteRequestModel(body []byte, model string) ([]byte, error) {
+	return normalizeChatRequest(body, model, 0)
+}
+
+const benchV9DefaultReasoningEffort = "medium"
+
+var benchV9ReasoningEfforts = map[string]struct{}{
+	"low": {}, "medium": {}, "high": {},
+}
+
+// normalizeChatRequest pins the ticket model and, for v9, canonicalizes the
+// agent-owned reasoning strategy before either a Platform reservation or a
+// local relay is reachable. The flat OpenAI alias and nested OpenRouter form
+// collapse to one nested block. Provider-only controls never survive the
+// boundary: the trusted side owns exclude=true for privacy, while the agent
+// owns only low/medium/high effort. V7/V8 retain byte-for-byte reasoning
+// semantics and their fixed-medium Platform contract.
+func normalizeChatRequest(body []byte, model string, benchVersion int) ([]byte, error) {
 	var decoded map[string]any
 	if err := json.Unmarshal(body, &decoded); err != nil || decoded == nil {
 		return nil, fmt.Errorf("inference request is not a JSON object")
 	}
 	decoded["model"] = model
+	if benchVersion != protocol.BenchVersionV9 {
+		return json.Marshal(decoded)
+	}
+
+	nestedRaw, nestedPresent := decoded["reasoning"]
+	flatRaw, flatPresent := decoded["reasoning_effort"]
+	nestedEffort := ""
+	flatEffort := ""
+	if nestedPresent {
+		nested, ok := nestedRaw.(map[string]any)
+		if !ok || len(nested) != 1 {
+			return nil, fmt.Errorf("invalid reasoning")
+		}
+		candidate, ok := nested["effort"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid reasoning effort")
+		}
+		if _, ok = benchV9ReasoningEfforts[candidate]; !ok {
+			return nil, fmt.Errorf("invalid reasoning effort")
+		}
+		nestedEffort = candidate
+	}
+	if flatPresent {
+		candidate, ok := flatRaw.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid reasoning_effort")
+		}
+		if _, ok = benchV9ReasoningEfforts[candidate]; !ok {
+			return nil, fmt.Errorf("invalid reasoning_effort")
+		}
+		flatEffort = candidate
+	}
+	if nestedEffort != "" && flatEffort != "" && nestedEffort != flatEffort {
+		return nil, fmt.Errorf("conflicting reasoning effort")
+	}
+	effort := nestedEffort
+	if effort == "" {
+		effort = flatEffort
+	}
+	if effort == "" {
+		effort = benchV9DefaultReasoningEffort
+	}
+	delete(decoded, "reasoning_effort")
+	decoded["reasoning"] = map[string]any{"effort": effort, "exclude": true}
 	return json.Marshal(decoded)
 }
 

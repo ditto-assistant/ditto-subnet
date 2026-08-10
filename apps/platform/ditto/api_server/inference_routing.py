@@ -31,6 +31,9 @@ AGGREGATE_PROVIDER = "openrouter"
 AGGREGATE_CALIBRATION_SAMPLES = 60
 V7_MODEL = "openai/gpt-oss-20b"
 V7_AGGREGATE_PROFILE_REVISION = "openrouter-route-a471cd87ae7df5b9-v1"
+V9_AGGREGATE_PROFILE_REVISION = "openrouter-route-6a097486af3c178d-v1"
+BENCH_V9_DEFAULT_REASONING_EFFORT = "medium"
+BENCH_V9_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
 
 
 def benchmark_reasoning(model: str) -> dict[str, Any] | None:
@@ -44,12 +47,15 @@ def benchmark_reasoning(model: str) -> dict[str, Any] | None:
     return None
 
 
-def aggregate_profile_revision(model: str) -> str:
+def aggregate_profile_revision(model: str, *, bench_version: int = 7) -> str:
     """Return the immutable identity for the calibrated aggregate route."""
     # Reasoning is part of benchmark semantics and therefore part of the route
-    # identity. The earlier calibration omitted this field, so it must not make
-    # the explicit-medium route eligible without a fresh reviewed calibration.
+    # identity. V7/V8 pin medium. V9 lets the agent select low/medium/high with
+    # a medium default, which is a distinct provider-capability and calibration
+    # contract even though model and privacy posture are unchanged.
     if model == V7_MODEL:
+        if bench_version == 9:
+            return V9_AGGREGATE_PROFILE_REVISION
         return V7_AGGREGATE_PROFILE_REVISION
     # Exact upstream membership was already dynamic in aggregate mode: the
     # router could choose a different healthy provider on every request. Keep
@@ -65,6 +71,15 @@ def aggregate_profile_revision(model: str) -> str:
     }
     identity = json.dumps(profile, sort_keys=True, separators=(",", ":"))
     return f"openrouter-route-{hashlib.sha256(identity.encode()).hexdigest()[:16]}-v1"
+
+
+def aggregate_profile_revisions(model: str) -> tuple[str, ...]:
+    """Every aggregate profile discovery must keep visible for ``model``."""
+    revisions = {
+        aggregate_profile_revision(model, bench_version=7),
+        aggregate_profile_revision(model, bench_version=9),
+    }
+    return tuple(sorted(revisions))
 
 
 def benchmark_model(bench_version: int) -> str:
@@ -162,12 +177,13 @@ async def select_route(
     supported_profiles: tuple[str, ...] | None = None,
     calibration_manifest_sha256: str | None = None,
     routing_mode: str = "adaptive",
+    bench_version: int = 7,
 ) -> InferenceProviderRoute | None:
     policy = await session.get(InferenceRoutingPolicy, model)
     if policy is None:
         return None
     if routing_mode == "aggregate_throughput":
-        profile = aggregate_profile_revision(model)
+        profile = aggregate_profile_revision(model, bench_version=bench_version)
         route = await session.get(
             InferenceProviderRoute,
             (model, AGGREGATE_PROVIDER, profile),
@@ -474,36 +490,38 @@ class ProviderRouteRefresher:
                 )
                 seen: set[tuple[str, str]] = set()
                 if model == benchmark_model(7):
-                    aggregate_profile = aggregate_profile_revision(model)
                     aggregate_active = any(
                         endpoint.get("status") == 0 for endpoint in deduped.values()
                     )
-                    aggregate_route = await session.get(
-                        InferenceProviderRoute,
-                        (model, AGGREGATE_PROVIDER, aggregate_profile),
-                    )
-                    if aggregate_route is None:
-                        aggregate_route = InferenceProviderRoute(
-                            model=model,
-                            provider=AGGREGATE_PROVIDER,
-                            profile_revision=aggregate_profile,
-                            status="discovered" if aggregate_active else "offline",
-                            calibration_status="shadow",
-                            discovered_at=now,
-                            ewma_error_rate=0,
-                            ewma_timeout_rate=0,
-                            sample_count=0,
-                            selected_ticket_count=0,
-                            exploration_ticket_count=0,
+                    for aggregate_profile in aggregate_profile_revisions(model):
+                        aggregate_route = await session.get(
+                            InferenceProviderRoute,
+                            (model, AGGREGATE_PROVIDER, aggregate_profile),
                         )
-                        session.add(aggregate_route)
-                    elif aggregate_active and aggregate_route.status == "offline":
-                        aggregate_route.status = "discovered"
-                    elif not aggregate_active:
-                        aggregate_route.status = "offline"
-                    aggregate_route.quantization = None
-                    aggregate_route.updated_at = now
-                    seen.add((AGGREGATE_PROVIDER, aggregate_profile))
+                        if aggregate_route is None:
+                            aggregate_route = InferenceProviderRoute(
+                                model=model,
+                                provider=AGGREGATE_PROVIDER,
+                                profile_revision=aggregate_profile,
+                                status=(
+                                    "discovered" if aggregate_active else "offline"
+                                ),
+                                calibration_status="shadow",
+                                discovered_at=now,
+                                ewma_error_rate=0,
+                                ewma_timeout_rate=0,
+                                sample_count=0,
+                                selected_ticket_count=0,
+                                exploration_ticket_count=0,
+                            )
+                            session.add(aggregate_route)
+                        elif aggregate_active and aggregate_route.status == "offline":
+                            aggregate_route.status = "discovered"
+                        elif not aggregate_active:
+                            aggregate_route.status = "offline"
+                        aggregate_route.quantization = None
+                        aggregate_route.updated_at = now
+                        seen.add((AGGREGATE_PROVIDER, aggregate_profile))
                 for (provider, profile), endpoint in deduped.items():
                     quantization = endpoint.get("quantization")
                     if not isinstance(quantization, str):
