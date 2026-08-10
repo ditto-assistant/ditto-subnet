@@ -117,6 +117,9 @@ resource "google_project_iam_custom_role" "screener_controller_fleet_reconciler"
   role_id = "dittoScreenerFleetReconciler"
   title   = "Ditto screener fleet reconciler"
   permissions = [
+    # `gcloud ... managed describe` checks whether the regional MIG has an
+    # autoscaler before returning targetSize.
+    "compute.autoscalers.list",
     "compute.instanceGroupManagers.get",
     "compute.instanceGroupManagers.update",
   ]
