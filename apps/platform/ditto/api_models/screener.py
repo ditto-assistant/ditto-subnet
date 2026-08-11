@@ -22,6 +22,8 @@ from ditto_screening_protocol import (
     ScreenReviewAudit,
     SourceReviewEvidenceItem,
     SourceReviewFinding,
+    SubmissionImageBuildRequest,
+    SubmissionImageBuildResponse,
 )
 from ditto_screening_protocol import (
     ScreenedImagePartUploadRequest as ScreenedImagePartRequest,
@@ -223,6 +225,8 @@ __all__ = [
     "ScreenEvidenceItem",
     "ScreenedImageUploadRequest",
     "ScreenedImageUploadResponse",
+    "SubmissionImageBuildRequest",
+    "SubmissionImageBuildResponse",
     "ScreenedImagePartRequest",
     "ScreenedImagePartResponse",
     "ScreenedImageCompletedPart",

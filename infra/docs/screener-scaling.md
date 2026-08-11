@@ -20,8 +20,10 @@ every active lease. The controller then:
 The current Targon Rentals attestation is `nogo`: nested RootlessKit did not
 provide the isolation required for hostile miner Docker builds. A missing,
 invalid, expired, or `nogo` attestation routes all demand to GCE. The dedicated
-trusted Kaniko build path is a separate capability and is not permission to run
-miner submissions on Targon.
+Kaniko build path is a separate capability: Targon may compile a miner
+submission with an attempt-bound token, but it may not claim or decide screening
+work. GCE still owns static preflight, archive import, health/source/policy
+review, signing, upload, and local-build fallback.
 
 The GCE autoscaler remains as an independent `ONLY_SCALE_OUT` watchdog on the
 group-level backlog metric. It cannot scale in or fight the controller. Its
@@ -40,7 +42,10 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
   30-minute token for `ditto-screener-bootstrap`, which can read only the
   source-review secret. No service-account key crosses the provider boundary.
 - Submitted builds receive none of these credentials. GCE hostile builds run
-  behind the dedicated rootless executor and metadata/egress guards.
+  behind the dedicated rootless executor and metadata/egress guards. A Targon
+  submission-builder rental receives only one expiring Platform capability
+  bound to an attempt, source object, and temporary output object. It cannot
+  push registry images or read Secret Manager.
 - Trusted release builds run in the separate `ditto-image-builder` service.
   It gives a Targon Kaniko rental one 30-minute OAuth token for
   `ditto-image-builder`, which can write only `ditto-public-runtime`. The
@@ -92,6 +97,12 @@ infra stacks merge, use this order:
    With the
    current NOGO attestation, real demand must choose GCE and an empty queue must
    return the MIG to zero.
+   Then enqueue one audited miner rebuild. Prove the submission-builder image is
+   digest pinned, Platform verifies the complete tar SHA-256, GCE imports and
+   finishes the normal screening gates, the temporary object is consumed, and
+   the Targon rental is suspended/deleted (or leaves a cleanup-required event).
+   The artifact bucket's `remote-builds/` lifecycle is the final one-day bound
+   for a canceled presigned upload that races normal cleanup.
 6. Only after a fresh hostile-runtime probe returns GO may an operator update
    the expiring Targon attestation and immutable worker image reference. Observe
    one shadow node through enrollment, heartbeat, a real lease, drain, and

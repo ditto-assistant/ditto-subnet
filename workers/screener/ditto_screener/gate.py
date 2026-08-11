@@ -101,6 +101,7 @@ from ditto_screener.source_review import (
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
+    from ditto_screener.platform import RemoteImageArchive
     from ditto_screener.review_settings import EffectiveReviewSettings
 
 logger = logging.getLogger(__name__)
@@ -608,6 +609,8 @@ class BuildGate:
         progress: Callable[[ScreenerProgressStage], None] | None = None,
         deadline: float | None = None,
         publish_image: Callable[[BuiltImageArtifact], Awaitable[None]] | None = None,
+        remote_build: Callable[[], Awaitable[RemoteImageArchive | None]] | None = None,
+        remote_build_consumed: Callable[[UUID], Awaitable[None]] | None = None,
         build_only: bool = False,
         deferred_source_review: bool = False,
     ) -> ScreeningDecision:
@@ -837,9 +840,45 @@ class BuildGate:
             if remaining is not None:
                 build_timeout = min(build_timeout, remaining)
             started = asyncio.get_running_loop().time()
-            built, build_detail, built_image_id = await self._build(
-                tmp_path, build_tag, timeout=build_timeout
-            )
+            built = False
+            build_detail = ""
+            built_image_id: str | None = None
+            remote_archive: RemoteImageArchive | None = None
+            if remote_build is not None:
+                try:
+                    remote_archive = await remote_build()
+                except Exception:  # noqa: BLE001 - local build is the fallback
+                    logger.warning(
+                        "remote builder raised unexpectedly; using local Docker",
+                        exc_info=True,
+                    )
+            if remote_archive is not None:
+                try:
+                    built, build_detail, built_image_id = await self._load_remote_image(
+                        remote_archive.path,
+                        build_tag,
+                        timeout=min(build_timeout, 120.0),
+                    )
+                finally:
+                    with contextlib.suppress(OSError):
+                        os.unlink(remote_archive.path)
+                    if remote_build_consumed is not None:
+                        with contextlib.suppress(Exception):
+                            await remote_build_consumed(remote_archive.build_id)
+                if not built:
+                    logger.warning(
+                        "verified remote archive could not be imported (%s); "
+                        "using local Docker",
+                        _log_tail(build_detail),
+                    )
+            if not built:
+                remaining = self._lease_remaining(deadline)
+                local_timeout = self._config.build_timeout_seconds
+                if remaining is not None:
+                    local_timeout = min(local_timeout, remaining)
+                built, build_detail, built_image_id = await self._build(
+                    tmp_path, build_tag, timeout=local_timeout
+                )
             build_elapsed_ms = round(
                 (asyncio.get_running_loop().time() - started) * 1000
             )
@@ -1812,6 +1851,49 @@ class BuildGate:
                 None,
             )
         return False, _log_tail(out), None
+
+    async def _load_remote_image(
+        self,
+        path: str,
+        tag: str,
+        *,
+        timeout: float,
+    ) -> tuple[bool, str, str | None]:
+        """Import a Platform-verified Kaniko archive into the local daemon."""
+        code, output = await self._run(
+            ["image", "load", "--input", path], timeout=timeout
+        )
+        if code != 0:
+            return False, f"docker image load failed: {_log_tail(output)}", None
+        inspect_code, image_id = await self._run(
+            ["image", "inspect", "--format", "{{.Id}}", tag],
+            timeout=min(timeout, 30.0),
+        )
+        image_id = image_id.strip()
+        if inspect_code != 0 or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            return False, "docker image inspect failed after remote load", None
+        inspect_code, volumes = await self._run(
+            [
+                "image",
+                "inspect",
+                "--format",
+                "{{if .Config.Volumes}}declared{{end}}",
+                image_id,
+            ],
+            timeout=min(timeout, 30.0),
+        )
+        if inspect_code != 0:
+            return False, "docker image inspect failed after remote load", None
+        if volumes.strip() == "declared":
+            return (
+                False,
+                "image declares writable volumes; harness images must use only "
+                "the validator-owned bounded /tmp tmpfs",
+                None,
+            )
+        if volumes.strip():
+            return False, "docker image inspect returned invalid output", None
+        return True, "", image_id
 
     async def _run_and_probe(
         self,

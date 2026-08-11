@@ -308,6 +308,7 @@ SCREENER_BUILD_MEMORY=2g
 # Language-neutral image builds get a larger but still bounded compiler/linker
 # envelope. The built harness keeps the validator-compatible runtime limits.
 SCREENER_IMAGE_BUILD_MEMORY=8g
+SCREENER_REMOTE_BUILD_MODE=prefer
 SCREENER_PIDS_LIMIT=512
 SCREENER_DOCKER_HOST=$rootless_host
 DOCKER_HOST=$rootless_host

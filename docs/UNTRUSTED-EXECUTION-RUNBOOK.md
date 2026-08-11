@@ -19,8 +19,19 @@ no miner source, credentials, or runnable exploit payloads.
 - No wallet, `.env`, cloud credential, Docker control socket, or host directory
   is mounted into a miner container. Host network, PID, IPC, and other namespaces
   are not shared or joined with miner containers.
+- Targon may perform only the Kaniko compilation phase. Its job capability is
+  attempt-bound and can fetch one source object and write one temporary archive;
+  it cannot publish images, claim screening work, sign a verdict, access GCP,
+  or bypass the GCE screener's health/source/policy checks.
 
 ## Executor boundary and residual risk
+
+Kaniko executes Dockerfile build steps on a provider-controlled Targon rental.
+Treat the provider and submitted Dockerfile as able to observe the build source,
+the narrow job capability, build process, and output. No long-lived secret is
+sent there. The output is untrusted until Platform hashes every byte and the GCE
+screener independently imports it and completes all normal gates. A mismatch or
+provider failure causes a local GCE build; it never authorizes a pass.
 
 The compatibility executor is a privileged outer container running a rootful
 nested Docker daemon. This deliberately restores the v0.41 deployment contract

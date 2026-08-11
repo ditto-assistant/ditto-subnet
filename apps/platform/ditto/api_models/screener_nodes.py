@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
 ScreenerNodeStatus = Literal["active", "draining", "quarantined", "revoked"]
@@ -255,6 +255,112 @@ class TrustedImageBuildUpdateRequest(BaseModel):
     )
     image_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")] | None = None
     error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+
+
+class SubmissionImageBuildClaimView(BaseModel):
+    """One miner build leased to the dedicated Targon builder."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    build_id: UUID
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    image_ref: Annotated[
+        str,
+        Field(pattern=r"^ditto-screen/[0-9a-f-]{73}:latest$"),
+    ]
+    job_token: Annotated[str, Field(min_length=43, max_length=128)]
+    job_token_expires_at: datetime
+
+
+class SubmissionImageBuildClaimResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    build: SubmissionImageBuildClaimView | None
+
+
+class SubmissionImageBuildControllerUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    status: Literal["running", "fallback_required"]
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)] | None = (
+        None
+    )
+    error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_error(self) -> SubmissionImageBuildControllerUpdateRequest:
+        if self.status == "fallback_required" and self.error_code is None:
+            raise ValueError("fallback build update requires an error code")
+        if self.status == "running" and self.error_code is not None:
+            raise ValueError("running build update cannot carry an error code")
+        return self
+
+
+class SubmissionImageBuildCleanupRequest(BaseModel):
+    """Durable notice that a suspended provider rental still needs deletion."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class SubmissionImageBuildControllerStatusResponse(BaseModel):
+    """Authority-free completion state used by the provider controller."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    build_id: UUID
+    status: Literal[
+        "queued",
+        "leased",
+        "running",
+        "succeeded",
+        "fallback_required",
+        "canceled",
+        "consumed",
+    ]
+
+
+class SubmissionBuildSourceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_url_b64: str
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    image_ref: Annotated[
+        str,
+        Field(pattern=r"^ditto-screen/[0-9a-f-]{73}:latest$"),
+    ]
+
+
+class SubmissionBuildUploadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    output_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    output_size_bytes: Annotated[int, Field(gt=0, le=4 * 1024**3)]
+
+
+class SubmissionBuildUploadResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    upload_url_b64: str
+    required_headers: dict[str, str]
+    expires_at: datetime
+
+
+class SubmissionBuildCompleteRequest(SubmissionBuildUploadRequest):
+    pass
+
+
+class SubmissionBuildCompleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verified: Literal[True]
 
 
 class ScreenerCapacityView(BaseModel):

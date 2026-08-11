@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -223,6 +225,88 @@ async def test_get_artifact_parses_url(
     async with http:
         art = await client.get_artifact(_AGENT, attempt_id=attempt_id)
     assert str(art.download_url).startswith("https://storage.test/")
+
+
+async def test_targon_build_download_is_fully_hashed_before_import(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    attempt_id = uuid4()
+    build_id = uuid4()
+    image = b"verified docker archive"
+    digest = hashlib.sha256(image).hexdigest()
+    status = {
+        "build_id": str(build_id),
+        "attempt_id": str(attempt_id),
+        "status": "succeeded",
+        "provider": "targon",
+        "artifact_sha256": "de" * 32,
+        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
+        "output_sha256": digest,
+        "output_size_bytes": len(image),
+        "download_url": "https://storage.test/image.tar",
+        "error_code": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "storage.test":
+            return httpx.Response(200, content=image)
+        if request.method == "POST":
+            assert request.url.path.endswith("/submission-image-builds")
+            return httpx.Response(200, json=status)
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        archive = await client.build_submission_image(
+            _AGENT, attempt_id=attempt_id, timeout=1
+        )
+    assert archive is not None
+    try:
+        assert archive.build_id == build_id
+        assert Path(archive.path).read_bytes() == image
+        assert archive.sha256 == digest
+    finally:
+        os.unlink(archive.path)
+
+
+async def test_targon_build_digest_mismatch_discards_and_falls_back(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    attempt_id = uuid4()
+    build_id = uuid4()
+    deletes: list[str] = []
+    status = {
+        "build_id": str(build_id),
+        "attempt_id": str(attempt_id),
+        "status": "succeeded",
+        "provider": "targon",
+        "artifact_sha256": "de" * 32,
+        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
+        "output_sha256": "ab" * 32,
+        "output_size_bytes": 6,
+        "download_url": "https://storage.test/image.tar",
+        "error_code": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "storage.test":
+            return httpx.Response(200, content=b"tamper")
+        if request.method == "POST":
+            return httpx.Response(200, json=status)
+        if request.method == "DELETE":
+            deletes.append(request.url.path)
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        archive = await client.build_submission_image(
+            _AGENT, attempt_id=attempt_id, timeout=1
+        )
+    assert archive is None
+    assert deletes == [
+        f"/api/v1/screener/agent/{_AGENT}/submission-image-builds/{build_id}"
+    ]
 
 
 async def test_submit_result_posts_signed_verdict(

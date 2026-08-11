@@ -127,6 +127,8 @@ from ditto.api_models.screener import (
     ScreenResultResponse,
     SourceReviewEvidenceItem,
     SourceReviewFinding,
+    SubmissionImageBuildRequest,
+    SubmissionImageBuildResponse,
 )
 from ditto.api_models.screener_nodes import (
     ScreenerBootstrapGrantRequest,
@@ -276,6 +278,8 @@ __all__ = [
     "ScreenEvidenceItem",
     "ScreenedImageUploadRequest",
     "ScreenedImageUploadResponse",
+    "SubmissionImageBuildRequest",
+    "SubmissionImageBuildResponse",
     "ScreenedImageAbortRequest",
     "ScreenedImageAbortResponse",
     "ScreenedImageCompleteRequest",

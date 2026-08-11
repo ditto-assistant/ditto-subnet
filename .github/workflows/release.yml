@@ -34,6 +34,7 @@ env:
   PYLON_BASE_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
   PYLON_TURBOBT_REVISION: d36d1a28e761ff9d743bbcc83d091309c4d3599e
   SCREENER_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime/screener
+  SUBMISSION_BUILDER_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/submission-builder
   OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
   COMPATIBILITY_EPOCH: "2"
   UPDATE_PROTOCOL: "1"
@@ -369,13 +370,61 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm exec wrangler deploy
 
-  deploy-screener-controller:
+  build-submission-builder:
     needs: [plan, release, deploy_platform]
     if: >-
       always() &&
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener_orchestrator == 'true' &&
+      (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SUBNET_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Publish the attempt-scoped Kaniko runner
+        env:
+          SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          image="$SUBMISSION_BUILDER_REPOSITORY:sha-$SOURCE_SHA"
+          existing_digest="$(gcloud artifacts docker images describe "$image" \
+            --format='value(image_summary.digest)' 2>/dev/null || true)"
+          if [[ ! "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            docker build \
+              --file services/screener-orchestrator/submission-builder/Dockerfile \
+              --tag "$image" \
+              .
+            docker push "$image"
+          fi
+          digest="$(gcloud artifacts docker images describe "$image" \
+            --format='value(image_summary.digest)')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+  deploy-screener-controller:
+    needs: [plan, release, deploy_platform, build-submission-builder]
+    if: >-
+      always() &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.screener_orchestrator == 'true' &&
       vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true' &&
+      needs.build-submission-builder.result == 'success' &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
     permissions:
       contents: read

@@ -64,6 +64,66 @@ class ArtifactResponse(BaseModel):
     ]
 
 
+SubmissionImageBuildStatus = Literal[
+    "queued",
+    "leased",
+    "running",
+    "succeeded",
+    "fallback_required",
+    "canceled",
+    "consumed",
+]
+
+
+class SubmissionImageBuildRequest(BaseModel):
+    """Queue one attempt-bound remote image build after local source validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: UUID
+
+
+class SubmissionImageBuildResponse(BaseModel):
+    """Public-safe status and, when ready, the verified image archive."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    build_id: UUID
+    attempt_id: UUID
+    status: SubmissionImageBuildStatus
+    provider: Literal["targon"] | None = None
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    image_ref: Annotated[
+        str,
+        Field(
+            pattern=(
+                r"^ditto-screen/[0-9a-f-]{73}:latest$"
+            )
+        ),
+    ]
+    output_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    output_size_bytes: Annotated[int, Field(gt=0, le=4 * 1024**3)] | None = None
+    download_url: str | None = None
+    error_code: Annotated[
+        str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")
+    ] | None = None
+
+    @model_validator(mode="after")
+    def validate_terminal_payload(self) -> SubmissionImageBuildResponse:
+        output = (
+            self.output_sha256,
+            self.output_size_bytes,
+            self.download_url,
+        )
+        if self.status == "succeeded" and any(value is None for value in output):
+            raise ValueError("successful remote build requires a verified archive")
+        if self.status != "succeeded" and any(value is not None for value in output):
+            raise ValueError("only a successful remote build exposes an archive")
+        if self.status == "fallback_required" and self.error_code is None:
+            raise ValueError("fallback remote build requires an error code")
+        return self
+
+
 class ScreenedImageUploadRequest(BaseModel):
     """Lease-bound metadata used to mint a pre-signed image upload URL."""
 

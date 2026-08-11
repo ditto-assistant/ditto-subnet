@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,18 +24,29 @@ from screener_capacity.controller import ControllerError, _read_secret_file
 from screener_capacity.targon import TargonAPIError, TargonClient
 
 _DIGEST = re.compile(r"DITTO_BUILD_DIGEST=(sha256:[0-9a-f]{64})")
+_SUBMISSION_BUILDER_REPOSITORY = (
+    "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/submission-builder"
+)
 
 
 def _request(
-    method: str, url: str, *, token: str, payload: dict[str, Any]
+    method: str,
+    url: str,
+    *,
+    token: str,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
-        data=json.dumps(payload, separators=(",", ":")).encode(),
+        data=(
+            json.dumps(payload, separators=(",", ":")).encode()
+            if payload is not None
+            else None
+        ),
         headers={
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
+            **({"Content-Type": "application/json"} if payload is not None else {}),
         },
         method=method,
     )
@@ -102,6 +114,78 @@ class BuildControl:
         )
 
 
+class SubmissionBuildControl:
+    def __init__(self, *, platform_url: str, token: str, environment: str, epoch: str):
+        self.base = platform_url.rstrip("/")
+        self.token = token
+        self.environment = environment
+        self.epoch = epoch
+
+    def claim(self) -> dict[str, Any] | None:
+        value = _request(
+            "POST",
+            f"{self.base}/api/v1/screener/controller/submission-image-builds/claim",
+            token=self.token,
+            payload={"environment": self.environment, "controller_epoch": self.epoch},
+        )
+        build = value.get("build")
+        if build is None:
+            return None
+        if not isinstance(build, dict):
+            raise ControllerError("Platform submission-build claim is invalid")
+        return build
+
+    def update(
+        self,
+        build_id: str,
+        *,
+        status: str,
+        provider_resource_id: str | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        _request(
+            "PUT",
+            f"{self.base}/api/v1/screener/controller/"
+            f"submission-image-builds/{build_id}",
+            token=self.token,
+            payload={
+                "environment": self.environment,
+                "controller_epoch": self.epoch,
+                "status": status,
+                "provider_resource_id": provider_resource_id,
+                "error_code": error_code,
+            },
+        )
+
+    def status(self, build_id: str) -> str:
+        query = urllib.parse.urlencode(
+            {"environment": self.environment, "controller_epoch": self.epoch}
+        )
+        value = _request(
+            "GET",
+            f"{self.base}/api/v1/screener/controller/"
+            f"submission-image-builds/{build_id}?{query}",
+            token=self.token,
+        )
+        status = value.get("status")
+        if not isinstance(status, str):
+            raise ControllerError("Platform submission-build status is invalid")
+        return status
+
+    def cleanup_required(self, build_id: str, *, provider_resource_id: str) -> None:
+        _request(
+            "POST",
+            f"{self.base}/api/v1/screener/controller/"
+            f"submission-image-builds/{build_id}/cleanup-required",
+            token=self.token,
+            payload={
+                "environment": self.environment,
+                "controller_epoch": self.epoch,
+                "provider_resource_id": provider_resource_id,
+            },
+        )
+
+
 def _mint_access_token(service_account: str) -> str:
     try:
         result = subprocess.run(
@@ -132,6 +216,52 @@ def _docker_config(destination: str, access_token: str) -> str:
         "auths": {host: {"username": "oauth2accesstoken", "password": access_token}}
     }
     return base64.b64encode(json.dumps(config, separators=(",", ":")).encode()).decode()
+
+
+def _submission_builder_image(source_sha: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise ControllerError("submission builder source revision is invalid")
+    image = f"{_SUBMISSION_BUILDER_REPOSITORY}:sha-{source_sha}"
+    try:
+        result = subprocess.run(
+            [
+                "gcloud",
+                "artifacts",
+                "docker",
+                "images",
+                "describe",
+                image,
+                "--format=value(image_summary.digest)",
+                "--quiet",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ControllerError("submission builder image resolution failed") from error
+    digest = result.stdout.strip()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ControllerError("submission builder image digest is invalid")
+    return f"{_SUBMISSION_BUILDER_REPOSITORY}@{digest}"
+
+
+def _source_revision() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ControllerError("builder source revision unavailable") from error
+    revision = result.stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ControllerError("builder source revision is invalid")
+    return revision
 
 
 def _kaniko_script(build: dict[str, Any]) -> str:
@@ -172,6 +302,7 @@ class Settings:
     build_timeout_seconds: int
     interval_seconds: int
     lock_file: Path
+    submission_builder_image: str
 
 
 def run_one(settings: Settings, client: TargonClient, control: BuildControl) -> bool:
@@ -253,11 +384,99 @@ def run_one(settings: Settings, client: TargonClient, control: BuildControl) -> 
                 if str(state.get("status", "")).casefold() not in {
                     "suspended",
                     "deleted",
-                    "error",
                 }:
                     client.suspend(uid)
             with contextlib.suppress(TargonAPIError):
                 client.delete(uid)
+
+
+def run_one_submission(
+    settings: Settings,
+    client: TargonClient,
+    control: SubmissionBuildControl,
+) -> bool:
+    build = control.claim()
+    if build is None:
+        return False
+    build_id = str(build.get("build_id", ""))
+    name = f"ditto-miner-build-{build_id.replace('-', '')[:12]}"[:32]
+    uid: str | None = None
+    try:
+        inventory = {
+            str(row.get("name")): int(row.get("available", 0))
+            for row in client.inventory()
+        }
+        if inventory.get(settings.targon_resource, 0) < 1:
+            control.update(
+                build_id,
+                status="fallback_required",
+                error_code="TARGON_SUBMISSION_BUILD_CAPACITY_UNAVAILABLE",
+            )
+            return True
+        job_token = str(build["job_token"])
+        if len(job_token) < 43:
+            raise ControllerError("submission build token is invalid")
+        created = client.create_rental(
+            name=name,
+            image=settings.submission_builder_image,
+            resource_name=settings.targon_resource,
+            envs=[
+                {"name": "DITTO_PLATFORM_URL", "value": control.base},
+                {"name": "DITTO_BUILD_ID", "value": build_id},
+                {"name": "DITTO_BUILD_JOB_TOKEN", "value": job_token},
+            ],
+        )
+        uid = str(created["uid"])
+        control.update(build_id, status="running", provider_resource_id=uid)
+        client.deploy(uid)
+        deadline = (
+            time.monotonic()
+            + settings.provision_timeout_seconds
+            + settings.build_timeout_seconds
+        )
+        while time.monotonic() < deadline:
+            state = client.state(uid)
+            build_status = control.status(build_id)
+            if build_status == "succeeded":
+                return True
+            if build_status in {"fallback_required", "canceled", "consumed"}:
+                return True
+            if str(state.get("status", "")).casefold() == "error":
+                break
+            time.sleep(10)
+        control.update(
+            build_id,
+            status="fallback_required",
+            provider_resource_id=uid,
+            error_code="TARGON_SUBMISSION_KANIKO_FAILED",
+        )
+        return True
+    except (ControllerError, TargonAPIError, KeyError, ValueError):
+        with contextlib.suppress(ControllerError):
+            control.update(
+                build_id,
+                status="fallback_required",
+                provider_resource_id=uid,
+                error_code="TARGON_SUBMISSION_PROVIDER_ERROR",
+            )
+        return True
+    finally:
+        if uid is not None:
+            try:
+                state = client.state(uid)
+            except TargonAPIError:
+                state = {}
+            if str(state.get("status", "")).casefold() not in {
+                "suspended",
+                "deleted",
+            }:
+                with contextlib.suppress(TargonAPIError):
+                    client.suspend(uid)
+            try:
+                client.delete(uid)
+            except TargonAPIError:
+                with contextlib.suppress(ControllerError):
+                    control.cleanup_required(build_id, provider_resource_id=uid)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -294,8 +513,15 @@ def main() -> int:
         build_timeout_seconds=args.build_timeout_seconds,
         interval_seconds=args.interval_seconds,
         lock_file=Path(args.lock_file),
+        submission_builder_image=_submission_builder_image(_source_revision()),
     )
     control = BuildControl(
+        platform_url=args.platform_url,
+        token=platform_token,
+        environment=args.environment,
+        epoch=epoch,
+    )
+    submission_control = SubmissionBuildControl(
         platform_url=args.platform_url,
         token=platform_token,
         environment=args.environment,
@@ -310,7 +536,9 @@ def main() -> int:
             print("trusted image builder already running", file=sys.stderr)
             return 75
         while True:
-            handled = run_one(settings, client, control)
+            handled = run_one_submission(settings, client, submission_control)
+            if not handled:
+                handled = run_one(settings, client, control)
             if args.once:
                 return 0
             if not handled:

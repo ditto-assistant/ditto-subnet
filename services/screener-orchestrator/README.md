@@ -6,10 +6,12 @@ capacity first, and resizes the GCE managed instance group only for the residual
 deficit. Both providers may return to zero when the queue and active leases are
 empty.
 
-Current Targon Rentals are approved only for the dedicated Kaniko image-builder
-path. Hostile screener execution remains fail-closed behind an expiring
-capability attestation because the nested RootlessKit probe failed. With a
-`nogo` or missing attestation, all runtime demand falls back to GCE.
+Current Targon Rentals are approved for credential-minimal Kaniko builds, both
+trusted release images and miner submission images. Hostile screener execution
+still remains fail-closed behind an expiring capability attestation because the
+nested RootlessKit probe failed. GCE imports each miner archive, reruns the
+normal health/source/policy gates, signs the result, and falls back to its local
+Docker build if Targon is unavailable or any byte-level check fails.
 
 Provider credentials are accepted only through mode-0600 files. The operator
 smoke wrapper streams `TARGON_API_KEY` directly from GCP Secret Manager to the
@@ -52,3 +54,15 @@ Artifact Registry writer token, starts one Kaniko rental, stores only the digest
 and redacted status, and deletes the rental. Provider failure becomes
 `fallback_required` for the existing build runner and never changes the hostile
 screener-runtime capability gate.
+
+Miner submission builds use the same separately locked process but a different
+contract. Platform mints a short-lived capability bound to one build, screening
+attempt, source object, and temporary output object. The rental receives only
+the public Platform URL, build ID, and that capability; it receives no Targon,
+GCP, registry, screener, controller, GitHub, validator, wallet, or inference
+credential. The helper verifies the source SHA-256, runs the immutable Kaniko
+executor without push/cache, uploads one bounded tar archive, and asks Platform
+to hash every output byte. The owning GCE screener independently hashes and
+imports the archive, applies the existing gates, then deletes the temporary
+object. Rental deletion failure is recorded after suspension as an operator
+cleanup event; zero replicas is the cost-safety boundary.

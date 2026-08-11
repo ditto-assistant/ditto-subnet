@@ -100,7 +100,12 @@ def test_release_auto_deploys_controller_and_builder_from_exact_release() -> Non
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     deploy = workflow["jobs"]["deploy-screener-controller"]
 
-    assert deploy["needs"] == ["plan", "release", "deploy_platform"]
+    assert deploy["needs"] == [
+        "plan",
+        "release",
+        "deploy_platform",
+        "build-submission-builder",
+    ]
     assert "needs.plan.outputs.screener_orchestrator == 'true'" in deploy["if"]
     assert "vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true'" in deploy["if"]
     assert deploy["uses"] == "./.github/workflows/screener-controller-deploy.yml"
@@ -231,6 +236,23 @@ def test_screener_runner_fallback_requires_platform_authorization() -> None:
     assert "gcloud artifacts docker images describe" in record["run"]
     assert '"$digest" != "$TARGON_DIGEST"' in record["run"]
     assert "--retry-all-errors" in record["run"]
+
+
+def test_submission_builder_is_immutable_and_gates_controller_deploy() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+    builder = jobs["build-submission-builder"]
+    publish = _step(builder["steps"], "Publish the attempt-scoped Kaniko runner")
+    controller = jobs["deploy-screener-controller"]
+
+    assert builder["needs"] == ["plan", "release", "deploy_platform"]
+    assert "needs.plan.outputs.screener_orchestrator == 'true'" in builder["if"]
+    assert publish["env"]["SOURCE_SHA"] == "${{ needs.release.outputs.commit_sha }}"
+    assert 'image="$SUBMISSION_BUILDER_REPOSITORY:sha-$SOURCE_SHA"' in publish["run"]
+    assert 'docker push "$image"' in publish["run"]
+    assert "GCP_SUBNET_BUILD_SA" in str(builder)
+    assert "build-submission-builder" in controller["needs"]
+    assert "needs.build-submission-builder.result == 'success'" in controller["if"]
 
 
 def test_public_screener_dependency_needs_no_private_authentication() -> None:

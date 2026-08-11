@@ -147,6 +147,19 @@ resource "google_storage_bucket" "agents" {
     }
   }
 
+  # Attempt-scoped Targon outputs are temporary transport objects. Normal GCE
+  # import deletes them immediately; this bounds the presigned-PUT race where a
+  # canceled builder finishes uploading after the screener's cleanup request.
+  lifecycle_rule {
+    condition {
+      age            = 1
+      matches_prefix = ["remote-builds/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
   # Keep a bounded rollback window after the platform explicitly supersedes or
   # deletes an artifact. `ARCHIVED` is required: current source tarballs and
   # screened images remain available for active/top-agent rescoring regardless

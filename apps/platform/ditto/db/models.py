@@ -2079,6 +2079,105 @@ class TrustedImageBuild(Base):
     )
 
 
+class SubmissionImageBuild(Base):
+    """Attempt-bound remote build whose output is still screened on GCE."""
+
+    __tablename__ = "submission_image_builds"
+
+    build_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    output_key: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    provider: Mapped[str | None] = mapped_column(Text)
+    provider_resource_id: Mapped[str | None] = mapped_column(Text)
+    output_sha256: Mapped[str | None] = mapped_column(Text)
+    output_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    controller_epoch: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    job_token_hash: Mapped[str | None] = mapped_column(Text)
+    job_token_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    upload_minted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="submission_image_builds_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="submission_image_builds_attempt_id_fkey",
+        ),
+        CheckConstraint(
+            "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
+            name="submission_image_builds_environment_check",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="submission_image_builds_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "image_ref = 'ditto-screen/' || agent_id::text || '-' || "
+            "attempt_id::text || chr(58) || 'latest'",
+            name="submission_image_builds_image_ref_check",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'running', 'succeeded', "
+            "'fallback_required', 'canceled', 'consumed')",
+            name="submission_image_builds_status_check",
+        ),
+        CheckConstraint(
+            "provider IS NULL OR provider = 'targon'",
+            name="submission_image_builds_provider_check",
+        ),
+        CheckConstraint(
+            "output_sha256 IS NULL OR output_sha256 ~ '^[0-9a-f]{64}$'",
+            name="submission_image_builds_output_sha_check",
+        ),
+        CheckConstraint(
+            "output_size_bytes IS NULL OR output_size_bytes BETWEEN 1 AND 4294967296",
+            name="submission_image_builds_output_size_check",
+        ),
+        CheckConstraint(
+            "job_token_hash IS NULL OR job_token_hash ~ '^[0-9a-f]{64}$'",
+            name="submission_image_builds_token_hash_check",
+        ),
+        CheckConstraint(
+            "attempt_count BETWEEN 0 AND 3",
+            name="submission_image_builds_attempt_count_check",
+        ),
+        UniqueConstraint("attempt_id", name="submission_image_builds_attempt_key"),
+        Index(
+            "submission_image_builds_queue_idx",
+            "environment",
+            "status",
+            "created_at",
+        ),
+    )
+
+
 class ScreenerReviewSettingsRevision(Base):
     """Append-only, operator-audited L2/L3 settings revision."""
 

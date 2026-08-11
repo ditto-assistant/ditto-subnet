@@ -166,6 +166,8 @@ class ScreenerConfig:
     l2_audit_retention_days: int
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
+    remote_build_mode: str = "prefer"
+    """``prefer`` tries the attempt-bound Targon Kaniko queue before Docker."""
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured."""
@@ -364,6 +366,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         review_settings_max_stale_seconds=_parse_int(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS", "900"
         ),
+        remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "prefer"),
     )
     if not config.signing_source_present():
         raise ScreenerConfigError(
@@ -451,4 +454,6 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS must be between 60 and 86400"
         )
+    if config.remote_build_mode not in {"off", "prefer"}:
+        raise ScreenerConfigError("SCREENER_REMOTE_BUILD_MODE must be off or prefer")
     return config

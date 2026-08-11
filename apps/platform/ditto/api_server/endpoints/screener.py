@@ -35,7 +35,7 @@ import logging
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -70,6 +70,8 @@ from ditto.api_models import (
     ScreenerQueueResponse,
     ScreenResultRequest,
     ScreenResultResponse,
+    SubmissionImageBuildRequest,
+    SubmissionImageBuildResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
@@ -78,6 +80,16 @@ from ditto.api_models.screener import (
     ShadowReviewObservationResponse,
 )
 from ditto.api_models.screener_nodes import (
+    SubmissionBuildCompleteRequest,
+    SubmissionBuildCompleteResponse,
+    SubmissionBuildSourceResponse,
+    SubmissionBuildUploadRequest,
+    SubmissionBuildUploadResponse,
+    SubmissionImageBuildClaimResponse,
+    SubmissionImageBuildClaimView,
+    SubmissionImageBuildCleanupRequest,
+    SubmissionImageBuildControllerStatusResponse,
+    SubmissionImageBuildControllerUpdateRequest,
     TrustedImageBuildClaimRequest,
     TrustedImageBuildClaimResponse,
     TrustedImageBuildCreateRequest,
@@ -135,6 +147,7 @@ from ditto.db.models import (
     ScreenerShadowReview,
     ScreeningAttempt,
     ScreeningQuarantine,
+    SubmissionImageBuild,
     TrustedImageBuild,
 )
 from ditto.db.queries.agents import get_agent_by_id
@@ -337,6 +350,10 @@ ControllerDep = Annotated[None, Depends(require_screener_controller)]
 _CONTROLLER_HEARTBEAT_READY_SECONDS = 180
 _NODE_TOKEN_ROTATION_GRACE_SECONDS = 120
 _TRUSTED_BUILD_LEASE_TTL = timedelta(minutes=45)
+_SUBMISSION_BUILD_LEASE_TTL = timedelta(minutes=50)
+_SUBMISSION_BUILD_JOB_TTL = timedelta(minutes=45)
+_SUBMISSION_BUILD_URL_TTL = timedelta(minutes=15)
+_SUBMISSION_BUILD_MAX_BYTES = 4 * 1024**3
 _TRUSTED_SOURCE_REPOSITORY = "https://github.com/ditto-assistant/ditto-subnet.git"
 _TRUSTED_RUNTIME_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime"
@@ -373,6 +390,69 @@ def _trusted_build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
         completed_at=aware(row.completed_at),
         updated_at=cast(datetime, aware(row.updated_at)),
     )
+
+
+async def _submission_build_view(
+    row: SubmissionImageBuild,
+    *,
+    storage: S3StorageClient | None = None,
+) -> SubmissionImageBuildResponse:
+    download_url: str | None = None
+    if row.status == "succeeded" and storage is not None:
+        download_url = await storage.presigned_get_url(
+            key=row.output_key,
+            expires_in=int(_SUBMISSION_BUILD_URL_TTL.total_seconds()),
+        )
+    return SubmissionImageBuildResponse(
+        build_id=row.build_id,
+        attempt_id=row.attempt_id,
+        status=cast(Any, row.status),
+        provider=cast(Literal["targon"] | None, row.provider),
+        artifact_sha256=row.artifact_sha256,
+        image_ref=row.image_ref,
+        output_sha256=row.output_sha256 if row.status == "succeeded" else None,
+        output_size_bytes=(
+            row.output_size_bytes if row.status == "succeeded" else None
+        ),
+        download_url=download_url,
+        error_code=row.error_code,
+    )
+
+
+def _submission_build_token(authorization: str | None) -> str:
+    prefix = "Bearer "
+    if authorization is None or not authorization.startswith(prefix):
+        raise HTTPException(status_code=401, detail="missing build job token")
+    return authorization[len(prefix) :]
+
+
+async def _locked_submission_build_for_job(
+    session: AsyncSession,
+    *,
+    build_id: UUID,
+    authorization: str | None,
+) -> SubmissionImageBuild:
+    token = _submission_build_token(authorization)
+    row = await session.scalar(
+        select(SubmissionImageBuild)
+        .where(SubmissionImageBuild.build_id == build_id)
+        .with_for_update()
+    )
+    if row is None or row.job_token_hash is None:
+        raise HTTPException(status_code=401, detail="invalid build job token")
+    presented_hash = hashlib.sha256(token.encode()).hexdigest()
+    if not secrets.compare_digest(presented_hash, row.job_token_hash):
+        raise HTTPException(status_code=401, detail="invalid build job token")
+    expiry = row.job_token_expires_at
+    if expiry is None:
+        raise HTTPException(status_code=401, detail="build job token expired")
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    if datetime.now(UTC) >= expiry:
+        raise HTTPException(status_code=401, detail="build job token expired")
+    if row.status not in {"leased", "running"}:
+        raise HTTPException(status_code=409, detail="build job is not active")
+    return row
 
 
 def _node_registration_message(payload: ScreenerNodeRegistrationRequest) -> bytes:
@@ -951,6 +1031,477 @@ async def update_trusted_image_build(
             row.completed_at = now
             row.lease_expires_at = None
     return _trusted_build_view(row)
+
+
+@router.post(
+    "/agent/{agent_id}/submission-image-builds",
+    response_model=SubmissionImageBuildResponse,
+)
+async def queue_submission_image_build(
+    agent_id: UUID,
+    payload: SubmissionImageBuildRequest,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> SubmissionImageBuildResponse:
+    """Queue a Targon build only after the owning screener validated source."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
+        if agent is None:
+            raise AgentNotFoundError(f"no agent with id={agent_id}")
+        attempt = await get_screening_attempt(
+            session, attempt_id=payload.attempt_id, for_update=True
+        )
+        deadline = attempt.deadline if attempt is not None else now
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if (
+            attempt is None
+            or attempt.agent_id != agent_id
+            or attempt.screener_hotkey != screener_hotkey
+            or attempt.status != "running"
+            or now >= deadline
+        ):
+            raise AgentNotScreenableError(
+                "remote build does not match an active screening attempt"
+            )
+        build_id = uuid4()
+        values = {
+            "build_id": build_id,
+            "agent_id": agent_id,
+            "attempt_id": payload.attempt_id,
+            "environment": "prod",
+            "artifact_sha256": agent.sha256.lower(),
+            "image_ref": f"ditto-screen/{agent_id}-{payload.attempt_id}:latest",
+            "output_key": f"remote-builds/{build_id}/image.tar",
+            "status": "queued",
+        }
+        await session.execute(
+            pg_insert(SubmissionImageBuild)
+            .values(**values)
+            .on_conflict_do_nothing(constraint="submission_image_builds_attempt_key")
+        )
+        row = await session.scalar(
+            select(SubmissionImageBuild).where(
+                SubmissionImageBuild.attempt_id == payload.attempt_id
+            )
+        )
+        if row is None:  # pragma: no cover - INSERT/SELECT share one transaction
+            raise HTTPException(
+                status_code=503, detail="remote build queue unavailable"
+            )
+    return await _submission_build_view(row)
+
+
+@router.get(
+    "/agent/{agent_id}/submission-image-builds/{build_id}",
+    response_model=SubmissionImageBuildResponse,
+)
+async def get_submission_image_build(
+    agent_id: UUID,
+    build_id: UUID,
+    attempt_id: UUID,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+    storage: StorageDep,
+) -> SubmissionImageBuildResponse:
+    row = await session.get(SubmissionImageBuild, build_id)
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    if row is None or row.agent_id != agent_id or row.attempt_id != attempt_id:
+        raise HTTPException(status_code=404, detail="submission image build not found")
+    if attempt is None or attempt.screener_hotkey != screener_hotkey:
+        raise AgentNotScreenableError("remote build does not match screener lease")
+    return await _submission_build_view(row, storage=storage)
+
+
+@router.delete(
+    "/agent/{agent_id}/submission-image-builds/{build_id}",
+    response_model=None,
+    status_code=204,
+)
+async def consume_submission_image_build(
+    agent_id: UUID,
+    build_id: UUID,
+    attempt_id: UUID,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+    storage: StorageDep,
+) -> None:
+    """Delete the temporary remote archive after the GCE daemon imported it."""
+    async with session.begin():
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.build_id == build_id)
+            .with_for_update()
+        )
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        if row is None or row.agent_id != agent_id or row.attempt_id != attempt_id:
+            raise HTTPException(
+                status_code=404, detail="submission image build not found"
+            )
+        if attempt is None or attempt.screener_hotkey != screener_hotkey:
+            raise AgentNotScreenableError("remote build does not match screener lease")
+        active = row.status in {"queued", "leased", "running"}
+        if row.status not in {
+            "queued",
+            "leased",
+            "running",
+            "succeeded",
+            "consumed",
+        }:
+            raise AgentNotScreenableError("remote build is not discardable")
+        output_key = row.output_key
+        if active:
+            row.status = "canceled"
+            row.completed_at = datetime.now(UTC)
+            row.lease_expires_at = None
+            row.job_token_hash = None
+            row.job_token_expires_at = None
+            row.updated_at = datetime.now(UTC)
+    if await storage.object_exists(key=output_key):
+        await storage.delete_object(key=output_key)
+    async with session.begin():
+        stored = await session.get(SubmissionImageBuild, build_id, with_for_update=True)
+        if stored is not None and stored.status in {"succeeded", "consumed"}:
+            stored.status = "consumed"
+            stored.consumed_at = datetime.now(UTC)
+            stored.updated_at = datetime.now(UTC)
+
+
+@router.post(
+    "/controller/submission-image-builds/claim",
+    response_model=SubmissionImageBuildClaimResponse,
+)
+async def claim_submission_image_build(
+    payload: TrustedImageBuildClaimRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> SubmissionImageBuildClaimResponse:
+    """Lease one miner build and mint only its short-lived job capability."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        await session.execute(
+            update(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.environment == payload.environment,
+                SubmissionImageBuild.status.in_(("leased", "running")),
+                SubmissionImageBuild.lease_expires_at < now,
+                SubmissionImageBuild.attempt_count >= 3,
+            )
+            .values(
+                status="fallback_required",
+                error_code="TARGON_SUBMISSION_BUILD_LEASE_EXHAUSTED",
+                completed_at=now,
+                lease_expires_at=None,
+                job_token_hash=None,
+                job_token_expires_at=None,
+                updated_at=now,
+            )
+        )
+        await session.execute(
+            update(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.environment == payload.environment,
+                SubmissionImageBuild.status == "queued",
+                ~exists().where(
+                    (ScreeningAttempt.attempt_id == SubmissionImageBuild.attempt_id)
+                    & (ScreeningAttempt.status == "running")
+                    & (ScreeningAttempt.deadline > now)
+                ),
+            )
+            .values(status="canceled", completed_at=now, updated_at=now)
+        )
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .join(
+                ScreeningAttempt,
+                ScreeningAttempt.attempt_id == SubmissionImageBuild.attempt_id,
+            )
+            .where(
+                SubmissionImageBuild.environment == payload.environment,
+                ScreeningAttempt.status == "running",
+                ScreeningAttempt.deadline > now,
+                or_(
+                    SubmissionImageBuild.status == "queued",
+                    (
+                        SubmissionImageBuild.status.in_(("leased", "running"))
+                        & (SubmissionImageBuild.lease_expires_at < now)
+                        & (SubmissionImageBuild.attempt_count < 3)
+                    ),
+                ),
+            )
+            .order_by(SubmissionImageBuild.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if row is None:
+            return SubmissionImageBuildClaimResponse(build=None)
+        token = _fresh_node_token()
+        token_expires_at = now + _SUBMISSION_BUILD_JOB_TTL
+        row.status = "leased"
+        row.provider = "targon"
+        row.controller_epoch = payload.controller_epoch
+        row.lease_expires_at = now + _SUBMISSION_BUILD_LEASE_TTL
+        row.attempt_count += 1
+        row.job_token_hash = hashlib.sha256(token.encode()).hexdigest()
+        row.job_token_expires_at = token_expires_at
+        row.updated_at = now
+    return SubmissionImageBuildClaimResponse(
+        build=SubmissionImageBuildClaimView(
+            build_id=row.build_id,
+            agent_id=row.agent_id,
+            attempt_id=row.attempt_id,
+            artifact_sha256=row.artifact_sha256,
+            image_ref=row.image_ref,
+            job_token=token,
+            job_token_expires_at=token_expires_at,
+        )
+    )
+
+
+@router.put(
+    "/controller/submission-image-builds/{build_id}",
+    response_model=None,
+    status_code=204,
+)
+async def update_submission_image_build(
+    build_id: UUID,
+    payload: SubmissionImageBuildControllerUpdateRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.build_id == build_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="submission image build not found"
+            )
+        if row.controller_epoch != payload.controller_epoch:
+            raise HTTPException(status_code=409, detail="build lease epoch is stale")
+        if row.status not in {"leased", "running"}:
+            raise HTTPException(status_code=409, detail="submission build is terminal")
+        row.status = payload.status
+        row.provider = "targon"
+        row.provider_resource_id = payload.provider_resource_id
+        row.error_code = payload.error_code
+        row.started_at = row.started_at or now
+        row.updated_at = now
+        if payload.status == "fallback_required":
+            row.completed_at = now
+            row.lease_expires_at = None
+            row.job_token_hash = None
+            row.job_token_expires_at = None
+
+
+@router.get(
+    "/controller/submission-image-builds/{build_id}",
+    response_model=SubmissionImageBuildControllerStatusResponse,
+)
+async def get_controller_submission_image_build(
+    build_id: UUID,
+    environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")],
+    controller_epoch: Annotated[str, Query(pattern=r"^[A-Za-z0-9._:@/-]{8,200}$")],
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> SubmissionImageBuildControllerStatusResponse:
+    row = await session.get(SubmissionImageBuild, build_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="submission image build not found")
+    if row.environment != environment or row.controller_epoch != controller_epoch:
+        raise HTTPException(status_code=409, detail="build lease epoch is stale")
+    return SubmissionImageBuildControllerStatusResponse(
+        build_id=row.build_id,
+        status=cast(Any, row.status),
+    )
+
+
+@router.post(
+    "/controller/submission-image-builds/{build_id}/cleanup-required",
+    response_model=None,
+    status_code=204,
+)
+async def record_submission_image_build_cleanup(
+    build_id: UUID,
+    payload: SubmissionImageBuildCleanupRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    """Keep provider deletion failures visible after zero-replica suspension."""
+    async with session.begin():
+        row = await session.get(SubmissionImageBuild, build_id)
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="submission image build not found"
+            )
+        if (
+            row.environment != payload.environment
+            or row.controller_epoch != payload.controller_epoch
+            or row.provider_resource_id != payload.provider_resource_id
+        ):
+            raise HTTPException(status_code=409, detail="build cleanup lease is stale")
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment=payload.environment,
+                event_type="provider_cleanup_required",
+                provider="targon",
+                node_id=None,
+                detail=(
+                    "A suspended zero-replica submission build rental requires "
+                    "provider deletion retry."
+                ),
+                controller_epoch=payload.controller_epoch,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+
+@router.get(
+    "/submission-image-builds/{build_id}/source",
+    response_model=SubmissionBuildSourceResponse,
+)
+async def get_submission_build_source(
+    build_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> SubmissionBuildSourceResponse:
+    async with session.begin():
+        row = await _locked_submission_build_for_job(
+            session, build_id=build_id, authorization=authorization
+        )
+        agent_id = row.agent_id
+        artifact_sha256 = row.artifact_sha256
+        image_ref = row.image_ref
+    url = await storage.presigned_get_url(
+        key=_artifact_key(agent_id),
+        expires_in=int(_SUBMISSION_BUILD_URL_TTL.total_seconds()),
+    )
+    return SubmissionBuildSourceResponse(
+        source_url_b64=base64.b64encode(url.encode()).decode(),
+        artifact_sha256=artifact_sha256,
+        image_ref=image_ref,
+    )
+
+
+@router.post(
+    "/submission-image-builds/{build_id}/upload",
+    response_model=SubmissionBuildUploadResponse,
+)
+async def mint_submission_build_upload(
+    build_id: UUID,
+    payload: SubmissionBuildUploadRequest,
+    session: SessionDep,
+    storage: StorageDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> SubmissionBuildUploadResponse:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await _locked_submission_build_for_job(
+            session, build_id=build_id, authorization=authorization
+        )
+        if payload.output_size_bytes > _SUBMISSION_BUILD_MAX_BYTES:
+            raise HTTPException(
+                status_code=413, detail="remote image archive too large"
+            )
+        if row.upload_minted_at is not None and (
+            row.output_sha256 != payload.output_sha256
+            or row.output_size_bytes != payload.output_size_bytes
+        ):
+            raise HTTPException(status_code=409, detail="remote build output changed")
+        row.output_sha256 = payload.output_sha256
+        row.output_size_bytes = payload.output_size_bytes
+        row.upload_minted_at = row.upload_minted_at or now
+        row.updated_at = now
+        key = row.output_key
+        metadata = {
+            "sha256": payload.output_sha256,
+            "build-id": str(row.build_id),
+            "attempt-id": str(row.attempt_id),
+            "artifact-sha256": row.artifact_sha256,
+        }
+    expires_in = int(_SUBMISSION_BUILD_URL_TTL.total_seconds())
+    url = await storage.presigned_put_url(
+        key=key,
+        size_bytes=payload.output_size_bytes,
+        metadata=metadata,
+        expires_in=expires_in,
+    )
+    return SubmissionBuildUploadResponse(
+        upload_url_b64=base64.b64encode(url.encode()).decode(),
+        required_headers={
+            "Content-Length": str(payload.output_size_bytes),
+            "Content-Type": "application/x-tar",
+            **{f"x-amz-meta-{key}": value for key, value in metadata.items()},
+        },
+        expires_at=now + timedelta(seconds=expires_in),
+    )
+
+
+@router.post(
+    "/submission-image-builds/{build_id}/complete",
+    response_model=SubmissionBuildCompleteResponse,
+)
+async def complete_submission_build_upload(
+    build_id: UUID,
+    payload: SubmissionBuildCompleteRequest,
+    session: SessionDep,
+    storage: StorageDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> SubmissionBuildCompleteResponse:
+    async with session.begin():
+        row = await _locked_submission_build_for_job(
+            session, build_id=build_id, authorization=authorization
+        )
+        if (
+            row.output_sha256 != payload.output_sha256
+            or row.output_size_bytes != payload.output_size_bytes
+            or row.upload_minted_at is None
+        ):
+            raise HTTPException(status_code=409, detail="remote build output changed")
+        key = row.output_key
+        metadata = {
+            "sha256": payload.output_sha256,
+            "build-id": str(row.build_id),
+            "attempt-id": str(row.attempt_id),
+            "artifact-sha256": row.artifact_sha256,
+        }
+    try:
+        head = await storage.head_object(key=key)
+        verified = await storage.verify_object_sha256(
+            key=key, expected_size_bytes=payload.output_size_bytes
+        )
+    except (ObjectNotFoundError, ObjectUploadFailedError, ObjectDownloadFailedError):
+        raise HTTPException(
+            status_code=503, detail="remote build storage verification unavailable"
+        ) from None
+    if (
+        head.size_bytes != payload.output_size_bytes
+        or head.metadata != metadata
+        or verified.size_bytes != payload.output_size_bytes
+        or verified.sha256 != payload.output_sha256
+    ):
+        await storage.delete_object(key=key)
+        raise HTTPException(status_code=409, detail="remote build archive mismatch")
+    now = datetime.now(UTC)
+    async with session.begin():
+        stored = await session.get(SubmissionImageBuild, build_id, with_for_update=True)
+        if stored is None or stored.status not in {"leased", "running"}:
+            raise HTTPException(
+                status_code=409, detail="remote build is no longer active"
+            )
+        stored.status = "succeeded"
+        stored.completed_at = now
+        stored.updated_at = now
+        stored.lease_expires_at = None
+        stored.job_token_hash = None
+        stored.job_token_expires_at = None
+    return SubmissionBuildCompleteResponse(verified=True)
 
 
 @router.put("/controller/nodes/{node_id}", response_model=None, status_code=204)

@@ -27,6 +27,9 @@ from ditto_screening_protocol.models import (
     SourceReviewEvidenceRole,
     SourceReviewFinding,
     SourceReviewScorerVisibleEffect,
+    SubmissionImageBuildRequest,
+    SubmissionImageBuildResponse,
+    SubmissionImageBuildStatus,
 )
 from ditto_screening_protocol.signing import verdict_signing_message
 
@@ -46,6 +49,9 @@ __all__ = [
     "ScreenedImageUploadCompleteResponse",
     "ScreenedImageUploadRequest",
     "ScreenedImageUploadResponse",
+    "SubmissionImageBuildRequest",
+    "SubmissionImageBuildResponse",
+    "SubmissionImageBuildStatus",
     "ScreenResultRequest",
     "ScreenReviewAudit",
     "ScreenResultResponse",

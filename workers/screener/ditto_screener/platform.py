@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
+import os
+import tempfile
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -55,6 +59,8 @@ from ditto_screening_protocol import (
     ScreenResultResponse,
     ScreenReviewAudit,
     SourceReviewFinding,
+    SubmissionImageBuildRequest,
+    SubmissionImageBuildResponse,
 )
 
 if TYPE_CHECKING:
@@ -72,6 +78,15 @@ _IMAGE_UPLOAD_ATTEMPTS = 3
 # build; they only replay the same idempotent attempt-bound payload.
 _VERDICT_RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 _TRANSIENT_VERDICT_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_REMOTE_BUILD_POLL_SECONDS = 5.0
+
+
+@dataclass(frozen=True)
+class RemoteImageArchive:
+    build_id: UUID
+    path: str
+    sha256: str
+    size_bytes: int
 
 
 class PlatformClient:
@@ -348,6 +363,141 @@ class PlatformClient:
                 f"artifact rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return ArtifactResponse.model_validate(resp.json())
+
+    async def build_submission_image(
+        self,
+        agent_id: UUID,
+        *,
+        attempt_id: UUID,
+        timeout: float,
+    ) -> RemoteImageArchive | None:
+        """Prefer one verified Targon Kaniko archive, otherwise authorize local."""
+        base_url = f"{self._base}{_PREFIX}/agent/{agent_id}/submission-image-builds"
+        try:
+            response = await self._client.post(
+                base_url,
+                json=SubmissionImageBuildRequest(attempt_id=attempt_id).model_dump(
+                    mode="json"
+                ),
+                headers=await self._auth_headers(),
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "remote build queue unavailable status=%d; using local builder",
+                    response.status_code,
+                )
+                return None
+            build = SubmissionImageBuildResponse.model_validate(response.json())
+        except (httpx.HTTPError, ValueError) as error:
+            logger.warning(
+                "remote build queue unavailable; using local builder: %s", error
+            )
+            return None
+        deadline = asyncio.get_running_loop().time() + max(1.0, timeout)
+        try:
+            while asyncio.get_running_loop().time() < deadline:
+                if build.status == "succeeded":
+                    archive = await self._download_remote_image(build)
+                    if archive is not None:
+                        return archive
+                    break
+                if build.status in {"fallback_required", "canceled", "consumed"}:
+                    logger.warning(
+                        "remote build unavailable code=%s; using local builder",
+                        build.error_code or "TARGON_SUBMISSION_BUILD_UNAVAILABLE",
+                    )
+                    return None
+                await asyncio.sleep(
+                    min(
+                        _REMOTE_BUILD_POLL_SECONDS,
+                        max(0.0, deadline - asyncio.get_running_loop().time()),
+                    )
+                )
+                response = await self._client.get(
+                    f"{base_url}/{build.build_id}",
+                    params={"attempt_id": str(attempt_id)},
+                    headers=await self._auth_headers(),
+                )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"remote build poll rejected ({response.status_code})"
+                    )
+                build = SubmissionImageBuildResponse.model_validate(response.json())
+        except (httpx.HTTPError, ValueError, PlatformError) as error:
+            logger.warning("remote build failed; using local builder: %s", error)
+        await self.discard_submission_image_build(
+            agent_id, attempt_id=attempt_id, build_id=build.build_id
+        )
+        return None
+
+    async def _download_remote_image(
+        self, build: SubmissionImageBuildResponse
+    ) -> RemoteImageArchive | None:
+        if (
+            build.download_url is None
+            or build.output_sha256 is None
+            or build.output_size_bytes is None
+        ):
+            return None
+        fd, path = tempfile.mkstemp(prefix="ditto-targon-image-", suffix=".tar")
+        os.fchmod(fd, 0o600)
+        digest = hashlib.sha256()
+        total = 0
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                async with self._client.stream(
+                    "GET", build.download_url, timeout=_IMAGE_REQUEST_TIMEOUT
+                ) as response:
+                    if response.status_code != 200:
+                        raise PlatformError(
+                            f"remote image download rejected ({response.status_code})"
+                        )
+                    async for chunk in response.aiter_bytes(8 * 1024**2):
+                        total += len(chunk)
+                        if total > build.output_size_bytes:
+                            raise PlatformError("remote image exceeded declared size")
+                        digest.update(chunk)
+                        await asyncio.to_thread(handle.write, chunk)
+            if total != build.output_size_bytes:
+                raise PlatformError("remote image ended before declared size")
+            actual = digest.hexdigest()
+            if actual != build.output_sha256:
+                raise PlatformError("remote image digest did not match Platform")
+            return RemoteImageArchive(
+                build_id=build.build_id,
+                path=path,
+                sha256=actual,
+                size_bytes=total,
+            )
+        except (httpx.HTTPError, OSError, PlatformError) as error:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+            logger.warning(
+                "remote image download failed; using local builder: %s", error
+            )
+            return None
+
+    async def discard_submission_image_build(
+        self,
+        agent_id: UUID,
+        *,
+        attempt_id: UUID,
+        build_id: UUID,
+    ) -> None:
+        """Revoke an active job or delete a successfully imported temp object."""
+        try:
+            response = await self._client.delete(
+                f"{self._base}{_PREFIX}/agent/{agent_id}/"
+                f"submission-image-builds/{build_id}",
+                params={"attempt_id": str(attempt_id)},
+                headers=await self._auth_headers(),
+            )
+            if response.status_code not in {204, 404, 409}:
+                logger.warning(
+                    "remote build cleanup rejected status=%d", response.status_code
+                )
+        except httpx.HTTPError as error:
+            logger.warning("remote build cleanup failed: %s", error)
 
     async def submit_result(
         self,
