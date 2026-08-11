@@ -138,6 +138,10 @@ Required values are supplied through the production host's protected
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
 - `SCREENER_L2_REVIEW_MODEL`: locked to `moonshotai/kimi-k3`, with
   `SCREENER_L2_FALLBACK_MODELS=z-ai/glm-5.2,openai/gpt-5.6-sol`.
+- `SCREENER_L3_REVIEW_ENABLED`: `true` (default) runs the independent SOL
+  critic/adjudicator after L2. `false` keeps L1 routing and the Kimi L2 analyst
+  active while making the L2 result authoritative. Platform review-settings
+  revisions can change this between leases without a worker restart.
 - `SCREENER_L3_REVIEW_MODEL`: locked to `openai/gpt-5.6-sol`; both layers use
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built

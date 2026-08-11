@@ -1235,6 +1235,22 @@ class L2RunResult:
     critic_cache_hit: bool = False
 
 
+def _finalize_without_l3(
+    analyst: L2RunResult,
+    *,
+    dossier_tools: tuple[str, ...],
+    analyst_cache_hit: bool,
+) -> L2RunResult:
+    """Make the paid L2 analyst authoritative when L3 is disabled."""
+    return replace(
+        analyst,
+        tools=dossier_tools + analyst.tools,
+        critic_disposition="disabled",
+        clearance_path="l2_only_l3_disabled",
+        analyst_cache_hit=analyst_cache_hit,
+    )
+
+
 class IsolatedCodingHarness:
     """Run only repository-owned analyzers inside a disposable Docker sandbox."""
 
@@ -1414,6 +1430,7 @@ class KimiSolSourceReviewAgent:
         critic_reasoning_effort: str = "medium",
         model: str = L2_MODEL,
         fallback_models: tuple[str, ...] = L2_FALLBACK_MODELS,
+        l3_enabled: bool = True,
         critic_model: str = L3_MODEL,
         critic_provider: str | None = L3_PROVIDER,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -1439,6 +1456,7 @@ class KimiSolSourceReviewAgent:
         self._critic_reasoning_effort = critic_reasoning_effort
         self._model = model
         self._fallback_models = fallback_models
+        self._l3_enabled = l3_enabled
         self._critic_model = critic_model
         self._critic_provider = critic_provider
         self._transport = transport
@@ -1741,6 +1759,12 @@ class KimiSolSourceReviewAgent:
                 # never non-overturnable findings. A complete Kimi clearance
                 # still receives independent SOL review, which may clear it.
                 integrity_attention = static_attention is not None
+            if not self._l3_enabled:
+                return _finalize_without_l3(
+                    analyst,
+                    dossier_tools=dossier_tools,
+                    analyst_cache_hit=analyst_cache_hit,
+                )
             if not (analyst.observation.ok and analyst.observation.risk_level == "low"):
                 if _needs_violation_adjudication(analyst, l1_observation):
                     provisional_violation = {

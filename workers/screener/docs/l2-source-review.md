@@ -208,6 +208,12 @@ workers sharing the cache. A provisional-safe analyst stage and complete SOL
 critic result are cached separately, so a retryable critic resumes without
 paying for Kimi and a retryable adjudicator reruns only that final bounded
 trajectory. Cache-hit stages contribute zero new usage to the retry audit.
+The Platform-managed `l3_enabled` switch independently skips SOL critic and
+adjudicator trajectories while preserving L1 routing, the paid L2 analyst,
+budgets, caches, and audit records. With L3 disabled, the L2 analyst result is
+authoritative and the audit records `critic_disposition=disabled` plus
+`clearance_path=l2_only_l3_disabled`. Existing settings revisions predate the
+switch and retain their original checksum while resolving to enabled.
 Results produced after the local or platform lease
 deadline are discarded as retryable infrastructure failures.
 

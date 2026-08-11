@@ -46,6 +46,7 @@ from ditto_screener.l2_review import (
     _cost,
     _dossier_has_scorer_attention,
     _extract_readonly_workspace,
+    _finalize_without_l3,
     _graph_covers_l1_slice,
     _has_mixed_causal_families,
     _make_writable,
@@ -389,6 +390,21 @@ async def test_uncertified_l1_low_escalates_to_l2() -> None:
 
     assert result.risk_level == "low"
     assert l2.calls == 1
+
+
+def test_l3_disabled_makes_l2_result_authoritative() -> None:
+    analyst = _model_result(_safe())
+
+    result = _finalize_without_l3(
+        analyst,
+        dossier_tools=("source_inventory",),
+        analyst_cache_hit=False,
+    )
+
+    assert result.observation is analyst.observation
+    assert result.tools == ("source_inventory",)
+    assert result.critic_disposition == "disabled"
+    assert result.clearance_path == "l2_only_l3_disabled"
 
 
 def test_direct_clear_graph_requires_unique_resolved_l1_slice() -> None:

@@ -14444,6 +14444,11 @@ export interface components {
              */
             l2_model: "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
             /**
+             * L3 Enabled
+             * @default true
+             */
+            l3_enabled: boolean;
+            /**
              * L3 Model
              * @default openai/gpt-5.6-sol
              * @constant

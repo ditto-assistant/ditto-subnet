@@ -215,6 +215,7 @@ export const screenerReviewSettingsSchema = z
     mode: screenerReviewModeSchema,
     l2_model: screenerReviewModelSchema,
     l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
+    l3_enabled: z.boolean().default(true),
     l3_model: z.literal('openai/gpt-5.6-sol'),
     timeout_seconds: z.number().int().min(30).max(900),
     max_steps: z.number().int().min(1).max(20),

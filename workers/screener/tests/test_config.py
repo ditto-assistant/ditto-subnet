@@ -56,6 +56,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.l2_review_model == "moonshotai/kimi-k3"
     assert cfg.l2_review_provider == "openrouter"
     assert cfg.l2_fallback_models == ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
+    assert cfg.l3_review_enabled is True
     assert cfg.l3_review_model == "openai/gpt-5.6-sol"
     assert cfg.l3_review_provider == "openrouter"
     assert cfg.l2_max_steps == 18

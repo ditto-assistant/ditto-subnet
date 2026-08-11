@@ -1124,6 +1124,7 @@ describe('screener review settings schemas', () => {
     mode: 'shadow',
     l2_model: 'moonshotai/kimi-k3',
     l2_fallback_models: ['z-ai/glm-5.2', 'openai/gpt-5.6-sol'],
+    l3_enabled: true,
     l3_model: 'openai/gpt-5.6-sol',
     timeout_seconds: 900,
     max_steps: 18,

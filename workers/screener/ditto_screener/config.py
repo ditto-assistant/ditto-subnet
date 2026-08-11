@@ -149,6 +149,7 @@ class ScreenerConfig:
     l2_review_model: str
     l2_review_provider: str
     l2_fallback_models: tuple[str, ...]
+    l3_review_enabled: bool
     l3_review_model: str
     l3_review_provider: str
     l2_analyzer_image: str
@@ -327,6 +328,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         l2_fallback_models=_parse_csv(
             "SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2,openai/gpt-5.6-sol"
         ),
+        l3_review_enabled=_parse_bool("SCREENER_L3_REVIEW_ENABLED", True),
         l3_review_model=os.environ.get(
             "SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-sol"
         ),

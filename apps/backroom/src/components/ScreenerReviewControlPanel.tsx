@@ -18,6 +18,7 @@ const defaults: ScreenerReviewSettings = {
   mode: 'off',
   l2_model: 'moonshotai/kimi-k3',
   l2_fallback_models: ['z-ai/glm-5.2', 'openai/gpt-5.6-sol'],
+  l3_enabled: true,
   l3_model: 'openai/gpt-5.6-sol',
   timeout_seconds: 900,
   max_steps: 18,
@@ -580,12 +581,30 @@ export function ScreenerReviewControlPanel({
               </label>
             </div>
 
-            <div className="rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
-              <p className="text-xs font-semibold">Fixed safety chain</p>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-                L3 stays GPT-5.6 SOL and the provider stays OpenRouter. Models still
-                produce quarantine/review recommendations only.
-              </p>
+            <div className="flex flex-col gap-4 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold">Independent L3 verification</p>
+                <p className="mt-1 max-w-[70ch] text-xs leading-5 text-[var(--muted)]">
+                  {settings.l3_enabled
+                    ? 'GPT-5.6 SOL independently critiques or adjudicates the Kimi result. This adds paid model calls when L2 escalates.'
+                    : 'L3 is disabled. The L2 analyst becomes the final paid reviewer; L1 routing, L2 budgets, caching, and audit evidence stay active.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.l3_enabled}
+                aria-label="Enable L3 verification"
+                disabled={readOnly || loading || settings.mode === 'inherit'}
+                onClick={() => setSettings((current) => ({ ...current, l3_enabled: !current.l3_enabled }))}
+                className={`inline-flex min-h-11 shrink-0 items-center rounded-lg border px-4 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
+                  settings.l3_enabled
+                    ? 'border-[var(--acid)] bg-[var(--acid-dim)] text-[var(--acid)]'
+                    : 'border-[var(--line)] text-[var(--muted-strong)] hover:bg-white/5'
+                }`}
+              >
+                L3 {settings.l3_enabled ? 'enabled' : 'disabled'}
+              </button>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">

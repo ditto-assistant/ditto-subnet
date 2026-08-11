@@ -84,6 +84,7 @@ class ReviewSettings(BaseModel):
     mode: Literal["off", "shadow", "enforce"]
     l2_model: ReviewModel
     l2_fallback_models: tuple[ReviewModel, ...]
+    l3_enabled: bool = True
     l3_model: Literal["openai/gpt-5.6-sol"]
     timeout_seconds: Annotated[int, Field(ge=30, le=900)]
     max_steps: Annotated[int, Field(ge=1, le=20)]
@@ -122,7 +123,18 @@ class EffectiveReviewSettings(BaseModel):
             separators=(",", ":"),
         ).encode()
         if hashlib.sha256(payload).hexdigest() != self.checksum:
-            raise ValueError("review settings checksum mismatch")
+            # Revisions written before the independent L3 control do not have
+            # ``l3_enabled`` in their canonical JSON. Accept their immutable
+            # checksum only when the newly defaulted behavior remains enabled.
+            legacy = self.settings.model_dump(mode="json")
+            if not self.settings.l3_enabled:
+                raise ValueError("review settings checksum mismatch")
+            legacy.pop("l3_enabled")
+            legacy_payload = json.dumps(
+                legacy, sort_keys=True, separators=(",", ":")
+            ).encode()
+            if hashlib.sha256(legacy_payload).hexdigest() != self.checksum:
+                raise ValueError("review settings checksum mismatch")
         return self
 
     def apply_to(self, config: ScreenerConfig) -> ScreenerConfig:
@@ -132,6 +144,7 @@ class EffectiveReviewSettings(BaseModel):
             l2_review_mode=value.mode,
             l2_review_model=value.l2_model,
             l2_fallback_models=value.l2_fallback_models,
+            l3_review_enabled=value.l3_enabled,
             l3_review_model=value.l3_model,
             l2_timeout_seconds=float(value.timeout_seconds),
             l2_max_steps=value.max_steps,
@@ -191,6 +204,7 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "mode": config.l2_review_mode,
             "l2_model": config.l2_review_model,
             "l2_fallback_models": config.l2_fallback_models,
+            "l3_enabled": config.l3_review_enabled,
             "l3_model": config.l3_review_model,
             "timeout_seconds": int(config.l2_timeout_seconds),
             "max_steps": config.l2_max_steps,

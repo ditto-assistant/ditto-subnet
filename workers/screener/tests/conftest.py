@@ -53,6 +53,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "l2_review_model": "moonshotai/kimi-k3",
         "l2_review_provider": "openrouter",
         "l2_fallback_models": ("z-ai/glm-5.2", "openai/gpt-5.6-sol"),
+        "l3_review_enabled": True,
         "l3_review_model": "openai/gpt-5.6-sol",
         "l3_review_provider": "openrouter",
         "l2_analyzer_image": "ditto-screener-l2-analyzer:active",

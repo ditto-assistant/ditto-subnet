@@ -51,6 +51,7 @@ def _payload(scope: str, mode: str, expected: int = 0) -> dict[str, object]:
             "mode": mode,
             "l2_model": "moonshotai/kimi-k3",
             "l2_fallback_models": ["z-ai/glm-5.2", "openai/gpt-5.6-sol"],
+            "l3_enabled": True,
             "l3_model": "openai/gpt-5.6-sol",
             "timeout_seconds": 900,
             "max_steps": 18,
@@ -157,6 +158,31 @@ async def test_enforce_is_activatable_but_global_inherit_is_not(
     )
     assert inherit.status_code == 409
     assert "exact worker scope" in inherit.text
+
+
+async def test_l3_can_be_disabled_without_disabling_l2(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    payload = _payload("*", "enforce")
+    assert isinstance(payload["settings"], dict)
+    payload["settings"]["l3_enabled"] = False
+
+    written = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=payload,
+    )
+    assert written.status_code == 200, written.text
+    effective = await client.get(
+        "/api/v1/screener/review-settings?instance_id=ditto-screener-prod",
+        headers=_SCREENER_HEADERS,
+    )
+    assert effective.status_code == 200
+    assert effective.json()["settings"]["mode"] == "enforce"
+    assert effective.json()["settings"]["l3_enabled"] is False
 
 
 async def test_stale_parent_and_duplicate_model_chain_are_rejected(

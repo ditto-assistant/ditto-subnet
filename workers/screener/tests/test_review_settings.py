@@ -16,6 +16,7 @@ from ditto_screener.errors import PlatformError
 from ditto_screener.platform import PlatformClient
 from ditto_screener.review_settings import (
     CachedReviewSettings,
+    EffectiveReviewSettings,
     ReviewSettingsCache,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
@@ -69,6 +70,7 @@ async def test_platform_settings_are_cached_and_apply_every_budget(
             "settings": baseline.settings.model_copy(
                 update={
                     "mode": "shadow",
+                    "l3_enabled": False,
                     "max_steps": 9,
                     "max_cost_usd": 0.75,
                     "critic_reasoning_effort": "low",
@@ -98,10 +100,27 @@ async def test_platform_settings_are_cached_and_apply_every_budget(
     assert first == second
     runtime = first.apply_to(config)
     assert runtime.l2_review_mode == "shadow"
+    assert runtime.l3_review_enabled is False
     assert runtime.l2_max_steps == 9
     assert runtime.l2_max_cost_usd == 0.75
     assert runtime.l2_critic_reasoning_effort == "low"
     assert ReviewSettingsCache(config.review_settings_cache_file).load() is not None
+
+
+def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
+    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+    baseline = bootstrap_review_settings(config)
+    legacy = baseline.settings.model_dump(mode="json")
+    legacy.pop("l3_enabled")
+    legacy_checksum = hashlib.sha256(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    payload = baseline.model_dump()
+    payload["checksum"] = legacy_checksum
+    compatible = EffectiveReviewSettings.model_validate(payload)
+
+    assert compatible.settings.l3_enabled is True
 
 
 @pytest.mark.asyncio

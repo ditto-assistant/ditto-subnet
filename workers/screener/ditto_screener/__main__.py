@@ -82,13 +82,14 @@ async def _amain() -> int:
             policy.manifest.digest,
         )
         logger.info(
-            "source review L2 mode=%s model=%s fallbacks=%s L3_model=%s "
+            "source review L2 mode=%s model=%s fallbacks=%s L3_enabled=%s L3_model=%s "
             "L3_provider=%s prompt=%s harness=%s "
             "steps=%d input_tokens=%d output_tokens=%d cost_usd=%.2f timeout_s=%.0f "
             "analyst_reasoning=%s critic_reasoning=%s",
             config.l2_review_mode,
             config.l2_review_model,
             ",".join(config.l2_fallback_models),
+            config.l3_review_enabled,
             config.l3_review_model,
             config.l3_review_provider,
             L2_PROMPT_REVISION,

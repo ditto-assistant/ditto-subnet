@@ -22,6 +22,7 @@ const settings = {
   mode: 'off' as const,
   l2_model: 'moonshotai/kimi-k3' as const,
   l2_fallback_models: ['z-ai/glm-5.2', 'openai/gpt-5.6-sol'] as const,
+  l3_enabled: true,
   l3_model: 'openai/gpt-5.6-sol' as const,
   timeout_seconds: 900,
   max_steps: 18,
@@ -178,6 +179,27 @@ describe('ScreenerReviewControlPanel', () => {
       target: { value: 'ditto-screener-prod' },
     })
     expect(screen.getByRole('button', { name: 'inherit' })).toBeTruthy()
+  })
+
+  it('disables L3 independently without turning off L2 review', async () => {
+    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Enable L3 verification' }))
+    expect(screen.getByText(/L2 analyst becomes the final paid reviewer/)).toBeTruthy()
+    fireEvent.change(screen.getAllByLabelText('Audit reason')[1]!, {
+      target: { value: 'keep L2 review active while disabling costly L3 calls' },
+    })
+    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[1]!, {
+      target: { value: 'APPLY SCREENER REVIEW * OFF' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Append settings revision' }))
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1))
+    expect(updateSettings).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        settings: expect.objectContaining({ mode: 'off', l3_enabled: false }),
+      }),
+    })
   })
 
   it('enforces deferred review without exposing a top-five disable switch', async () => {

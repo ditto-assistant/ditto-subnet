@@ -565,6 +565,7 @@ class BuildGate:
             cache_ttl_seconds=config.l2_cache_ttl_seconds,
             model=config.l2_review_model,
             fallback_models=config.l2_fallback_models,
+            l3_enabled=config.l3_review_enabled,
             critic_model=config.l3_review_model,
             critic_provider=config.l3_review_provider,
         )
@@ -586,11 +587,13 @@ class BuildGate:
         self._configure_source_reviewer(runtime)
         self._review_settings_key = key
         logger.info(
-            "applied review settings revision=%d scope=%s mode=%s model=%s",
+            "applied review settings revision=%d scope=%s mode=%s model=%s "
+            "l3_enabled=%s",
             effective.revision,
             effective.scope,
             runtime.l2_review_mode,
             runtime.l2_review_model,
+            runtime.l3_review_enabled,
         )
         return True
 
