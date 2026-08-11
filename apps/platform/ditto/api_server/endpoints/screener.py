@@ -2670,7 +2670,10 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
     if "no dockerfile at tarball root" in normalized:
         return "Dockerfile missing from archive root"
     if normalized.startswith("serve check failed"):
-        return "Container failed the health check"
+        return (
+            "Container did not return a 2xx response from GET /health on port "
+            "8080 during startup"
+        )
     if "tarball exceeds" in normalized:
         return "Submission archive exceeded the size limit"
     if "sha256 mismatch" in normalized:

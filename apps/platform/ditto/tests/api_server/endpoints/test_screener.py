@@ -3084,7 +3084,10 @@ class TestClaim:
             agent = await session.get(Agent, agent_id)
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert agent is not None and agent.status == AgentStatus.REJECTED
-            assert agent.screening_reason == "Container failed the health check"
+            assert agent.screening_reason == (
+                "Container did not return a 2xx response from GET /health on port "
+                "8080 during startup"
+            )
             assert attempt is not None and attempt.status == "rejected"
 
 
