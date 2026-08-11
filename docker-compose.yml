@@ -82,6 +82,9 @@ services:
       DOCKER_TLS_CERTDIR: ""
       DITTOBENCH_OPENROUTER_SHIM_PORT: "11437"
       DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH: /var/lib/dittobench-openrouter-shim/ca-bundle.pem
+      # This trusted root process owns initialization of the private V9
+      # projection volume before the non-root scorer becomes healthy.
+      DITTOBENCH_PRIVATE_ARTIFACT_DIR: /var/lib/dittobench-private-artifacts
     extra_hosts:
       - host.docker.internal:127.0.0.1
     volumes:
@@ -90,6 +93,9 @@ services:
       # the nested daemon mounts it read-only into miner containers. No private
       # key is written to this volume.
       - openrouter-shim-ca:/var/lib/dittobench-openrouter-shim
+      # Validator-private V9 replay evidence. This is deliberately absent from
+      # every miner container and from the public validator service.
+      - dittobench-private-artifacts:/var/lib/dittobench-private-artifacts
     healthcheck:
       test: [CMD-SHELL, "docker info >/dev/null 2>&1"]
       interval: 10s
@@ -162,6 +168,9 @@ services:
       # openrouter.ai:443 traffic there while preserving the sandbox source IP.
       DITTOBENCH_OPENROUTER_SHIM_PORT: "11437"
       DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH: /var/lib/dittobench-openrouter-shim/ca-bundle.pem
+      # The sandbox-docker entrypoint initializes this shared volume as a real
+      # 0700 directory owned by the scorer's uid before its healthcheck passes.
+      DITTOBENCH_PRIVATE_ARTIFACT_DIR: /var/lib/dittobench-private-artifacts
       # Authorizes the validator's session prepare/activate/cancel calls. Same
       # anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
@@ -200,6 +209,7 @@ services:
       - ALL
     volumes:
       - openrouter-shim-ca:/var/lib/dittobench-openrouter-shim
+      - dittobench-private-artifacts:/var/lib/dittobench-private-artifacts
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8000/health"]
       interval: 10s
@@ -359,5 +369,6 @@ services:
 volumes:
   pylon-data:
   openrouter-shim-ca:
+  dittobench-private-artifacts:
   sandbox-docker-rootful-data:
   validator-update-bootstrap:

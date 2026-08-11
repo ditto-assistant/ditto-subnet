@@ -23,6 +23,24 @@ mkdir -p "$openrouter_shim_ca_dir"
 chown 65532:65532 "$openrouter_shim_ca_dir"
 chmod 0755 "$openrouter_shim_ca_dir"
 
+# Bench v9's public transcript commits to a private replay manifest containing
+# the per-run blinding key and alias map. The scorer runs as uid 65532 with a
+# read-only root filesystem, so the trusted DinD side of the stack initializes
+# the dedicated named volume before dockerd can become healthy and unblock the
+# scorer. Keep this separate from the public CA bundle and never mount it into a
+# miner container.
+private_artifact_dir="${DITTOBENCH_PRIVATE_ARTIFACT_DIR:-/var/lib/dittobench-private-artifacts}"
+case "$private_artifact_dir" in
+  /*) ;;
+  *)
+    printf 'private artifact directory must be absolute: %s\n' "$private_artifact_dir" >&2
+    exit 1
+    ;;
+esac
+mkdir -p "$private_artifact_dir"
+chown 65532:65532 "$private_artifact_dir"
+chmod 0700 "$private_artifact_dir"
+
 # Submission builds create a steady stream of images and BuildKit cache in the
 # nested daemon's named volume. Keep cleanup inside this isolation boundary:
 # mounting the host Docker socket would give the stack control over unrelated

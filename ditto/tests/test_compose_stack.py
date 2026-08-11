@@ -51,6 +51,43 @@ def test_sandbox_health_reports_the_isolated_daemon() -> None:
     assert "docker info >/dev/null 2>&1" in probe
 
 
+def test_v9_private_projection_volume_is_initialized_before_scorer_health() -> None:
+    """The scorer must not finish 351 V9 cases and then discover no storage.
+
+    The trusted rootful sandbox service initializes one durable named volume;
+    the scorer receives that exact volume and path only after the sandbox is
+    healthy. No miner or public validator container can mount the replay keys.
+    """
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    services = compose["services"]
+    volume_name = "dittobench-private-artifacts"
+    target = "/var/lib/dittobench-private-artifacts"
+
+    assert volume_name in compose["volumes"]
+    for service_name in ("sandbox-docker", "dittobench-api"):
+        service = services[service_name]
+        assert service["environment"]["DITTOBENCH_PRIVATE_ARTIFACT_DIR"] == target
+        assert f"{volume_name}:{target}" in service["volumes"]
+
+    for service_name, service in services.items():
+        if service_name in {"sandbox-docker", "dittobench-api"}:
+            continue
+        serialized = "\n".join(str(item) for item in service.get("volumes", []))
+        assert volume_name not in serialized
+        assert target not in serialized
+
+    scorer = services["dittobench-api"]
+    assert scorer["read_only"] is True
+    assert scorer["depends_on"]["sandbox-docker"]["condition"] == "service_healthy"
+
+    entrypoint = SANDBOX_ENTRYPOINT_PATH.read_text()
+    assert 'chown 65532:65532 "$private_artifact_dir"' in entrypoint
+    assert 'chmod 0700 "$private_artifact_dir"' in entrypoint
+    assert entrypoint.index('chmod 0700 "$private_artifact_dir"') < entrypoint.index(
+        "exec dockerd-entrypoint.sh"
+    )
+
+
 def test_compatibility_executor_does_not_require_host_specific_outer_limits() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
@@ -131,6 +168,7 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     assert set(sandbox["volumes"]) == {
         "sandbox-docker-rootful-data:/var/lib/docker",
         "openrouter-shim-ca:/var/lib/dittobench-openrouter-shim",
+        "dittobench-private-artifacts:/var/lib/dittobench-private-artifacts",
     }
     assert "security_opt" not in sandbox
     # `docker system prune` also removes unused networks, which would delete the

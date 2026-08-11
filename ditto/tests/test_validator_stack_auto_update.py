@@ -172,6 +172,18 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
     assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == "0.10.0"
     assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == REVISION
+    assert scorer_environment["DITTOBENCH_PRIVATE_ARTIFACT_DIR"] == (
+        "/var/lib/dittobench-private-artifacts"
+    )
+    assert (
+        "dittobench-private-artifacts:/var/lib/dittobench-private-artifacts"
+        in compose["services"]["dittobench-api"]["volumes"]
+    )
+    assert (
+        "dittobench-private-artifacts:/var/lib/dittobench-private-artifacts"
+        in compose["services"]["sandbox-docker"]["volumes"]
+    )
+    assert "dittobench-private-artifacts" in compose["volumes"]
 
     # Frozen compat-2 updaters require the historical six-service descriptor.
     # The retired services remain isolated compatibility shims: no active
