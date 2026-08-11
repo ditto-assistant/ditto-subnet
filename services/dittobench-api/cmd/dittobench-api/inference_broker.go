@@ -63,6 +63,13 @@ const (
 	brokerAblationTraceBytes   = 256 << 20
 )
 
+// usesPlatformEmbedding is the single version boundary for the hosted,
+// ticket-scoped embedding route. Bench v2-v6 retain the frozen local Ollama
+// lane; v7 and every later negotiated contract use the signed Platform route.
+func usesPlatformEmbedding(benchVersion int) bool {
+	return benchVersion >= protocol.BenchVersionV7
+}
+
 // ticketTransientMaxAttempts bounds the embedding lane's short retry window.
 // Chat uses ticketChatFastMaxAttempts because one Platform response already
 // represents exhausted throughput and reliability phases; repeating that whole
@@ -1333,7 +1340,7 @@ func (b *inferenceBroker) claimRun(id, runID string, identity brokerTicketIdenti
 	// Only the hosted lane widens. v2-v6 embeddings still land on the one
 	// Ollama container this host runs, so they keep the single-slot lane they
 	// have always had; leaving embeddingConcurrency at zero is that lane.
-	if benchVersion >= 7 {
+	if usesPlatformEmbedding(benchVersion) {
 		session.embeddingConcurrency = v8EmbeddingSessionConcurrency
 	}
 	return true
@@ -1573,7 +1580,7 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 	session.mu.Lock()
 	benchVersion := session.benchVersion
 	session.mu.Unlock()
-	if benchVersion < 7 && b.embeddingURL == "" {
+	if !usesPlatformEmbedding(benchVersion) && b.embeddingURL == "" {
 		writeError(w, http.StatusServiceUnavailable, "embedding service unavailable")
 		return
 	}
@@ -1731,7 +1738,7 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 	// the published one logs exactly the harnesses that named something nobody
 	// told them to name, which is the signal.
 	servedModel := embeddingModel
-	if benchVersion >= 7 {
+	if usesPlatformEmbedding(benchVersion) {
 		servedModel = hostedEmbeddingModel
 	}
 	if payload.Model != embeddingModel {
@@ -1741,7 +1748,7 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 	// v2-v6 retain the frozen global Ollama lane. Hosted v7 requests are already
 	// isolated and serialized per ticket above, so unrelated evaluations must
 	// not queue behind an obsolete host-global embedding bottleneck.
-	if benchVersion < 7 {
+	if !usesPlatformEmbedding(benchVersion) {
 		select {
 		case b.embeddingSlots <- struct{}{}:
 			slotAcquired = true
@@ -1759,13 +1766,13 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 		// paid-free ordinary/reference trace. Both intervention rounds either
 		// replay this response or synthesize the targeted lane above.
 		decoded, err = b.forwardLocalEmbedding(requestContext, payload.Input)
-	} else if benchVersion >= 7 {
+	} else if usesPlatformEmbedding(benchVersion) {
 		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input)
 	} else {
 		decoded, err = b.forwardLocalEmbedding(requestContext, payload.Input)
 	}
 	if err != nil {
-		if benchVersion >= 7 {
+		if usesPlatformEmbedding(benchVersion) {
 			// #97 made a v7 embedding fault fail the run closed, and it still
 			// does. What changes is only WHICH counter it lands in: a platform
 			// grant denial is recorded as a lost lease rather than as an
@@ -1980,7 +1987,7 @@ func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session 
 		return embeddingResponse{}, err
 	}
 	session.mu.Lock()
-	if session.benchVersion != protocol.BenchVersionV8 || !session.activeLocked(time.Now()) {
+	if !usesPlatformEmbedding(session.benchVersion) || !session.activeLocked(time.Now()) {
 		session.mu.Unlock()
 		return embeddingResponse{}, fmt.Errorf("embedding session unavailable")
 	}
@@ -2536,7 +2543,7 @@ func (b *inferenceBroker) trustedProbe(ctx context.Context, id string) error {
 	session.mu.Lock()
 	benchVersion := session.benchVersion
 	session.mu.Unlock()
-	if benchVersion == protocol.BenchVersionV8 {
+	if usesPlatformEmbedding(benchVersion) {
 		embedding, err := b.forwardPlatformEmbedding(ctx, session, []string{"validator embedding preflight"})
 		if err != nil {
 			return fmt.Errorf("ticket embedding probe failed: %w", err)
