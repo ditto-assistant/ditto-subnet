@@ -4999,6 +4999,7 @@ class TestRequestJob:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The operator-ready route must also be usable by the ticket path.
 
@@ -5080,6 +5081,11 @@ class TestRequestJob:
         )
         _install_db(app, session_maker)
         _install_chain(app)
+        activate_retest = AsyncMock(wraps=validator_endpoint.activate_next_score_retest)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.validator.activate_next_score_retest",
+            activate_retest,
+        )
         app.state.config = replace(
             app.state.config,
             inference_proxy=replace(
@@ -5101,6 +5107,11 @@ class TestRequestJob:
         assert response.json()["agent_id"] == str(agent_id)
         assert response.json()["bench_version"] == 9
         assert response.json()["inference"]["profile_revision"] == profile
+        activate_retest.assert_awaited_once()
+        assert activate_retest.await_args is not None
+        call_kwargs = activate_retest.await_args.kwargs
+        assert call_kwargs["required_basis"] == "v9_contract_mismatch"
+        assert call_kwargs["allow_parallel_ordinary"] is True
         async with session_maker() as session:
             grant = await session.scalar(
                 select(InferenceGrant).where(

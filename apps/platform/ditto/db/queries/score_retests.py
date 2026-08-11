@@ -34,6 +34,7 @@ from ditto.db.queries.lease_liveness import (
 )
 
 REPLACEMENT_TICKET_TTL = timedelta(minutes=90)
+V9_CONTRACT_RETEST_BASIS = "v9_contract_mismatch"
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
 
 
@@ -48,7 +49,7 @@ def _agent_retestable(agent: Agent | None, entry: ScoreAuditEntry) -> bool:
     # known to be non-authoritative and may be replaced without waiting for the
     # other validators to finish.
     return (
-        entry.payload.get("basis") == "v9_contract_mismatch"
+        entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
         and agent.status == AgentStatus.EVALUATING
     )
 
@@ -141,13 +142,19 @@ async def activate_next_score_retest(
     supports_version: Callable[[int], bool],
     validator_running_benchmark: bool = False,
     slot_id: str = "slot-0",
+    required_basis: str | None = None,
+    allow_parallel_ordinary: bool = False,
 ) -> ValidatorTicket | None:
     """Resume the active re-test or promote the oldest runnable queued item.
 
     Must be called inside a transaction. Stale requests close append-only and
-    never mutate the accepted score. An unrelated live assignment keeps all
-    queued requests waiting.
+    never mutate the accepted score. By default an unrelated live assignment
+    keeps all queued requests waiting. Activation-critical contract repair may
+    explicitly use one otherwise-free slot alongside ordinary rollout work;
+    re-tests themselves remain serialized to one per validator.
     """
+    if allow_parallel_ordinary and required_basis != V9_CONTRACT_RETEST_BASIS:
+        raise ValueError("parallel ordinary work is reserved for v9 contract retests")
     # Look before locking. A validator with no re-test lifecycle at all cannot
     # reach any mutating branch below -- `issued` needs a REQUESTED entry and
     # `queued` needs a QUEUED one, so an empty history returns None down every
@@ -169,9 +176,17 @@ async def activate_next_score_retest(
     # That is safe by construction: the queueing transaction runs its own
     # activation under the lock, and any later job request or score submission
     # picks it up. Losing a lock a caller cannot use is not a lost re-test.
-    if not await latest_retest_events_for_validator(
+    probe = await latest_retest_events_for_validator(
         session, validator_hotkey=validator_hotkey
-    ):
+    )
+    if required_basis is not None:
+        probe = {
+            agent_id: entry
+            for agent_id, entry in probe.items()
+            if entry.event == EVENT_SCORE_RETEST_REQUESTED
+            or entry.payload.get("basis") == required_basis
+        }
+    if not probe:
         return None
 
     if not await try_lock_validator(session, validator_hotkey):
@@ -205,10 +220,12 @@ async def activate_next_score_retest(
         ),
         None,
     )
-    # Retests remain serialized behind every live ticket for this validator.
-    # Parallel ordinary capacity must not let a replacement jump the existing
-    # recovery queue or displace the public canonical score early.
-    if issued_rows and issued is None:
+    # Retests remain serialized behind every live ticket by default. A typed,
+    # activation-critical caller may share the validator with ordinary work,
+    # but never with a second re-test and never on an already-owned slot.
+    if issued_rows and issued is None and not allow_parallel_ordinary:
+        return None
+    if issued is None and any(ticket.slot_id == slot_id for ticket in issued_rows):
         return None
     if issued is not None:
         if issued.slot_id != slot_id:
@@ -278,6 +295,8 @@ async def activate_next_score_retest(
         key=lambda entry: entry.seq,
     )
     for entry in queued:
+        if required_basis is not None and entry.payload.get("basis") != required_basis:
+            continue
         bench_version = int(entry.payload.get("bench_version", -1))
         # The floor comes first, and it is a different KIND of check from the
         # one below it. ``supports_version`` asks what this validator says it
@@ -365,6 +384,7 @@ def retest_is_queued(entry: ScoreAuditEntry | None) -> bool:
 __all__ = [
     "EVENT_SCORE_INVALIDATED",
     "REPLACEMENT_TICKET_TTL",
+    "V9_CONTRACT_RETEST_BASIS",
     "activate_next_score_retest",
     "try_lock_validator",
     "retest_is_active",

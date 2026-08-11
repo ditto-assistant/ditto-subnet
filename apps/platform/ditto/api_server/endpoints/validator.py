@@ -243,7 +243,10 @@ from ditto.db.queries.retry_budget import (
     grant_no_fault_retry,
     infra_retry_backoff,
 )
-from ditto.db.queries.score_retests import activate_next_score_retest
+from ditto.db.queries.score_retests import (
+    V9_CONTRACT_RETEST_BASIS,
+    activate_next_score_retest,
+)
 from ditto.db.queries.scores import (
     SCORING_QUORUM,
     get_score_for_validator,
@@ -2684,8 +2687,34 @@ async def request_job(
                 )
                 return Response(status_code=204)
         if rollout is not None:
+            # A shadow/mismatched v9 score cannot satisfy rollout activation,
+            # so its operator-authorized replacement is rollout work rather
+            # than idle backfill. Dispatch only that typed basis here;
+            # statistical outlier re-tests keep their lower-priority behavior
+            # below, after ordinary work and only once no rollout is open.
+            ticket = (
+                await activate_next_score_retest(
+                    session,
+                    validator_hotkey=payload.validator_hotkey,
+                    now=now,
+                    supports_version=lambda version: (
+                        heartbeat is not None
+                        and version == rollout.desired_version
+                        and heartbeat_supports_version(
+                            heartbeat, now=now, version=version
+                        )
+                    ),
+                    validator_running_benchmark=slot_running_benchmark,
+                    slot_id=slot_id,
+                    required_basis=V9_CONTRACT_RETEST_BASIS,
+                    allow_parallel_ordinary=True,
+                )
+                if target_inference_ready
+                else None
+            )
             fresh_lane_due = (
-                target_inference_ready
+                ticket is None
+                and target_inference_ready
                 and heartbeat is not None
                 and heartbeat_supports_version(
                     heartbeat, now=now, version=rollout.desired_version
@@ -2703,7 +2732,7 @@ async def request_job(
                 fresh_lane_due=fresh_lane_due,
                 settings=queue_policy.prev_gen_carryover,
             )
-            ticket = (
+            ticket = ticket or (
                 await _issue_prev_gen_carryover_ticket(
                     session,
                     rollout=rollout,

@@ -32,13 +32,14 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
-from ditto.db.models import Agent, ValidatorTicket
+from ditto.db.models import Agent, Score, ValidatorTicket
 from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED, append_audit_entry
 from ditto.db.queries.score_retests import activate_next_score_retest
 
@@ -88,7 +89,21 @@ async def _seed_issued_ticket(
     return ticket
 
 
-class TestNoRetestHistoryTakesNoLocks:
+class TestScoreRetestLockingAndPriority:
+    async def test_parallel_ordinary_mode_is_contract_only(
+        self, session: AsyncSession
+    ) -> None:
+        with pytest.raises(
+            ValueError, match="parallel ordinary work is reserved for v9 contract"
+        ):
+            await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda _version: True,
+                allow_parallel_ordinary=True,
+            )
+
     async def test_returns_none_without_waiting_on_a_held_ticket_row(
         self,
         session: AsyncSession,
@@ -122,6 +137,148 @@ class TestNoRetestHistoryTakesNoLocks:
                     timeout=_NO_WAIT,
                 )
             assert promoted is None
+
+    async def test_contract_retest_uses_one_free_slot_during_ordinary_work(
+        self, session: AsyncSession
+    ) -> None:
+        """Typed contract repair skips older outliers and stays single-flight."""
+        statistical_id = uuid4()
+        contract_id = uuid4()
+        busy_id = uuid4()
+        async with session.begin():
+            for agent_id, status, name in (
+                (statistical_id, AgentStatus.SCORED, "statistical"),
+                (contract_id, AgentStatus.EVALUATING, "contract"),
+                (busy_id, AgentStatus.EVALUATING, "ordinary"),
+            ):
+                session.add(
+                    Agent(
+                        agent_id=agent_id,
+                        miner_hotkey=f"miner-{agent_id}",
+                        name=name,
+                        sha256=f"{agent_id.int:064x}"[-64:],
+                        status=status,
+                        screening_policy_version=SCREENING_POLICY_VERSION,
+                        created_at=_NOW - timedelta(days=1),
+                    )
+                )
+            for agent_id, run_id in (
+                (statistical_id, "statistical-run"),
+                (contract_id, "contract-run"),
+            ):
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=_HOTKEY,
+                        bench_version=9,
+                        status=TicketStatus.SCORED,
+                        purpose=TicketPurpose.CANONICAL_QUORUM,
+                        purpose_revision=1,
+                        issued_at=_NOW - timedelta(hours=2),
+                        deadline=_NOW - timedelta(minutes=30),
+                        attempt_count=1,
+                    )
+                )
+                session.add(
+                    Score(
+                        agent_id=agent_id,
+                        bench_version=9,
+                        validator_hotkey=_HOTKEY,
+                        run_id=run_id,
+                        seed=1,
+                        composite=0.5,
+                        tool_mean=0.5,
+                        memory_mean=0.5,
+                        median_ms=100,
+                        n=1,
+                        details={"bench_version": 9},
+                        generated_at=_NOW - timedelta(hours=1),
+                    )
+                )
+            session.add(
+                ValidatorTicket(
+                    agent_id=busy_id,
+                    validator_hotkey=_HOTKEY,
+                    bench_version=9,
+                    slot_id="slot-0",
+                    status=TicketStatus.ISSUED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose_revision=1,
+                    issued_at=_NOW,
+                    deadline=_NOW + timedelta(minutes=90),
+                    attempt_count=1,
+                )
+            )
+            await session.flush()
+            await append_audit_entry(
+                session,
+                agent_id=statistical_id,
+                validator_hotkey=_HOTKEY,
+                event=EVENT_SCORE_RETEST_QUEUED,
+                payload={
+                    "request_id": str(uuid4()),
+                    "bench_version": 9,
+                    "run_id": "statistical-run",
+                },
+                recorded_at=_NOW,
+            )
+            await append_audit_entry(
+                session,
+                agent_id=contract_id,
+                validator_hotkey=_HOTKEY,
+                event=EVENT_SCORE_RETEST_QUEUED,
+                payload={
+                    "request_id": str(uuid4()),
+                    "basis": "v9_contract_mismatch",
+                    "bench_version": 9,
+                    "run_id": "contract-run",
+                },
+                recorded_at=_NOW,
+            )
+
+            occupied = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                slot_id="slot-0",
+                required_basis="v9_contract_mismatch",
+                allow_parallel_ordinary=True,
+            )
+            assert occupied is None
+
+            promoted = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                slot_id="slot-1",
+                required_basis="v9_contract_mismatch",
+                allow_parallel_ordinary=True,
+            )
+
+            assert promoted is not None
+            assert promoted.agent_id == contract_id
+            assert promoted.slot_id == "slot-1"
+            statistical = await session.get(
+                ValidatorTicket, (statistical_id, 9, _HOTKEY)
+            )
+            busy = await session.get(ValidatorTicket, (busy_id, 9, _HOTKEY))
+            assert statistical is not None
+            assert statistical.status == TicketStatus.SCORED
+            assert busy is not None
+            assert busy.status == TicketStatus.ISSUED
+
+            second = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                slot_id="slot-2",
+                required_basis="v9_contract_mismatch",
+                allow_parallel_ordinary=True,
+            )
+            assert second is None
 
     async def test_returns_none_without_waiting_on_the_advisory_lock(
         self,
