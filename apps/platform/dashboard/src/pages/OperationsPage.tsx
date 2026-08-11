@@ -16,6 +16,7 @@ import {
   PipelineBoard,
   RescreenNotice,
 } from "../components/operations/PipelineBoard";
+import { SubmissionBuildLane } from "../components/operations/SubmissionBuildLane";
 import {
   fleetLedgerCounts,
   fleetWindowLabel,
@@ -364,6 +365,12 @@ export function OperationsPage(
           </div>
           <FleetLedger counts={fleet().counts} />
         </div>
+
+        <SubmissionBuildLane
+          snapshot={ops()?.submission_builds}
+          unavailable={opsUnavailable()}
+          loading={opsLoading()}
+        />
 
         <div class="fleet-table-head">
           <div>

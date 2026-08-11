@@ -630,6 +630,72 @@ describe("pipeline board from the shared snapshot", () => {
   });
 });
 
+describe("Targon submission build provenance", () => {
+  it("shows provider provenance independently from the screener fleet", async () => {
+    const payload: OperationsPayload = {
+      ...operations,
+      submission_builds: {
+        window_hours: 24,
+        active_count: 1,
+        targon_completed_count: 12,
+        fallback_authorized_count: 2,
+        builds: [
+          {
+            agent_id: "4f44ebd4-72ad-4e96-bbec-e7393d95b913",
+            agent_name: "Targon Trial",
+            agent_version: 3,
+            status: "consumed",
+            provider: "targon",
+            attempt_count: 1,
+            output_sha256: "a".repeat(64),
+            output_size_bytes: 104857600,
+            created_at: "2026-07-31T12:00:00Z",
+            completed_at: "2026-07-31T12:08:00Z",
+            consumed_at: "2026-07-31T12:09:00Z",
+            updated_at: "2026-07-31T12:09:00Z",
+          },
+          {
+            agent_id: "5e5509dc-80ae-42c8-b954-121330697292",
+            agent_name: "Fallback Trial",
+            agent_version: 1,
+            status: "fallback_required",
+            provider: "targon",
+            attempt_count: 3,
+            error_code: "PROVIDER_UNAVAILABLE",
+            created_at: "2026-07-31T11:00:00Z",
+            updated_at: "2026-07-31T11:15:00Z",
+          },
+        ],
+      },
+    };
+    restoreFetch?.();
+    restoreFetch = null;
+    const fixtures = installFixtureFetch();
+    const fixtureFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes("/public/operations")) {
+        return Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+      }
+      return fixtureFetch(input);
+    }) as typeof fetch;
+    restoreFetch = fixtures;
+
+    const { container } = render(() => <OperationsPage />);
+    await waitFor(() => {
+      expect(container.querySelector(".submission-builds")?.textContent).toContain(
+        "12Targon imports",
+      );
+    });
+    const lane = container.querySelector(".submission-builds");
+    expect(lane?.textContent).toContain("12Targon imports");
+    expect(lane?.textContent).toContain("Targon TrialSubmission v3TargonImported1");
+    expect(lane?.textContent).toContain("Targon → local allowed");
+    expect(lane?.textContent).toContain(
+      "fleet table below tracks screening workers, not these builders",
+    );
+  });
+});
+
 // ── Weekend drift: renamed lanes, the integrity-review branch, and the
 // last-reconciled-snapshot rule (Python guards
 // test_operations_refresh_keeps_last_successful_snapshot and the #623/#635

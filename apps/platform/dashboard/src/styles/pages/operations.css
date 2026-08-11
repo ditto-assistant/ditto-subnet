@@ -1077,6 +1077,142 @@
   font-size: 11px;
 }
 
+/* ── Trusted miner-image build provenance ── */
+.submission-builds {
+  margin: 18px 0 24px;
+  border-block: 1px solid var(--border);
+  background: color-mix(in oklab, var(--accent) 3%, transparent);
+}
+.submission-builds-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 0 14px;
+}
+.submission-builds-eyebrow {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--accent);
+  font: 750 9px/1.2 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.submission-builds h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.submission-builds-head p {
+  max-width: 760px;
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+.submission-builds-window {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font: 650 10px/1.4 var(--mono);
+}
+.submission-builds-ledger {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  border-top: 1px solid var(--border);
+}
+.submission-builds-ledger > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 0;
+}
+.submission-builds-ledger > div + div {
+  padding-left: 18px;
+  border-left: 1px solid var(--border);
+}
+.submission-builds-ledger strong {
+  color: var(--text);
+  font: 400 19px/1 var(--display);
+  font-variant-numeric: tabular-nums;
+}
+.submission-builds-ledger span {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 650;
+}
+.submission-builds-table-wrap {
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+}
+.submission-builds-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.submission-builds-table th,
+.submission-builds-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+.submission-builds-table th:first-child,
+.submission-builds-table td:first-child {
+  width: 25%;
+  padding-left: 0;
+}
+.submission-builds-table th {
+  color: var(--text-faint);
+  font: 700 9px/1.3 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.submission-builds-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.submission-build-agent {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.submission-build-agent:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.submission-build-version,
+.submission-build-image small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font: 600 9px/1.3 var(--mono);
+}
+.submission-build-route {
+  color: var(--text-dim);
+  font: 650 10.5px/1.35 var(--mono);
+}
+.submission-build-image,
+.submission-build-time,
+.submission-build-none {
+  color: var(--text-dim);
+  font: 600 10px/1.35 var(--mono);
+}
+.submission-build-time {
+  white-space: nowrap;
+}
+.submission-builds-empty {
+  height: 52px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
 @media (max-width: 1180px) {
   .fleet-atlas {
     grid-template-columns: 1fr;
@@ -1157,6 +1293,22 @@
   }
   .fleet-work-col {
     min-width: 190px;
+  }
+  .submission-builds {
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+  .submission-builds-head {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .submission-builds-ledger {
+    grid-template-columns: 1fr;
+  }
+  .submission-builds-ledger > div + div {
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {

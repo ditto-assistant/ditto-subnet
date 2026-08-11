@@ -114,6 +114,8 @@ from ditto.api_models import (
     PublicScreeningReviewLocation,
     PublicSubmissionFamily,
     PublicSubmissionFamilyMember,
+    PublicSubmissionImageBuild,
+    PublicSubmissionImageBuildSnapshot,
     PublicSubmissionPipeline,
     PublicSubmissionScores,
     PublicSubmissionsResponse,
@@ -221,6 +223,7 @@ from ditto.db.models import (
     ScreenerNode,
     ScreeningDispute,
     ScreeningQuarantine,
+    SubmissionImageBuild,
     ValidatorTicket,
 )
 from ditto.db.queries.agents import get_public_activity_by_id, list_public_activity
@@ -329,6 +332,8 @@ router = APIRouter(prefix="/public", tags=["public"])
 # short here, so a stale board is never more than a couple of minutes old.
 _CACHE_CONTROL = "public, max-age=30, stale-while-revalidate=120"
 _OPERATIONS_CACHE_CONTROL = "public, max-age=5, stale-while-revalidate=30"
+_SUBMISSION_BUILD_WINDOW = timedelta(hours=24)
+_SUBMISSION_BUILD_LIMIT = 8
 _TIMELINE_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 # v1 predates the memory subscore, so it has nothing to plot on this axis.
 _TIMELINE_MIN_BENCH_VERSION = 2
@@ -4342,6 +4347,73 @@ async def screener_capacity_watchdog(
     )
 
 
+async def _public_submission_build_snapshot(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    environment: str = "prod",
+) -> PublicSubmissionImageBuildSnapshot:
+    """Project recent build provenance without provider or job credentials."""
+    cutoff = now - _SUBMISSION_BUILD_WINDOW
+    active_statuses = ("queued", "leased", "running")
+    completed_statuses = ("succeeded", "consumed")
+    active_count, targon_completed_count, fallback_authorized_count = (
+        await session.execute(
+            select(
+                func.count().filter(SubmissionImageBuild.status.in_(active_statuses)),
+                func.count().filter(
+                    SubmissionImageBuild.provider == "targon",
+                    SubmissionImageBuild.status.in_(completed_statuses),
+                ),
+                func.count().filter(SubmissionImageBuild.status == "fallback_required"),
+            ).where(
+                SubmissionImageBuild.environment == environment,
+                SubmissionImageBuild.updated_at >= cutoff,
+            )
+        )
+    ).one()
+    recent = (
+        await session.execute(
+            select(SubmissionImageBuild, Agent.name, Agent.version)
+            .join(Agent, Agent.agent_id == SubmissionImageBuild.agent_id)
+            .where(
+                SubmissionImageBuild.environment == environment,
+                SubmissionImageBuild.updated_at >= cutoff,
+            )
+            .order_by(
+                SubmissionImageBuild.updated_at.desc(),
+                SubmissionImageBuild.build_id.desc(),
+            )
+            .limit(_SUBMISSION_BUILD_LIMIT)
+        )
+    ).all()
+    return PublicSubmissionImageBuildSnapshot(
+        window_hours=int(_SUBMISSION_BUILD_WINDOW.total_seconds() // 3600),
+        active_count=int(active_count),
+        targon_completed_count=int(targon_completed_count),
+        fallback_authorized_count=int(fallback_authorized_count),
+        builds=[
+            PublicSubmissionImageBuild(
+                agent_id=row.agent_id,
+                agent_name=agent_name,
+                agent_version=agent_version,
+                status=cast(Any, row.status),
+                provider=cast(Literal["targon"] | None, row.provider),
+                attempt_count=row.attempt_count,
+                output_sha256=row.output_sha256,
+                output_size_bytes=row.output_size_bytes,
+                error_code=row.error_code,
+                created_at=row.created_at,
+                started_at=row.started_at,
+                completed_at=row.completed_at,
+                consumed_at=row.consumed_at,
+                updated_at=row.updated_at,
+            )
+            for row, agent_name, agent_version in recent
+        ],
+    )
+
+
 @router.get("/operations", response_model=PublicOperationsResponse)
 async def operations(
     request: Request,
@@ -4506,6 +4578,7 @@ async def operations(
         activity=activity_snapshot,
         rollout_queue=rollout_queue,
         validators=validator_snapshot,
+        submission_builds=await _public_submission_build_snapshot(session, now=now),
     )
 
 

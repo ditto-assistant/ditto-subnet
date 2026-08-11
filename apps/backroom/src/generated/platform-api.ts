@@ -11926,6 +11926,7 @@ export interface components {
             generated_at: string;
             /** Rollout Queue */
             rollout_queue?: components["schemas"]["PublicRolloutQueueEntry"][];
+            submission_builds: components["schemas"]["PublicSubmissionImageBuildSnapshot"];
             validators: components["schemas"]["PublicValidatorHeartbeatsResponse"];
         };
         /**
@@ -12439,6 +12440,68 @@ export interface components {
              * Format: date-time
              */
             submitted_at: string;
+        };
+        /**
+         * PublicSubmissionImageBuild
+         * @description Public-safe provenance for one attempt-bound miner image build.
+         */
+        PublicSubmissionImageBuild: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Attempt Count */
+            attempt_count: number;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Consumed At */
+            consumed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Output Sha256 */
+            output_sha256?: string | null;
+            /** Output Size Bytes */
+            output_size_bytes?: number | null;
+            /** Provider */
+            provider?: "targon" | null;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "running" | "succeeded" | "fallback_required" | "canceled" | "consumed";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * PublicSubmissionImageBuildSnapshot
+         * @description Recent Targon-first miner build activity for the operations board.
+         */
+        PublicSubmissionImageBuildSnapshot: {
+            /** Active Count */
+            active_count: number;
+            /** Builds */
+            builds?: components["schemas"]["PublicSubmissionImageBuild"][];
+            /** Fallback Authorized Count */
+            fallback_authorized_count: number;
+            /** Targon Completed Count */
+            targon_completed_count: number;
+            /** Window Hours */
+            window_hours: number;
         };
         /**
          * PublicSubmissionPipeline

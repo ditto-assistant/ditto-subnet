@@ -87,6 +87,7 @@ from ditto.db.models import (
     Score,
     ScreeningAttempt,
     ScreeningQuarantine,
+    SubmissionImageBuild,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
@@ -4498,6 +4499,132 @@ class TestPublicActivity:
                 "active_benchmarks": [],
             }
         ]
+
+    async def test_operations_exposes_recent_targon_build_provenance_only(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _activate_era(session_maker)
+        targon_agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="targon-canary",
+                queue_ready=False,
+            )
+        )
+        fallback_agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_B,
+                status=AgentStatus.EVALUATING,
+                name="fallback-canary",
+                queue_ready=False,
+            )
+        )
+        now = datetime.now(UTC)
+        targon_attempt_id = uuid4()
+        fallback_attempt_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    ScreeningAttempt(
+                        attempt_id=targon_attempt_id,
+                        agent_id=targon_agent_id,
+                        screener_hotkey=_MINER_B,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="passed",
+                        started_at=now - timedelta(minutes=8),
+                        deadline=now + timedelta(minutes=22),
+                        finished_at=now - timedelta(minutes=1),
+                    ),
+                    ScreeningAttempt(
+                        attempt_id=fallback_attempt_id,
+                        agent_id=fallback_agent_id,
+                        screener_hotkey=_MINER_B,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="passed",
+                        started_at=now - timedelta(minutes=9),
+                        deadline=now + timedelta(minutes=21),
+                        finished_at=now - timedelta(minutes=2),
+                    ),
+                    SubmissionImageBuild(
+                        build_id=uuid4(),
+                        agent_id=targon_agent_id,
+                        attempt_id=targon_attempt_id,
+                        environment="prod",
+                        artifact_sha256="ab" * 32,
+                        image_ref=(
+                            f"ditto-screen/{targon_agent_id}-{targon_attempt_id}:latest"
+                        ),
+                        output_key="private/targon-output.tar",
+                        status="consumed",
+                        provider="targon",
+                        provider_resource_id="provider-resource-must-stay-private",
+                        output_sha256="ef" * 32,
+                        output_size_bytes=123456,
+                        attempt_count=1,
+                        controller_epoch="private-controller-epoch",
+                        job_token_hash="cd" * 32,
+                        created_at=now - timedelta(minutes=8),
+                        started_at=now - timedelta(minutes=7),
+                        completed_at=now - timedelta(minutes=2),
+                        consumed_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
+                    SubmissionImageBuild(
+                        build_id=uuid4(),
+                        agent_id=fallback_agent_id,
+                        attempt_id=fallback_attempt_id,
+                        environment="prod",
+                        artifact_sha256="12" * 32,
+                        image_ref=(
+                            f"ditto-screen/{fallback_agent_id}-{fallback_attempt_id}:latest"
+                        ),
+                        output_key="private/fallback-output.tar",
+                        status="fallback_required",
+                        provider="targon",
+                        error_code="TARGON_SUBMISSION_BUILD_FAILED",
+                        attempt_count=2,
+                        controller_epoch="private-controller-epoch",
+                        created_at=now - timedelta(minutes=9),
+                        started_at=now - timedelta(minutes=8),
+                        completed_at=now - timedelta(minutes=2),
+                        updated_at=now - timedelta(minutes=2),
+                    ),
+                ]
+            )
+        _install_db(app, session_maker)
+
+        response = await client.get("/api/v1/public/operations")
+
+        assert response.status_code == 200
+        snapshot = response.json()["submission_builds"]
+        assert snapshot["window_hours"] == 24
+        assert snapshot["active_count"] == 0
+        assert snapshot["targon_completed_count"] == 1
+        assert snapshot["fallback_authorized_count"] == 1
+        assert [row["agent_name"] for row in snapshot["builds"]] == [
+            "targon-canary",
+            "fallback-canary",
+        ]
+        targon = snapshot["builds"][0]
+        assert targon["provider"] == "targon"
+        assert targon["status"] == "consumed"
+        assert targon["output_sha256"] == "ef" * 32
+        assert targon["attempt_count"] == 1
+        assert {
+            "build_id",
+            "attempt_id",
+            "artifact_sha256",
+            "output_key",
+            "provider_resource_id",
+            "controller_epoch",
+            "job_token_hash",
+        }.isdisjoint(targon)
 
     async def test_lists_all_stages_newest_first_without_sensitive_fields(
         self,

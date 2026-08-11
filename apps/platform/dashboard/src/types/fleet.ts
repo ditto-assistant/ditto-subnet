@@ -134,12 +134,47 @@ export interface FleetReport {
 
 // ── Operations snapshot (/public/operations) ─────────────────
 
+export type SubmissionImageBuildStatus =
+  | "queued"
+  | "leased"
+  | "running"
+  | "succeeded"
+  | "fallback_required"
+  | "canceled"
+  | "consumed";
+
+export interface SubmissionImageBuild {
+  agent_id: string;
+  agent_name?: string | null;
+  agent_version?: number | null;
+  status: SubmissionImageBuildStatus;
+  provider?: "targon" | null;
+  attempt_count: number;
+  output_sha256?: string | null;
+  output_size_bytes?: number | null;
+  error_code?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  consumed_at?: string | null;
+  updated_at: string;
+}
+
+export interface SubmissionImageBuildSnapshot {
+  window_hours: number;
+  active_count: number;
+  targon_completed_count: number;
+  fallback_authorized_count: number;
+  builds: SubmissionImageBuild[];
+}
+
 export interface OperationsPayload {
   active_bench_version?: number | null;
   desired_bench_version?: number | null;
   benchmark_rollout_status?: string | null;
   validators: FleetReport;
   activity?: PipelineFeed;
+  submission_builds?: SubmissionImageBuildSnapshot;
   generated_at?: string;
 }
 

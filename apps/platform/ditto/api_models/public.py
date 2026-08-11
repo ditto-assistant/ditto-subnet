@@ -3233,6 +3233,43 @@ class PublicRolloutQueueEntry(BaseModel):
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
 
 
+class PublicSubmissionImageBuild(BaseModel):
+    """Public-safe provenance for one attempt-bound miner image build."""
+
+    agent_id: UUID
+    agent_name: str
+    agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
+    status: Literal[
+        "queued",
+        "leased",
+        "running",
+        "succeeded",
+        "fallback_required",
+        "canceled",
+        "consumed",
+    ]
+    provider: Literal["targon"] | None = None
+    attempt_count: Annotated[int, Field(ge=0, le=3)]
+    output_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+    output_size_bytes: Annotated[int | None, Field(ge=1, le=4294967296)] = None
+    error_code: Annotated[str | None, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    consumed_at: datetime | None = None
+    updated_at: datetime
+
+
+class PublicSubmissionImageBuildSnapshot(BaseModel):
+    """Recent Targon-first miner build activity for the operations board."""
+
+    window_hours: Annotated[int, Field(ge=1, le=168)]
+    active_count: Annotated[int, Field(ge=0)]
+    targon_completed_count: Annotated[int, Field(ge=0)]
+    fallback_authorized_count: Annotated[int, Field(ge=0)]
+    builds: list[PublicSubmissionImageBuild] = Field(default_factory=list)
+
+
 class PublicOperationsResponse(BaseModel):
     """One cacheable operations snapshot shared by pipeline and fleet views."""
 
@@ -3245,6 +3282,7 @@ class PublicOperationsResponse(BaseModel):
     activity: PublicActivityResponse
     rollout_queue: list[PublicRolloutQueueEntry] = Field(default_factory=list)
     validators: PublicValidatorHeartbeatsResponse
+    submission_builds: PublicSubmissionImageBuildSnapshot
 
 
 class PublicValidatorName(BaseModel):
