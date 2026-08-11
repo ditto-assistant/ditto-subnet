@@ -749,6 +749,7 @@ async def _fresh_submission_lane_due(
     validator_hotkey: str,
     bench_version: int,
     rollout_started_at: datetime,
+    now: datetime,
     settings: QueuePolicySettings,
 ) -> bool:
     """Whether this validator's next rollout-era job serves a fresh submission.
@@ -758,6 +759,13 @@ async def _fresh_submission_lane_due(
     through both lanes and new agents can still reach the three-validator
     scoring quorum.
 
+    Live issued tickets reserve positions as soon as they are leased. Without
+    that reservation, every concurrent worker slot observes the same completed
+    count and the whole validator bursts into the fresh lane before any one job
+    can finish. PostgreSQL serializes this count-and-lease decision per
+    validator and rollout; the transaction keeps the lock until the selected
+    ticket is written. Expired leases do not reserve a position forever.
+
     The split is operator policy
     (``ditto.api_models.queue_policy_settings.QueuePolicySettings``), but the
     modulus is deliberately immutable while a rollout is open: this count is
@@ -765,17 +773,38 @@ async def _fresh_submission_lane_due(
     reassign every validator's position in it discontinuously. The admin
     endpoint refuses such a write rather than letting it land here.
     """
-    completed_since_rollout = await session.scalar(
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended(
+                        (
+                            "fresh-submission-lane:"
+                            f"{validator_hotkey}:{bench_version}:"
+                            f"{rollout_started_at.isoformat()}"
+                        ),
+                        0,
+                    )
+                )
+            )
+        )
+    reserved_since_rollout = await session.scalar(
         select(func.count())
         .select_from(ValidatorTicket)
         .where(
             ValidatorTicket.validator_hotkey == validator_hotkey,
             ValidatorTicket.bench_version == bench_version,
-            ValidatorTicket.status == TicketStatus.SCORED,
             ValidatorTicket.created_at >= rollout_started_at,
+            or_(
+                ValidatorTicket.status == TicketStatus.SCORED,
+                (
+                    (ValidatorTicket.status == TicketStatus.ISSUED)
+                    & (ValidatorTicket.deadline > now)
+                ),
+            ),
         )
     )
-    return settings.fresh_submission_lane_due(int(completed_since_rollout or 0))
+    return settings.fresh_submission_lane_due(int(reserved_since_rollout or 0))
 
 
 # Unparseable slot ids sort above every cap, so an unrecognised id is declined
@@ -2666,6 +2695,7 @@ async def request_job(
                     validator_hotkey=payload.validator_hotkey,
                     bench_version=rollout.desired_version,
                     rollout_started_at=rollout.created_at,
+                    now=now,
                     settings=queue_policy,
                 )
             )

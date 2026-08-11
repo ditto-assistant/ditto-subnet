@@ -8,6 +8,7 @@ keypair so the signature-verification path runs for real.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -4625,6 +4626,7 @@ class TestRequestJob:
                 validator_hotkey=validator_hotkey,
                 bench_version=_BENCH_VERSION,
                 rollout_started_at=started_at,
+                now=datetime.now(UTC),
                 settings=QueuePolicySettings(),
             )
             for completed in range(1, 4):
@@ -4658,9 +4660,119 @@ class TestRequestJob:
                     validator_hotkey=validator_hotkey,
                     bench_version=_BENCH_VERSION,
                     rollout_started_at=started_at,
+                    now=datetime.now(UTC),
                     settings=QueuePolicySettings(),
                 )
                 assert due is (completed != 2)
+
+    async def test_fresh_submission_lane_counts_only_live_reservations(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        now = datetime.now(UTC)
+        started_at = now - timedelta(minutes=1)
+        validator_hotkey = "5ReservedLaneValidator"
+        async with session_maker() as session, session.begin():
+            for ordinal, deadline in enumerate(
+                (now + timedelta(minutes=90), now + timedelta(minutes=90), now)
+            ):
+                agent_id = uuid4()
+                session.add(
+                    Agent(
+                        agent_id=agent_id,
+                        miner_hotkey=f"5ReservedMiner-{ordinal}",
+                        name=f"reserved-lane-{ordinal}",
+                        sha256=f"{ordinal + 10:064x}",
+                        status=AgentStatus.EVALUATING,
+                        screening_policy_version=SCREENING_POLICY_VERSION,
+                        created_at=started_at,
+                    )
+                )
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        bench_version=_BENCH_VERSION,
+                        validator_hotkey=validator_hotkey,
+                        slot_id=f"slot-{ordinal}",
+                        status=TicketStatus.ISSUED,
+                        issued_at=started_at,
+                        deadline=deadline,
+                        attempt_count=1,
+                        created_at=started_at,
+                    )
+                )
+            await session.flush()
+
+            assert not await _fresh_submission_lane_due(
+                session,
+                validator_hotkey=validator_hotkey,
+                bench_version=_BENCH_VERSION,
+                rollout_started_at=started_at,
+                now=now,
+                settings=QueuePolicySettings(),
+            )
+
+    async def test_concurrent_lane_claims_serialize_before_counting(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        now = datetime.now(UTC)
+        started_at = now - timedelta(minutes=1)
+        validator_hotkey = "5ConcurrentLaneValidator"
+        settings = QueuePolicySettings(lane_cycle_size=2, fresh_submission_slots=(0,))
+        async with session_maker() as first:
+            if first.get_bind().dialect.name != "postgresql":
+                return
+            await first.begin()
+            assert await _fresh_submission_lane_due(
+                first,
+                validator_hotkey=validator_hotkey,
+                bench_version=_BENCH_VERSION,
+                rollout_started_at=started_at,
+                now=now,
+                settings=settings,
+            )
+
+            async def second_claim() -> bool:
+                async with session_maker() as second, second.begin():
+                    return await _fresh_submission_lane_due(
+                        second,
+                        validator_hotkey=validator_hotkey,
+                        bench_version=_BENCH_VERSION,
+                        rollout_started_at=started_at,
+                        now=now,
+                        settings=settings,
+                    )
+
+            waiting = asyncio.create_task(second_claim())
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(waiting), timeout=0.1)
+
+            agent_id = uuid4()
+            first.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5ConcurrentLaneMiner",
+                    name="concurrent-lane",
+                    sha256="ef" * 32,
+                    status=AgentStatus.EVALUATING,
+                    screening_policy_version=SCREENING_POLICY_VERSION,
+                    created_at=started_at,
+                )
+            )
+            first.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    bench_version=_BENCH_VERSION,
+                    validator_hotkey=validator_hotkey,
+                    status=TicketStatus.ISSUED,
+                    issued_at=now,
+                    deadline=now + timedelta(minutes=90),
+                    attempt_count=1,
+                    created_at=now,
+                )
+            )
+            await first.commit()
+
+            assert await asyncio.wait_for(waiting, timeout=5) is False
 
     @staticmethod
     async def _activate_benchmark(
