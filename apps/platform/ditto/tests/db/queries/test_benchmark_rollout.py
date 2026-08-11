@@ -3327,12 +3327,10 @@ async def test_v9_activation_uses_median_semantic_evidence(
     ) as (session, (agent_ids, rollout)):
         failed_agent_id = agent_ids[0]
         failed_rows = sorted(
-            list(
-                await session.scalars(
-                    select(Score).where(
-                        Score.agent_id == failed_agent_id,
-                        Score.bench_version == CANARY_BENCH_VERSION,
-                    )
+            await session.scalars(
+                select(Score).where(
+                    Score.agent_id == failed_agent_id,
+                    Score.bench_version == CANARY_BENCH_VERSION,
                 )
             ),
             key=lambda score: score.composite,
@@ -3340,7 +3338,7 @@ async def test_v9_activation_uses_median_semantic_evidence(
         assert len(failed_rows) == 3
         failed_score = failed_rows[failed_order_index]
         failed_score.details = {
-            **failed_score.details,
+            **(failed_score.details or {}),
             "v9_base": {"semantic_gate_factor_bps": 0},
         }
         await session.flush()
@@ -3372,12 +3370,10 @@ async def test_v9_activation_rejects_missing_semantic_evidence(
         session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
     ) as (session, (agent_ids, rollout)):
         median_score = sorted(
-            list(
-                await session.scalars(
-                    select(Score).where(
-                        Score.agent_id == agent_ids[0],
-                        Score.bench_version == CANARY_BENCH_VERSION,
-                    )
+            await session.scalars(
+                select(Score).where(
+                    Score.agent_id == agent_ids[0],
+                    Score.bench_version == CANARY_BENCH_VERSION,
                 )
             ),
             key=lambda score: score.composite,
