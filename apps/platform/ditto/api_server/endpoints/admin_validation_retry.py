@@ -282,11 +282,32 @@ def _v9_contract_observation(
 def _is_v9_contract_mismatch(score: Score) -> bool:
     if score.bench_version != 9:
         return False
-    revision, manifest, rollout_mode, _factor = _v9_contract_observation(score)
-    return (
+    revision, manifest, rollout_mode, factor = _v9_contract_observation(score)
+    if (
         revision != V9_SCORE_CONTRACT_REVISION
         or manifest != V9_SCORE_CONTRACT_MANIFEST_SHA256
         or rollout_mode != "enforce"
+    ):
+        return True
+
+    # v0.53.1 could publish the authoritative enforce contract while still
+    # losing every per-case inference attribution: a harness /run response may
+    # finish just before the source-bound broker copies its final upstream
+    # bytes and decrements inFlight. Aggregate trusted accounting then proves
+    # successful model use, but the all-or-nothing case window reports
+    # insufficient evidence and zeros the score. This is deterministic repair,
+    # not outlier selection. Never include a genuine zero-inference result.
+    details = score.details if isinstance(score.details, dict) else {}
+    base = details.get("v9_base")
+    gates = base.get("score_gates") if isinstance(base, dict) else None
+    model_use = gates.get("model_use") if isinstance(gates, dict) else None
+    return bool(
+        factor == 0
+        and isinstance(model_use, dict)
+        and model_use.get("result") == "insufficient_evidence"
+        and model_use.get("case_attribution_complete") is False
+        and type(model_use.get("successful_requests")) is int
+        and model_use["successful_requests"] > 0
     )
 
 

@@ -241,6 +241,7 @@ async def _set_v9_score_contract(
     manifest_sha256: str | None,
     rollout_mode: str | None,
     factor_bps: int = 10_000,
+    model_use: dict[str, object] | None = None,
 ) -> None:
     async with maker() as session, session.begin():
         score = await session.get(Score, (agent_id, 9, validator_hotkey))
@@ -251,7 +252,10 @@ async def _set_v9_score_contract(
                     "revision": revision,
                     "manifest_sha256": manifest_sha256,
                 },
-                "score_gates": {"rollout_mode": rollout_mode},
+                "score_gates": {
+                    "rollout_mode": rollout_mode,
+                    **({"model_use": model_use} if model_use is not None else {}),
+                },
                 "semantic_gate_factor_bps": factor_bps,
             }
         }
@@ -2034,6 +2038,65 @@ async def test_v9_contract_retest_preview_is_exact_and_includes_evaluating_agent
     assert by_agent[str(shadow)]["queue_allowed"] is True
     assert by_agent[str(missing)]["observed_revision"] is None
     assert str(current) not in by_agent
+
+
+async def test_v9_contract_retest_includes_only_proven_case_attribution_defects(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    defective = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
+    genuine_zero = await _seed(
+        retry_maker, score_count=1, bench_version=9, ticket_count=1
+    )
+    healthy = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
+    common = {
+        "revision": V9_SCORE_CONTRACT_REVISION,
+        "manifest_sha256": V9_SCORE_CONTRACT_MANIFEST_SHA256,
+        "rollout_mode": "enforce",
+    }
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=defective,
+        factor_bps=0,
+        model_use={
+            "result": "insufficient_evidence",
+            "case_attribution_complete": False,
+            "successful_requests": 734,
+        },
+        **common,
+    )
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=genuine_zero,
+        factor_bps=0,
+        model_use={
+            "result": "zero_inference",
+            "case_attribution_complete": False,
+            "successful_requests": 0,
+        },
+        **common,
+    )
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=healthy,
+        factor_bps=10_000,
+        model_use={
+            "result": "passed",
+            "case_attribution_complete": True,
+            "successful_requests": 734,
+        },
+        **common,
+    )
+    _install(app, retry_maker)
+
+    response = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["agent_id"] for item in items] == [str(defective)]
+    assert items[0]["observed_rollout_mode"] == "enforce"
+    assert items[0]["semantic_gate_factor_bps"] == 0
+    assert items[0]["queue_allowed"] is True
 
 
 async def test_v9_contract_retest_requires_typed_confirmation_and_current_snapshot(

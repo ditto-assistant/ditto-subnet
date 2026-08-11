@@ -103,9 +103,10 @@ export function V9ContractRetestPanel({
             </span>
           </div>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-[var(--muted-strong)]">
-            These accepted v9 scores were produced by the shadow or a missing contract. This is
-            deterministic contract repair, not statistical outlier detection. Each score stays
-            canonical until the same validator submits its enforce replacement.
+            These accepted v9 scores were produced by a non-authoritative contract or contain a
+            proven trusted case-attribution defect. This is deterministic evidence repair, not
+            statistical outlier detection. Each score stays canonical until the same validator
+            submits its enforce replacement.
           </p>
           <p className="mt-2 font-mono text-[10px] text-[var(--muted)]" title={requiredManifestSha256}>
             Required {requiredRevision} · {short(requiredManifestSha256)}
