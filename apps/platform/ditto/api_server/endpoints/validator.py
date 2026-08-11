@@ -586,6 +586,11 @@ async def _record_deferred_review_decision(
         prior_provenance = existing.algorithm_provenance
         prior_review = {
             "original_reason": existing.original_reason,
+            "original_duplicate_of": (
+                str(existing.original_duplicate_of)
+                if existing.original_duplicate_of is not None
+                else None
+            ),
             "original_policy_version": existing.original_policy_version,
             "original_evidence": existing.original_evidence,
             "algorithm_provenance": prior_provenance,
@@ -605,6 +610,12 @@ async def _record_deferred_review_decision(
         existing.resolution = None
         existing.resolution_reason = None
         existing.original_reason = DEFERRED_REVIEW_REASON
+        # The reopened lifecycle is a deferred source review, which has no
+        # matched agent. ``agent.duplicate_of`` is cleared below, and
+        # ``resolve_copy_review`` refuses to resolve while the two disagree, so
+        # a retained copy-hold pointer strands the agent in ATH forever -- the
+        # same failure the provenance reset below already guards against.
+        existing.original_duplicate_of = None
         existing.original_policy_version = agent.screening_policy_version
         existing.original_evidence = {
             **evidence,

@@ -354,6 +354,92 @@ async def test_enforce_reopen_rebinds_current_review_kind_and_preserves_history(
 
 
 @pytest.mark.asyncio
+async def test_enforce_reopen_of_copy_review_clears_the_matched_pointer(
+    session: AsyncSession,
+) -> None:
+    """A reopened copy hold must not keep pointing at its matched agent.
+
+    ``_record_deferred_review_decision`` clears ``agent.duplicate_of``, and
+    ``resolve_copy_review`` refuses to resolve while that disagrees with
+    ``review.original_duplicate_of``. Retaining the copy pointer therefore made
+    the reopened review permanently unresolvable: every clear came back 409
+    "agent hold evidence no longer matches review", and the agent stayed in
+    ath_pending_review -- excluded from the emission ledger -- with no operator
+    action able to release it.
+    """
+    now = datetime.now(UTC)
+    matched = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="matched-miner",
+        name="matched-agent",
+        sha256="ef" * 32,
+        status=AgentStatus.SCORED,
+        screening_policy_version=9,
+    )
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="reopen-miner",
+        name="reopen-agent",
+        sha256="ab" * 32,
+        status=AgentStatus.SCORED,
+        screening_policy_version=9,
+        duplicate_of=matched.agent_id,
+    )
+    review = AthReview(
+        review_id=uuid4(),
+        agent_id=agent.agent_id,
+        status="resolved",
+        opened_at=now - timedelta(days=1),
+        resolved_at=now - timedelta(hours=1),
+        resolved_by="operator",
+        resolution="clear",
+        resolution_reason="copy hold cleared on provenance",
+        original_reason="prior copy review",
+        original_duplicate_of=matched.agent_id,
+        original_policy_version=9,
+        original_evidence={"copy_signal": "lexical"},
+        algorithm_provenance={"review_kind": "copy", "algorithm_version": "old"},
+    )
+    async with session.begin():
+        session.add_all([matched, agent, review])
+    decision = DeferredReviewDecision(
+        True,
+        ("top_five",),
+        1,
+        {
+            "eligible": True,
+            "rank": 1,
+            "cohort_size": 10,
+            "peer_count": 9,
+            "candidate": {"composite": 0.98, "tool_mean": 0.98, "memory_mean": 0.98},
+            "thresholds": None,
+            "triggers": ["top_five"],
+        },
+    )
+
+    async with session.begin():
+        await _record_deferred_review_decision(
+            session,
+            agent=agent,
+            decision=decision,
+            mode="enforce",
+            screening_attempt=None,
+            score_count=3,
+            now=now,
+        )
+
+    # The agent and its review must agree, or resolve_copy_review 409s forever.
+    assert agent.duplicate_of is None
+    assert review.original_duplicate_of is None
+    assert agent.duplicate_of == review.original_duplicate_of
+    assert agent.review_reason == review.original_reason
+    # The discarded pointer stays recoverable in the audit snapshot.
+    assert review.original_evidence["prior_review"]["original_duplicate_of"] == str(
+        matched.agent_id
+    )
+
+
+@pytest.mark.asyncio
 async def test_terminal_deep_attempt_suppresses_old_admission_marker(
     session: AsyncSession,
 ) -> None:
