@@ -207,7 +207,25 @@ class TargonClient:
         return value
 
     def deploy(self, uid: str) -> dict[str, Any]:
-        value = self._request("POST", self._workload_path(f"/{uid}/deploy"))
+        # Deploying an already-deployed workload is idempotent in the Rentals
+        # API. Retry transient provider failures so a successfully registered
+        # rental is not abandoned before it ever starts.
+        try:
+            value = self._request(
+                "POST", self._workload_path(f"/{uid}/deploy"), retryable=True
+            )
+        except TargonAPIError as error:
+            # A lost deploy response is ambiguous. Reconcile the workload
+            # before authorizing fallback; any state beyond registration means
+            # Targon accepted the action even though the response was lost.
+            try:
+                state = self.state(uid)
+            except TargonAPIError:
+                raise error from None
+            status = str(state.get("status", "")).casefold()
+            if status in {"", "registered", "error", "suspended", "deleted"}:
+                raise error from None
+            return state
         return value if isinstance(value, dict) else {}
 
     def update(self, uid: str, *, envs: list[dict[str, str]]) -> dict[str, Any]:
@@ -249,7 +267,9 @@ class TargonClient:
         return value if isinstance(value, str) else ""
 
     def suspend(self, uid: str) -> dict[str, Any]:
-        value = self._request("POST", self._workload_path(f"/{uid}/suspend"))
+        value = self._request(
+            "POST", self._workload_path(f"/{uid}/suspend"), retryable=True
+        )
         return value if isinstance(value, dict) else {}
 
     def delete(self, uid: str) -> None:

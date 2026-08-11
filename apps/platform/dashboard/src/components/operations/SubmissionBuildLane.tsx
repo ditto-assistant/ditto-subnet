@@ -27,6 +27,27 @@ function buildRoute(build: SubmissionImageBuild): string {
   return "Not assigned";
 }
 
+const FALLBACK_REASON: Readonly<Record<string, string>> = {
+  TARGON_SUBMISSION_BUILD_CAPACITY_UNAVAILABLE: "No rental capacity",
+  TARGON_SUBMISSION_BUILD_LEASE_EXHAUSTED: "Build lease exhausted",
+  TARGON_SUBMISSION_BUILD_TIMEOUT: "Remote build timed out",
+  TARGON_SUBMISSION_DEPLOY_ERROR: "Rental did not start",
+  TARGON_SUBMISSION_RUNTIME_ERROR: "Builder container crashed",
+  TARGON_SUBMISSION_PLATFORM_CONTROL_ERROR: "Platform control unavailable",
+  TARGON_SUBMISSION_PROVIDER_ERROR: "Targon provider error",
+  TARGON_SUBMISSION_CONTRACT_ERROR: "Build contract invalid",
+  TARGON_SUBMISSION_SOURCE_FAILED: "Source fetch failed",
+  TARGON_SUBMISSION_KANIKO_FAILED: "Docker image build failed",
+  TARGON_SUBMISSION_ARCHIVE_FAILED: "Image export failed",
+  TARGON_SUBMISSION_UPLOAD_FAILED: "Image upload failed",
+  TARGON_SUBMISSION_COMPLETE_FAILED: "Image verification failed",
+};
+
+function fallbackReason(build: SubmissionImageBuild): string | undefined {
+  if (build.status !== "fallback_required" || !build.error_code) return undefined;
+  return FALLBACK_REASON[build.error_code] ?? "Remote build unavailable";
+}
+
 function buildTime(build: SubmissionImageBuild): string {
   return relTime(build.consumed_at || build.completed_at || build.started_at || build.updated_at);
 }
@@ -132,6 +153,13 @@ export function SubmissionBuildLane(props: {
                           tone={chip()[1]}
                           title={build.error_code || undefined}
                         />
+                        <Show when={fallbackReason(build)}>
+                          {(reason) => (
+                            <span class="submission-build-reason" title={build.error_code || ""}>
+                              {reason()}
+                            </span>
+                          )}
+                        </Show>
                       </td>
                       <td class="num">{build.attempt_count}</td>
                       <td>

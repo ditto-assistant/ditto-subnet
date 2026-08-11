@@ -24,6 +24,15 @@ from screener_capacity.controller import ControllerError, _read_secret_file
 from screener_capacity.targon import TargonAPIError, TargonClient
 
 _DIGEST = re.compile(r"DITTO_BUILD_DIGEST=(sha256:[0-9a-f]{64})")
+_SUBMISSION_EXIT_CODE = re.compile(r"(?:^|\D)exit code (71|72|73|74|75|76)(?:\D|$)")
+_SUBMISSION_STAGE_BY_EXIT_CODE = {
+    "71": "SOURCE",
+    "72": "KANIKO",
+    "73": "ARCHIVE",
+    "74": "UPLOAD",
+    "75": "COMPLETE",
+    "76": "CONTRACT",
+}
 _SUBMISSION_BUILDER_REPOSITORY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/submission-builder"
 )
@@ -35,6 +44,7 @@ def _request(
     *,
     token: str,
     payload: dict[str, Any] | None = None,
+    retryable: bool = False,
 ) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
@@ -50,15 +60,25 @@ def _request(
         },
         method=method,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = response.read()
-    except urllib.error.HTTPError as error:
-        raise ControllerError(
-            f"Platform trusted-build {method} failed with HTTP {error.code}"
-        ) from None
-    except (TimeoutError, urllib.error.URLError, OSError) as error:
-        raise ControllerError("Platform trusted-build transport failed") from error
+    attempts = 3 if retryable else 1
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read()
+            break
+        except urllib.error.HTTPError as error:
+            transient = error.code == 429 or error.code >= 500
+            if transient and attempt + 1 < attempts:
+                time.sleep(0.5 * (2**attempt))
+                continue
+            raise ControllerError(
+                f"Platform trusted-build {method} failed with HTTP {error.code}"
+            ) from None
+        except (TimeoutError, urllib.error.URLError, OSError) as error:
+            if attempt + 1 < attempts:
+                time.sleep(0.5 * (2**attempt))
+                continue
+            raise ControllerError("Platform trusted-build transport failed") from error
     try:
         value = json.loads(body) if body else {}
     except json.JSONDecodeError as error:
@@ -143,19 +163,27 @@ class SubmissionBuildControl:
         provider_resource_id: str | None = None,
         error_code: str | None = None,
     ) -> None:
-        _request(
-            "PUT",
-            f"{self.base}/api/v1/screener/controller/"
-            f"submission-image-builds/{build_id}",
-            token=self.token,
-            payload={
-                "environment": self.environment,
-                "controller_epoch": self.epoch,
-                "status": status,
-                "provider_resource_id": provider_resource_id,
-                "error_code": error_code,
-            },
-        )
+        try:
+            _request(
+                "PUT",
+                f"{self.base}/api/v1/screener/controller/"
+                f"submission-image-builds/{build_id}",
+                token=self.token,
+                payload={
+                    "environment": self.environment,
+                    "controller_epoch": self.epoch,
+                    "status": status,
+                    "provider_resource_id": provider_resource_id,
+                    "error_code": error_code,
+                },
+                retryable=True,
+            )
+        except ControllerError:
+            # A proxy may lose the response after Platform committed the
+            # idempotent transition. Re-read before turning that ambiguity into
+            # a false provider failure.
+            if self.status(build_id) != status:
+                raise
 
     def status(self, build_id: str) -> str:
         query = urllib.parse.urlencode(
@@ -166,6 +194,7 @@ class SubmissionBuildControl:
             f"{self.base}/api/v1/screener/controller/"
             f"submission-image-builds/{build_id}?{query}",
             token=self.token,
+            retryable=True,
         )
         status = value.get("status")
         if not isinstance(status, str):
@@ -401,6 +430,7 @@ def run_one_submission(
     build_id = str(build.get("build_id", ""))
     name = f"ditto-miner-build-{build_id.replace('-', '')[:12]}"[:32]
     uid: str | None = None
+    phase = "inventory"
     try:
         inventory = {
             str(row.get("name")): int(row.get("available", 0))
@@ -415,7 +445,8 @@ def run_one_submission(
             return True
         job_token = str(build["job_token"])
         if len(job_token) < 43:
-            raise ControllerError("submission build token is invalid")
+            raise ValueError("submission build token is invalid")
+        phase = "create"
         created = client.create_rental(
             name=name,
             image=settings.submission_builder_image,
@@ -427,37 +458,92 @@ def run_one_submission(
             ],
         )
         uid = str(created["uid"])
+        phase = "mark_running"
         control.update(build_id, status="running", provider_resource_id=uid)
+        phase = "deploy"
         client.deploy(uid)
         deadline = (
             time.monotonic()
             + settings.provision_timeout_seconds
             + settings.build_timeout_seconds
         )
+        provider_poll_failures = 0
+        platform_poll_failures = 0
+        phase = "monitor"
         while time.monotonic() < deadline:
-            state = client.state(uid)
-            build_status = control.status(build_id)
+            try:
+                state = client.state(uid)
+                provider_poll_failures = 0
+            except TargonAPIError:
+                provider_poll_failures += 1
+                if provider_poll_failures < 3:
+                    time.sleep(10)
+                    continue
+                raise
+            try:
+                build_status = control.status(build_id)
+                platform_poll_failures = 0
+            except ControllerError:
+                platform_poll_failures += 1
+                if platform_poll_failures < 3:
+                    time.sleep(10)
+                    continue
+                raise
             if build_status == "succeeded":
                 return True
             if build_status in {"fallback_required", "canceled", "consumed"}:
                 return True
             if str(state.get("status", "")).casefold() == "error":
-                break
+                error_code = "TARGON_SUBMISSION_RUNTIME_ERROR"
+                match = _SUBMISSION_EXIT_CODE.search(str(state.get("message", "")))
+                if match is not None:
+                    stage = _SUBMISSION_STAGE_BY_EXIT_CODE[match.group(1)]
+                    error_code = f"TARGON_SUBMISSION_{stage}_FAILED"
+                control.update(
+                    build_id,
+                    status="fallback_required",
+                    provider_resource_id=uid,
+                    error_code=error_code,
+                )
+                return True
             time.sleep(10)
         control.update(
             build_id,
             status="fallback_required",
             provider_resource_id=uid,
-            error_code="TARGON_SUBMISSION_KANIKO_FAILED",
+            error_code="TARGON_SUBMISSION_BUILD_TIMEOUT",
         )
         return True
-    except (ControllerError, TargonAPIError, KeyError, ValueError):
+    except TargonAPIError:
+        error_code = (
+            "TARGON_SUBMISSION_DEPLOY_ERROR"
+            if phase == "deploy"
+            else "TARGON_SUBMISSION_PROVIDER_ERROR"
+        )
         with contextlib.suppress(ControllerError):
             control.update(
                 build_id,
                 status="fallback_required",
                 provider_resource_id=uid,
-                error_code="TARGON_SUBMISSION_PROVIDER_ERROR",
+                error_code=error_code,
+            )
+        return True
+    except ControllerError:
+        with contextlib.suppress(ControllerError):
+            control.update(
+                build_id,
+                status="fallback_required",
+                provider_resource_id=uid,
+                error_code="TARGON_SUBMISSION_PLATFORM_CONTROL_ERROR",
+            )
+        return True
+    except (KeyError, ValueError):
+        with contextlib.suppress(ControllerError):
+            control.update(
+                build_id,
+                status="fallback_required",
+                provider_resource_id=uid,
+                error_code="TARGON_SUBMISSION_CONTRACT_ERROR",
             )
         return True
     finally:
@@ -536,9 +622,16 @@ def main() -> int:
             print("trusted image builder already running", file=sys.stderr)
             return 75
         while True:
-            handled = run_one_submission(settings, client, submission_control)
-            if not handled:
-                handled = run_one(settings, client, control)
+            try:
+                handled = run_one_submission(settings, client, submission_control)
+                if not handled:
+                    handled = run_one(settings, client, control)
+            except ControllerError as error:
+                # Claim/read outages are control-plane failures, not a reason to
+                # terminate the daemon or mislabel a Targon rental. The next
+                # bounded poll retries without exposing response bodies.
+                print(str(error), file=sys.stderr)
+                handled = False
             if args.once:
                 return 0
             if not handled:

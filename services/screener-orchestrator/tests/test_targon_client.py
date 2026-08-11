@@ -173,6 +173,50 @@ class TargonClientTests(unittest.TestCase):
         self.assertNotIn("leaked-secret-value", str(raised.exception))
         self.assertIn("rate limited", str(raised.exception))
 
+    @patch("screener_capacity.targon.time.sleep", return_value=None)
+    @patch("screener_capacity.targon.urllib.request.urlopen")
+    def test_deploy_retries_transient_provider_failure(
+        self, urlopen: object, _sleep: object
+    ) -> None:
+        error = urllib.error.HTTPError(
+            "https://api.targon.com/tha/v3/orgs/ditto/workloads/rental-1/deploy",
+            503,
+            "unavailable",
+            {},
+            io.BytesIO(b"provider body is never copied"),
+        )
+        urlopen.side_effect = [error, _Response({"uid": "rental-1"})]  # type: ignore[attr-defined]
+        client = TargonClient(api_key="x" * 40, org_slug="ditto")
+
+        client.deploy("rental-1")
+
+        self.assertEqual(urlopen.call_count, 2)  # type: ignore[attr-defined]
+
+    @patch("screener_capacity.targon.time.sleep", return_value=None)
+    @patch("screener_capacity.targon.urllib.request.urlopen")
+    def test_deploy_reconciles_lost_response_from_provider(
+        self, urlopen: object, _sleep: object
+    ) -> None:
+        error = urllib.error.HTTPError(
+            "https://api.targon.com/tha/v3/orgs/ditto/workloads/rental-1/deploy",
+            503,
+            "unavailable",
+            {},
+            io.BytesIO(b"provider body is never copied"),
+        )
+        urlopen.side_effect = [  # type: ignore[attr-defined]
+            error,
+            error,
+            error,
+            _Response({"status": "provisioning"}),
+        ]
+        client = TargonClient(api_key="x" * 40, org_slug="ditto")
+
+        state = client.deploy("rental-1")
+
+        self.assertEqual(state, {"status": "provisioning"})
+        self.assertEqual(urlopen.call_count, 4)  # type: ignore[attr-defined]
+
 
 if __name__ == "__main__":
     unittest.main()

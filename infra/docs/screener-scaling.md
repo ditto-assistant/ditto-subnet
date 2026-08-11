@@ -29,6 +29,11 @@ Submission builds give Targon Kaniko a dedicated 25-minute window. That timeout
 is independent of the local Docker cap: the 70-minute screening lease can spend
 up to 25 minutes remotely and still preserve up to 45 minutes for GCE fallback.
 Changing a local build override must never silently shrink the Targon window.
+Transient Targon lifecycle and Platform status calls are retried and reconciled
+before fallback is authorized. When fallback is necessary, its public error code
+separates rental start, builder runtime, source, Kaniko, archive, upload,
+verification, timeout, and Platform-control failures without copying provider
+responses or untrusted build logs into Platform.
 
 The GCE autoscaler remains as an independent `ONLY_SCALE_OUT` watchdog on the
 group-level backlog metric. It cannot scale in or fight the controller. Its

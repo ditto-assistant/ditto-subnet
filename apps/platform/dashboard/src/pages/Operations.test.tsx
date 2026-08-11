@@ -661,7 +661,7 @@ describe("Targon submission build provenance", () => {
             status: "fallback_required",
             provider: "targon",
             attempt_count: 3,
-            error_code: "PROVIDER_UNAVAILABLE",
+            error_code: "TARGON_SUBMISSION_RUNTIME_ERROR",
             created_at: "2026-07-31T11:00:00Z",
             updated_at: "2026-07-31T11:15:00Z",
           },
@@ -690,6 +690,7 @@ describe("Targon submission build provenance", () => {
     expect(lane?.textContent).toContain("12Targon imports");
     expect(lane?.textContent).toContain("Targon TrialSubmission v3TargonImported1");
     expect(lane?.textContent).toContain("Targon → local allowed");
+    expect(lane?.textContent).toContain("Builder container crashed");
     expect(lane?.textContent).toContain(
       "fleet table below tracks screening workers, not these builders",
     );

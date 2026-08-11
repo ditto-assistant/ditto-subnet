@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,6 +30,22 @@ func TestSanitizedEnvironmentStripsCapabilities(t *testing.T) {
 	}
 	if !strings.Contains(joined, "GO_TEST_VISIBLE=allowed") {
 		t.Fatal("ordinary environment was unexpectedly removed")
+	}
+}
+
+func TestFailureStageNameIsBoundedAndPublicSafe(t *testing.T) {
+	private := errors.New("private source URL and token must never be emitted")
+	if got := failureStageName(stageFailure("UPLOAD", private)); got != "UPLOAD" {
+		t.Fatalf("unexpected stage: %s", got)
+	}
+	if got := failureStageName(private); got != "CONTRACT" {
+		t.Fatalf("unexpected default stage: %s", got)
+	}
+	if got := failureExitCode("UPLOAD"); got != 74 {
+		t.Fatalf("unexpected upload exit code: %d", got)
+	}
+	if got := failureExitCode("anything else"); got != 76 {
+		t.Fatalf("unexpected contract exit code: %d", got)
 	}
 }
 

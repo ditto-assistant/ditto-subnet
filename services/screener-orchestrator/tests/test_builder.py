@@ -5,10 +5,12 @@ from typing import Any
 
 from screener_capacity.builder import (
     Settings,
+    SubmissionBuildControl,
     _docker_config,
     _kaniko_script,
     run_one_submission,
 )
+from screener_capacity.controller import ControllerError
 from screener_capacity.targon import TargonAPIError
 
 
@@ -44,8 +46,11 @@ def test_kaniko_job_is_bound_to_exact_monorepo_sha_and_paths() -> None:
 class _SubmissionControl:
     base = "https://platform.example"
 
-    def __init__(self, build: dict[str, Any] | None) -> None:
+    def __init__(
+        self, build: dict[str, Any] | None, *, status: str = "succeeded"
+    ) -> None:
         self.build = build
+        self.build_status = status
         self.updates: list[tuple[str, dict[str, Any]]] = []
         self.cleanup: list[tuple[str, str]] = []
 
@@ -59,13 +64,24 @@ class _SubmissionControl:
         self.cleanup.append((build_id, provider_resource_id))
 
     def status(self, _build_id: str) -> str:
-        return "succeeded"
+        return self.build_status
 
 
 class _Targon:
-    def __init__(self, *, delete_fails: bool = False, available: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        delete_fails: bool = False,
+        available: int = 1,
+        deploy_error: TargonAPIError | None = None,
+        state_status: str = "running",
+        state_message: str = "",
+    ) -> None:
         self.delete_fails = delete_fails
         self.available = available
+        self.deploy_error = deploy_error
+        self.state_status = state_status
+        self.state_message = state_message
         self.created: dict[str, Any] | None = None
         self.deployed: list[str] = []
         self.suspended: list[str] = []
@@ -80,10 +96,12 @@ class _Targon:
 
     def deploy(self, uid: str) -> dict[str, Any]:
         self.deployed.append(uid)
+        if self.deploy_error is not None:
+            raise self.deploy_error
         return {}
 
     def state(self, _uid: str) -> dict[str, Any]:
-        return {"status": "running"}
+        return {"status": self.state_status, "message": self.state_message}
 
     def suspend(self, uid: str) -> dict[str, Any]:
         self.suspended.append(uid)
@@ -173,3 +191,77 @@ def test_submission_delete_failure_is_suspended_and_audited() -> None:
 
     assert targon.suspended == ["wrk-build-1"]
     assert control.cleanup == [(_submission()["build_id"], "wrk-build-1")]
+
+
+def test_submission_deploy_failure_is_distinct_from_runtime_failure() -> None:
+    control = _SubmissionControl(_submission())
+    targon = _Targon(
+        deploy_error=TargonAPIError(
+            operation="POST deploy", status=503, reason="HTTP error"
+        )
+    )
+
+    assert run_one_submission(_settings(), targon, control)
+
+    assert control.updates[-1] == (
+        _submission()["build_id"],
+        {
+            "status": "fallback_required",
+            "provider_resource_id": "wrk-build-1",
+            "error_code": "TARGON_SUBMISSION_DEPLOY_ERROR",
+        },
+    )
+
+
+def test_submission_runtime_uses_public_safe_builder_stage() -> None:
+    control = _SubmissionControl(_submission(), status="running")
+    targon = _Targon(
+        state_status="error",
+        state_message="Container failed (Error) — exit code 72",
+    )
+
+    assert run_one_submission(_settings(), targon, control)
+
+    assert control.updates[-1] == (
+        _submission()["build_id"],
+        {
+            "status": "fallback_required",
+            "provider_resource_id": "wrk-build-1",
+            "error_code": "TARGON_SUBMISSION_KANIKO_FAILED",
+        },
+    )
+
+
+def test_submission_runtime_without_marker_stays_provider_specific() -> None:
+    control = _SubmissionControl(_submission(), status="running")
+    targon = _Targon(state_status="error")
+
+    assert run_one_submission(_settings(), targon, control)
+
+    assert control.updates[-1][1]["error_code"] == "TARGON_SUBMISSION_RUNTIME_ERROR"
+
+
+def test_submission_update_reconciles_a_lost_platform_response(monkeypatch) -> None:
+    requests: list[str] = []
+
+    def request(method: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        requests.append(method)
+        if method == "PUT":
+            raise ControllerError("Platform trusted-build transport failed")
+        return {"status": "fallback_required"}
+
+    monkeypatch.setattr("screener_capacity.builder._request", request)
+    control = SubmissionBuildControl(
+        platform_url="https://platform.example",
+        token="x" * 40,
+        environment="prod",
+        epoch="builder:test",
+    )
+
+    control.update(
+        _submission()["build_id"],
+        status="fallback_required",
+        error_code="TARGON_SUBMISSION_RUNTIME_ERROR",
+    )
+
+    assert requests == ["PUT", "GET"]

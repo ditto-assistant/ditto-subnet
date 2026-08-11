@@ -52,10 +52,54 @@ type uploadResponse struct {
 	RequiredHeaders map[string]string `json:"required_headers"`
 }
 
+type stagedError struct {
+	stage string
+	err   error
+}
+
+func (e *stagedError) Error() string { return e.err.Error() }
+func (e *stagedError) Unwrap() error { return e.err }
+
+func stageFailure(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &stagedError{stage: stage, err: err}
+}
+
+func failureStageName(err error) string {
+	var failure *stagedError
+	if errors.As(err, &failure) {
+		return failure.stage
+	}
+	return "CONTRACT"
+}
+
+func failureExitCode(stage string) int {
+	switch stage {
+	case "SOURCE":
+		return 71
+	case "KANIKO":
+		return 72
+	case "ARCHIVE":
+		return 73
+	case "UPLOAD":
+		return 74
+	case "COMPLETE":
+		return 75
+	default:
+		return 76
+	}
+}
+
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "DITTO_SUBMISSION_BUILD_FAILED")
-		os.Exit(1)
+		stage := failureStageName(err)
+		// Public-safe machine-readable classification only. Never print the
+		// underlying error: submitted build output may contain private source or
+		// capability-bearing URLs.
+		fmt.Fprintf(os.Stderr, "DITTO_SUBMISSION_BUILD_FAILED=%s\n", stage)
+		os.Exit(failureExitCode(stage))
 	}
 }
 
@@ -75,18 +119,18 @@ func run() error {
 	base := platform + "/api/v1/screener/submission-image-builds/" + buildID
 	var source sourceResponse
 	if err := jobJSON(client, http.MethodGet, base+"/source", token, nil, &source); err != nil {
-		return err
+		return stageFailure("SOURCE", err)
 	}
 	if !digestPattern.MatchString(source.ArtifactSHA256) ||
 		!imageRefPattern.MatchString(source.ImageRef) {
-		return errors.New("invalid source contract")
+		return stageFailure("SOURCE", errors.New("invalid source contract"))
 	}
 	sourceURL, err := decodeURL(source.SourceURLB64)
 	if err != nil {
-		return err
+		return stageFailure("SOURCE", err)
 	}
 	if err := downloadVerified(client, sourceURL, "/workspace/source.tar.gz", source.ArtifactSHA256); err != nil {
-		return err
+		return stageFailure("SOURCE", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
@@ -108,33 +152,33 @@ func run() error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("kaniko build failed: %w", err)
+		return stageFailure("KANIKO", fmt.Errorf("kaniko build failed: %w", err))
 	}
 
 	outputSHA, outputSize, err := hashBounded("/workspace/image.tar", maxOutputBytes)
 	if err != nil {
-		return err
+		return stageFailure("ARCHIVE", err)
 	}
 	payload := uploadRequest{OutputSHA256: outputSHA, OutputSizeBytes: outputSize}
 	var upload uploadResponse
 	if err := jobJSON(client, http.MethodPost, base+"/upload", token, payload, &upload); err != nil {
-		return err
+		return stageFailure("UPLOAD", err)
 	}
 	uploadURL, err := decodeURL(upload.UploadURLB64)
 	if err != nil {
-		return err
+		return stageFailure("UPLOAD", err)
 	}
 	if err := uploadFile(client, uploadURL, "/workspace/image.tar", upload.RequiredHeaders); err != nil {
-		return err
+		return stageFailure("UPLOAD", err)
 	}
 	var complete struct {
 		Verified bool `json:"verified"`
 	}
 	if err := jobJSON(client, http.MethodPost, base+"/complete", token, payload, &complete); err != nil {
-		return err
+		return stageFailure("COMPLETE", err)
 	}
 	if !complete.Verified {
-		return errors.New("platform did not verify remote image")
+		return stageFailure("COMPLETE", errors.New("platform did not verify remote image"))
 	}
 	fmt.Printf("DITTO_SUBMISSION_BUILD_OK=%s:%d\n", outputSHA, outputSize)
 	return nil
