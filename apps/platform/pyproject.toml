@@ -26,7 +26,7 @@ dependencies = [
     "pydantic>=2.12",
     "cryptography>=42",
     "aioboto3>=13.0",
-    "ditto-screening-protocol==0.13.0",
+    "ditto-screening-protocol==0.14.0",
 ]
 
 [tool.uv.sources]

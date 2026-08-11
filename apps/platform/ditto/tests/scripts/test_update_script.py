@@ -285,6 +285,14 @@ def _deploy_record(tmp_path: Path) -> dict[str, str]:
     return json.loads((tmp_path / "repo" / "logs" / "last-deploy.json").read_text())
 
 
+def test_deploy_reinstalls_embedded_protocol_before_migrations() -> None:
+    updater = (ROOT / "scripts" / "update.sh").read_text()
+
+    command = "uv sync --reinstall-package ditto-screening-protocol"
+    assert updater.count(command) == 2
+    assert updater.index(command) < updater.index("uv run alembic upgrade head")
+
+
 def test_update_loads_taostats_key_without_logging_value(tmp_path: Path) -> None:
     api_key = "tao-test:example"
     result, base_env, deploy_env, deploy_mode = _run_update(
