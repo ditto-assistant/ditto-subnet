@@ -49,8 +49,15 @@ const ready: BenchmarkRolloutControl = {
   canary_capable_validator_count: 4,
   v3_capable_validator_count: 4,
   current_hybrid_top_five: [],
+  ranked_quorum_agents: 5,
+  min_ranked_quorum_agents: 5,
   qualification_converged: true,
+  cohort_size: 5,
+  cohort_ready_count: 5,
+  priority_cohort_size: 5,
+  priority_complete: true,
   members: [],
+  qualification_blockers: [],
   contracts,
   available_target_versions: [6],
   active_contract_candidates: [],
@@ -141,6 +148,21 @@ const v9Qualified: BenchmarkRolloutControl = {
   ],
 }
 
+const v9CollectingWithStableMembership: BenchmarkRolloutControl = {
+  ...v9Ready,
+  desired_version: 9,
+  status: 'collecting',
+  qualification_converged: true,
+  priority_cohort_size: 5,
+  priority_complete: false,
+  members: [2, 3, 2, 2, 3].map((score_count, index) => ({
+    agent_id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+    position: index + 1,
+    score_count,
+    currently_top_five: true,
+  })),
+}
+
 describe('BenchmarkRolloutPanel', () => {
   afterEach(cleanup)
 
@@ -171,6 +193,21 @@ describe('BenchmarkRolloutPanel', () => {
     expect(screen.getAllByText('Benchmark v9').length).toBeGreaterThan(0)
     expect(screen.getByText('Start benchmark v8 → v9 rollout')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Review v9 rollout' })).toBeTruthy()
+  })
+
+  it('separates stable membership from the incomplete priority score gate', () => {
+    render(
+      <BenchmarkRolloutPanel
+        initialState={v9CollectingWithStableMembership}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText('Top-five membership')).toBeTruthy()
+    expect(screen.getByText('Stable')).toBeTruthy()
+    expect(screen.getByText('Priority scoring gate')).toBeTruthy()
+    expect(screen.getByText('2/5 at 3/3')).toBeTruthy()
+    expect(screen.getByText('· pending')).toBeTruthy()
   })
 
   it('starts v9 only after the existing guarded confirmation', async () => {

@@ -101,6 +101,10 @@ export function BenchmarkRolloutPanel({
     [selectedTarget, state.contracts],
   )
   const open = state.status === 'collecting' || state.status === 'blocked_ineligible'
+  const priorityReadyCount = state.members.filter(
+    (member) =>
+      member.position <= state.priority_cohort_size && member.score_count >= 3,
+  ).length
   const canSupersede = open && state.active_version !== state.desired_version
   const candidatesDegraded = state.degraded_sections.includes(
     'active_contract_candidates',
@@ -245,7 +249,7 @@ export function BenchmarkRolloutPanel({
             </div>
           </div>
 
-          <dl className="mt-5 grid gap-x-6 gap-y-4 text-xs sm:grid-cols-2 lg:grid-cols-4">
+          <dl className="mt-5 grid gap-x-6 gap-y-4 text-xs sm:grid-cols-2 lg:grid-cols-5">
             <div>
               <dt className="text-[var(--muted)]">Active contract</dt>
               <dd className="mt-1 text-sm font-semibold">v{state.active_version}</dd>
@@ -262,9 +266,24 @@ export function BenchmarkRolloutPanel({
               </dd>
             </div>
             <div>
-              <dt className="text-[var(--muted)]">Top-five convergence</dt>
+              <dt className="text-[var(--muted)]">Top-five membership</dt>
               <dd className="mt-1 text-sm font-semibold">
-                {state.qualification_converged ? 'Converged' : 'Pending'}
+                {state.qualification_converged ? 'Stable' : 'Updating'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[var(--muted)]">Priority scoring gate</dt>
+              <dd className="mt-1 text-sm font-semibold">
+                {open ? (
+                  <>
+                    {priorityReadyCount}/{state.priority_cohort_size} at 3/3
+                    <span className="ml-1 text-xs font-normal text-[var(--muted)]">
+                      · {state.priority_complete ? 'complete' : 'pending'}
+                    </span>
+                  </>
+                ) : (
+                  'Not rolling out'
+                )}
               </dd>
             </div>
           </dl>

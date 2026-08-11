@@ -3924,8 +3924,18 @@ export const benchmarkRolloutStateSchema = z.object({
   canary_capable_validator_count: z.number().int().nonnegative(),
   v3_capable_validator_count: z.number().int().nonnegative(),
   current_hybrid_top_five: z.array(z.string().uuid()),
+  ranked_quorum_agents: z.number().int().nonnegative().nullable().optional().default(null),
+  min_ranked_quorum_agents: z.number().int().positive().nullable().optional().default(null),
   qualification_converged: z.boolean(),
+  cohort_size: z.number().int().nonnegative().optional().default(0),
+  cohort_ready_count: z.number().int().nonnegative().optional().default(0),
+  priority_cohort_size: z.number().int().positive().optional().default(5),
+  priority_complete: z.boolean().optional().default(false),
   members: z.array(benchmarkRolloutMemberSchema),
+  qualification_blockers: z
+    .array(z.record(z.string(), z.string()))
+    .optional()
+    .default([]),
 })
 
 export const benchmarkContractSchema = z.object({
