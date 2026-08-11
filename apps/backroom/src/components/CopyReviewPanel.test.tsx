@@ -101,12 +101,13 @@ const unavailable = item({
 const panelProps = {
   initialGeneration: 'active' as const,
   initialActiveBenchVersion: 8,
+  initialRolloutBenchVersion: 9,
 }
 
 function listResult(
   items: Array<CopyReviewConsoleItem>,
   bulkEligibleCount: number,
-  generation: 'active' | 'history' = 'active',
+  generation: 'active' | 'rollout' | 'history' = 'active',
 ) {
   return {
     items,
@@ -116,6 +117,7 @@ function listResult(
     bulk_eligible_count: bulkEligibleCount,
     generation,
     active_bench_version: 8,
+    rollout_bench_version: 9,
   }
 }
 
@@ -371,5 +373,20 @@ describe('CopyReviewPanel', () => {
     }))
     expect(await screen.findByText(/legacy-agent/)).toBeDefined()
     expect(screen.getByText(/Older benchmark generations/)).toBeDefined()
+  })
+
+  it('surfaces rollout-target reviews in their own operator lane', async () => {
+    vi.mocked(listCopyReviews).mockResolvedValue(
+      listResult([eligible], 1, 'rollout'),
+    )
+    render(<CopyReviewPanel {...panelProps} initialItems={[]} initialBulkEligibleCount={0} readOnly />)
+
+    fireEvent.click(screen.getByText('Rollout target v9'))
+
+    await waitFor(() => expect(listCopyReviews).toHaveBeenCalledWith({
+      data: { generation: 'rollout' },
+    }))
+    expect(await screen.findByText(/held-agent/)).toBeDefined()
+    expect(screen.getByText(/require review before activation can converge/)).toBeDefined()
   })
 })

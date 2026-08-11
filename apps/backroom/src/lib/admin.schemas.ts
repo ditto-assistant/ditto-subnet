@@ -4216,11 +4216,12 @@ export const copyReviewListSchema = z.object({
   count: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
-  generation: z.enum(['active', 'history', 'all']),
+  generation: z.enum(['active', 'rollout', 'history', 'all']),
   active_bench_version: z.number().int().positive(),
+  rollout_bench_version: z.number().int().positive().nullable().default(null),
 })
 
-export const copyReviewGenerationSchema = z.enum(['active', 'history'])
+export const copyReviewGenerationSchema = z.enum(['active', 'rollout', 'history'])
 export const listCopyReviewsInputSchema = z.object({
   generation: copyReviewGenerationSchema.default('active'),
 })
@@ -4235,8 +4236,9 @@ export const copyReviewConsoleListSchema = z.object({
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
   bulk_eligible_count: z.number().int().nonnegative(),
-  generation: z.enum(['active', 'history', 'all']),
+  generation: z.enum(['active', 'rollout', 'history', 'all']),
   active_bench_version: z.number().int().positive(),
+  rollout_bench_version: z.number().int().positive().nullable(),
 })
 
 export const resolveCopyReviewInputSchema = z.object({

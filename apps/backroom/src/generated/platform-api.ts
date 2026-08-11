@@ -4454,13 +4454,15 @@ export interface components {
              * Generation
              * @enum {string}
              */
-            generation: "active" | "history" | "all";
+            generation: "active" | "rollout" | "history" | "all";
             /** Items */
             items: components["schemas"]["AdminCopyReviewItem"][];
             /** Limit */
             limit: number;
             /** Offset */
             offset: number;
+            /** Rollout Bench Version */
+            rollout_bench_version?: number | null;
         };
         /** AdminCopyReviewOpenRequest */
         AdminCopyReviewOpenRequest: {
@@ -16992,7 +16994,7 @@ export interface operations {
                 limit?: number;
                 offset?: number;
                 include?: "current_comparison" | null;
-                generation?: "active" | "history" | "all";
+                generation?: "active" | "rollout" | "history" | "all";
             };
             header?: {
                 authorization?: string | null;

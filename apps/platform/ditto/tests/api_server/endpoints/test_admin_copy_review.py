@@ -774,6 +774,79 @@ async def test_default_generation_tracks_a_benchmark_authority_bump(
     assert response.json()["items"][0]["agent_id"] == str(current)
 
 
+async def test_rollout_generation_surfaces_target_reviews_without_mixing_history(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    active, _ = await _seed(maker, opened_at=_T0)
+    rollout_target, _ = await _seed(maker, opened_at=_T0 + timedelta(hours=1))
+    historical, _ = await _seed(maker, opened_at=_T0 + timedelta(hours=2))
+    active_version = MIN_SCOREABLE_BENCH_VERSION + 1
+    target_version = active_version + 1
+    await _score_review_for_generation(
+        maker, agent_id=active, bench_version=active_version
+    )
+    await _score_review_for_generation(
+        maker, agent_id=rollout_target, bench_version=target_version
+    )
+    await _score_review_for_generation(
+        maker, agent_id=historical, bench_version=MIN_SCOREABLE_BENCH_VERSION
+    )
+    await _activate_generation(maker, bench_version=active_version)
+    async with maker() as session, session.begin():
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=active_version,
+                desired_version=target_version,
+                status="collecting",
+                cohort_size=5,
+                created_at=_T0,
+            )
+        )
+    _install(app, maker)
+
+    active_response = await client.get(
+        "/api/v1/admin/copy-reviews?generation=active", headers=_HEADERS
+    )
+    rollout_response = await client.get(
+        "/api/v1/admin/copy-reviews?generation=rollout", headers=_HEADERS
+    )
+    history_response = await client.get(
+        "/api/v1/admin/copy-reviews?generation=history", headers=_HEADERS
+    )
+
+    assert active_response.status_code == 200
+    assert rollout_response.status_code == 200
+    assert history_response.status_code == 200
+    assert active_response.json()["rollout_bench_version"] == target_version
+    assert [item["agent_id"] for item in rollout_response.json()["items"]] == [
+        str(rollout_target)
+    ]
+    assert [item["agent_id"] for item in history_response.json()["items"]] == [
+        str(historical)
+    ]
+
+
+async def test_rollout_generation_is_empty_without_open_transition(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    active, _ = await _seed(maker)
+    await _score_review_for_generation(
+        maker, agent_id=active, bench_version=MIN_SCOREABLE_BENCH_VERSION
+    )
+    await _activate_generation(maker, bench_version=MIN_SCOREABLE_BENCH_VERSION)
+    _install(app, maker)
+
+    response = await client.get(
+        "/api/v1/admin/copy-reviews?generation=rollout", headers=_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert response.json()["rollout_bench_version"] is None
+    assert response.json()["count"] == 0
+    assert response.json()["items"] == []
+
+
 async def test_original_evidence_names_the_matched_submission(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:

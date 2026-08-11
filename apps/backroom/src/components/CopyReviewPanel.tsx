@@ -84,12 +84,14 @@ export function CopyReviewPanel({
   initialBulkEligibleCount,
   initialGeneration,
   initialActiveBenchVersion,
+  initialRolloutBenchVersion,
   readOnly,
 }: {
   initialItems: Array<CopyReviewConsoleItem>
   initialBulkEligibleCount: number
   initialGeneration: CopyReviewGeneration | 'all'
   initialActiveBenchVersion: number
+  initialRolloutBenchVersion: number | null
   readOnly: boolean
 }) {
   const listFn = useServerFn(listCopyReviews)
@@ -98,9 +100,12 @@ export function CopyReviewPanel({
   const [items, setItems] = useState(initialItems)
   const [bulkEligibleCount, setBulkEligibleCount] = useState(initialBulkEligibleCount)
   const [generation, setGeneration] = useState<CopyReviewGeneration>(
-    initialGeneration === 'history' ? 'history' : 'active',
+    initialGeneration === 'history' || initialGeneration === 'rollout'
+      ? initialGeneration
+      : 'active',
   )
   const [activeBenchVersion, setActiveBenchVersion] = useState(initialActiveBenchVersion)
+  const [rolloutBenchVersion, setRolloutBenchVersion] = useState(initialRolloutBenchVersion)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [reason, setReason] = useState('')
   const [resolution, setResolution] = useState<CopyReviewResolution>('clear')
@@ -129,6 +134,7 @@ export function CopyReviewPanel({
     setBulkEligibleCount(data.bulk_eligible_count)
     setGeneration(nextGeneration)
     setActiveBenchVersion(data.active_bench_version)
+    setRolloutBenchVersion(data.rollout_bench_version)
     setSelectedId((current) =>
       current && data.items.some((item) => item.agent_id === current) ? current : null,
     )
@@ -258,6 +264,21 @@ export function CopyReviewPanel({
         >
           Active benchmark v{activeBenchVersion}
         </button>
+        {rolloutBenchVersion != null ? (
+          <button
+            type="button"
+            aria-pressed={generation === 'rollout'}
+            onClick={() => void refresh('rollout')}
+            disabled={busy}
+            className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:opacity-50 ${
+              generation === 'rollout'
+                ? 'border-[var(--acid)]/35 bg-[var(--acid-dim)] text-[var(--acid)]'
+                : 'border-white/10 text-[var(--muted-strong)] hover:bg-white/[0.05]'
+            }`}
+          >
+            Rollout target v{rolloutBenchVersion}
+          </button>
+        ) : null}
         <button
           type="button"
           aria-pressed={generation === 'history'}
@@ -274,7 +295,9 @@ export function CopyReviewPanel({
         <span className="text-xs text-[var(--muted)]">
           {generation === 'active'
             ? `Only submissions scored on the active v${activeBenchVersion} contract.`
-            : `Older benchmark generations, kept separate from the active queue.`}
+            : generation === 'rollout'
+              ? `Submissions scored on rollout target v${rolloutBenchVersion}; these require review before activation can converge.`
+              : `Older benchmark generations, kept separate from active and rollout queues.`}
         </span>
       </div>
 
@@ -338,7 +361,9 @@ export function CopyReviewPanel({
         <div className="rounded-xl border border-white/10 bg-white/[0.02] p-8 text-center text-sm text-[var(--muted)]">
           {generation === 'active'
             ? `No benchmark v${activeBenchVersion} submissions are awaiting operator review.`
-            : 'No historical submissions are awaiting operator review.'}
+            : generation === 'rollout'
+              ? `No rollout target v${rolloutBenchVersion} submissions are awaiting operator review.`
+              : 'No historical submissions are awaiting operator review.'}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-white/10">

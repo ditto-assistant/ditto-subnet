@@ -36,6 +36,7 @@ function CopyReviewPage() {
         initialBulkEligibleCount={reviews.bulk_eligible_count}
         initialGeneration={reviews.generation}
         initialActiveBenchVersion={reviews.active_bench_version}
+        initialRolloutBenchVersion={reviews.rollout_bench_version}
         readOnly={user.accessLevel === 'read'}
       />
     </div>

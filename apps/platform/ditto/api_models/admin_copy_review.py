@@ -137,8 +137,9 @@ class AdminCopyReviewList(BaseModel):
     count: int
     limit: int
     offset: int
-    generation: Literal["active", "history", "all"]
+    generation: Literal["active", "rollout", "history", "all"]
     active_bench_version: int = Field(ge=1)
+    rollout_bench_version: int | None = Field(default=None, ge=1)
 
 
 class AdminCopyReviewAction(BaseModel):
