@@ -68,9 +68,10 @@ def main() -> None:
             args.url,
             headers={"User-Agent": "sn118-backroom-review"},
         )
-        with urllib.request.urlopen(request, timeout=60) as response, tar_path.open(
-            "wb"
-        ) as dest:
+        with (
+            urllib.request.urlopen(request, timeout=60) as response,
+            tar_path.open("wb") as dest,
+        ):
             shutil.copyfileobj(response, dest)
 
     actual = digest(tar_path)
@@ -107,14 +108,19 @@ def main() -> None:
             file_count += 1
             paths.append(member.name)
 
-    print(json.dumps({
-        "artifact_sha256": actual,
-        "tar_path": str(tar_path),
-        "source_path": str(source_dir),
-        "file_count": file_count,
-        "expanded_bytes": expanded_bytes,
-        "paths": paths,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "artifact_sha256": actual,
+                "tar_path": str(tar_path),
+                "source_path": str(source_dir),
+                "file_count": file_count,
+                "expanded_bytes": expanded_bytes,
+                "paths": paths,
+            },
+            indent=2,
+        )
+    )
     atexit.unregister(cleanup_incomplete_output)
 
 
