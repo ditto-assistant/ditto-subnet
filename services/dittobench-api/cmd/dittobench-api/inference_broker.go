@@ -2582,6 +2582,30 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 	}, nil
 }
 
+type brokerCaseSnapshot struct {
+	Requests  uint64
+	Successes uint64
+	InFlight  int
+}
+
+// caseSnapshot is the ticket-scoped boundary used to attribute model use to
+// one ordinary benchmark case. It deliberately stays internal instead of
+// extending the aggregate relay health wire: only the source-bound broker can
+// prove that no sibling request overlaps the case window.
+func (b *inferenceBroker) caseSnapshot(id string) (brokerCaseSnapshot, error) {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return brokerCaseSnapshot{}, fmt.Errorf("inference session unavailable")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return brokerCaseSnapshot{
+		Requests: session.requests, Successes: session.successes, InFlight: session.inFlight,
+	}, nil
+}
+
 // rewriteRequestModel replaces the caller's `model` with the ticket's, leaving
 // every other field of the request untouched. Decoding into a generic map and
 // re-encoding is deliberate: it normalises exactly one field and cannot smuggle

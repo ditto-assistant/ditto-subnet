@@ -309,10 +309,10 @@ def test_v9_receipt_verifies_without_overwriting_ordinary_composite() -> None:
     assert verify_ledger_entry(entry)
 
 
-def test_base_only_v9_shadow_gate_is_not_reward_authority() -> None:
+def test_base_only_v9_enforce_gate_is_not_confirmation_authority() -> None:
     entry = _entry().model_copy(update={"v9_confirmation": None})
     assert entry.score_proofs[1].base_evidence is not None
-    assert entry.score_proofs[1].base_evidence.score_gates.rollout_mode == "shadow"
+    assert entry.score_proofs[1].base_evidence.score_gates.rollout_mode == "enforce"
     # Transport accepts the cryptographically valid row so one unconfirmed v9
     # result cannot abort the whole mixed-version ledger fetch. Reward authority
     # is applied per entry at the weight fold instead.

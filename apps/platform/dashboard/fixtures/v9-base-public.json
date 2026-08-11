@@ -1,7 +1,7 @@
 {
   "bench_version": 9,
   "score_gates": {
-    "rollout_mode": "shadow",
+    "rollout_mode": "enforce",
     "model_use": {
       "administered_cases": 4,
       "eligible_cases": 3,

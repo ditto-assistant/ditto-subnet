@@ -1,17 +1,90 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-api/internal/v9base"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
+func (s *server) runCaseWithModelAttribution(
+	ctx context.Context,
+	inferenceSessionID string,
+	harnessURL string,
+	caseID string,
+	prompt string,
+	tools []protocol.ToolDefinition,
+	opts runner.CaseOptions,
+) (protocol.RunResponse, runner.CaseExecution, error) {
+	if opts.BenchVersion != protocol.BenchVersionV9 || inferenceSessionID == "" {
+		return runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
+	}
+	before, beforeErr := s.broker.caseSnapshot(inferenceSessionID)
+	response, execution, runErr := runner.RunCaseWithTelemetry(
+		ctx, harnessURL, caseID, prompt, tools, opts,
+	)
+	after, afterErr := s.broker.caseSnapshot(inferenceSessionID)
+	execution.ModelInferenceObserved, execution.ModelAttributionComplete =
+		v9ModelCaseDelta(before, after, beforeErr, afterErr)
+	return response, execution, runErr
+}
+
+func v9ModelCaseDelta(
+	before brokerCaseSnapshot,
+	after brokerCaseSnapshot,
+	beforeErr error,
+	afterErr error,
+) (observed bool, complete bool) {
+	if beforeErr != nil || afterErr != nil || before.InFlight != 0 || after.InFlight != 0 ||
+		after.Requests < before.Requests || after.Successes < before.Successes {
+		return false, false
+	}
+	requestDelta := after.Requests - before.Requests
+	successDelta := after.Successes - before.Successes
+	if successDelta > requestDelta {
+		return false, false
+	}
+	return successDelta > 0, true
+}
+
+func v9DistinctModelCases(
+	perCase []protocol.CaseScore,
+	transcripts []transcriptCase,
+) (complete bool, successful int) {
+	if len(perCase) != len(transcripts) {
+		return false, 0
+	}
+	seen := make(map[string]struct{}, len(perCase))
+	for index, score := range perCase {
+		if score.CaseID == "" || score.CaseID != transcripts[index].CaseID {
+			return false, 0
+		}
+		if _, duplicate := seen[score.CaseID]; duplicate {
+			return false, 0
+		}
+		seen[score.CaseID] = struct{}{}
+		if score.Undelivered || score.ValidatorFault {
+			continue
+		}
+		execution := transcripts[index].Execution
+		if !execution.ModelAttributionComplete {
+			return false, 0
+		}
+		if execution.ModelInferenceObserved {
+			successful++
+		}
+	}
+	return true, successful
+}
+
 func applyV9BaseEvidence(
 	report protocol.ScoreReport,
 	req submitRequest,
 	perCase []protocol.CaseScore,
+	transcripts []transcriptCase,
 	usage protocol.TokenUsage,
 	execution relayExecutionSummary,
 	transcriptSHA256 string,
@@ -26,7 +99,7 @@ func applyV9BaseEvidence(
 	// screened image is a separate derived build product and must never replace
 	// the tarball identity at this trust boundary.
 	artifactSHA256 := req.TarballSHA256
-	model := v9AggregateModelTelemetry(usage, execution)
+	model := v9AggregateModelTelemetry(usage, execution, perCase, transcripts)
 	gates, err := v9base.BuildGateEvidence(perCase, model, true)
 	if err != nil {
 		return protocol.ScoreReport{}, fmt.Errorf("build v9 score-gate evidence: %w", err)
@@ -47,7 +120,12 @@ func applyV9BaseEvidence(
 	return report, nil
 }
 
-func v9AggregateModelTelemetry(usage protocol.TokenUsage, execution relayExecutionSummary) v9base.AggregateModelTelemetry {
+func v9AggregateModelTelemetry(
+	usage protocol.TokenUsage,
+	execution relayExecutionSummary,
+	perCase []protocol.CaseScore,
+	transcripts []transcriptCase,
+) v9base.AggregateModelTelemetry {
 	complete := usage.AccountingVersion == 2 && usage.Status == "complete" &&
 		usage.Requests == execution.Requests && usage.Successes == execution.Successes &&
 		usage.Successes <= usage.Requests && usage.UsageAvailable == usage.Successes &&
@@ -58,13 +136,12 @@ func v9AggregateModelTelemetry(usage protocol.TokenUsage, execution relayExecuti
 	} else {
 		complete = complete && usage.PromptTokens > 0 && usage.TotalTokens > 0
 	}
+	attributionComplete, successfulCases := v9DistinctModelCases(perCase, transcripts)
 	return v9base.AggregateModelTelemetry{
 		ObservedRequests: execution.Requests, SuccessfulRequests: execution.Successes,
 		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens,
-		TelemetryComplete: complete,
-		// Existing broker accounting is run-aggregate. It intentionally cannot
-		// claim distinct-case attribution; repeated requests remain diagnostic.
-		DistinctCaseAttributionComplete: false,
-		SuccessfulDistinctCases:         0,
+		TelemetryComplete:               complete,
+		DistinctCaseAttributionComplete: attributionComplete,
+		SuccessfulDistinctCases:         successfulCases,
 	}
 }

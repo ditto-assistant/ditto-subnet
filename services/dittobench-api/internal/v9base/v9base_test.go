@@ -30,7 +30,7 @@ func attributedGateEvidence(t *testing.T) scoregates.Evidence {
 		scoregates.AuthoritativeToolInput{
 			ExpectedExecutions: 3, MatchedExecutions: 2, UnexpectedExecutions: 1, TelemetryComplete: true,
 		},
-		ContractThresholds(), scoregates.RolloutShadow,
+		ContractThresholds(), scoregates.RolloutEnforce,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -56,19 +56,19 @@ func mustBuild(t *testing.T) (protocol.V9BaseDetails, string) {
 	return details, digest
 }
 
-func TestCompiledShadowContractChecksumAndReadiness(t *testing.T) {
+func TestCompiledEnforceContractChecksumAndReadiness(t *testing.T) {
 	if err := VerifyCompiledContract(); err != nil {
 		t.Fatal(err)
 	}
-	if ProductionReady() {
-		t.Fatal("uncalibrated shadow collection contract must not activate v9")
+	if !ProductionReady() {
+		t.Fatal("efficiency-era enforce contract must be production ready")
 	}
 	thresholds := ContractThresholds()
 	if thresholds.Profile.ID != ContractRevision || thresholds.Profile.ManifestSHA256 != ContractManifestSHA256 {
 		t.Fatalf("compiled identity drift: %+v", thresholds.Profile)
 	}
 	if thresholds.ModelUseCoverageBPS != 1 || thresholds.AuthoritativeToolCoverageBPS != 1 {
-		t.Fatalf("shadow diagnostic thresholds drift: %+v", thresholds)
+		t.Fatalf("enforce thresholds drift: %+v", thresholds)
 	}
 }
 
@@ -81,15 +81,15 @@ func TestBuildCanonicalRootGolden(t *testing.T) {
 	const want = "ditto-v9-base-v1\n" +
 		"schema_version=1\n" +
 		"bench_version=9\n" +
-		"score_contract.revision=v9-base-shadow-calibration-v1\n" +
-		"score_contract.manifest_sha256=5adfbae18c2af63f39d5d087414ae4f1484db0b192ea6da205e2cb9166507bd1\n" +
+		"score_contract.revision=v9-base-enforce-efficiency-v1\n" +
+		"score_contract.manifest_sha256=861d161cd031d5c40a4c50f0ae0c3d4a4f99a8513ff7fc87239f22104ebe3bb8\n" +
 		"run_id=run-v9-vector\n" +
 		"artifact_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
 		"dataset_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n" +
 		"transcript_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n" +
 		"ordinary_composite_micros=812345\n" +
 		"ordinary_stderr_micros=23456\n" +
-		"score_gates_sha256=5b8a065952838eb072a38808a338e07f9eb3080ecd0cc620812e19c5ab29cf9e\n" +
+		"score_gates_sha256=7339f13600877e72b5dcc81f1d18437ff688ea065c54e2a02a6ad8169e15db72\n" +
 		"semantic_gate_factor_bps=10000\n" +
 		"applied_gate_factor_bps=10000\n" +
 		"effective_composite_micros=812345\n" +
@@ -97,7 +97,7 @@ func TestBuildCanonicalRootGolden(t *testing.T) {
 	if string(body) != want {
 		t.Fatalf("canonical root mismatch:\n%s\ndigest=%s gate=%s", body, digest, details.ScoreGatesSHA256)
 	}
-	if digest != "bb3e471f477ffc47f329293ec086771cf4ee738e740a3df6d5a568e4728146da" {
+	if digest != "7cdf744adab8e51fb0cf7b0582a7a2b7273d5ec900a474245e478bfde531c1a1" {
 		t.Fatalf("root digest = %s", digest)
 	}
 }
@@ -149,7 +149,7 @@ func TestSharedCrossLanguageVectorMatchesGoCanonicalization(t *testing.T) {
 	}
 }
 
-func TestBuildProducesTypedValidShadowEvidence(t *testing.T) {
+func TestBuildProducesTypedValidEnforceEvidence(t *testing.T) {
 	details, digest := mustBuild(t)
 	if err := Validate(details); err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestBuildProducesTypedValidShadowEvidence(t *testing.T) {
 	}
 }
 
-func TestShadowInsufficientAttributionPublishesZeroSemanticButPreservesScore(t *testing.T) {
+func TestEnforceInsufficientAttributionPublishesAndAppliesZero(t *testing.T) {
 	perCase := []protocol.CaseScore{
 		{CaseID: "a", Expected: []string{"search"}, Called: []string{"search"}},
 		{CaseID: "b"}, {CaseID: "c"},
@@ -187,8 +187,9 @@ func TestShadowInsufficientAttributionPublishesZeroSemanticButPreservesScore(t *
 		details.ScoreGates.ModelUse.RequestCoverageBPS != 10_000 || details.ScoreGates.ModelUse.CoverageBPS != 0 {
 		t.Fatalf("unattributed request evidence passed: %+v", details.ScoreGates.ModelUse)
 	}
-	if details.SemanticGateFactorBPS != 0 || details.AppliedGateFactorBPS != 10_000 || effective != input.Ordinary {
-		t.Fatalf("shadow semantic/application split failed: %+v effective=%+v", details, effective)
+	if details.SemanticGateFactorBPS != 0 || details.AppliedGateFactorBPS != 0 ||
+		effective != (scoregates.Score{}) {
+		t.Fatalf("enforce semantic factor was not applied: %+v effective=%+v", details, effective)
 	}
 }
 
@@ -207,8 +208,8 @@ func TestZeroInferenceIsValidSignedEvidence(t *testing.T) {
 	if details.ScoreGates.ModelUse.Result != string(scoregates.ResultZeroInference) || details.SemanticGateFactorBPS != 0 {
 		t.Fatalf("zero inference not retained: %+v", details.ScoreGates.ModelUse)
 	}
-	if len(digest) != 64 || effective != input.Ordinary {
-		t.Fatalf("zero-inference shadow evidence not signable: digest=%s effective=%+v", digest, effective)
+	if len(digest) != 64 || effective != (scoregates.Score{}) {
+		t.Fatalf("zero-inference enforce evidence not signable: digest=%s effective=%+v", digest, effective)
 	}
 }
 
@@ -223,7 +224,7 @@ func TestBuildRejectsTamperedIdentityAndContract(t *testing.T) {
 		{"transcript", func(v *Inputs) { v.TranscriptSHA256 = strings.Repeat("g", 64) }},
 		{"gate profile", func(v *Inputs) { v.Gates.ThresholdProfile.ID = "other" }},
 		{"gate threshold", func(v *Inputs) { v.Gates.ModelUse.ThresholdBPS++ }},
-		{"gate mode", func(v *Inputs) { v.Gates.RolloutMode = scoregates.RolloutEnforce }},
+		{"gate mode", func(v *Inputs) { v.Gates.RolloutMode = scoregates.RolloutShadow }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

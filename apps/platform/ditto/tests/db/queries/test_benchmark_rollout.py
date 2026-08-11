@@ -2655,11 +2655,14 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
     [
         ("0.51.2", False),
         ("source-build", False),
-        ("0.51.3", True),
+        ("0.51.3", False),
+        ("0.51.7", False),
+        ("0.51.8", False),
+        ("0.51.9", True),
         ("0.52.0", True),
     ],
 )
-async def test_v9_requires_the_complete_hosted_embedding_scorer_release(
+async def test_v9_requires_the_authoritative_enforce_scorer_release(
     software_version: str, supports_v9: bool
 ) -> None:
     """A stale v9 advertisement cannot make a broken embedding lane routable."""
@@ -2684,7 +2687,7 @@ async def test_capable_counts_exclude_stale_v9_advertisers(
 ) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     async with session_maker() as session, session.begin():
-        for index, software_version in enumerate(("0.51.2", "source-build", "0.51.3")):
+        for index, software_version in enumerate(("0.51.8", "source-build", "0.51.9")):
             heartbeat = _heartbeat(
                 f"v9-floor-{index}", now, versions=[7, 8, 9], protocol_version=18
             )

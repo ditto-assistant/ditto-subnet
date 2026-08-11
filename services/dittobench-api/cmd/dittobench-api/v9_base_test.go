@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-api/internal/v9base"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -37,6 +39,21 @@ func completeUsage(requests, successes, prompt, completion uint64) protocol.Toke
 	}
 }
 
+func completeModelTranscripts(perCase []protocol.CaseScore, observed ...bool) []transcriptCase {
+	items := make([]transcriptCase, len(perCase))
+	for index, score := range perCase {
+		used := index < len(observed) && observed[index]
+		items[index] = transcriptCase{
+			CaseID: score.CaseID,
+			Execution: runner.CaseExecution{
+				ModelAttributionComplete: true,
+				ModelInferenceObserved:   used,
+			},
+		}
+	}
+	return items
+}
+
 func TestApplyV9BaseEvidencePublishesTypedSignedRoot(t *testing.T) {
 	report := sampleV9Report()
 	req := submitRequest{
@@ -51,7 +68,9 @@ func TestApplyV9BaseEvidencePublishesTypedSignedRoot(t *testing.T) {
 	usage := completeUsage(20, 20, 2_000, 400)
 	execution := relayExecutionSummary{Requests: 20, Successes: 20}
 
-	got, err := applyV9BaseEvidence(report, req, perCase, usage, execution, v9TranscriptSHA)
+	got, err := applyV9BaseEvidence(
+		report, req, perCase, completeModelTranscripts(perCase, true, true), usage, execution, v9TranscriptSHA,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,15 +82,16 @@ func TestApplyV9BaseEvidencePublishesTypedSignedRoot(t *testing.T) {
 		base.DatasetSHA256 != v9DatasetSHA || base.TranscriptSHA256 != v9TranscriptSHA {
 		t.Fatalf("identity not bound: %+v", base)
 	}
-	if base.ScoreGates.ModelUse.CaseAttributionComplete || base.ScoreGates.ModelUse.Result != string(scoregates.ResultInsufficientEvidence) {
-		t.Fatalf("aggregate requests claimed distinct-case coverage: %+v", base.ScoreGates.ModelUse)
+	if !base.ScoreGates.ModelUse.CaseAttributionComplete || base.ScoreGates.ModelUse.Result != string(scoregates.ResultPassed) {
+		t.Fatalf("trusted distinct-case coverage missing: %+v", base.ScoreGates.ModelUse)
 	}
 	if base.ScoreGates.ModelUse.RequestCoverageBPS != scoregates.BasisPointScale ||
-		base.ScoreGates.ModelUse.CoverageBPS != 0 || base.SemanticGateFactorBPS != 0 || base.AppliedGateFactorBPS != scoregates.BasisPointScale {
-		t.Fatalf("shadow diagnostic/application split wrong: %+v", base)
+		base.ScoreGates.ModelUse.CoverageBPS != scoregates.BasisPointScale ||
+		base.SemanticGateFactorBPS != scoregates.BasisPointScale || base.AppliedGateFactorBPS != scoregates.BasisPointScale {
+		t.Fatalf("enforced semantic evidence wrong: %+v", base)
 	}
 	if got.Composite != report.Composite || got.CompositeStderr != report.CompositeStderr {
-		t.Fatalf("shadow changed score: got %v/%v want %v/%v", got.Composite, got.CompositeStderr, report.Composite, report.CompositeStderr)
+		t.Fatalf("passing enforce gate changed score: got %v/%v want %v/%v", got.Composite, got.CompositeStderr, report.Composite, report.CompositeStderr)
 	}
 	if err := v9base.Validate(*base); err != nil {
 		t.Fatal(err)
@@ -84,10 +104,12 @@ func TestApplyV9BaseEvidencePublishesTypedSignedRoot(t *testing.T) {
 
 func TestApplyV9BaseEvidenceAcceptsHealthyZeroInferenceAsFactorZero(t *testing.T) {
 	report := sampleV9Report()
+	perCase := []protocol.CaseScore{{CaseID: "memory"}}
 	got, err := applyV9BaseEvidence(
 		report,
 		submitRequest{BenchVersion: protocol.BenchVersionV9, TarballSHA256: v9ArtifactSHA},
-		[]protocol.CaseScore{{CaseID: "memory"}},
+		perCase,
+		completeModelTranscripts(perCase, false),
 		completeUsage(0, 0, 0, 0), relayExecutionSummary{}, v9TranscriptSHA,
 	)
 	if err != nil {
@@ -97,17 +119,19 @@ func TestApplyV9BaseEvidenceAcceptsHealthyZeroInferenceAsFactorZero(t *testing.T
 	if base.ScoreGates.ModelUse.Result != string(scoregates.ResultZeroInference) || base.SemanticGateFactorBPS != 0 {
 		t.Fatalf("zero inference did not become valid zero-factor evidence: %+v", base)
 	}
-	if got.Composite != report.Composite {
-		t.Fatalf("shadow zero-inference changed score: %v != %v", got.Composite, report.Composite)
+	if got.Composite != 0 || got.CompositeStderr != 0 || base.AppliedGateFactorBPS != 0 {
+		t.Fatalf("enforce zero-inference did not zero score: %+v", got)
 	}
 }
 
 func TestApplyV9BaseEvidenceFailsClosedOnIncompleteAggregateTelemetry(t *testing.T) {
 	usage := completeUsage(2, 2, 100, 20)
+	perCase := []protocol.CaseScore{{CaseID: "memory"}}
 	_, err := applyV9BaseEvidence(
 		sampleV9Report(),
 		submitRequest{BenchVersion: protocol.BenchVersionV9, TarballSHA256: v9ArtifactSHA},
-		[]protocol.CaseScore{{CaseID: "memory"}},
+		perCase,
+		completeModelTranscripts(perCase, true),
 		usage, relayExecutionSummary{Requests: 3, Successes: 2}, v9TranscriptSHA,
 	)
 	if err == nil || !strings.Contains(err.Error(), "telemetry unavailable") {
@@ -131,7 +155,8 @@ func TestApplyV9BaseEvidenceRejectsMissingTypedIdentity(t *testing.T) {
 			req := submitRequest{BenchVersion: protocol.BenchVersionV9, TarballSHA256: v9ArtifactSHA}
 			transcript := v9TranscriptSHA
 			tt.mutate(&report, &req, &transcript)
-			_, err := applyV9BaseEvidence(report, req, []protocol.CaseScore{{CaseID: "a"}}, completeUsage(0, 0, 0, 0), relayExecutionSummary{}, transcript)
+			perCase := []protocol.CaseScore{{CaseID: "a"}}
+			_, err := applyV9BaseEvidence(report, req, perCase, completeModelTranscripts(perCase, false), completeUsage(0, 0, 0, 0), relayExecutionSummary{}, transcript)
 			if err == nil {
 				t.Fatal("missing v9 identity unexpectedly passed")
 			}
@@ -150,7 +175,7 @@ func TestApplyV9BaseEvidencePreservesPreV9ReportBitsAndJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := applyV9BaseEvidence(report, submitRequest{BenchVersion: protocol.BenchVersionV8}, nil, protocol.TokenUsage{}, relayExecutionSummary{}, "")
+	got, err := applyV9BaseEvidence(report, submitRequest{BenchVersion: protocol.BenchVersionV8}, nil, nil, protocol.TokenUsage{}, relayExecutionSummary{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,11 +190,17 @@ func TestApplyV9BaseEvidencePreservesPreV9ReportBitsAndJSON(t *testing.T) {
 	}
 }
 
-func TestV9AggregateModelTelemetryNeverInventsDistinctCases(t *testing.T) {
+func TestV9AggregateModelTelemetryUsesOnlyTrustedDistinctCases(t *testing.T) {
 	usage := completeUsage(1_000, 999, 999_000, 100_000)
-	got := v9AggregateModelTelemetry(usage, relayExecutionSummary{Requests: 1_000, Successes: 999})
-	if !got.TelemetryComplete || got.DistinctCaseAttributionComplete || got.SuccessfulDistinctCases != 0 {
-		t.Fatalf("aggregate telemetry invented case attribution: %+v", got)
+	perCase := []protocol.CaseScore{{CaseID: "a"}, {CaseID: "b"}, {CaseID: "c", Undelivered: true}}
+	got := v9AggregateModelTelemetry(
+		usage,
+		relayExecutionSummary{Requests: 1_000, Successes: 999},
+		perCase,
+		completeModelTranscripts(perCase, true, false, true),
+	)
+	if !got.TelemetryComplete || !got.DistinctCaseAttributionComplete || got.SuccessfulDistinctCases != 1 {
+		t.Fatalf("trusted case attribution wrong: %+v", got)
 	}
 }
 
@@ -194,8 +225,67 @@ func TestV9AggregateModelTelemetryCompletenessMatrix(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := v9AggregateModelTelemetry(tt.usage, tt.execution).TelemetryComplete; got != tt.want {
+			if got := v9AggregateModelTelemetry(tt.usage, tt.execution, nil, nil).TelemetryComplete; got != tt.want {
 				t.Fatalf("complete = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestV9ModelCaseDeltaFailsClosedOnAmbiguousWindows(t *testing.T) {
+	tests := []struct {
+		name                string
+		before, after       brokerCaseSnapshot
+		beforeErr, afterErr error
+		observed, complete  bool
+	}{
+		{name: "zero use", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 4, Successes: 4}, complete: true},
+		{name: "one success", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}, observed: true, complete: true},
+		{name: "failed request", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 4}, complete: true},
+		{name: "overlap before", before: brokerCaseSnapshot{Requests: 4, Successes: 4, InFlight: 1}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}},
+		{name: "overlap after", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 4, InFlight: 1}},
+		{name: "request rollback", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 4, Successes: 4}},
+		{name: "success rollback", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 3}},
+		{name: "success exceeds requests", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}},
+		{name: "before unavailable", beforeErr: fmt.Errorf("missing")},
+		{name: "after unavailable", afterErr: fmt.Errorf("missing")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			observed, complete := v9ModelCaseDelta(tt.before, tt.after, tt.beforeErr, tt.afterErr)
+			if observed != tt.observed || complete != tt.complete {
+				t.Fatalf("got observed=%t complete=%t, want %t/%t", observed, complete, tt.observed, tt.complete)
+			}
+		})
+	}
+}
+
+func TestV9DistinctModelCasesRequiresExactEligibleTranscriptPopulation(t *testing.T) {
+	base := []protocol.CaseScore{{CaseID: "a"}, {CaseID: "b"}, {CaseID: "c", Undelivered: true}}
+	tests := []struct {
+		name       string
+		perCase    []protocol.CaseScore
+		transcript []transcriptCase
+		complete   bool
+		successful int
+	}{
+		{name: "complete", perCase: base, transcript: completeModelTranscripts(base, true, false, true), complete: true, successful: 1},
+		{name: "missing transcript", perCase: base, transcript: completeModelTranscripts(base[:2], true, false)},
+		{name: "wrong order", perCase: base, transcript: []transcriptCase{{CaseID: "b"}, {CaseID: "a"}, {CaseID: "c"}}},
+		{name: "duplicate case", perCase: []protocol.CaseScore{{CaseID: "a"}, {CaseID: "a"}}, transcript: completeModelTranscripts([]protocol.CaseScore{{CaseID: "a"}, {CaseID: "a"}}, true, true)},
+		{name: "empty case", perCase: []protocol.CaseScore{{CaseID: ""}}, transcript: completeModelTranscripts([]protocol.CaseScore{{CaseID: ""}}, true)},
+		{name: "eligible attribution missing", perCase: base, transcript: []transcriptCase{{CaseID: "a"}, {CaseID: "b"}, {CaseID: "c"}}},
+		{name: "excluded attribution missing", perCase: base, transcript: []transcriptCase{
+			{CaseID: "a", Execution: runner.CaseExecution{ModelAttributionComplete: true}},
+			{CaseID: "b", Execution: runner.CaseExecution{ModelAttributionComplete: true}},
+			{CaseID: "c"},
+		}, complete: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			complete, successful := v9DistinctModelCases(tt.perCase, tt.transcript)
+			if complete != tt.complete || successful != tt.successful {
+				t.Fatalf("got complete=%t successful=%d, want %t/%d", complete, successful, tt.complete, tt.successful)
 			}
 		})
 	}

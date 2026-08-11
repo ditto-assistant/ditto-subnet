@@ -10,9 +10,9 @@ import (
 
 const modelRoutePreflightCaseID = "__dittobench_model_route_preflight__"
 
-// AggregateModelTelemetry is the trusted run-level broker accounting available
-// today. DistinctCaseAttributionComplete deliberately defaults false: aggregate
-// request counts cannot prove how many different cases reached inference.
+// AggregateModelTelemetry combines trusted run-level broker accounting with
+// scorer-observed non-overlapping ordinary-case windows. Aggregate request
+// counts alone still cannot prove how many different cases reached inference.
 type AggregateModelTelemetry struct {
 	ObservedRequests                uint64
 	SuccessfulRequests              uint64
@@ -25,8 +25,8 @@ type AggregateModelTelemetry struct {
 
 // BuildGateEvidence converts trusted ordinary-run observations into the pure
 // scoregates contract. It fails closed if aggregate telemetry itself is
-// incomplete; lack of distinct-case attribution is instead published as
-// insufficient evidence with semantic factor zero in the shadow report.
+// incomplete; lack of distinct-case attribution is published as insufficient
+// evidence and therefore receives a zero factor under the enforce contract.
 func BuildGateEvidence(perCase []protocol.CaseScore, model AggregateModelTelemetry, toolTelemetryComplete bool) (scoregates.Evidence, error) {
 	modelInput := scoregates.ModelUseInput{
 		AdministeredCases: len(perCase),
@@ -70,7 +70,7 @@ func BuildGateEvidence(perCase []protocol.CaseScore, model AggregateModelTelemet
 	if model.DistinctCaseAttributionComplete && model.SuccessfulDistinctCases > modelInput.EligibleCases {
 		return scoregates.Evidence{}, fmt.Errorf("successful distinct inference cases exceed eligible population")
 	}
-	return scoregates.Build(modelInput, toolInput, ContractThresholds(), scoregates.RolloutShadow)
+	return scoregates.Build(modelInput, toolInput, ContractThresholds(), scoregates.RolloutEnforce)
 }
 
 func observedToolCounts(expected, called []string) (expectedN, matched, unexpected int) {

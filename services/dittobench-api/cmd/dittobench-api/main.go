@@ -1572,6 +1572,13 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 	}
 	effectiveCaseConcurrency := activeCaseConcurrency()
+	// The current starter-harness wire has one run-wide inference URL. Until a
+	// future protocol carries a per-case broker capability, the only way to bind
+	// trusted broker successes to distinct cases is a non-overlapping case
+	// window. V8 and earlier retain their existing concurrency exactly.
+	if scope == scorer.ScopeScored && req.BenchVersion == protocol.BenchVersionV9 {
+		effectiveCaseConcurrency = 1
+	}
 	toolRunUserID := ""
 	if harnessProjection != nil {
 		toolRunUserID = harnessProjection.WireUserID(gen.PrimaryUser)
@@ -1601,7 +1608,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	runBounded(ctx, len(toolCases), effectiveCaseConcurrency, func(i int) {
 		c := toolCases[i]
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
-		resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
+		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
 		observed := toolSrv.Observed(c.ID)
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		fixture := toolFixtureByInternalID[c.ID]
@@ -1753,7 +1760,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				uid = wave.UserID
 			}
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
-			resp, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
+			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
 			observedCalls := toolSrv.Observed(mc.ID)
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
@@ -1960,7 +1967,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		log.Printf("run %s: transcript hashing failed: %v", runID, tErr)
 	} else {
 		if requiresV9BaseEvidence(req) {
-			report, tErr = applyV9BaseEvidence(report, req, perCase, tokenUsage, relayExecution, tSHA)
+			report, tErr = applyV9BaseEvidence(report, req, perCase, transcripts, tokenUsage, relayExecution, tSHA)
 			if tErr != nil {
 				s.store.Fail(runID, tErr.Error())
 				return

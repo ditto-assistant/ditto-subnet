@@ -111,6 +111,69 @@ func TestLegacyBrokerSessionsRunConcurrentlyWithIsolatedAccounting(t *testing.T)
 	}
 }
 
+func TestCaseSnapshotExposesOnlySettledSourceBoundCalls(t *testing.T) {
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(arrived)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	runID := uuid.NewString()
+	id, err := broker.prepareLegacy(runID, protocol.BenchVersionV6, upstream.URL, relayHealthSnapshot{
+		Provider: "openrouter", ProfileRevision: llm.OpenRouterRelayProfileRevision,
+		Model: llm.LockedHarnessModel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceIP = "192.0.2.99"
+	if !broker.bindSource(id, runID, sourceIP) {
+		t.Fatal("failed to bind source")
+	}
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		request := httptest.NewRequest(http.MethodPost, "/v1/inference/chat/completions", bytes.NewBufferString(`{"model":"qwen/qwen3-32b"}`))
+		request.RemoteAddr = sourceIP + ":4321"
+		request.SetPathValue("rest", "chat/completions")
+		recorder := httptest.NewRecorder()
+		broker.handle(recorder, request)
+		done <- recorder
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("broker call did not reach upstream")
+	}
+	inFlight, err := broker.caseSnapshot(id)
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	if inFlight.Requests != 1 || inFlight.Successes != 0 || inFlight.InFlight != 1 {
+		close(release)
+		t.Fatalf("in-flight snapshot = %+v", inFlight)
+	}
+	close(release)
+	response := <-done
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d: %s", response.Code, response.Body.String())
+	}
+	settled, err := broker.caseSnapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Requests != 1 || settled.Successes != 1 || settled.InFlight != 0 {
+		t.Fatalf("settled snapshot = %+v", settled)
+	}
+}
+
 func TestLegacyBrokerRetainsBoundedRelayRetries(t *testing.T) {
 	requestCount := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

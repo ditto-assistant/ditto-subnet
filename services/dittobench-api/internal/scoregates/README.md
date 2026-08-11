@@ -28,8 +28,10 @@ gate.
 The package does not collect or infer telemetry. The integration layer must:
 
 1. set distinct successful-inference case counts only when the controlled
-   broker/runner path can prove case attribution; aggregate request totals must
-   leave `CaseAttributionComplete` false;
+   broker/runner path can prove case attribution. The v9 scorer serializes
+   ordinary cases and snapshots the source-bound ticket broker at both edges;
+   any overlapping request makes attribution incomplete. Aggregate request
+   totals alone must leave `CaseAttributionComplete` false;
 2. exclude protocol preflight, ablation, undelivered, and validator-fault cases;
 3. derive tool matches and unexpected executions only from validator-observed
    `tool_endpoint` transcript events; and
@@ -54,9 +56,9 @@ the existing signed fields rather than placing the evidence only in unsigned
 details. Integration should retain the golden digest test when changing this
 schema.
 
-Threshold calibration is an orchestration concern. The current API integration
-uses a source-checksummed, explicitly uncalibrated shadow-collection profile and
-keeps v9 production readiness false. A successor activation change must freeze
-measured honest-agent provenance and calibrated enforce thresholds. Evidence
+The production v9 contract uses one-basis-point enforce thresholds: trusted
+evidence must prove at least one eligible model-backed case and one matched
+authoritative tool execution. This is a binary integrity floor, not a sampled
+quality calibration; efficiency is versioned and ranked separately. Evidence
 binds both profile ID and manifest SHA-256 so arbitrary numeric thresholds
-cannot masquerade as either contract.
+cannot masquerade as the production contract.

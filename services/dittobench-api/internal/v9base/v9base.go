@@ -17,13 +17,14 @@ import (
 
 const (
 	SchemaVersion = 1
-	// ContractRevision identifies the immutable pre-activation shadow profile.
-	// Its one-basis-point thresholds collect honest coverage distributions while
-	// still classifying a healthy zero-use run as a semantic failure. V9 remains
-	// inactive until calibrated enforcement thresholds replace this contract.
-	ContractRevision       = "v9-base-shadow-calibration-v1"
-	ContractManifest       = `{"schema_version":1,"revision":"v9-base-shadow-calibration-v1","bench_version":9,"rollout_mode":"shadow","model_use_coverage_bps":1,"authoritative_tool_coverage_bps":1}`
-	ContractManifestSHA256 = "5adfbae18c2af63f39d5d087414ae4f1484db0b192ea6da205e2cb9166507bd1"
+	// ContractRevision identifies the immutable production v9 semantic gate.
+	// V9 no longer waits on a sampled calibration artifact: the published
+	// one-basis-point contract asks only whether trusted evidence proves any
+	// model and authoritative tool use, while efficiency remains a separately
+	// versioned ranking signal.
+	ContractRevision       = "v9-base-enforce-efficiency-v1"
+	ContractManifest       = `{"schema_version":1,"revision":"v9-base-enforce-efficiency-v1","bench_version":9,"rollout_mode":"enforce","model_use_coverage_bps":1,"authoritative_tool_coverage_bps":1}`
+	ContractManifestSHA256 = "861d161cd031d5c40a4c50f0ae0c3d4a4f99a8513ff7fc87239f22104ebe3bb8"
 	MicrosScale            = int64(1_000_000)
 )
 
@@ -39,7 +40,7 @@ type Inputs struct {
 	Gates            scoregates.Evidence
 }
 
-// ContractThresholds returns the compiled shadow-calibration gate contract.
+// ContractThresholds returns the compiled production gate contract.
 func ContractThresholds() scoregates.Thresholds {
 	return scoregates.Thresholds{
 		Profile: scoregates.ThresholdProfile{
@@ -61,10 +62,7 @@ func VerifyCompiledContract() error {
 	return nil
 }
 
-// ProductionReady remains false until measured honest-v8 provenance freezes
-// calibrated enforce thresholds in a successor contract. Merely being able to
-// generate and verify v9 shadow evidence is not activation readiness.
-func ProductionReady() bool { return false }
+func ProductionReady() bool { return true }
 
 // Build validates the nested score-gate evidence, applies its versioned mode,
 // and returns the typed wire details plus their canonical root digest.
@@ -83,7 +81,7 @@ func Build(input Inputs) (protocol.V9BaseDetails, string, scoregates.Score, erro
 			return protocol.V9BaseDetails{}, "", scoregates.Score{}, invalid("%s is invalid", name)
 		}
 	}
-	if input.Gates.RolloutMode != scoregates.RolloutShadow || input.Gates.ThresholdProfile != ContractThresholds().Profile {
+	if input.Gates.RolloutMode != scoregates.RolloutEnforce || input.Gates.ThresholdProfile != ContractThresholds().Profile {
 		return protocol.V9BaseDetails{}, "", scoregates.Score{}, invalid("score gates do not use the compiled contract")
 	}
 	if input.Gates.ModelUse.ThresholdBPS != ContractThresholds().ModelUseCoverageBPS ||

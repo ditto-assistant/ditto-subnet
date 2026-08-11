@@ -266,11 +266,13 @@ type AttemptTelemetry struct {
 // It is published beside that question in the content-addressed transcript;
 // none of these values come from the harness response.
 type CaseExecution struct {
-	Attempts        []AttemptTelemetry `json:"attempts"`
-	TotalDurationMs int64              `json:"total_duration_ms"`
-	TimedOut        bool               `json:"timed_out,omitempty"`
-	Cancelled       bool               `json:"cancelled,omitempty"`
-	TerminalOutcome string             `json:"terminal_outcome"`
+	Attempts                 []AttemptTelemetry `json:"attempts"`
+	TotalDurationMs          int64              `json:"total_duration_ms"`
+	TimedOut                 bool               `json:"timed_out,omitempty"`
+	Cancelled                bool               `json:"cancelled,omitempty"`
+	TerminalOutcome          string             `json:"terminal_outcome"`
+	ModelInferenceObserved   bool               `json:"model_inference_observed,omitempty"`
+	ModelAttributionComplete bool               `json:"model_attribution_complete,omitempty"`
 }
 
 // RunCase POSTs one tool OR memory case to <harnessURL>/run. For a tool case,
