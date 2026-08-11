@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
@@ -16,6 +17,7 @@ import pytest
 from ditto.api_models.validator import (
     LEGACY_FAILURE_DETAIL_MAX_LENGTH,
     FailJobRequest,
+    V9BaseEvidence,
 )
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
@@ -40,8 +42,13 @@ from ditto.validator.errors import (
     ValidatorInfrastructureError,
     failure_detail,
 )
+from ditto.validator.signing import score_signing_message
 
 _REVISION = "ab" * 20
+_V9_CONTRACT_VECTOR = (
+    Path(__file__).resolve().parents[3]
+    / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+)
 
 
 @pytest.mark.asyncio
@@ -1283,8 +1290,8 @@ async def test_current_poll_rejects_job_or_report_version_mismatch(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [8, 9])
-async def test_current_poll_returns_version_bound_report(bench_version: int) -> None:
+async def test_current_poll_returns_v8_version_bound_report() -> None:
+    bench_version = 8
     payload = _done_job()
     payload["bench_version"] = bench_version
     report = cast(dict[str, object], payload["report"])
@@ -1808,6 +1815,35 @@ def _done_job_with_transcript(declared: str) -> dict[str, object]:
     return job
 
 
+def _done_v9_job(*, declare_transcript: bool = True) -> dict[str, object]:
+    declared = hashlib.sha256(_TRANSCRIPT).hexdigest()
+    vector = json.loads(_V9_CONTRACT_VECTOR.read_text())["vectors"][0]
+    evidence = vector["details"]
+    evidence["run_id"] = "private-run-id"
+    evidence["transcript_sha256"] = declared
+    validated = V9BaseEvidence.model_validate(evidence)
+
+    job = _done_job()
+    job["bench_version"] = 9
+    if declare_transcript:
+        job["transcript_sha256"] = declared
+    report = cast(dict[str, object], job["report"])
+    report.update(
+        {
+            "composite": validated.effective_composite_micros / 1_000_000,
+            "composite_stderr": (validated.effective_stderr_micros / 1_000_000),
+            "base_evidence_sha256": validated.digest_hex(),
+            "details": {
+                "bench_version": 9,
+                "dataset_sha256": validated.dataset_sha256,
+                "transcript_sha256": declared,
+                "v9_base": evidence,
+            },
+        }
+    )
+    return job
+
+
 def _transcript_handler(declared: str, body: bytes) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/transcript"):
@@ -1819,8 +1855,6 @@ def _transcript_handler(declared: str, body: bytes) -> httpx.MockTransport:
 
 @pytest.mark.asyncio
 async def test_poll_fetches_transcript_and_binds_digest() -> None:
-    import hashlib
-
     declared = hashlib.sha256(_TRANSCRIPT).hexdigest()
     async with httpx.AsyncClient(
         transport=_transcript_handler(declared, _TRANSCRIPT)
@@ -1863,3 +1897,106 @@ async def test_poll_without_transcript_keeps_legacy_shape() -> None:
 
     assert report.details == {"bench_version": 8}
     assert client.last_transcript is None
+
+
+@pytest.mark.asyncio
+async def test_v8_transcript_fetch_failure_remains_best_effort() -> None:
+    declared = hashlib.sha256(_TRANSCRIPT).hexdigest()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/transcript"):
+            return httpx.Response(503)
+        return httpx.Response(200, json=_done_job_with_transcript(declared))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        report = await client._poll("private-run-id", expected_bench_version=8)
+
+    assert report.composite == 0.9
+    assert report.bench_version == 8
+    assert client.last_transcript is None
+    assert not (report.details or {}).get("transcript_sha256")
+
+
+@pytest.mark.asyncio
+async def test_v9_poll_validates_evidence_before_returning_signable_report() -> None:
+    declared = hashlib.sha256(_TRANSCRIPT).hexdigest()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/transcript"):
+            return httpx.Response(200, content=_TRANSCRIPT)
+        return httpx.Response(200, json=_done_v9_job())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        report = await client._poll("private-run-id", expected_bench_version=9)
+
+    assert report.bench_version == 9
+    assert report.base_evidence_sha256
+    assert report.details and report.details["transcript_sha256"] == declared
+    assert client.take_transcript("private-run-id") == _TRANSCRIPT
+    message = score_signing_message(
+        validator_hotkey="5Fvalidator",
+        agent_id=UUID("11111111-2222-3333-4444-555555555555"),
+        run_id=report.run_id,
+        composite=report.composite,
+        seed=report.seed,
+        bench_version=report.bench_version,
+        transcript_sha256=report.details["transcript_sha256"],
+        base_evidence_sha256=report.base_evidence_sha256,
+    )
+    assert message.endswith(f":{declared}:{report.base_evidence_sha256}".encode())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["undeclared", "rejected", "mismatch"])
+async def test_v9_poll_rejects_unavailable_transcript_evidence(failure: str) -> None:
+    payload = _done_v9_job(declare_transcript=failure != "undeclared")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/transcript"):
+            if failure == "rejected":
+                return httpx.Response(503)
+            body = b"tampered" if failure == "mismatch" else _TRANSCRIPT
+            return httpx.Response(200, content=body)
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(
+            ValidatorInfrastructureError,
+            match="benchmark v9 transcript evidence unavailable",
+        ):
+            await client._poll("private-run-id", expected_bench_version=9)
+
+    assert client.last_transcript is None
+    assert client.take_transcript("private-run-id") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing", "digest_mismatch"])
+async def test_v9_poll_rejects_invalid_base_evidence(failure: str) -> None:
+    payload = _done_v9_job()
+    report = cast(dict[str, object], payload["report"])
+    details = cast(dict[str, object], report["details"])
+    if failure == "missing":
+        report.pop("base_evidence_sha256")
+        details.pop("v9_base")
+    else:
+        report["base_evidence_sha256"] = "00" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/transcript"):
+            return httpx.Response(200, content=_TRANSCRIPT)
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(
+            ValidatorInfrastructureError,
+            match="benchmark v9 base evidence unavailable",
+        ):
+            await client._poll("private-run-id", expected_bench_version=9)
+
+    assert client.last_transcript is None
+    assert client.take_transcript("private-run-id") is None

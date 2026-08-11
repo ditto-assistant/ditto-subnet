@@ -1189,28 +1189,48 @@ class DittobenchClient:
                     # Offline reproducibility: fetch the run's transcript
                     # artifact and bind its digest into the report details, so
                     # the score signature covers it and the worker can publish
-                    # the bytes. Never gates scoring: a missing or corrupt
-                    # transcript logs and the score submits without one.
+                    # the bytes. V8 keeps its legacy best-effort behavior. V9
+                    # makes the transcript and typed base root part of the
+                    # signed contract, so either must fail closed as validator
+                    # infrastructure rather than escaping later from signing.
                     digest = await self._fetch_transcript(
                         run_id, data.get("transcript_sha256")
                     )
+                    if expected_bench_version == 9 and digest is None:
+                        raise ValidatorInfrastructureError(
+                            "benchmark v9 transcript evidence unavailable"
+                        )
                     if digest is not None and isinstance(rep, dict):
                         details = rep.get("details")
                         if not isinstance(details, dict):
                             details = {}
                         details["transcript_sha256"] = digest
                         rep["details"] = details
+                    if expected_bench_version == 9 and isinstance(rep, dict):
+                        # Stamp before validation. ``model_copy(update=...)``
+                        # deliberately skips validation, which previously let
+                        # a V9 report bypass ScoreReport's typed base-evidence
+                        # invariant and fail only when the worker signed it.
+                        rep["bench_version"] = expected_bench_version
+                        try:
+                            parsed = self._parse_report(data)
+                        except DittobenchError as parse_error:
+                            self.last_transcript = None
+                            self._transcripts.pop(run_id, None)
+                            raise ValidatorInfrastructureError(
+                                "benchmark v9 base evidence unavailable"
+                            ) from parse_error
+                    else:
+                        parsed = self._parse_report(data)
+                        # Preserve the V8 signing-domain stamp without making
+                        # its legacy report shape subject to V9-only evidence.
+                        parsed = parsed.model_copy(
+                            update={"bench_version": expected_bench_version}
+                        )
                     self.last_details = (
-                        rep["details"]
-                        if isinstance(rep, dict)
-                        and isinstance(rep.get("details"), dict)
-                        else {}
+                        parsed.details if isinstance(parsed.details, dict) else {}
                     )
-                    parsed = self._parse_report(data)
-                    # Stamp the actual active contract into the signing domain.
-                    return parsed.model_copy(
-                        update={"bench_version": expected_bench_version}
-                    )
+                    return parsed
                 if status == _FAILED:
                     error = str(data.get("error", "unknown"))
                     agent_failure_code = _agent_attributable_failure_code(data)
@@ -1285,8 +1305,8 @@ class DittobenchClient:
 
         Returns the verified digest, or ``None`` (with ``last_transcript``
         cleared) when the run declared no transcript, the fetch failed, or the
-        bytes do not hash to the declared digest. Never raises: the score does
-        not depend on the artifact.
+        bytes do not hash to the declared digest. This helper never raises;
+        the caller applies the active benchmark's evidence policy.
         """
         self.last_transcript = None
         self._transcripts.pop(run_id, None)
