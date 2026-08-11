@@ -142,3 +142,18 @@ def test_longmemeval_query_preserves_research_scoring_boundary() -> None:
         )
     ]
     assert topic_ids == ["dittobench-scoring", "research-adapters"]
+
+
+def test_submission_triage_skill_requires_public_backroom_and_guarded_writes() -> None:
+    skill = ROOT / ".agents" / "skills" / "backroom-submission-triage"
+    body = (skill / "SKILL.md").read_text()
+    metadata = (skill / "agents" / "openai.yaml").read_text()
+
+    assert "https://backroom.dittobench.ai/mcp" in body
+    assert "https://backroom.dittobench.ai/mcp" in metadata
+    assert 'value: "sn118-backroom"' in metadata
+    assert "backroom.heyditto.ai" not in body + metadata
+    assert "preview_screening_quarantine_batch" in body
+    assert "execute_screening_quarantine_batch" in body
+    assert "confirmed: true" in body
+    assert "Agent-returned tool-call traces are not proof" in body

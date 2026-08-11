@@ -1,0 +1,15 @@
+interface:
+  display_name: "Backroom Submission Triage"
+  short_description: "Review and resolve screening quarantines"
+  default_prompt: "Use $backroom-submission-triage to review the active SN118 quarantine queue and apply audited release or reject decisions."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "sn118-backroom"
+      description: "OAuth-protected SN118 Backroom operator MCP"
+      transport: "streamable_http"
+      url: "https://backroom.dittobench.ai/mcp"
+
+policy:
+  allow_implicit_invocation: true
