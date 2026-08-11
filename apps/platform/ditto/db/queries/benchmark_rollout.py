@@ -664,11 +664,13 @@ async def active_bench_version(session: AsyncSession) -> int:
             session,
             bench_version=open_transition.desired_version,
             agent_ids=priority_ids,
+            require_v9_semantic_pass=open_transition.desired_version == 9,
         )
         ready = await count_ranked_quorum_agents(
             session,
             bench_version=open_transition.desired_version,
             agent_ids=member_ids,
+            require_v9_semantic_pass=open_transition.desired_version == 9,
         )
         # MIN_DESIRED_AUTHORITY_AGENTS stays a constant on purpose. It is the
         # KOTH emission-set size, so it is a consensus quantity, not queue
@@ -1482,6 +1484,7 @@ async def rollout_cohort_complete(
             session,
             bench_version=rollout.desired_version,
             agent_ids=member_ids,
+            require_v9_semantic_pass=rollout.desired_version == 9,
         )
         == cohort_size
     )
@@ -1874,11 +1877,13 @@ async def maybe_activate_rollout(
         session,
         bench_version=rollout.desired_version,
         agent_ids=member_ids,
+        require_v9_semantic_pass=rollout.desired_version == 9,
     )
     ranked_cohort_agents = await count_ranked_quorum_agents(
         session,
         bench_version=rollout.desired_version,
         agent_ids=member_ids,
+        require_v9_semantic_pass=rollout.desired_version == 9,
     )
     if ranked_member_ids != member_ids:
         return False
@@ -2014,6 +2019,7 @@ async def rollout_state(
         session,
         bench_version=rollout.desired_version,
         agent_ids={member.agent_id for member in members},
+        require_v9_semantic_pass=rollout.desired_version == 9,
     )
     cohort_ready_count = sum(
         counts.get(member.agent_id, 0) >= SCORING_QUORUM for member in members

@@ -1147,6 +1147,7 @@ async def ranked_quorum_agent_ids(
     *,
     bench_version: int,
     agent_ids: set[UUID] | None = None,
+    require_v9_semantic_pass: bool = False,
 ) -> set[UUID]:
     """Eligible agent IDs holding a complete, RANKED quorum at ``bench_version``.
 
@@ -1155,9 +1156,23 @@ async def ranked_quorum_agent_ids(
     every frozen member completed a rankable full benchmark even when a legacy
     snapshot contains two members from one family.
     """
+    ranked_score = _is_ranked()
+    if require_v9_semantic_pass:
+        if bench_version != 9:
+            raise ValueError("v9 semantic evidence can only gate Bench v9")
+        # Score ingestion has already verified the signature-bound v9 evidence
+        # root and every derived field. Activation must additionally select a
+        # median row whose frozen semantic gates passed. Without this predicate,
+        # the rollout could promote shadow rows that explicitly report
+        # zero-inference or incomplete case attribution merely because their
+        # ordinary composite is positive.
+        ranked_score = and_(
+            ranked_score,
+            Score.details["v9_base"]["semantic_gate_factor_bps"].as_integer() == 10_000,
+        )
     score_scope = select(
         Score.agent_id.label("agent_id"),
-        _is_ranked().label("eligible"),
+        ranked_score.label("eligible"),
         func.count(Score.agent_id).over(partition_by=Score.agent_id).label("cnt"),
         func.row_number()
         .over(
@@ -1218,6 +1233,7 @@ async def count_ranked_quorum_agents(
     *,
     bench_version: int,
     agent_ids: set[UUID] | None = None,
+    require_v9_semantic_pass: bool = False,
 ) -> int:
     """How many owner families hold a complete, RANKED quorum at ``bench_version``.
 
@@ -1242,7 +1258,10 @@ async def count_ranked_quorum_agents(
     same answer.
     """
     ranked_ids = await ranked_quorum_agent_ids(
-        session, bench_version=bench_version, agent_ids=agent_ids
+        session,
+        bench_version=bench_version,
+        agent_ids=agent_ids,
+        require_v9_semantic_pass=require_v9_semantic_pass,
     )
     if not ranked_ids:
         return 0
@@ -1588,6 +1607,7 @@ async def list_eligible_ledger(
             session,
             bench_version=desired_version,
             agent_ids=priority_ids,
+            require_v9_semantic_pass=desired_version == 9,
         )
         if desired_ready_agents >= MIN_DESIRED_AUTHORITY_AGENTS:
             # Whole-pool flip: drop every row that is not a desired-version

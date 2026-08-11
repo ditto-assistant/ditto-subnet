@@ -654,7 +654,10 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
                     memory_mean=0.8,
                     median_ms=1,
                     n=114,
-                    details={"bench_version": CANARY_BENCH_VERSION},
+                    details={
+                        "bench_version": CANARY_BENCH_VERSION,
+                        "v9_base": {"semantic_gate_factor_bps": 10_000},
+                    },
                     generated_at=now,
                 )
             )
@@ -686,7 +689,10 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
                     memory_mean=0.9,
                     median_ms=1,
                     n=114,
-                    details={"bench_version": CANARY_BENCH_VERSION},
+                    details={
+                        "bench_version": CANARY_BENCH_VERSION,
+                        "v9_base": {"semantic_gate_factor_bps": 10_000},
+                    },
                     generated_at=now,
                 )
             )
@@ -722,7 +728,10 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
                         memory_mean=0.8,
                         median_ms=1,
                         n=114,
-                        details={"bench_version": CANARY_BENCH_VERSION},
+                        details={
+                            "bench_version": CANARY_BENCH_VERSION,
+                            "v9_base": {"semantic_gate_factor_bps": 10_000},
+                        },
                         generated_at=now,
                     )
                 )
@@ -795,7 +804,10 @@ async def test_source_backfill_gate_waits_for_full_inherited_top_ten(
                         memory_mean=0.8,
                         median_ms=1,
                         n=(15 if position == DEFAULT_RESCORE_COHORT_SIZE else 114),
-                        details={"bench_version": CANARY_BENCH_VERSION},
+                        details={
+                            "bench_version": CANARY_BENCH_VERSION,
+                            "v9_base": {"semantic_gate_factor_bps": 10_000},
+                        },
                         generated_at=now,
                     )
                 )
@@ -1100,7 +1112,10 @@ async def test_five_agents_remain_v2_at_two_of_three_then_activate_atomically(
                         memory_mean=0.7,
                         median_ms=1,
                         n=114,
-                        details={"bench_version": CANARY_BENCH_VERSION},
+                        details={
+                            "bench_version": CANARY_BENCH_VERSION,
+                            "v9_base": {"semantic_gate_factor_bps": 10_000},
+                        },
                         generated_at=now,
                     )
                 )
@@ -1147,7 +1162,10 @@ async def test_five_agents_remain_v2_at_two_of_three_then_activate_atomically(
                     memory_mean=0.8,
                     median_ms=1,
                     n=114,
-                    details={"bench_version": CANARY_BENCH_VERSION},
+                    details={
+                        "bench_version": CANARY_BENCH_VERSION,
+                        "v9_base": {"semantic_gate_factor_bps": 10_000},
+                    },
                     generated_at=now,
                 )
             )
@@ -3110,7 +3128,10 @@ async def _seed_desired_quorum_cohort(
                     memory_mean=0.7,
                     median_ms=1,
                     n=50 if smoke else 114,
-                    details={"bench_version": CANARY_BENCH_VERSION},
+                    details={
+                        "bench_version": CANARY_BENCH_VERSION,
+                        "v9_base": {"semantic_gate_factor_bps": 10_000},
+                    },
                     generated_at=now,
                 )
             )
@@ -3290,6 +3311,89 @@ async def test_activation_at_five_ranked_quorums_keeps_a_full_emission_set(
         assert all(row.eligible for row in ledger)
 
 
+@pytest.mark.parametrize(
+    ("failed_order_index", "expected_activation"),
+    [(0, True), (1, False), (2, True)],
+    ids=("lower-row-fails", "median-row-fails", "upper-row-fails"),
+)
+async def test_v9_activation_uses_median_semantic_evidence(
+    session_maker: async_sessionmaker[AsyncSession],
+    failed_order_index: int,
+    expected_activation: bool,
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (agent_ids, rollout)):
+        failed_agent_id = agent_ids[0]
+        failed_rows = sorted(
+            list(
+                await session.scalars(
+                    select(Score).where(
+                        Score.agent_id == failed_agent_id,
+                        Score.bench_version == CANARY_BENCH_VERSION,
+                    )
+                )
+            ),
+            key=lambda score: score.composite,
+        )
+        assert len(failed_rows) == 3
+        failed_score = failed_rows[failed_order_index]
+        failed_score.details = {
+            **failed_score.details,
+            "v9_base": {"semantic_gate_factor_bps": 0},
+        }
+        await session.flush()
+
+        assert (
+            await count_ranked_quorum_agents(
+                session, bench_version=CANARY_BENCH_VERSION
+            )
+            == MIN_DESIRED_AUTHORITY_AGENTS
+        )
+        activated = await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert activated is expected_activation
+        assert rollout.status == ("activated" if expected_activation else "collecting")
+        assert await active_bench_version(session) == (
+            CANARY_BENCH_VERSION if expected_activation else 2
+        )
+
+
+async def test_v9_activation_rejects_missing_semantic_evidence(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (agent_ids, rollout)):
+        median_score = sorted(
+            list(
+                await session.scalars(
+                    select(Score).where(
+                        Score.agent_id == agent_ids[0],
+                        Score.bench_version == CANARY_BENCH_VERSION,
+                    )
+                )
+            ),
+            key=lambda score: score.composite,
+        )[1]
+        median_score.details = {"bench_version": CANARY_BENCH_VERSION}
+        await session.flush()
+
+        assert not await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert await active_bench_version(session) == 2
+
+
 async def test_activation_recovers_legacy_cohort_with_linked_priority_family(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -3339,7 +3443,10 @@ async def test_activation_recovers_legacy_cohort_with_linked_priority_family(
                     memory_mean=0.7,
                     median_ms=1,
                     n=114,
-                    details={"bench_version": CANARY_BENCH_VERSION},
+                    details={
+                        "bench_version": CANARY_BENCH_VERSION,
+                        "v9_base": {"semantic_gate_factor_bps": 10_000},
+                    },
                     generated_at=now,
                 )
             )
