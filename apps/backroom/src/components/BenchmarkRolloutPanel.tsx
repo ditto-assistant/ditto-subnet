@@ -112,6 +112,7 @@ export function BenchmarkRolloutPanel({
       .find((candidate) => candidate.ready) ?? null
   const canStart = !open && selectedContract !== null
   const capacityReady = (selectedContract?.capable_validator_count ?? 0) >= 1
+  const startReady = capacityReady && (selectedContract?.start_ready ?? false)
   const actionVersion =
     reviewing === 'supersede'
       ? state.desired_version
@@ -419,6 +420,20 @@ export function BenchmarkRolloutPanel({
                 </p>
               ) : null}
 
+              {capacityReady && !startReady ? (
+                <div role="status" className="mt-3 text-xs font-medium text-[var(--red)]">
+                  {(selectedContract?.start_blockers ?? []).length > 0 ? (
+                    <ul className="space-y-1">
+                      {selectedContract?.start_blockers.map((blocker) => (
+                        <li key={blocker}>{blocker}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    'Start preflight is unavailable; refresh after Platform deployment.'
+                  )}
+                </div>
+              ) : null}
+
               {readOnly ? (
                 <ReadOnlyNotice />
               ) : reviewing === 'start' ? (
@@ -439,7 +454,7 @@ export function BenchmarkRolloutPanel({
                 <button
                   type="button"
                   onClick={() => setReviewing('start')}
-                  disabled={!capacityReady}
+                  disabled={!startReady}
                   className="mt-4 min-h-11 rounded-lg border border-[var(--amber)]/45 px-4 text-xs font-semibold text-[var(--amber)] transition-colors hover:bg-[var(--amber)]/10 disabled:opacity-40"
                 >
                   Review v{selectedTarget} rollout

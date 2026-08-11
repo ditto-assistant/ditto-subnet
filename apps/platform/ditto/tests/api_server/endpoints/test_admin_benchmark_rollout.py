@@ -23,6 +23,7 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints import admin_benchmark_rollout
 from ditto.api_server.endpoints.admin_benchmark_rollout import (
     MINIMUM_ROLLOUT_START_VALIDATORS,
+    _inference_proxy_start_blocker,
 )
 from ditto.api_server.inference_routing import benchmark_model
 from ditto.api_server.middleware.error_envelope import (
@@ -89,6 +90,23 @@ def instrumented_maker(
 
 _V7_MODEL = benchmark_model(_TARGET)
 _MANIFEST = "c" * 64
+
+
+async def test_post_v7_proxy_preflight_does_not_require_calibration_manifest(
+    app: FastAPI,
+) -> None:
+    config = replace(
+        app.state.config.inference_proxy,
+        enabled=True,
+        openrouter_api_key="test-openrouter-key",
+        reviewed_calibration_manifest_sha256=None,
+    )
+
+    assert _inference_proxy_start_blocker(8, config) is None
+    assert _inference_proxy_start_blocker(9, config) is None
+    assert "reviewed calibration manifest" in str(
+        _inference_proxy_start_blocker(7, config)
+    )
 
 
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
@@ -508,6 +526,11 @@ async def test_control_offers_v9_without_moving_active_v8_authority(
         "minimum_screening_policy_version": 9,
         "requires_screened_image": True,
         "capable_validator_count": 0,
+        "start_ready": False,
+        "start_blockers": [
+            "benchmark v9 rollout requires at least 1 fresh, identity-matched "
+            "v9 scorer validators"
+        ],
     }
 
     async with session_maker() as session:
@@ -642,7 +665,10 @@ async def test_control_degrades_the_slow_section_instead_of_hanging(
     # Fail closed on what could not be proven: no candidate is offered for
     # activation, and the omission is named rather than mistaken for "none".
     assert body["active_contract_candidates"] == []
-    assert body["degraded_sections"] == ["active_contract_candidates"]
+    assert body["degraded_sections"] == [
+        "active_contract_candidates",
+        "start_readiness",
+    ]
 
 
 async def test_control_names_the_database_when_the_core_read_overruns(

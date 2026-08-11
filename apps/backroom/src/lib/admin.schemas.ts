@@ -3874,6 +3874,8 @@ export const benchmarkContractSchema = z.object({
   minimum_screening_policy_version: z.number().int().positive(),
   requires_screened_image: z.boolean(),
   capable_validator_count: z.number().int().nonnegative(),
+  start_ready: z.boolean().default(false),
+  start_blockers: z.array(z.string()).default([]),
 })
 
 export const activeContractCandidateSchema = z.object({

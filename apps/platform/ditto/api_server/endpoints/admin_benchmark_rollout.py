@@ -22,6 +22,7 @@ from ditto.api_server.benchmark_rollout import (
     qualification_candidate,
     refresh_rolling_qualification,
 )
+from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.dependencies import get_dataset_generator, get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -161,66 +162,113 @@ async def _require_rollout_start_capacity(
 ) -> dict[str, object]:
     """Fail closed until one independently verified target scorer is online."""
     state = await rollout_state(session, now=now, capability_version=desired_version)
-    capable = int(state["canary_capable_validator_count"])
+    blocker = await _rollout_start_capacity_blocker(
+        session,
+        now=now,
+        desired_version=desired_version,
+        capable=int(state["canary_capable_validator_count"]),
+        routing_mode=routing_mode,
+        reviewed_manifest_sha256=reviewed_manifest_sha256,
+    )
+    if blocker is not None:
+        raise HTTPException(status_code=409, detail=blocker)
+    return state
+
+
+async def _rollout_start_capacity_blocker(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    desired_version: int,
+    capable: int,
+    routing_mode: str,
+    reviewed_manifest_sha256: str | None,
+) -> str | None:
+    """Return the exact read-only blocker enforced by the rollout POST."""
     if capable < MINIMUM_ROLLOUT_START_VALIDATORS:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"benchmark v{desired_version} rollout requires at least "
-                f"{MINIMUM_ROLLOUT_START_VALIDATORS} fresh, identity-matched "
-                f"v{desired_version} scorer validators"
-            ),
+        return (
+            f"benchmark v{desired_version} rollout requires at least "
+            f"{MINIMUM_ROLLOUT_START_VALIDATORS} fresh, identity-matched "
+            f"v{desired_version} scorer validators"
         )
     if desired_version >= 7:
         model = benchmark_model(desired_version)
-        route_statement = (
-            select(InferenceProviderRoute)
-            .join(
-                InferenceRoutingPolicy,
-                InferenceRoutingPolicy.model == InferenceProviderRoute.model,
+        if desired_version >= 8:
+            route_statement = (
+                select(InferenceProviderRoute)
+                .join(
+                    InferenceRoutingPolicy,
+                    InferenceRoutingPolicy.model == InferenceProviderRoute.model,
+                )
+                .where(
+                    InferenceProviderRoute.model == model,
+                    InferenceProviderRoute.status.in_(("discovered", "healthy")),
+                    (
+                        InferenceProviderRoute.provider == AGGREGATE_PROVIDER
+                        if routing_mode == "aggregate_throughput"
+                        else InferenceRoutingPolicy.enabled.is_(True)
+                    ),
+                    (
+                        InferenceProviderRoute.profile_revision
+                        == aggregate_profile_revision(
+                            model, bench_version=desired_version
+                        )
+                        if routing_mode == "aggregate_throughput"
+                        else InferenceProviderRoute.provider.is_not(None)
+                    ),
+                )
             )
-            .where(
-                InferenceProviderRoute.model == model,
-                (
-                    InferenceRoutingPolicy.enabled.is_(True)
-                    if routing_mode == "adaptive"
-                    else InferenceProviderRoute.provider == AGGREGATE_PROVIDER
-                ),
-                (
-                    InferenceProviderRoute.profile_revision
-                    == aggregate_profile_revision(model, bench_version=desired_version)
-                    if routing_mode == "aggregate_throughput"
-                    else InferenceProviderRoute.provider.is_not(None)
-                ),
-                InferenceProviderRoute.status.in_(("discovered", "healthy")),
-                InferenceProviderRoute.calibration_status == "eligible",
-                InferenceProviderRoute.calibration_tool_accuracy
-                >= InferenceRoutingPolicy.min_tool_accuracy,
-                InferenceProviderRoute.calibration_composite
-                >= InferenceRoutingPolicy.min_composite,
-                (
-                    InferenceProviderRoute.calibration_sample_count
-                    == AGGREGATE_CALIBRATION_SAMPLES
-                    if routing_mode == "aggregate_throughput"
-                    else InferenceProviderRoute.calibration_sample_count
-                    >= InferenceRoutingPolicy.min_calibration_samples
-                ),
-                InferenceProviderRoute.calibration_manifest_sha256.is_not(None),
+        else:
+            route_statement = (
+                select(InferenceProviderRoute)
+                .join(
+                    InferenceRoutingPolicy,
+                    InferenceRoutingPolicy.model == InferenceProviderRoute.model,
+                )
+                .where(
+                    InferenceProviderRoute.model == model,
+                    (
+                        InferenceRoutingPolicy.enabled.is_(True)
+                        if routing_mode == "adaptive"
+                        else InferenceProviderRoute.provider == AGGREGATE_PROVIDER
+                    ),
+                    (
+                        InferenceProviderRoute.profile_revision
+                        == aggregate_profile_revision(
+                            model, bench_version=desired_version
+                        )
+                        if routing_mode == "aggregate_throughput"
+                        else InferenceProviderRoute.provider.is_not(None)
+                    ),
+                    InferenceProviderRoute.status.in_(("discovered", "healthy")),
+                    InferenceProviderRoute.calibration_status == "eligible",
+                    InferenceProviderRoute.calibration_tool_accuracy
+                    >= InferenceRoutingPolicy.min_tool_accuracy,
+                    InferenceProviderRoute.calibration_composite
+                    >= InferenceRoutingPolicy.min_composite,
+                    (
+                        InferenceProviderRoute.calibration_sample_count
+                        == AGGREGATE_CALIBRATION_SAMPLES
+                        if routing_mode == "aggregate_throughput"
+                        else InferenceProviderRoute.calibration_sample_count
+                        >= InferenceRoutingPolicy.min_calibration_samples
+                    ),
+                    InferenceProviderRoute.calibration_manifest_sha256.is_not(None),
+                )
             )
-        )
-        if reviewed_manifest_sha256 is not None:
-            route_statement = route_statement.where(
-                InferenceProviderRoute.calibration_manifest_sha256
-                == reviewed_manifest_sha256
-            )
-        calibrated_routes = list(await session.scalars(route_statement))
-        if not calibrated_routes:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"benchmark v{desired_version} rollout requires at least one "
-                    "healthy reviewed inference calibration"
-                ),
+            if reviewed_manifest_sha256 is not None:
+                route_statement = route_statement.where(
+                    InferenceProviderRoute.calibration_manifest_sha256
+                    == reviewed_manifest_sha256
+                )
+        candidate_routes = list(await session.scalars(route_statement))
+        if not candidate_routes:
+            return (
+                f"benchmark v{desired_version} rollout requires its exact "
+                "inference route"
+                if desired_version >= 8
+                else f"benchmark v{desired_version} rollout requires at least one "
+                "healthy reviewed inference calibration"
             )
         heartbeats = list(await session.scalars(select(ValidatorHeartbeat)))
         route_contracts = {
@@ -229,7 +277,7 @@ async def _require_rollout_start_capacity(
                 row.provider,
                 row.profile_revision,
             )
-            for row in calibrated_routes
+            for row in candidate_routes
             if row.model == model
         }
         matching_identity = False
@@ -244,15 +292,36 @@ async def _require_rollout_start_capacity(
                 matching_identity = True
                 break
         if not matching_identity:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"benchmark v{desired_version} rollout requires a capable "
-                    "validator whose exact route and manifest match an eligible "
-                    "inference calibration"
-                ),
+            return (
+                f"benchmark v{desired_version} rollout requires a fresh compatible "
+                "validator for the selected inference route"
+                if desired_version >= 8
+                else f"benchmark v{desired_version} rollout requires a capable "
+                "validator whose exact route and manifest match an eligible "
+                "inference calibration"
             )
-    return state
+    return None
+
+
+def _inference_proxy_start_blocker(
+    desired_version: int, inference_config: InferenceProxyConfig | None
+) -> str | None:
+    """Return the proxy/config blocker shared by preview and execution."""
+    if desired_version < 7 or inference_config is None:
+        return None
+    if (
+        not inference_config.enabled
+        or inference_config.openrouter_api_key is None
+        or (
+            desired_version < 8
+            and inference_config.reviewed_calibration_manifest_sha256 is None
+        )
+    ):
+        return (
+            f"benchmark v{desired_version} rollout requires the enabled platform "
+            "inference proxy and a deployed reviewed calibration manifest"
+        )
+    return None
 
 
 def _require_confirmation(actual: str, *, action: str, version: int) -> None:
@@ -268,6 +337,7 @@ def _require_confirmation(actual: str, *, action: str, version: int) -> None:
 async def get_rollout_control(
     _: AdminDep,
     session: SessionDep,
+    request: Request,
 ) -> dict[str, object]:
     """Advertise shipped targets and durable state without changing either.
 
@@ -313,16 +383,49 @@ async def get_rollout_control(
     ]
     degraded: list[str] = []
     candidates: list[dict[str, object]] = []
+    start_readiness: dict[int, tuple[bool, list[str]]] = {}
     try:
         async with asyncio.timeout(_remaining(deadline)):
             for version in targets:
                 candidates.append(
                     await authority_selection_state(session, bench_version=version)
                 )
+                blockers: list[str] = []
+                inference_config = (
+                    request.app.state.config.inference_proxy
+                    if request is not None
+                    else None
+                )
+                config_blocker = _inference_proxy_start_blocker(
+                    version, inference_config
+                )
+                if config_blocker is not None:
+                    blockers.append(config_blocker)
+                else:
+                    blocker = await _rollout_start_capacity_blocker(
+                        session,
+                        now=datetime.now(UTC),
+                        desired_version=version,
+                        capable=capability_counts[version],
+                        routing_mode=(
+                            inference_config.routing_mode
+                            if inference_config is not None
+                            else "adaptive"
+                        ),
+                        reviewed_manifest_sha256=(
+                            inference_config.reviewed_calibration_manifest_sha256
+                            if version >= 7 and inference_config is not None
+                            else None
+                        ),
+                    )
+                    if blocker is not None:
+                        blockers.append(blocker)
+                start_readiness[version] = (not blockers, blockers)
     except TimeoutError:
         await session.invalidate()
         candidates = []
-        degraded = ["active_contract_candidates"]
+        start_readiness = {}
+        degraded = ["active_contract_candidates", "start_readiness"]
     return {
         **state,
         "contracts": [
@@ -333,6 +436,8 @@ async def get_rollout_control(
                 ),
                 "requires_screened_image": contract.requires_screened_image,
                 "capable_validator_count": capability_counts[contract.version],
+                "start_ready": start_readiness.get(contract.version, (False, []))[0],
+                "start_blockers": start_readiness.get(contract.version, (False, []))[1],
             }
             for contract in contracts
         ],
@@ -474,7 +579,7 @@ async def select_active_contract(
         await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.commit()
-    return await get_rollout_control(None, session)
+    return await get_rollout_control(None, session, request)
 
 
 @router.post("/{desired_version}")
@@ -562,22 +667,9 @@ async def start_rollout(
     inference_config = (
         request.app.state.config.inference_proxy if request is not None else None
     )
-    if (
-        target >= 7
-        and inference_config is not None
-        and (
-            not inference_config.enabled
-            or inference_config.openrouter_api_key is None
-            or inference_config.reviewed_calibration_manifest_sha256 is None
-        )
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"benchmark v{target} rollout requires the enabled platform "
-                "inference proxy and a deployed reviewed calibration manifest"
-            ),
-        )
+    config_blocker = _inference_proxy_start_blocker(target, inference_config)
+    if config_blocker is not None:
+        raise HTTPException(status_code=409, detail=config_blocker)
     await _require_rollout_start_capacity(
         session,
         now=now,

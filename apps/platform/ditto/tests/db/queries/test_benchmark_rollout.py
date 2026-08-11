@@ -149,7 +149,7 @@ async def test_admin_status_read_does_not_start_rollout(
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
         assert count == 0
 
-        control = await get_rollout_control(None, session)
+        control = await get_rollout_control(None, session, None)  # type: ignore[arg-type]
         # A target must be both above the active version and at or above the
         # floor. Shipping v8 and v9 makes both discoverable as targets but does
         # not create or activate a rollout.
@@ -225,6 +225,7 @@ def _add_ready_inference_route(
     *,
     provider: str = "Groq",
     profile_revision: str = "openrouter-route-test-v1",
+    calibrated: bool = True,
 ) -> None:
     session.add(
         InferenceRoutingPolicy(
@@ -250,14 +251,14 @@ def _add_ready_inference_route(
             provider=provider,
             profile_revision=profile_revision,
             status="healthy",
-            calibration_status="eligible",
-            calibration_tool_accuracy=0.65,
-            calibration_composite=0.20,
-            calibration_sample_count=60,
-            calibration_manifest_sha256="c" * 64,
+            calibration_status="eligible" if calibrated else "shadow",
+            calibration_tool_accuracy=0.65 if calibrated else None,
+            calibration_composite=0.20 if calibrated else None,
+            calibration_sample_count=60 if calibrated else 0,
+            calibration_manifest_sha256="c" * 64 if calibrated else None,
             ewma_error_rate=0,
             ewma_timeout_rate=0,
-            sample_count=60,
+            sample_count=60 if calibrated else 0,
             selected_ticket_count=0,
             exploration_ticket_count=0,
             discovered_at=now,
@@ -2451,12 +2452,14 @@ def _v9_only_capabilities(now: datetime) -> tuple[dict, dict]:
     return capabilities, stack
 
 
-async def test_v9_rollout_uses_v9_route_and_does_not_require_retired_v7_metadata(
+@pytest.mark.parametrize("bench_version", [8, 9])
+async def test_post_v7_rollout_uses_exact_route_without_retired_calibration(
     session_maker: async_sessionmaker[AsyncSession],
+    bench_version: int,
 ) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
-    model = benchmark_model(9)
-    profile_revision = aggregate_profile_revision(model, bench_version=9)
+    model = benchmark_model(bench_version)
+    profile_revision = aggregate_profile_revision(model, bench_version=bench_version)
     capabilities, stack = _v9_only_capabilities(now)
     requirements = InferenceActivationRequirements(
         enabled=True,
@@ -2489,20 +2492,21 @@ async def test_v9_rollout_uses_v9_route_and_does_not_require_retired_v7_metadata
             now,
             provider=AGGREGATE_PROVIDER,
             profile_revision=profile_revision,
+            calibrated=False,
         )
         await session.flush()
 
         guarded = await _require_rollout_start_capacity(
             session,
             now=now,
-            desired_version=9,
+            desired_version=bench_version,
             routing_mode="aggregate_throughput",
             reviewed_manifest_sha256="c" * 64,
         )
         assert guarded["canary_capable_validator_count"] == 1
         assert await inference_activation_ready(
             session,
-            bench_version=9,
+            bench_version=bench_version,
             now=now,
             requirements=requirements,
         )
@@ -2538,9 +2542,7 @@ async def test_v9_rollout_rejects_the_fixed_medium_v8_route(
         )
         await session.flush()
 
-        with pytest.raises(
-            HTTPException, match="healthy reviewed inference calibration"
-        ):
+        with pytest.raises(HTTPException, match="exact inference route"):
             await _require_rollout_start_capacity(
                 session,
                 now=now,
@@ -2628,6 +2630,61 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
 
     assert heartbeat_supports_version(heartbeat, now=now, version=8)
     assert not heartbeat_supports_version(heartbeat, now=now, version=7)
+
+
+@pytest.mark.parametrize(
+    ("software_version", "supports_v9"),
+    [
+        ("0.51.2", False),
+        ("source-build", False),
+        ("0.51.3", True),
+        ("0.52.0", True),
+    ],
+)
+async def test_v9_requires_the_complete_hosted_embedding_scorer_release(
+    software_version: str, supports_v9: bool
+) -> None:
+    """A stale v9 advertisement cannot make a broken embedding lane routable."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    heartbeat = _heartbeat(
+        f"scorer-{software_version}", now, versions=[7, 8, 9], protocol_version=18
+    )
+    capabilities = heartbeat.capabilities
+    stack = heartbeat.stack
+    assert capabilities is not None
+    assert stack is not None
+    capabilities["scorer_benchmarks"]["software_version"] = software_version
+    stack["components"]["dittobench_api"]["version"] = software_version
+
+    # The incident is v9-specific. Do not retire an otherwise valid v8 scorer.
+    assert heartbeat_supports_version(heartbeat, now=now, version=8)
+    assert heartbeat_supports_version(heartbeat, now=now, version=9) is supports_v9
+
+
+async def test_capable_counts_exclude_stale_v9_advertisers(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with session_maker() as session, session.begin():
+        for index, software_version in enumerate(("0.51.2", "source-build", "0.51.3")):
+            heartbeat = _heartbeat(
+                f"v9-floor-{index}", now, versions=[7, 8, 9], protocol_version=18
+            )
+            assert heartbeat.capabilities is not None
+            assert heartbeat.stack is not None
+            heartbeat.capabilities["scorer_benchmarks"]["software_version"] = (
+                software_version
+            )
+            heartbeat.stack["components"]["dittobench_api"]["version"] = (
+                software_version
+            )
+            session.add(heartbeat)
+        await session.flush()
+
+        assert await capable_validator_counts(session, versions=[8, 9], now=now) == {
+            8: 3,
+            9: 1,
+        }
 
 
 async def test_capable_validator_counts_agree_with_the_per_version_state(
@@ -3332,18 +3389,11 @@ async def test_activation_recovers_legacy_cohort_with_linked_priority_family(
             replace(_activation_requirements(), provider_key_configured=False),
             False,
         ),
-        (
-            replace(
-                _activation_requirements(),
-                reviewed_manifest_sha256="d" * 64,
-            ),
-            False,
-        ),
         (_activation_requirements(), True),
     ],
-    ids=("proxy-disabled", "provider-key-removed", "manifest-drift", "stale-route"),
+    ids=("proxy-disabled", "provider-key-removed", "stale-route"),
 )
-async def test_v7_top_five_authority_requires_live_exact_inference_route(
+async def test_post_v7_top_five_authority_requires_live_inference_route(
     session_maker: async_sessionmaker[AsyncSession],
     requirements: InferenceActivationRequirements,
     stale_route: bool,
@@ -3373,6 +3423,43 @@ async def test_v7_top_five_authority_requires_live_exact_inference_route(
         )
         assert rollout.status == "collecting"
         assert await persisted_active_bench_version(session) == 2
+
+
+async def test_activation_persists_and_audits_frozen_member_ineligibility(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (agent_ids, rollout)):
+        agent = await session.get(Agent, agent_ids[0])
+        assert agent is not None
+        agent.status = AgentStatus.QUARANTINED
+
+        assert not await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert rollout.status == "blocked_ineligible"
+        assert rollout.blocked_reason == f"ineligible frozen members: {agent.agent_id}"
+        audit = await session.scalar(
+            select(BenchmarkRolloutAudit).where(
+                BenchmarkRolloutAudit.rollout_id == rollout.rollout_id,
+                BenchmarkRolloutAudit.event == "cohort_blocked",
+            )
+        )
+        assert audit is not None
+
+        agent.status = AgentStatus.SCORED
+        assert await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now + timedelta(seconds=1),
+            inference_requirements=_activation_requirements(),
+        )
+        assert rollout.status == "activated"
 
 
 async def test_rollout_state_active_version_matches_start_guard_authority(

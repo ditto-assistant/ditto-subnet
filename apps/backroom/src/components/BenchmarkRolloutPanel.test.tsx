@@ -27,12 +27,16 @@ const contracts = [
     minimum_screening_policy_version: 9,
     requires_screened_image: true,
     capable_validator_count: 4,
+    start_ready: true,
+    start_blockers: [],
   },
   {
     version: 6,
     minimum_screening_policy_version: 9,
     requires_screened_image: true,
     capable_validator_count: 4,
+    start_ready: true,
+    start_blockers: [],
   },
 ]
 
@@ -106,12 +110,16 @@ const v9Ready: BenchmarkRolloutControl = {
       minimum_screening_policy_version: 9,
       requires_screened_image: true,
       capable_validator_count: 4,
+      start_ready: false,
+      start_blockers: [],
     },
     {
       version: 9,
       minimum_screening_policy_version: 9,
       requires_screened_image: true,
       capable_validator_count: 4,
+      start_ready: true,
+      start_blockers: [],
     },
   ],
   available_target_versions: [9],
@@ -192,6 +200,28 @@ describe('BenchmarkRolloutPanel', () => {
         confirmation: expected,
       },
     })
+  })
+
+  it('blocks v9 review when the exact start preflight is not ready', () => {
+    const blocker = 'benchmark v9 rollout requires at least one healthy reviewed inference calibration'
+    render(
+      <BenchmarkRolloutPanel
+        initialState={{
+          ...v9Ready,
+          contracts: v9Ready.contracts.map((contract) =>
+            contract.version === 9
+              ? { ...contract, start_ready: false, start_blockers: [blocker] }
+              : contract,
+          ),
+        }}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText(blocker)).toBeTruthy()
+    expect(
+      (screen.getByRole('button', { name: 'Review v9 rollout' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
   })
 
   it('activates a qualified v9 contract through the separate authority guard', async () => {

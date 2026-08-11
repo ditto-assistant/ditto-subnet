@@ -99,6 +99,13 @@ DEFAULT_RESCORE_COHORT_SIZE = 10
 # created by an older deployment still finishes without member deletion.
 MAX_PERSISTED_RESCORE_COHORT_SIZE = 25
 SCORING_QUORUM = 3
+# Bench v9's hosted embedding path was not actually executable until the scorer
+# release containing #610. Older scorers advertised v9 from the dataset and
+# grading contract alone, so trusting ``supported_bench_versions`` would route
+# v9 work to a sidecar that rejects every embedding request. This is a semantic
+# capability floor, not the active release version: v8 remains compatible and
+# every later scorer release continues to satisfy it.
+_V9_MINIMUM_SCORER_VERSION = (0, 51, 3)
 # How many agents must hold a COMPLETE, ranked desired-version quorum before
 # the desired version may take over. Two gates enforce it against the same count
 # (``ditto.db.queries.scores.count_ranked_quorum_agents``): the ledger's
@@ -147,7 +154,7 @@ class DatasetPin:
 
 @dataclass(frozen=True)
 class InferenceActivationRequirements:
-    """Live process state required before v7 may become authoritative."""
+    """Live process state required before an inference-backed era activates."""
 
     enabled: bool
     provider_key_configured: bool
@@ -180,17 +187,66 @@ async def inference_activation_ready(
     now: datetime,
     requirements: InferenceActivationRequirements | None,
 ) -> bool:
-    """Require live proxy readiness and an exact, recently proven v7 route."""
+    """Require live proxy readiness and a recent route for the benchmark era."""
     if bench_version < 7:
         return True
     if (
         requirements is None
         or not requirements.enabled
         or not requirements.provider_key_configured
-        or requirements.reviewed_manifest_sha256 is None
     ):
         return False
     cutoff = now - requirements.route_observation_max_age
+    if bench_version >= 8:
+        route_statement = (
+            select(InferenceProviderRoute)
+            .join(
+                InferenceRoutingPolicy,
+                InferenceRoutingPolicy.model == InferenceProviderRoute.model,
+            )
+            .where(
+                InferenceProviderRoute.model == requirements.model,
+                InferenceProviderRoute.status == "healthy",
+                InferenceProviderRoute.last_observed_at.is_not(None),
+                InferenceProviderRoute.last_observed_at >= cutoff,
+            )
+        )
+        if requirements.routing_mode == "aggregate_throughput":
+            if (
+                requirements.aggregate_provider is None
+                or requirements.aggregate_profile_revision is None
+            ):
+                return False
+            route_statement = route_statement.where(
+                InferenceProviderRoute.provider == requirements.aggregate_provider,
+                InferenceProviderRoute.profile_revision
+                == requirements.aggregate_profile_revision,
+            )
+        elif requirements.routing_mode == "adaptive":
+            route_statement = route_statement.where(
+                InferenceRoutingPolicy.enabled.is_(True),
+                InferenceProviderRoute.provider.is_not(None),
+            )
+        else:
+            return False
+        routes = list(await session.scalars(route_statement))
+        routes = [
+            route
+            for route in routes
+            if route.cooldown_until is None or route.cooldown_until <= now
+        ]
+        return bool(routes) and any(
+            heartbeat_matches_inference_contract(
+                heartbeat,
+                now=now,
+                bench_version=bench_version,
+                model=requirements.model,
+                route_contracts=set(),
+            )
+            for heartbeat in list(await session.scalars(select(ValidatorHeartbeat)))
+        )
+    if requirements.reviewed_manifest_sha256 is None:
+        return False
     route_statement = (
         select(InferenceProviderRoute)
         .join(
@@ -1175,10 +1231,16 @@ async def _validate_frozen_members(
             .order_by(BenchmarkRolloutMember.position)
         )
     ).all()
+    permanently_ineligible = {
+        AgentStatus.SCREENING_FAILED,
+        AgentStatus.QUARANTINED,
+        AgentStatus.REJECTED,
+        AgentStatus.BANNED,
+    }
     invalid = [
         str(member.agent_id)
         for member, agent in rows
-        if agent.status not in (AgentStatus.SCORED, AgentStatus.LIVE)
+        if agent.status in permanently_ineligible
     ]
     if len(rows) != rollout.cohort_size or invalid:
         reason = (
@@ -1248,6 +1310,10 @@ def verified_scorer_for_version(
         or version not in scorer.supported_bench_versions
     ):
         return None
+    if version >= 9 and not _scorer_version_at_least(
+        scorer.software_version, minimum=_V9_MINIMUM_SCORER_VERSION
+    ):
+        return None
     if version >= 7 and (
         not capabilities.ticket_inference or not capabilities.signed_score_quorum
     ):
@@ -1279,6 +1345,23 @@ def verified_scorer_for_version(
     return scorer
 
 
+def _scorer_version_at_least(
+    value: str | None, *, minimum: tuple[int, int, int]
+) -> bool:
+    """Compare a stable scorer release without trusting free-form labels.
+
+    Source builds and prerelease labels intentionally fail closed. They may
+    regain v9 eligibility by running a scorer that reports a stable release
+    containing the complete hosted-embedding contract.
+    """
+    if value is None:
+        return False
+    parts = value.split(".")
+    if len(parts) != 3 or any(not part.isdecimal() for part in parts):
+        return False
+    return tuple(int(part) for part in parts) >= minimum
+
+
 def heartbeat_matches_inference_contract(
     heartbeat: ValidatorHeartbeat,
     *,
@@ -1291,10 +1374,10 @@ def heartbeat_matches_inference_contract(
 
     V7 is the only scorer era that advertised provider-route calibration in its
     signed heartbeat. V8 and v9 deliberately removed that retired payload: the
-    Platform owns their reviewed route, while the heartbeat independently binds
+    Platform proves recent route health and identity, while the heartbeat binds
     the exact scorer binary and supported benchmark version. Requiring v7-only
-    metadata from a v9 scorer makes rollout activation impossible rather than
-    safer, so keep the two proofs separate for post-v7 contracts.
+    calibration metadata from later scorers makes rollout activation impossible
+    rather than safer, so keep the two proofs separate for post-v7 contracts.
     """
     if not heartbeat_supports_version(heartbeat, now=now, version=bench_version):
         return False
@@ -1733,6 +1816,9 @@ async def maybe_activate_rollout(
     # A superseded (or already activated) rollout is terminal and must never be
     # revived by a refresh sweep that still holds a stale reference to it.
     if rollout.status not in ("collecting", "blocked_ineligible"):
+        return False
+    if not await _validate_frozen_members(session, rollout, now=now):
+        await session.flush()
         return False
     count_rows = (
         await session.execute(
