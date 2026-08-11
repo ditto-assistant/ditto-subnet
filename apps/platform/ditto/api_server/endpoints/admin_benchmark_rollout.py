@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
+from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +16,6 @@ from ditto.api_models.benchmark_contract import (
     benchmark_contract,
     benchmark_contracts,
 )
-from ditto.api_models.validator_capabilities import ValidatorCapabilities
 from ditto.api_server.benchmark_rollout import (
     expand_rolling_qualification,
     inference_activation_requirements,
@@ -50,7 +48,7 @@ from ditto.db.queries.benchmark_rollout import (
     authority_selection_state,
     capable_validator_counts,
     create_rollout_snapshot,
-    heartbeat_supports_version,
+    heartbeat_matches_inference_contract,
     historical_rescore_cohort,
     rollout_for_desired_version,
     rollout_state,
@@ -170,7 +168,7 @@ async def _require_rollout_start_capacity(
             detail=(
                 f"benchmark v{desired_version} rollout requires at least "
                 f"{MINIMUM_ROLLOUT_START_VALIDATORS} fresh, identity-matched "
-                "v8 scorer validators"
+                f"v{desired_version} scorer validators"
             ),
         )
     if desired_version >= 7:
@@ -225,30 +223,23 @@ async def _require_rollout_start_capacity(
                 ),
             )
         heartbeats = list(await session.scalars(select(ValidatorHeartbeat)))
+        route_contracts = {
+            (
+                str(row.calibration_manifest_sha256),
+                row.provider,
+                row.profile_revision,
+            )
+            for row in calibrated_routes
+            if row.model == model
+        }
         matching_identity = False
         for heartbeat in heartbeats:
-            if not heartbeat_supports_version(
-                heartbeat, now=now, version=desired_version
-            ):
-                continue
-            try:
-                capabilities = ValidatorCapabilities.model_validate_json(
-                    json.dumps(heartbeat.capabilities)
-                )
-            except ValidationError:
-                continue
-            scorer = capabilities.scorer_benchmarks
-            calibration = scorer.v7_calibration if scorer is not None else None
-            if calibration is None:
-                continue
-            supported = {
-                (route.model, route.provider, route.profile_revision)
-                for route in calibration.supported_routes
-            }
-            if any(
-                row.calibration_manifest_sha256 == calibration.manifest_sha256
-                and (row.model, row.provider, row.profile_revision) in supported
-                for row in calibrated_routes
+            if heartbeat_matches_inference_contract(
+                heartbeat,
+                now=now,
+                bench_version=desired_version,
+                model=model,
+                route_contracts=route_contracts,
             ):
                 matching_identity = True
                 break

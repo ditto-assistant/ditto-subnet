@@ -40,6 +40,12 @@ from ditto.api_server.endpoints.admin_quarantine import (
     inspect_benchmark_qualification,
     qualify_benchmark_rollout,
 )
+from ditto.api_server.inference_routing import (
+    AGGREGATE_CALIBRATION_SAMPLES,
+    AGGREGATE_PROVIDER,
+    aggregate_profile_revision,
+    benchmark_model,
+)
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
@@ -73,6 +79,7 @@ from ditto.db.queries.benchmark_rollout import (
     create_rollout_snapshot,
     heartbeat_supports_version,
     historical_rescore_cohort,
+    inference_activation_ready,
     issue_rollout_ticket,
     maybe_activate_rollout,
     open_rollout,
@@ -100,12 +107,12 @@ pytestmark = pytest.mark.asyncio
 _Seeded = TypeVar("_Seeded")
 
 
-async def test_v8_contract_is_a_target_not_an_activation() -> None:
-    contract = benchmark_contract(8)
+async def test_v9_contract_is_a_target_not_an_activation() -> None:
+    contract = benchmark_contract(9)
     assert contract.minimum_screening_policy_version == 9
     assert contract.requires_screened_image is True
     assert latest_benchmark_contract() == contract
-    assert CANARY_BENCH_VERSION == 8
+    assert CANARY_BENCH_VERSION == 9
     assert DEFAULT_BENCH_VERSION == 2
     assert LEGACY_BENCH_VERSION == 2
 
@@ -144,12 +151,12 @@ async def test_admin_status_read_does_not_start_rollout(
 
         control = await get_rollout_control(None, session)
         # A target must be both above the active version and at or above the
-        # floor. Shipping v8 makes it discoverable as a target but does not
-        # create or activate a rollout.
-        assert control["available_target_versions"] == [8]
+        # floor. Shipping v8 and v9 makes both discoverable as targets but does
+        # not create or activate a rollout.
+        assert control["available_target_versions"] == [8, 9]
         contracts = control["contracts"]
         assert isinstance(contracts, list)
-        assert [item["version"] for item in contracts] == [2, 3, 4, 5, 6, 7, 8]
+        assert [item["version"] for item in contracts] == [2, 3, 4, 5, 6, 7, 8, 9]
         assert control["status"] == "inactive"
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
         assert count == 0
@@ -212,7 +219,13 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
     return capabilities, stack
 
 
-def _add_ready_v7_route(session, now: datetime) -> None:
+def _add_ready_inference_route(
+    session,
+    now: datetime,
+    *,
+    provider: str = "Groq",
+    profile_revision: str = "openrouter-route-test-v1",
+) -> None:
     session.add(
         InferenceRoutingPolicy(
             model="openai/gpt-oss-20b",
@@ -234,8 +247,8 @@ def _add_ready_v7_route(session, now: datetime) -> None:
     session.add(
         InferenceProviderRoute(
             model="openai/gpt-oss-20b",
-            provider="Groq",
-            profile_revision="openrouter-route-test-v1",
+            provider=provider,
+            profile_revision=profile_revision,
             status="healthy",
             calibration_status="eligible",
             calibration_tool_accuracy=0.65,
@@ -274,7 +287,7 @@ async def _seed_rollout(session, now: datetime) -> tuple[list[UUID], BenchmarkRo
     await grandfather_active_era(
         session, version=DEFAULT_BENCH_VERSION, now=now - timedelta(days=30)
     )
-    _add_ready_v7_route(session, now)
+    _add_ready_inference_route(session, now)
     agent_ids = [uuid4() for _ in range(5)]
     members = []
     pins = {}
@@ -2238,7 +2251,7 @@ async def test_capable_validator_cannot_automatically_seed_rollout_work(
                 stack=stack,
             )
         )
-        _add_ready_v7_route(session, now)
+        _add_ready_inference_route(session, now)
 
     generator = AsyncMock()
     generator.generate.return_value = "e" * 64
@@ -2379,7 +2392,7 @@ async def test_rollout_start_requires_one_capable_validator_and_matches_telemetr
                     stack=stack,
                 )
             )
-        _add_ready_v7_route(session, now)
+        _add_ready_inference_route(session, now)
         await session.flush()
 
         telemetry = await rollout_state(session, now=now)
@@ -2421,15 +2434,120 @@ async def test_v7_rollout_start_requires_route_and_manifest_intersection(
                 stack=stack,
             )
         )
-        _add_ready_v7_route(session, now)
+        _add_ready_inference_route(session, now)
         await session.flush()
 
         with pytest.raises(HTTPException) as exc_info:
-            await _require_rollout_start_capacity(
-                session, now=now, desired_version=CANARY_BENCH_VERSION
-            )
+            await _require_rollout_start_capacity(session, now=now, desired_version=7)
         assert exc_info.value.status_code == 409
         assert "exact route and manifest match" in str(exc_info.value.detail)
+
+
+def _v9_only_capabilities(now: datetime) -> tuple[dict, dict]:
+    capabilities, stack = _capabilities(now)
+    scorer = capabilities["scorer_benchmarks"]
+    scorer["supported_bench_versions"] = [8, 9]
+    scorer.pop("v7_calibration")
+    return capabilities, stack
+
+
+async def test_v9_rollout_uses_v9_route_and_does_not_require_retired_v7_metadata(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    model = benchmark_model(9)
+    profile_revision = aggregate_profile_revision(model, bench_version=9)
+    capabilities, stack = _v9_only_capabilities(now)
+    requirements = InferenceActivationRequirements(
+        enabled=True,
+        provider_key_configured=True,
+        model=model,
+        routing_mode="aggregate_throughput",
+        reviewed_manifest_sha256="c" * 64,
+        aggregate_provider=AGGREGATE_PROVIDER,
+        aggregate_profile_revision=profile_revision,
+        aggregate_calibration_samples=AGGREGATE_CALIBRATION_SAMPLES,
+    )
+    async with session_maker() as session, session.begin():
+        session.add(
+            ValidatorHeartbeat(
+                validator_hotkey="validator-v9-only",
+                software_version="1.0.0",
+                protocol_version=12,
+                code_digest="d" * 64,
+                state="polling",
+                first_seen_at=now,
+                reported_at=now,
+                seen_at=now,
+                signature="ab" * 64,
+                capabilities=capabilities,
+                stack=stack,
+            )
+        )
+        _add_ready_inference_route(
+            session,
+            now,
+            provider=AGGREGATE_PROVIDER,
+            profile_revision=profile_revision,
+        )
+        await session.flush()
+
+        guarded = await _require_rollout_start_capacity(
+            session,
+            now=now,
+            desired_version=9,
+            routing_mode="aggregate_throughput",
+            reviewed_manifest_sha256="c" * 64,
+        )
+        assert guarded["canary_capable_validator_count"] == 1
+        assert await inference_activation_ready(
+            session,
+            bench_version=9,
+            now=now,
+            requirements=requirements,
+        )
+
+
+async def test_v9_rollout_rejects_the_fixed_medium_v8_route(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    model = benchmark_model(9)
+    capabilities, stack = _v9_only_capabilities(now)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ValidatorHeartbeat(
+                validator_hotkey="validator-v9-wrong-route",
+                software_version="1.0.0",
+                protocol_version=12,
+                code_digest="d" * 64,
+                state="polling",
+                first_seen_at=now,
+                reported_at=now,
+                seen_at=now,
+                signature="ab" * 64,
+                capabilities=capabilities,
+                stack=stack,
+            )
+        )
+        _add_ready_inference_route(
+            session,
+            now,
+            provider=AGGREGATE_PROVIDER,
+            profile_revision=aggregate_profile_revision(model, bench_version=8),
+        )
+        await session.flush()
+
+        with pytest.raises(
+            HTTPException, match="healthy reviewed inference calibration"
+        ):
+            await _require_rollout_start_capacity(
+                session,
+                now=now,
+                desired_version=9,
+                routing_mode="aggregate_throughput",
+                reviewed_manifest_sha256="c" * 64,
+            )
 
 
 def _heartbeat(
@@ -2898,7 +3016,7 @@ async def test_admin_start_route_is_parameterised_by_version(
 
         # An unshipped version fails closed rather than opening a bad rollout.
         with pytest.raises(HTTPException) as exc_info:
-            await get_rollout(None, session, "9")
+            await get_rollout(None, session, "10")
         assert exc_info.value.status_code == 409
         with pytest.raises(HTTPException) as not_found:
             await get_rollout(None, session, "banana")
@@ -3377,7 +3495,7 @@ async def _seed_eligible_v2_era(session, now: datetime, *, count: int) -> None:
             stack=stack,
         )
     )
-    _add_ready_v7_route(session, now)
+    _add_ready_inference_route(session, now)
 
 
 async def _start_for_cohort_size(

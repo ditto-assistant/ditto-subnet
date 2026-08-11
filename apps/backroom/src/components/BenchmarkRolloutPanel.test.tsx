@@ -95,6 +95,44 @@ const recoverable: BenchmarkRolloutControl = {
   ],
 }
 
+const v9Ready: BenchmarkRolloutControl = {
+  ...ready,
+  active_version: 8,
+  desired_version: 8,
+  capability_bench_version: 9,
+  contracts: [
+    {
+      version: 8,
+      minimum_screening_policy_version: 9,
+      requires_screened_image: true,
+      capable_validator_count: 4,
+    },
+    {
+      version: 9,
+      minimum_screening_policy_version: 9,
+      requires_screened_image: true,
+      capable_validator_count: 4,
+    },
+  ],
+  available_target_versions: [9],
+}
+
+const v9Qualified: BenchmarkRolloutControl = {
+  ...v9Ready,
+  desired_version: 9,
+  status: 'superseded',
+  available_target_versions: [9],
+  active_contract_candidates: [
+    {
+      version: 9,
+      ready: true,
+      ranked_quorum_agents: 5,
+      min_ranked_quorum_agents: 5,
+      blocked_reason: null,
+    },
+  ],
+}
+
 describe('BenchmarkRolloutPanel', () => {
   afterEach(cleanup)
 
@@ -116,6 +154,70 @@ describe('BenchmarkRolloutPanel', () => {
     expect(screen.getAllByText('Benchmark v6').length).toBeGreaterThan(0)
     expect(screen.getByText('Start benchmark v5 → v6 rollout')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Review v6 rollout' })).toBeTruthy()
+  })
+
+  it('offers the shipped v9 contract from an active v8 authority', () => {
+    render(<BenchmarkRolloutPanel initialState={v9Ready} readOnly={false} />)
+
+    expect(screen.getByText('Benchmark v8 active')).toBeTruthy()
+    expect(screen.getAllByText('Benchmark v9').length).toBeGreaterThan(0)
+    expect(screen.getByText('Start benchmark v8 → v9 rollout')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Review v9 rollout' })).toBeTruthy()
+  })
+
+  it('starts v9 only after the existing guarded confirmation', async () => {
+    startBenchmarkRollout.mockResolvedValue({
+      ...v9Ready,
+      desired_version: 9,
+      status: 'collecting',
+    })
+    render(<BenchmarkRolloutPanel initialState={v9Ready} readOnly={false} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review v9 rollout' }))
+    fireEvent.change(screen.getByLabelText('Operator reason'), {
+      target: { value: 'v9 scorer, route, and validator capacity verified' },
+    })
+    const expected = benchmarkRolloutConfirmation('START', 9)
+    fireEvent.change(screen.getByLabelText(new RegExp(expected)), {
+      target: { value: expected },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Start rollout' }))
+
+    await waitFor(() => expect(startBenchmarkRollout).toHaveBeenCalledTimes(1))
+    expect(startBenchmarkRollout).toHaveBeenCalledWith({
+      data: {
+        desiredVersion: 9,
+        expectedActiveVersion: 8,
+        reason: 'v9 scorer, route, and validator capacity verified',
+        confirmation: expected,
+      },
+    })
+  })
+
+  it('activates a qualified v9 contract through the separate authority guard', async () => {
+    selectActiveBenchmark.mockResolvedValue({ ...v9Qualified, active_version: 9 })
+    render(<BenchmarkRolloutPanel initialState={v9Qualified} readOnly={false} />)
+
+    expect(screen.getByText('Active contract · v9 ready')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Review activation of v9' }))
+    fireEvent.change(screen.getByLabelText('Operator reason'), {
+      target: { value: 'v9 qualification and confirmation evidence verified' },
+    })
+    const expected = benchmarkRolloutConfirmation('ACTIVATE', 9)
+    fireEvent.change(screen.getByLabelText(new RegExp(expected)), {
+      target: { value: expected },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate contract' }))
+
+    await waitFor(() => expect(selectActiveBenchmark).toHaveBeenCalledTimes(1))
+    expect(selectActiveBenchmark).toHaveBeenCalledWith({
+      data: {
+        desiredVersion: 9,
+        expectedActiveVersion: 8,
+        reason: 'v9 qualification and confirmation evidence verified',
+        confirmation: expected,
+      },
+    })
   })
 
   it('requires reason and the version-specific confirmation before starting', async () => {

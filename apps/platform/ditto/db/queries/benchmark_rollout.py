@@ -245,30 +245,21 @@ async def inference_activation_ready(
     ]
     if not routes:
         return False
-    route_identities = {(route.provider, route.profile_revision) for route in routes}
+    route_contracts = {
+        (
+            str(route.calibration_manifest_sha256),
+            route.provider,
+            route.profile_revision,
+        )
+        for route in routes
+    }
     for heartbeat in list(await session.scalars(select(ValidatorHeartbeat))):
-        if heartbeat.protocol_version < 11 or not heartbeat_supports_version(
-            heartbeat, now=now, version=bench_version
-        ):
-            continue
-        try:
-            capabilities = ValidatorCapabilities.model_validate_json(
-                json.dumps(heartbeat.capabilities)
-            )
-        except ValidationError:
-            continue
-        scorer = capabilities.scorer_benchmarks
-        calibration = scorer.v7_calibration if scorer is not None else None
-        if (
-            calibration is None
-            or not capabilities.ticket_inference
-            or calibration.manifest_sha256 != requirements.reviewed_manifest_sha256
-        ):
-            continue
-        if any(
-            route.model == requirements.model
-            and (route.provider, route.profile_revision) in route_identities
-            for route in calibration.supported_routes
+        if heartbeat_matches_inference_contract(
+            heartbeat,
+            now=now,
+            bench_version=bench_version,
+            model=requirements.model,
+            route_contracts=route_contracts,
         ):
             return True
     return False
@@ -1286,6 +1277,51 @@ def verified_scorer_for_version(
     ):
         return None
     return scorer
+
+
+def heartbeat_matches_inference_contract(
+    heartbeat: ValidatorHeartbeat,
+    *,
+    now: datetime,
+    bench_version: int,
+    model: str,
+    route_contracts: set[tuple[str, str, str]],
+) -> bool:
+    """Bind a capable scorer to the inference evidence its era publishes.
+
+    V7 is the only scorer era that advertised provider-route calibration in its
+    signed heartbeat. V8 and v9 deliberately removed that retired payload: the
+    Platform owns their reviewed route, while the heartbeat independently binds
+    the exact scorer binary and supported benchmark version. Requiring v7-only
+    metadata from a v9 scorer makes rollout activation impossible rather than
+    safer, so keep the two proofs separate for post-v7 contracts.
+    """
+    if not heartbeat_supports_version(heartbeat, now=now, version=bench_version):
+        return False
+    try:
+        capabilities = ValidatorCapabilities.model_validate_json(
+            json.dumps(heartbeat.capabilities)
+        )
+    except ValidationError:
+        return False
+    if bench_version >= 8:
+        return True
+    scorer = capabilities.scorer_benchmarks
+    calibration = scorer.v7_calibration if scorer is not None else None
+    return bool(
+        calibration is not None
+        and capabilities.ticket_inference
+        and any(
+            route.model == model
+            and (
+                calibration.manifest_sha256,
+                route.provider,
+                route.profile_revision,
+            )
+            in route_contracts
+            for route in calibration.supported_routes
+        )
+    )
 
 
 def heartbeat_supports_version(

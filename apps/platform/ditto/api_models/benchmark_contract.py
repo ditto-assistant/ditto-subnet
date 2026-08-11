@@ -41,6 +41,12 @@ _CONTRACTS = {
     # contract. Shipping this entry exposes an operator target; it does not
     # open or activate a rollout.
     8: BenchmarkContract(8, 9, True),
+    # v9 adds confirmation-gated scoring, LongMemEval evidence and an
+    # agent-selected reasoning strategy. It retains the policy-9 screened-image
+    # prerequisites. Publishing the contract only makes v9 discoverable to the
+    # guarded rollout control plane; v8 remains authoritative until an operator
+    # completes the existing rollout and activation workflow.
+    9: BenchmarkContract(9, 9, True),
 }
 
 
