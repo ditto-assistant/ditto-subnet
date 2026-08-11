@@ -1,9 +1,10 @@
 """DB-backed OpenRouter route admission, selection, and telemetry.
 
-The initial aggregate mode admits one reviewed logical OpenRouter route and
-lets OpenRouter select from an operator-ordered healthy provider set for each
-request. Adaptive mode retains exact provider-per-ticket selection behind an
-explicit flag.
+Aggregate mode admits one versioned logical OpenRouter route and lets
+OpenRouter select from an operator-ordered healthy provider set for each
+request. V7 retains its reviewed-calibration gate; v8/v9 use operational route
+health and measured efficiency. Adaptive mode retains exact provider-per-ticket
+selection behind an explicit flag.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 
+from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.db.models import (
     InferenceGrant,
     InferenceProviderRoute,
@@ -107,8 +109,9 @@ def rank_routes(
     speed_weight: float,
     cost_weight: float,
     exploration_weight: float,
+    require_calibration: bool = True,
 ) -> list[RouteScore]:
-    """Rank pre-calibrated routes for speed/cost without trading away quality."""
+    """Rank routes by reliability and efficiency, with legacy quality gating."""
     if not routes:
         return []
     measured_speeds = [
@@ -139,11 +142,16 @@ def rank_routes(
         reliability = max(0.0, 1.0 - (route.ewma_error_rate or 0.0)) * max(
             0.0, 1.0 - (route.ewma_timeout_rate or 0.0)
         )
-        # Only reviewed calibration influences benchmark quality. Raw miner
-        # scores are retained for analysis but are not trusted routing input.
-        quality = min(
-            route.calibration_tool_accuracy or 0.0,
-            route.calibration_composite or 0.0,
+        # V7 multiplies by reviewed calibration quality. V8/V9 intentionally
+        # omit that retired gate and rank only operational reliability,
+        # throughput, and cost. Raw miner scores never influence either path.
+        quality = (
+            min(
+                route.calibration_tool_accuracy or 0.0,
+                route.calibration_composite or 0.0,
+            )
+            if require_calibration
+            else 1.0
         )
         total_samples = sum(item.sample_count for item in routes)
         exploration = math.sqrt(
@@ -182,6 +190,9 @@ async def select_route(
     policy = await session.get(InferenceRoutingPolicy, model)
     if policy is None:
         return None
+    require_calibration = benchmark_contract(
+        bench_version
+    ).requires_inference_route_calibration
     if routing_mode == "aggregate_throughput":
         profile = aggregate_profile_revision(model, bench_version=bench_version)
         route = await session.get(
@@ -193,15 +204,24 @@ async def select_route(
             route is None
             or route.status not in {"discovered", "healthy", "degraded"}
             or (route.cooldown_until is not None and route.cooldown_until > now)
-            or route.calibration_status != "eligible"
-            or route.calibration_manifest_sha256 is None
-            or route.calibration_sample_count != AGGREGATE_CALIBRATION_SAMPLES
-            or (route.calibration_tool_accuracy or 0) < policy.min_tool_accuracy
-            or (route.calibration_composite or 0) < policy.min_composite
-            or (supported_profiles is not None and profile not in supported_profiles)
             or (
-                calibration_manifest_sha256 is not None
-                and route.calibration_manifest_sha256 != calibration_manifest_sha256
+                require_calibration
+                and (
+                    route.calibration_status != "eligible"
+                    or route.calibration_manifest_sha256 is None
+                    or route.calibration_sample_count != AGGREGATE_CALIBRATION_SAMPLES
+                    or (route.calibration_tool_accuracy or 0) < policy.min_tool_accuracy
+                    or (route.calibration_composite or 0) < policy.min_composite
+                    or (
+                        supported_profiles is not None
+                        and profile not in supported_profiles
+                    )
+                    or (
+                        calibration_manifest_sha256 is not None
+                        and route.calibration_manifest_sha256
+                        != calibration_manifest_sha256
+                    )
+                )
             )
         ):
             return None
@@ -211,36 +231,39 @@ async def select_route(
         return route
     if routing_mode != "adaptive" or not policy.enabled:
         return None
-    routes = list(
-        (
-            await session.scalars(
-                select(InferenceProviderRoute)
-                .where(
-                    InferenceProviderRoute.model == model,
-                    InferenceProviderRoute.calibration_status == "eligible",
-                    InferenceProviderRoute.calibration_tool_accuracy
-                    >= policy.min_tool_accuracy,
-                    InferenceProviderRoute.calibration_composite
-                    >= policy.min_composite,
-                    InferenceProviderRoute.calibration_sample_count
-                    >= policy.min_calibration_samples,
-                    InferenceProviderRoute.calibration_manifest_sha256.is_not(None),
-                    InferenceProviderRoute.ewma_error_rate <= policy.max_error_rate,
-                    InferenceProviderRoute.ewma_timeout_rate <= policy.max_timeout_rate,
-                    InferenceProviderRoute.status.in_(("discovered", "healthy")),
-                )
-                .with_for_update()
-            )
-        ).all()
+    route_statement = select(InferenceProviderRoute).where(
+        InferenceProviderRoute.model == model,
+        InferenceProviderRoute.ewma_error_rate <= policy.max_error_rate,
+        InferenceProviderRoute.ewma_timeout_rate <= policy.max_timeout_rate,
+        InferenceProviderRoute.status.in_(("discovered", "healthy")),
     )
+    if require_calibration:
+        route_statement = route_statement.where(
+            InferenceProviderRoute.calibration_status == "eligible",
+            InferenceProviderRoute.calibration_tool_accuracy
+            >= policy.min_tool_accuracy,
+            InferenceProviderRoute.calibration_composite >= policy.min_composite,
+            InferenceProviderRoute.calibration_sample_count
+            >= policy.min_calibration_samples,
+            InferenceProviderRoute.calibration_manifest_sha256.is_not(None),
+        )
+    routes = list((await session.scalars(route_statement.with_for_update())).all())
     routes = [
         route
         for route in routes
         if (route.cooldown_until is None or route.cooldown_until <= now)
-        and (supported_profiles is None or route.profile_revision in supported_profiles)
         and (
-            calibration_manifest_sha256 is None
-            or route.calibration_manifest_sha256 == calibration_manifest_sha256
+            not require_calibration
+            or (
+                (
+                    supported_profiles is None
+                    or route.profile_revision in supported_profiles
+                )
+                and (
+                    calibration_manifest_sha256 is None
+                    or route.calibration_manifest_sha256 == calibration_manifest_sha256
+                )
+            )
         )
     ]
     explorers = sorted(
@@ -265,6 +288,7 @@ async def select_route(
             speed_weight=policy.speed_weight,
             cost_weight=policy.cost_weight,
             exploration_weight=policy.exploration_weight,
+            require_calibration=require_calibration,
         )
         if not ranked:
             return None

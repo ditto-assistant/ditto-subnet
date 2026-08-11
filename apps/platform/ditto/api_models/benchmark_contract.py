@@ -10,43 +10,47 @@ class BenchmarkContract:
     version: int
     minimum_screening_policy_version: int
     requires_screened_image: bool
+    requires_inference_route_calibration: bool = False
 
 
 _CONTRACTS = {
     # v2 predates screened images and must remain source-build compatible for
     # validators which do not update during the rolling v3 activation.
-    2: BenchmarkContract(2, 1, False),
+    2: BenchmarkContract(2, 1, False, False),
     # A v3 dataset is only released after a policy-9 screener has produced an
     # archive whose complete bytes were verified by the platform.
-    3: BenchmarkContract(3, 9, True),
+    3: BenchmarkContract(3, 9, True, False),
     # v4 supersedes v3 without relaxing any prerequisite: same policy-9 screener
     # floor and the same verified-archive requirement.
-    4: BenchmarkContract(4, 9, True),
+    4: BenchmarkContract(4, 9, True, False),
     # v5 adds chat-quality and trusted token-efficiency scoring. Shipping the
     # contract makes it a rollout target but does not activate it; the scorer
     # also withholds v5 capability until every provider baseline is calibrated.
-    5: BenchmarkContract(5, 9, True),
+    5: BenchmarkContract(5, 9, True, False),
     # v6 adds memory-as-data (stored-instruction) plus the multi-query,
     # non-verbatim, and passive-consolidation complexity cases. Same policy-9
     # screener floor and verified-archive requirement as v5; shipping the
     # contract makes it an operator rollout target without activating it.
-    6: BenchmarkContract(6, 9, True),
+    6: BenchmarkContract(6, 9, True, False),
     # v7 changes the consensus inference model to OpenRouter-served GPT-OSS
     # 20B and rotates the generated surface. Capability advertisement remains
-    # separately gated on reviewed provider-specific starter-kit baselines.
-    7: BenchmarkContract(7, 9, True),
+    # separately gated on reviewed provider-specific starter-kit baselines;
+    # this is the sole shipped era whose route contract includes calibration.
+    7: BenchmarkContract(7, 9, True, True),
     # v8 is the urgent difficulty bump on the existing v7 infrastructure. It
     # keeps the policy-9 screener floor and verified archive requirement. The
     # deeper-history redesign is reserved for v9 rather than rushed into this
     # contract. Shipping this entry exposes an operator target; it does not
-    # open or activate a rollout.
-    8: BenchmarkContract(8, 9, True),
+    # open or activate a rollout. Route admission is operational and
+    # efficiency-ranked, not gated on the retired v7 calibration artifact.
+    8: BenchmarkContract(8, 9, True, False),
     # v9 adds confirmation-gated scoring, LongMemEval evidence and an
     # agent-selected reasoning strategy. It retains the policy-9 screened-image
     # prerequisites. Publishing the contract only makes v9 discoverable to the
     # guarded rollout control plane; v8 remains authoritative until an operator
-    # completes the existing rollout and activation workflow.
-    9: BenchmarkContract(9, 9, True),
+    # completes the existing rollout and activation workflow. Like v8, it uses
+    # operational route health and efficiency rather than v7 calibration.
+    9: BenchmarkContract(9, 9, True, False),
 }
 
 

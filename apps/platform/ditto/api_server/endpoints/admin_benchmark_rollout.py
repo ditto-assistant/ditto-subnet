@@ -193,7 +193,10 @@ async def _rollout_start_capacity_blocker(
         )
     if desired_version >= 7:
         model = benchmark_model(desired_version)
-        if desired_version >= 8:
+        requires_route_calibration = benchmark_contract(
+            desired_version
+        ).requires_inference_route_calibration
+        if not requires_route_calibration:
             route_statement = (
                 select(InferenceProviderRoute)
                 .join(
@@ -266,7 +269,7 @@ async def _rollout_start_capacity_blocker(
             return (
                 f"benchmark v{desired_version} rollout requires its exact "
                 "inference route"
-                if desired_version >= 8
+                if not requires_route_calibration
                 else f"benchmark v{desired_version} rollout requires at least one "
                 "healthy reviewed inference calibration"
             )
@@ -295,7 +298,7 @@ async def _rollout_start_capacity_blocker(
             return (
                 f"benchmark v{desired_version} rollout requires a fresh compatible "
                 "validator for the selected inference route"
-                if desired_version >= 8
+                if not requires_route_calibration
                 else f"benchmark v{desired_version} rollout requires a capable "
                 "validator whose exact route and manifest match an eligible "
                 "inference calibration"
@@ -309,17 +312,25 @@ def _inference_proxy_start_blocker(
     """Return the proxy/config blocker shared by preview and execution."""
     if desired_version < 7 or inference_config is None:
         return None
+    requires_route_calibration = benchmark_contract(
+        desired_version
+    ).requires_inference_route_calibration
     if (
         not inference_config.enabled
         or inference_config.openrouter_api_key is None
         or (
-            desired_version < 8
+            requires_route_calibration
             and inference_config.reviewed_calibration_manifest_sha256 is None
         )
     ):
+        suffix = (
+            " and a deployed reviewed calibration manifest"
+            if requires_route_calibration
+            else " and its provider key"
+        )
         return (
             f"benchmark v{desired_version} rollout requires the enabled platform "
-            "inference proxy and a deployed reviewed calibration manifest"
+            f"inference proxy{suffix}"
         )
     return None
 

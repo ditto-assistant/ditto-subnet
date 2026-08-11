@@ -197,7 +197,7 @@ async def inference_activation_ready(
     ):
         return False
     cutoff = now - requirements.route_observation_max_age
-    if bench_version >= 8:
+    if not benchmark_contract(bench_version).requires_inference_route_calibration:
         route_statement = (
             select(InferenceProviderRoute)
             .join(
@@ -1387,7 +1387,7 @@ def heartbeat_matches_inference_contract(
         )
     except ValidationError:
         return False
-    if bench_version >= 8:
+    if not benchmark_contract(bench_version).requires_inference_route_calibration:
         return True
     scorer = capabilities.scorer_benchmarks
     calibration = scorer.v7_calibration if scorer is not None else None

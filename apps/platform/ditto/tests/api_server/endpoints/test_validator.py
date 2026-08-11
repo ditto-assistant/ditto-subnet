@@ -4882,6 +4882,123 @@ class TestRequestJob:
         assert response.json()["bench_version"] == 8
         refresh.assert_not_awaited()
 
+    async def test_v9_rollout_job_mints_grant_without_legacy_calibration(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The operator-ready route must also be usable by the ticket path.
+
+        Rollout start stopped requiring the retired 60-sample provider
+        calibration for v8/v9, but grant creation retained that old gate. The
+        rollout therefore opened successfully while every slot received 503
+        and its lease transaction rolled back. Exercise the production shape:
+        an exact v9 aggregate route with operational discovery state and no
+        calibration evidence must mint a real grant and return the job.
+        """
+        from ditto.api_server.inference_routing import (
+            AGGREGATE_PROVIDER,
+            aggregate_profile_revision,
+            benchmark_model,
+        )
+
+        await _seed_activated_era(session_maker, version=8)
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            dataset_version=9,
+        )
+        now = datetime.now(UTC)
+        rollout_id = uuid4()
+        profile = aggregate_profile_revision(benchmark_model(9), bench_version=9)
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=rollout_id,
+                    from_version=8,
+                    desired_version=9,
+                    status="collecting",
+                    cohort_size=5,
+                    rescore_cohort_target=5,
+                    priority_cohort_target=5,
+                    created_at=now,
+                )
+            )
+            session.add(
+                BenchmarkRolloutMember(
+                    rollout_id=rollout_id,
+                    agent_id=agent_id,
+                    position=1,
+                    frozen_miner_hotkey=_MINER_HOTKEY,
+                    frozen_composite=0.9,
+                )
+            )
+            session.add(
+                InferenceProviderRoute(
+                    model=benchmark_model(9),
+                    provider=AGGREGATE_PROVIDER,
+                    profile_revision=profile,
+                    status="discovered",
+                    calibration_status="shadow",
+                    calibration_manifest_sha256=None,
+                    calibration_tool_accuracy=None,
+                    calibration_composite=None,
+                    calibration_sample_count=0,
+                    ewma_error_rate=0,
+                    ewma_timeout_rate=0,
+                    sample_count=0,
+                    selected_ticket_count=0,
+                    exploration_ticket_count=0,
+                    discovered_at=now,
+                    updated_at=now,
+                )
+            )
+
+        capabilities = _scorer_capable_capabilities(now=now, versions=(9,))
+        scorer = capabilities["scorer_benchmarks"]
+        assert isinstance(scorer, dict)
+        scorer.pop("v7_calibration")
+        await _seed_validator_heartbeat(
+            session_maker,
+            protocol_version=18,
+            capabilities=capabilities,
+            stack=_V7_STACK,
+            benchmark_capacity=_ACCEPTING_CAPACITY,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.config = replace(
+            app.state.config,
+            inference_proxy=replace(
+                app.state.config.inference_proxy,
+                enabled=True,
+                openrouter_api_key="test-only",
+                allowed_models=(benchmark_model(9),),
+                routing_mode="aggregate_throughput",
+            ),
+        )
+
+        response = await client.post(
+            "/api/v1/validator/job",
+            headers=_AUTH_HEADER,
+            json=_job_payload(slot_id=_SLOT_ID),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["agent_id"] == str(agent_id)
+        assert response.json()["bench_version"] == 9
+        assert response.json()["inference"]["profile_revision"] == profile
+        async with session_maker() as session:
+            grant = await session.scalar(
+                select(InferenceGrant).where(
+                    InferenceGrant.agent_id == agent_id,
+                    InferenceGrant.bench_version == 9,
+                )
+            )
+            assert grant is not None
+            assert grant.route_profile == profile
+
     async def test_required_proxy_issues_only_to_v10_ticket_inference_slots(
         self,
         app: FastAPI,

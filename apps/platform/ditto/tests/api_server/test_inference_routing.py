@@ -1,10 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_server.inference_routing import (
     AGGREGATE_PROVIDER,
     ProviderRouteRefresher,
@@ -72,6 +73,14 @@ def test_route_ranking_balances_speed_cost_and_reliability() -> None:
 
     assert ranked[0].route.provider == "fast"
     assert ranked[-1].route.provider == "flaky"
+
+
+def test_route_calibration_contract_is_explicit_and_future_safe() -> None:
+    assert benchmark_contract(7).requires_inference_route_calibration is True
+    assert benchmark_contract(8).requires_inference_route_calibration is False
+    assert benchmark_contract(9).requires_inference_route_calibration is False
+    with pytest.raises(ValueError, match="unsupported benchmark version: 10"):
+        benchmark_contract(10)
 
 
 def test_route_ranking_explores_an_eligible_unmeasured_provider() -> None:
@@ -178,15 +187,37 @@ async def test_aggregate_selection_uses_only_reviewed_logical_route(
         assert selected.provider == AGGREGATE_PROVIDER
         assert selected.selected_ticket_count == 1
 
+    async with maker() as session, session.begin():
+        route = await session.get(
+            InferenceProviderRoute, (model, AGGREGATE_PROVIDER, profile)
+        )
+        assert route is not None
+        route.calibration_sample_count = 0
+        assert (
+            await select_route(
+                session,
+                model=model,
+                now=now,
+                supported_profiles=(profile,),
+                calibration_manifest_sha256="ab" * 32,
+                routing_mode="aggregate_throughput",
+                bench_version=7,
+            )
+            is None
+        )
+
 
 @pytest.mark.asyncio
-async def test_v9_aggregate_selection_requires_variable_reasoning_profile(
+@pytest.mark.parametrize("bench_version", [8, 9])
+async def test_v8_v9_aggregate_selection_ignores_legacy_calibration(
     session_maker: async_sessionmaker[AsyncSession],
+    bench_version: int,
 ) -> None:
     now = datetime.now(UTC)
     model = "openai/gpt-oss-20b"
     v7_profile = aggregate_profile_revision(model, bench_version=7)
     v9_profile = aggregate_profile_revision(model, bench_version=9)
+    target_profile = aggregate_profile_revision(model, bench_version=bench_version)
     assert v7_profile == "openrouter-route-a471cd87ae7df5b9-v1"
     assert v9_profile == "openrouter-route-6a097486af3c178d-v1"
     assert v9_profile != v7_profile
@@ -210,54 +241,117 @@ async def test_v9_aggregate_selection_requires_variable_reasoning_profile(
                 updated_at=now,
             )
         )
-        for profile in (v7_profile, v9_profile):
-            session.add(
-                InferenceProviderRoute(
-                    model=model,
-                    provider=AGGREGATE_PROVIDER,
-                    profile_revision=profile,
-                    status="healthy",
-                    calibration_status="eligible",
-                    calibration_manifest_sha256="ab" * 32,
-                    calibration_tool_accuracy=0.65,
-                    calibration_composite=0.20,
-                    calibration_sample_count=60,
-                    ewma_error_rate=0,
-                    ewma_timeout_rate=0,
-                    sample_count=0,
-                    selected_ticket_count=0,
-                    exploration_ticket_count=0,
-                    discovered_at=now,
-                    updated_at=now,
-                )
+        session.add(
+            InferenceProviderRoute(
+                model=model,
+                provider=AGGREGATE_PROVIDER,
+                profile_revision=target_profile,
+                status="discovered",
+                calibration_status="shadow",
+                calibration_manifest_sha256=None,
+                calibration_tool_accuracy=None,
+                calibration_composite=None,
+                calibration_sample_count=0,
+                ewma_error_rate=0,
+                ewma_timeout_rate=0,
+                sample_count=0,
+                selected_ticket_count=0,
+                exploration_ticket_count=0,
+                discovered_at=now,
+                updated_at=now,
             )
+        )
 
     async with session_maker() as session, session.begin():
         selected = await select_route(
             session,
             model=model,
             now=now,
-            supported_profiles=(v7_profile, v9_profile),
+            # These are retired calibration claims the validator may still
+            # advertise. They must not gate the v8/v9 operational route.
+            supported_profiles=("retired-calibration-profile",),
             calibration_manifest_sha256="ab" * 32,
             routing_mode="aggregate_throughput",
-            bench_version=9,
+            bench_version=bench_version,
         )
         assert selected is not None
-        assert selected.profile_revision == v9_profile
+        assert selected.profile_revision == target_profile
 
     async with session_maker() as session, session.begin():
+        route = await session.get(
+            InferenceProviderRoute, (model, AGGREGATE_PROVIDER, target_profile)
+        )
+        assert route is not None
+        route.cooldown_until = now + timedelta(minutes=1)
         assert (
             await select_route(
                 session,
                 model=model,
                 now=now,
-                supported_profiles=(v7_profile,),
+                supported_profiles=("retired-calibration-profile",),
                 calibration_manifest_sha256="ab" * 32,
                 routing_mode="aggregate_throughput",
-                bench_version=9,
+                bench_version=bench_version,
             )
             is None
         )
+
+
+@pytest.mark.asyncio
+async def test_v9_adaptive_selection_ranks_operational_routes_without_calibration(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    model = "openai/gpt-oss-20b"
+    async with session_maker() as session, session.begin():
+        session.add(
+            InferenceRoutingPolicy(
+                model=model,
+                enabled=True,
+                speed_weight=0.65,
+                cost_weight=0.25,
+                exploration_weight=0.10,
+                exploration_ticket_budget=3,
+                min_tool_accuracy=0.55,
+                min_composite=0.15,
+                min_calibration_samples=60,
+                max_error_rate=0.25,
+                max_timeout_rate=0.15,
+                cooldown_seconds=30,
+                ewma_alpha=0.20,
+                updated_at=now,
+            )
+        )
+        for provider, speed in (("fast", 250.0), ("slow", 50.0)):
+            route = _route(
+                provider,
+                speed=speed,
+                prompt_price=0.00000003,
+                completion_price=0.00000013,
+                samples=100,
+            )
+            route.calibration_status = "shadow"
+            route.calibration_manifest_sha256 = None
+            route.calibration_tool_accuracy = None
+            route.calibration_composite = None
+            route.calibration_sample_count = 0
+            route.exploration_ticket_count = 3
+            route.selected_ticket_count = 0
+            route.updated_at = now
+            session.add(route)
+
+    async with session_maker() as session, session.begin():
+        selected = await select_route(
+            session,
+            model=model,
+            now=now,
+            supported_profiles=("retired-v7-profile",),
+            calibration_manifest_sha256="ab" * 32,
+            routing_mode="adaptive",
+            bench_version=9,
+        )
+        assert selected is not None
+        assert selected.provider == "fast"
 
 
 @pytest.mark.asyncio
