@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-api/internal/v9base"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
+
+const v9CaseAttributionSettleTimeout = 15 * time.Second
 
 func (s *server) runCaseWithModelAttribution(
 	ctx context.Context,
@@ -22,14 +25,20 @@ func (s *server) runCaseWithModelAttribution(
 	if opts.BenchVersion != protocol.BenchVersionV9 || inferenceSessionID == "" {
 		return runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
 	}
-	before, beforeErr := s.broker.caseSnapshot(inferenceSessionID)
+	before, beforeErr := s.settledV9CaseSnapshot(ctx, inferenceSessionID)
 	response, execution, runErr := runner.RunCaseWithTelemetry(
 		ctx, harnessURL, caseID, prompt, tools, opts,
 	)
-	after, afterErr := s.broker.caseSnapshot(inferenceSessionID)
+	after, afterErr := s.settledV9CaseSnapshot(ctx, inferenceSessionID)
 	execution.ModelInferenceObserved, execution.ModelAttributionComplete =
 		v9ModelCaseDelta(before, after, beforeErr, afterErr)
 	return response, execution, runErr
+}
+
+func (s *server) settledV9CaseSnapshot(ctx context.Context, inferenceSessionID string) (brokerCaseSnapshot, error) {
+	settleCtx, cancel := context.WithTimeout(ctx, v9CaseAttributionSettleTimeout)
+	defer cancel()
+	return s.broker.settledCaseSnapshot(settleCtx, inferenceSessionID)
 }
 
 func v9ModelCaseDelta(

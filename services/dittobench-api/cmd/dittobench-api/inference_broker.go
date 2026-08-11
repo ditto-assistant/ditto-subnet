@@ -2606,6 +2606,33 @@ func (b *inferenceBroker) caseSnapshot(id string) (brokerCaseSnapshot, error) {
 	}, nil
 }
 
+// settledCaseSnapshot waits until every chat request already admitted for this
+// source has finished before returning its monotonic counters. A harness may
+// finish its /run response a few milliseconds before the broker handler has
+// copied the final upstream bytes and decremented inFlight. Treating that
+// harmless tail as an overlapping case makes the entire v9 run's distinct-case
+// evidence fail closed even though the trusted request succeeded. The caller
+// supplies a bounded context, so a genuinely stuck/background request remains
+// incomplete rather than being attributed to the next case.
+func (b *inferenceBroker) settledCaseSnapshot(ctx context.Context, id string) (brokerCaseSnapshot, error) {
+	const pollInterval = 5 * time.Millisecond
+	for {
+		snapshot, err := b.caseSnapshot(id)
+		if err != nil || snapshot.InFlight == 0 {
+			return snapshot, err
+		}
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return brokerCaseSnapshot{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 // rewriteRequestModel replaces the caller's `model` with the ticket's, leaving
 // every other field of the request untouched. Decoding into a generic map and
 // re-encoding is deliberate: it normalises exactly one field and cannot smuggle

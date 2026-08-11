@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -108,6 +109,63 @@ func TestLegacyBrokerSessionsRunConcurrentlyWithIsolatedAccounting(t *testing.T)
 		if snapshot.PromptTokens != 3 || snapshot.CompletionTokens != 4 {
 			t.Fatalf("legacy session %d token accounting = %+v", i, snapshot)
 		}
+	}
+}
+
+func TestBrokerSettledCaseSnapshotWaitsForAdmittedRequest(t *testing.T) {
+	broker := newInferenceBroker(1)
+	id := uuid.NewString()
+	broker.mu.Lock()
+	broker.sessions[id] = &brokerSession{inFlight: 1, requests: 7, successes: 6}
+	broker.mu.Unlock()
+
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		broker.mu.RLock()
+		session := broker.sessions[id]
+		broker.mu.RUnlock()
+		session.mu.Lock()
+		session.inFlight--
+		session.successes++
+		session.mu.Unlock()
+		close(released)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	snapshot, err := broker.settledCaseSnapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-released
+	if snapshot != (brokerCaseSnapshot{Requests: 7, Successes: 7}) {
+		t.Fatalf("settled snapshot = %+v", snapshot)
+	}
+}
+
+func TestBrokerSettledCaseSnapshotFailsClosedWhileRequestRemainsInFlight(t *testing.T) {
+	broker := newInferenceBroker(1)
+	id := uuid.NewString()
+	broker.mu.Lock()
+	broker.sessions[id] = &brokerSession{inFlight: 1, requests: 4, successes: 3}
+	broker.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	snapshot, err := broker.settledCaseSnapshot(ctx, id)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want deadline exceeded", err)
+	}
+	if snapshot != (brokerCaseSnapshot{}) {
+		t.Fatalf("timeout exposed unsettled counters: %+v", snapshot)
+	}
+	got, err := broker.caseSnapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != (brokerCaseSnapshot{Requests: 4, Successes: 3, InFlight: 1}) {
+		t.Fatalf("unsettled source mutated: %+v", got)
 	}
 }
 

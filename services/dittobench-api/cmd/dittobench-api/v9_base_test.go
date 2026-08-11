@@ -1,18 +1,86 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-api/internal/v9base"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
+
+func TestRunCaseWithModelAttributionWaitsForBrokerTail(t *testing.T) {
+	broker := newInferenceBroker(1)
+	sessionID := "case-attribution-tail"
+	session := &brokerSession{requests: 10, successes: 10}
+	broker.mu.Lock()
+	broker.sessions[sessionID] = session
+	broker.mu.Unlock()
+
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/run" {
+			http.NotFound(w, r)
+			return
+		}
+		session.mu.Lock()
+		session.requests++
+		session.inFlight++
+		session.mu.Unlock()
+		close(requestStarted)
+		go func() {
+			<-releaseRequest
+			session.mu.Lock()
+			session.successes++
+			session.inFlight--
+			session.mu.Unlock()
+		}()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"final_text":"ok"}`))
+	}))
+	defer harness.Close()
+
+	type outcome struct {
+		execution runner.CaseExecution
+		err       error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		_, execution, err := (&server{broker: broker}).runCaseWithModelAttribution(
+			runner.TrustSandbox(context.Background()), sessionID, harness.URL,
+			"case-1", "question", nil, runner.CaseOptions{BenchVersion: protocol.BenchVersionV9},
+		)
+		result <- outcome{execution: execution, err: err}
+	}()
+	<-requestStarted
+	select {
+	case early := <-result:
+		t.Fatalf("case returned before broker tail settled: %+v", early)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseRequest)
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if !got.execution.ModelAttributionComplete || !got.execution.ModelInferenceObserved {
+			t.Fatalf("model attribution = %+v", got.execution)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("case did not finish after broker request settled")
+	}
+}
 
 const (
 	v9ArtifactSHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
