@@ -346,15 +346,16 @@ class ScreenerWorker:
                     async def remote_build():  # type: ignore[no-untyped-def]
                         if self._config.remote_build_mode != "prefer":
                             return None
-                        # Leave at least twenty minutes of the 45-minute local
-                        # build cap for the GCE fallback when Targon stalls.
+                        # The remote and local caps are separate on purpose.
+                        # A normal 70-minute lease budgets 25 minutes for
+                        # Targon, then up to 45 minutes for local Docker. Do not
+                        # derive this from the local cap: older hosts may carry
+                        # a stale local override, which previously collapsed
+                        # Targon to a one-minute attempt.
                         return await self._platform.build_submission_image(
                             agent_id,
                             attempt_id=attempt_id,
-                            timeout=min(
-                                1500.0,
-                                max(60.0, self._config.build_timeout_seconds - 1200.0),
-                            ),
+                            timeout=self._config.remote_build_timeout_seconds,
                         )
 
                     async def remote_build_consumed(build_id: UUID) -> None:

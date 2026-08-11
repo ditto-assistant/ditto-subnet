@@ -169,6 +169,13 @@ class ScreenerConfig:
     review_settings_max_stale_seconds: int
     remote_build_mode: str = "prefer"
     """``prefer`` tries the attempt-bound Targon Kaniko queue before Docker."""
+    remote_build_timeout_seconds: float = 1500.0
+    """Maximum time to wait for a Targon Kaniko submission build.
+
+    This is intentionally independent of ``build_timeout_seconds``. The latter
+    caps the local Docker fallback, while the 70-minute screening lease budgets
+    both stages: 25 minutes for Targon followed by up to 45 minutes locally.
+    """
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured."""
@@ -369,6 +376,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS", "900"
         ),
         remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "prefer"),
+        remote_build_timeout_seconds=_parse_float(
+            "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"
+        ),
     )
     if not config.signing_source_present():
         raise ScreenerConfigError(
@@ -458,4 +468,8 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         )
     if config.remote_build_mode not in {"off", "prefer"}:
         raise ScreenerConfigError("SCREENER_REMOTE_BUILD_MODE must be off or prefer")
+    if not 300 <= config.remote_build_timeout_seconds <= 2400:
+        raise ScreenerConfigError(
+            "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS must be between 300 and 2400"
+        )
     return config

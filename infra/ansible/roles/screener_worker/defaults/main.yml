@@ -47,6 +47,10 @@ screener_queue_limit: 20
 # build to the remaining lease, so a value above the lease is never used in full,
 # while a value below a legitimate cold dependency build false-fails it as a timeout.
 screener_build_timeout_seconds: 2700
+# Targon Kaniko gets its own 25-minute cap before the local Docker fallback.
+# Keep independent from screener_build_timeout_seconds: the 70-minute Platform
+# lease budgets both stages and stale local overrides must not shorten Targon.
+screener_remote_build_timeout_seconds: 1500
 screener_run_timeout_seconds: 120
 screener_build_memory: 2g
 # The untrusted build runs one-at-a-time and needs enough bounded headroom for

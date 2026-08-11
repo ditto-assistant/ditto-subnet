@@ -309,6 +309,9 @@ SCREENER_BUILD_MEMORY=2g
 # envelope. The built harness keeps the validator-compatible runtime limits.
 SCREENER_IMAGE_BUILD_MEMORY=8g
 SCREENER_REMOTE_BUILD_MODE=prefer
+# A normal 70-minute screening lease budgets 25 minutes for Targon Kaniko and
+# leaves up to 45 minutes for the independent local Docker fallback.
+SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS=1500
 SCREENER_PIDS_LIMIT=512
 SCREENER_DOCKER_HOST=$rootless_host
 DOCKER_HOST=$rootless_host

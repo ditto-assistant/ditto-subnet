@@ -317,6 +317,47 @@ async def test_default_item_screens_full_pipeline(
     assert platform.verdicts[0]["build_only"] is False
 
 
+async def test_remote_build_gets_full_timeout_despite_stale_local_override(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A legacy 20-minute local cap must not reduce Targon to one minute."""
+    agent = uuid4()
+    platform = _FakePlatform([])
+    observed_timeouts: list[float] = []
+
+    async def build_submission_image(  # type: ignore[no-untyped-def]
+        _agent_id,
+        *,
+        attempt_id: UUID,
+        timeout,
+    ):
+        assert attempt_id is not None
+        observed_timeouts.append(timeout)
+        return None
+
+    platform.build_submission_image = build_submission_image  # type: ignore[attr-defined]
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    original_screen = gate.screen
+
+    async def invoke_remote_build(*, remote_build, **kwargs):  # type: ignore[no-untyped-def]
+        await remote_build()
+        return await original_screen(**kwargs)
+
+    gate.screen = invoke_remote_build  # type: ignore[method-assign]
+    worker = _worker(
+        make_config(
+            build_timeout_seconds=1200,
+            remote_build_timeout_seconds=1500,
+        ),
+        platform,
+        gate,
+    )
+
+    await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
+
+    assert observed_timeouts == [1500]
+
+
 async def test_build_only_quarantine_is_rejected_and_posts_no_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

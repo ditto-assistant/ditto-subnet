@@ -25,6 +25,11 @@ submission with an attempt-bound token, but it may not claim or decide screening
 work. GCE still owns static preflight, archive import, health/source/policy
 review, signing, upload, and local-build fallback.
 
+Submission builds give Targon Kaniko a dedicated 25-minute window. That timeout
+is independent of the local Docker cap: the 70-minute screening lease can spend
+up to 25 minutes remotely and still preserve up to 45 minutes for GCE fallback.
+Changing a local build override must never silently shrink the Targon window.
+
 The GCE autoscaler remains as an independent `ONLY_SCALE_OUT` watchdog on the
 group-level backlog metric. It cannot scale in or fight the controller. Its
 floor is zero; normal scale-in is controller-owned and lease-aware.
