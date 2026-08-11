@@ -19,7 +19,6 @@ from ditto.api_server.endpoints.inference import (
     _ALLOWED_REQUEST_FIELDS,
     _DROPPED_REQUEST_FIELDS,
     _FORWARDED_REQUEST_FIELDS,
-    _HOSTED_EMBEDDING_BENCH_VERSIONS,
     _PINNED_REQUEST_FIELDS,
     _REFUSED_REQUEST_FIELDS,
     _bounded_provider_cost,
@@ -42,16 +41,19 @@ from ditto.api_server.endpoints.inference import (
     _public_provider_response,
     _reliability_provider_preferences,
     _upstream_provider,
+    _uses_hosted_embeddings,
     _validate_request_schema,
     _validated_embedding_payload,
 )
 from ditto.api_server.endpoints.validator import _verify_signature
 
 
-def test_hosted_embedding_contract_is_limited_to_supported_live_benches() -> None:
-    assert frozenset({7, 8}) == _HOSTED_EMBEDDING_BENCH_VERSIONS
-    assert 6 not in _HOSTED_EMBEDDING_BENCH_VERSIONS
-    assert 9 not in _HOSTED_EMBEDDING_BENCH_VERSIONS
+def test_hosted_embedding_contract_is_inherited_by_later_benches() -> None:
+    assert not _uses_hosted_embeddings(6)
+    assert _uses_hosted_embeddings(7)
+    assert _uses_hosted_embeddings(8)
+    assert _uses_hosted_embeddings(9)
+    assert _uses_hosted_embeddings(10)
 
 
 @pytest.mark.asyncio

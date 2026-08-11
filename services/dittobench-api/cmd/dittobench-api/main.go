@@ -683,7 +683,7 @@ func validateScreenedImageAccess(req submitRequest, allowScreenedImages bool) st
 }
 
 func validateBenchmarkImageContract(req submitRequest) string {
-	if req.BenchVersion == protocol.BenchVersionV8 && req.ScreenedImageURL == "" {
+	if req.BenchVersion >= protocol.BenchVersionV8 && req.ScreenedImageURL == "" {
 		return fmt.Sprintf(
 			"benchmark version %d requires a screener-built image; source builds are disabled",
 			req.BenchVersion,

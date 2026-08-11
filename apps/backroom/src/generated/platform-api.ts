@@ -1754,7 +1754,7 @@ export interface paths {
         put?: never;
         /**
          * Proxy Embeddings
-         * @description Proxy the one reviewed v7 embedding contract under separate budgets.
+         * @description Proxy the reviewed v7-and-later embedding contract under separate budgets.
          */
         post: operations["proxy_embeddings_api_v1_inference_embeddings_post"];
         delete?: never;

@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"testing"
+
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 func TestValidateScreenedImage(t *testing.T) {
@@ -58,11 +60,16 @@ func TestValidateScreenedImageAccess(t *testing.T) {
 }
 
 func TestValidateBenchmarkImageContract(t *testing.T) {
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: 8, TarballURL: "https://example.com/source.tgz"}); msg == "" {
-		t.Fatal("benchmark v8 allowed an untrusted source build")
+	for _, benchVersion := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9} {
+		if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: benchVersion, TarballURL: "https://example.com/source.tgz"}); msg == "" {
+			t.Fatalf("benchmark v%d allowed an untrusted source build", benchVersion)
+		}
+		if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: benchVersion, ScreenedImageURL: "https://example.com/image.tar"}); msg != "" {
+			t.Fatalf("benchmark v%d screened image rejected: %s", benchVersion, msg)
+		}
 	}
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: 8, ScreenedImageURL: "https://example.com/image.tar"}); msg != "" {
-		t.Fatalf("benchmark v8 screened image rejected: %s", msg)
+	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: protocol.BenchVersionV7, TarballURL: "https://example.com/source.tgz"}); msg != "" {
+		t.Fatalf("benchmark v7 source-build compatibility rejected: %s", msg)
 	}
 }
 

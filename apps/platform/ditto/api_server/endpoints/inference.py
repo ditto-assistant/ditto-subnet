@@ -103,7 +103,7 @@ _PROXY_MAX_AGE = timedelta(seconds=30)
 _EMBEDDING_MAX_INPUTS = 256
 _PPLX_EMBED_CONTRACT_MODEL = "perplexity/pplx-embed-v1-0.6b"
 _PPLX_EMBED_RESPONSE_MODEL = "pplx-embed-v1-0.6b"
-_HOSTED_EMBEDDING_BENCH_VERSIONS = frozenset({7, 8})
+_MIN_HOSTED_EMBEDDING_BENCH_VERSION = 7
 _PROVIDER_MAX_ATTEMPTS = 3
 _PROVIDER_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
@@ -134,6 +134,19 @@ _ESTIMATED_BYTES_PER_TOKEN = 4
 def _estimated_tokens(body: bytes) -> int:
     """A realistic token estimate for a request body, floored at 1."""
     return max(1, -(-len(body) // _ESTIMATED_BYTES_PER_TOKEN))
+
+
+def _uses_hosted_embeddings(bench_version: int) -> bool:
+    """Whether a benchmark contract uses the ticket-scoped embedding lane.
+
+    Hosted embeddings are an era boundary, not an enumerated allowlist. V7
+    introduced the Platform-owned contract and every later benchmark inherits
+    it unless a future version explicitly defines another lane. Keeping this
+    as a lower-bound predicate prevents a newly supported scorer version from
+    being admitted at the broker but rejected here by a stale version set.
+    """
+
+    return bench_version >= _MIN_HOSTED_EMBEDDING_BENCH_VERSION
 
 
 def _max_chargeable_tokens(body: bytes, *, output_tokens: int = 0) -> int:
@@ -1744,7 +1757,7 @@ async def proxy_embeddings(
     x_ditto_proof: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """Proxy the one reviewed v7 embedding contract under separate budgets."""
+    """Proxy the reviewed v7-and-later embedding contract under separate budgets."""
     config = request.app.state.config.inference_proxy
     if not config.enabled or config.openrouter_api_key is None:
         raise HTTPException(status_code=404, detail="inference proxy is disabled")
@@ -1792,7 +1805,7 @@ async def proxy_embeddings(
         grant = await session.get(InferenceGrant, x_ditto_grant)
         if (
             grant is None
-            or grant.bench_version not in _HOSTED_EMBEDDING_BENCH_VERSIONS
+            or not _uses_hosted_embeddings(grant.bench_version)
             or grant.broker_public_key is None
             or grant.generation != x_ditto_generation
             or grant.embedding_model != config.embedding_model

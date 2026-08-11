@@ -39,7 +39,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.config import InferenceProxyConfig
-from ditto.api_server.endpoints.inference import _proxy_message, proxy_chat_completions
+from ditto.api_server.endpoints.inference import (
+    _proxy_message,
+    proxy_chat_completions,
+    proxy_embeddings,
+)
 from ditto.api_server.inference_routing import (
     AGGREGATE_CALIBRATION_SAMPLES,
     AGGREGATE_PROVIDER,
@@ -501,6 +505,98 @@ async def test_v9_reasoning_strategy_reaches_provider_and_invalid_aliases_spend_
         assert grant.request_count == 3
         assert grant.prompt_tokens == 30
         assert grant.completion_tokens == 15
+
+
+@pytest.mark.parametrize("bench_version", [7, 8, 9])
+@pytest.mark.asyncio
+async def test_versioned_hosted_embedding_reaches_provider_and_is_charged(
+    session_maker: async_sessionmaker[Any], bench_version: int
+) -> None:
+    """Every Platform-embedding benchmark crosses the authenticated boundary."""
+    config = _config()
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    grant_id, bearer, generation = await _seed_grant(
+        session_maker,
+        config=config,
+        public_key=base64.urlsafe_b64encode(public).decode().rstrip("="),
+        bench_version=bench_version,
+    )
+    seen: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "pplx-embed-v1-0.6b",
+                "data": [
+                    {
+                        "object": "embedding",
+                        "index": 0,
+                        "embedding": [0.0] * config.embedding_dimensions,
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = _App(_State(config=config, session_maker=session_maker, client=client))
+    body = json.dumps(
+        {
+            "model": config.embedding_model,
+            "input": ["versioned embedding"],
+            "dimensions": config.embedding_dimensions,
+            "encoding_format": "float",
+        }
+    ).encode()
+
+    try:
+        response = await proxy_embeddings(
+            **_signed_request(
+                app=app,
+                grant_id=grant_id,
+                bearer=bearer,
+                generation=generation,
+                private=private,
+                body=body,
+            )
+        )
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 200
+    assert seen == [
+        {
+            "model": config.embedding_model,
+            "input": ["versioned embedding"],
+            "dimensions": config.embedding_dimensions,
+            "encoding_format": "float",
+            "provider": {
+                "order": [config.embedding_provider],
+                "allow_fallbacks": False,
+                "data_collection": "deny",
+            },
+        }
+    ]
+    async with session_maker() as session:
+        request = (
+            await session.scalars(
+                select(InferenceRequest).where(InferenceRequest.grant_id == grant_id)
+            )
+        ).one()
+        assert request.status == "completed"
+        assert request.request_kind == "embedding"
+        assert request.prompt_tokens == 3
+        grant = await session.get(InferenceGrant, grant_id)
+        assert grant is not None
+        assert grant.embedding_request_count == 1
+        assert grant.embedding_tokens == 3
 
 
 @pytest.mark.asyncio
