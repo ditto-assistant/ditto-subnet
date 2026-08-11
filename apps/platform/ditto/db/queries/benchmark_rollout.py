@@ -99,16 +99,14 @@ DEFAULT_RESCORE_COHORT_SIZE = 10
 # created by an older deployment still finishes without member deletion.
 MAX_PERSISTED_RESCORE_COHORT_SIZE = 25
 SCORING_QUORUM = 3
-# Bench v9's authoritative score contract first ships in v0.51.9. The preceding
-# Platform-only guard consumes v0.51.8 without changing the scorer, so accepting
-# that global version would let a source build keep advertising the shadow
-# implementation. Older scorers
-# either rejected the hosted embedding lane or emitted the non-authoritative
-# shadow contract, so trusting ``supported_bench_versions`` would spend a v9
-# attempt on evidence that cannot activate v9. This is a semantic capability
-# floor, not the active release version: v8 remains compatible and every later
-# scorer release continues to satisfy it.
-_V9_MINIMUM_SCORER_VERSION = (0, 51, 9)
+# Bench v9 requires the complete report/evidence boundary shipped in v0.53.1.
+# Older releases can advertise and execute v9, but reject a valid zero-gate
+# report after Go omits ``composite_stderr: 0`` under ``omitempty``. Leasing new
+# v9 work to one of those scorers can therefore reopen a finished ticket instead
+# of finalizing its zero score. This is a semantic capability floor, not the
+# active release version: v8 remains compatible and every later scorer release
+# continues to satisfy it.
+_V9_MINIMUM_SCORER_VERSION = (0, 53, 1)
 # How many agents must hold a COMPLETE, ranked desired-version quorum before
 # the desired version may take over. Two gates enforce it against the same count
 # (``ditto.db.queries.scores.count_ranked_quorum_agents``): the ledger's
