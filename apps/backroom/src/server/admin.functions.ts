@@ -52,6 +52,8 @@ import {
   confirmationBundleListInputSchema,
   confirmationBundleDetailInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
+  batchRetryValidationInputSchema,
+  listStuckSubmissionsInputSchema,
 } from '../lib/admin.schemas'
 import {
   startBenchmarkRollout as startBenchmarkRolloutService,
@@ -122,8 +124,28 @@ import {
   fetchConfirmationBundles,
   fetchConfirmationBundle,
   authorizeConfirmationBundleRetest as authorizeConfirmationBundleRetestService,
+  batchRetryValidation as batchRetryValidationService,
+  fetchStuckSubmissions,
 } from './admin.service'
 import { authMiddleware, sameOriginMiddleware, writeAuthMiddleware } from './auth.functions'
+
+export const listStuckSubmissions = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(listStuckSubmissionsInputSchema)
+  .handler(({ data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchStuckSubmissions(data)
+  })
+
+export const batchRetryStuckSubmissions = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(batchRetryValidationInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return batchRetryValidationService(data, context.session.email)
+  })
 
 export const getConfirmationBundleSettings = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])

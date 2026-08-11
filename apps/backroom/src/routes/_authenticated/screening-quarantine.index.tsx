@@ -10,22 +10,25 @@ import {
 } from '../../components/ScreeningRouteFrame'
 import { ValidatorAssignmentPanel } from '../../components/ValidatorAssignmentPanel'
 import { ValidatorRetryPanel } from '../../components/ValidatorRetryPanel'
+import { StuckSubmissionFleetPanel } from '../../components/StuckSubmissionFleetPanel'
 import {
   listScreeningDisputes,
   listScreeningQuarantines,
   listScreeningSubmissions,
   listValidatorAssignments,
+  listStuckSubmissions,
 } from '../../server/admin.functions'
 
 export const Route = createFileRoute('/_authenticated/screening-quarantine/')({
   loader: async () => {
-    const [assignments, quarantines, disputes, submissions] = await Promise.all([
+    const [assignments, quarantines, disputes, submissions, stuck] = await Promise.all([
       listValidatorAssignments(),
       listScreeningQuarantines({ data: { status: 'active', sort: 'oldest' } }),
       listScreeningDisputes({ data: { status: 'pending', limit: 1, offset: 0 } }),
       listScreeningSubmissions({ data: { limit: 1, offset: 0 } }),
+      listStuckSubmissions({ data: { state: ['exhausted'], detail: 'summary' } }),
     ])
-    return { assignments, quarantines, disputes, submissions }
+    return { assignments, quarantines, disputes, submissions, stuck }
   },
   pendingComponent: ScreeningPending,
   errorComponent: ScreeningError,
@@ -33,7 +36,7 @@ export const Route = createFileRoute('/_authenticated/screening-quarantine/')({
 })
 
 function ScreeningQueuePage() {
-  const { assignments, quarantines, disputes, submissions } = Route.useLoaderData()
+  const { assignments, quarantines, disputes, submissions, stuck } = Route.useLoaderData()
   const { user } = Route.useRouteContext()
 
   return (
@@ -43,6 +46,7 @@ function ScreeningQueuePage() {
         readOnly={user.accessLevel === 'read'}
       />
       <ValidatorRetryPanel readOnly={user.accessLevel === 'read'} />
+      <StuckSubmissionFleetPanel initial={stuck} readOnly={user.accessLevel === 'read'} />
       <BenchmarkContractRefreshPanel readOnly={user.accessLevel === 'read'} />
       <ScreenedImageRebuildPanel readOnly={user.accessLevel === 'read'} />
       <BenchmarkContractMigrationPanel readOnly={user.accessLevel === 'read'} />
