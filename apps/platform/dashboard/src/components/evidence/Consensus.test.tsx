@@ -300,7 +300,7 @@ describe("Consensus · per-row absences", () => {
     const evidence = scope.querySelector<HTMLElement>(".v9-gate-evidence");
     expect(evidence).toBeTruthy();
     expect(evidence?.textContent).toContain("Trusted Bench 9 score gates");
-    expect(evidence?.textContent).toContain("Shadow");
+    expect(evidence?.textContent).toContain("Enforced");
     expect(evidence?.textContent).toContain("Coverage 66.7% · threshold 0.01%");
     expect(evidence?.textContent).toContain("2 of 3 eligible cases");
     expect(evidence?.textContent).toContain("4 of 5 relay requests succeeded");
