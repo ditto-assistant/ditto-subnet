@@ -1527,7 +1527,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	if handle != nil {
 		toolSourceIP = handle.SourceIP
 	}
-	toolEndpoint, stopToolSrv, err := s.startToolServer(toolSrv, toolSourceIP)
+	toolEndpoint, stopToolSrv, err := s.startToolServer(toolSrv, toolSourceIP, req.BenchVersion)
 	if err != nil {
 		s.store.FailWith(runID, "tool endpoint start failed: "+err.Error(), toolEndpointInfrastructureFailure())
 		return
@@ -2174,9 +2174,23 @@ func (e observedToolEndpoint) forCase(caseID, userID string) string {
 	return e.brokerRoute.endpoint(e.baseURL, caseID, userID)
 }
 
-func (s *server) startToolServer(h http.Handler, sandboxSourceIP string) (endpoint observedToolEndpoint, stop func(), err error) {
+// Bench v8 and earlier keep the frozen source-IP-bound broker wire contract:
+// one bare endpoint for the whole run, with no case capability in the URL or
+// request body. Bench v9 adds the case/user capability that safely authorizes
+// Docker Desktop's source-NAT fallback for local scoring.
+func (s *server) startToolServer(
+	h http.Handler,
+	sandboxSourceIP string,
+	benchVersion int,
+) (endpoint observedToolEndpoint, stop func(), err error) {
 	if sandboxSourceIP != "" {
-		route, unregister, registerErr := s.broker.registerTool(h, sandboxSourceIP, s.allowPrivate)
+		requireCaseCapability := benchVersion >= protocol.BenchVersionV9
+		route, unregister, registerErr := s.broker.registerTool(
+			h,
+			sandboxSourceIP,
+			s.allowPrivate,
+			requireCaseCapability,
+		)
 		if registerErr != nil {
 			return observedToolEndpoint{}, func() {}, registerErr
 		}

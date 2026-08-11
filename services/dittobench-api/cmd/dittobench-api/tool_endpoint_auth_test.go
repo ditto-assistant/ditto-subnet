@@ -89,7 +89,7 @@ func TestLocalSandboxToolEndpointSurvivesDockerDesktopNAT(t *testing.T) {
 	}
 	toolServer.Register(toolCase.ID, toolexec.BuildFixture(42, toolCase))
 	server := &server{broker: broker, allowPrivate: true}
-	endpoint, stopTool, err := server.startToolServer(toolServer, "172.30.0.2")
+	endpoint, stopTool, err := server.startToolServer(toolServer, "172.30.0.2", protocol.BenchVersionV9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +106,58 @@ func TestLocalSandboxToolEndpointSurvivesDockerDesktopNAT(t *testing.T) {
 	observed := toolServer.Observed(toolCase.ID)
 	if len(observed) != 1 || observed[0].Name != "search_web" {
 		t.Fatalf("observed=%+v", observed)
+	}
+}
+
+func TestV8SandboxToolEndpointPreservesFrozenBareRoute(t *testing.T) {
+	broker := newInferenceBroker(1)
+	port, stopBroker := serveTestBroker(t, broker)
+	defer stopBroker()
+	t.Setenv("DITTOBENCH_BROKER_PORT", strconv.Itoa(port))
+
+	toolServer := toolexec.NewServer()
+	toolCase := protocol.ToolCase{
+		ID:            "v8-wire-case",
+		Category:      "web_search",
+		ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}},
+		MaxToolCalls:  1,
+	}
+	toolServer.Register(toolCase.ID, toolexec.BuildFixture(8, toolCase))
+	server := &server{broker: broker, allowPrivate: true}
+	endpoint, stopTool, err := server.startToolServer(
+		toolServer,
+		"127.0.0.1",
+		protocol.BenchVersionV8,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopTool()
+
+	caseEndpoint := endpoint.forCase(toolCase.ID, "new-v9-user-field")
+	if caseEndpoint != endpoint.baseURL {
+		t.Fatalf("v8 endpoint changed from frozen bare route: got %q want %q", caseEndpoint, endpoint.baseURL)
+	}
+	if other := endpoint.forCase("other-case", "other-user"); other != caseEndpoint {
+		t.Fatalf("v8 endpoint became case-specific: first=%q other=%q", caseEndpoint, other)
+	}
+	parsed, err := url.Parse(caseEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.RawQuery != "" {
+		t.Fatalf("v8 endpoint unexpectedly requires query capability: %q", parsed.RawQuery)
+	}
+
+	// A frozen v8 harness may populate its own user identity rather than echo a
+	// new scorer-side value. It remains authorized by the inspected container
+	// source and reaches the old handler without case/user coupling.
+	status, result := postToolRequest(t, localToolURL(t, caseEndpoint), toolCase.ID, "legacy-default-user")
+	if status != http.StatusOK || result.Result == "" || result.Error != "" {
+		t.Fatalf("frozen v8 tool status=%d result=%+v", status, result)
+	}
+	if observed := toolServer.Observed(toolCase.ID); len(observed) != 1 || observed[0].Name != "search_web" {
+		t.Fatalf("frozen v8 observation=%+v", observed)
 	}
 }
 
@@ -133,7 +185,7 @@ func TestDockerDesktopNATToolObservationSmoke(t *testing.T) {
 	})
 	server := &server{broker: broker, allowPrivate: true}
 	const inspectedContainerIP = "172.30.0.2"
-	endpoint, stopTool, err := server.startToolServer(handler, inspectedContainerIP)
+	endpoint, stopTool, err := server.startToolServer(handler, inspectedContainerIP, protocol.BenchVersionV9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +247,7 @@ func TestProductionToolEndpointDoesNotTreatCapabilityAsSourceBypass(t *testing.T
 	toolCase := protocol.ToolCase{ID: "case-a", ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}}}
 	toolServer.Register(toolCase.ID, toolexec.BuildFixture(1, toolCase))
 	server := &server{broker: broker, allowPrivate: false}
-	endpoint, stopTool, err := server.startToolServer(toolServer, "172.30.0.2")
+	endpoint, stopTool, err := server.startToolServer(toolServer, "172.30.0.2", protocol.BenchVersionV9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +274,7 @@ func TestCaseCapabilityCannotAttributeCallToSiblingCase(t *testing.T) {
 		toolServer.Register(caseID, toolexec.BuildFixture(1, toolCase))
 	}
 	server := &server{broker: broker, allowPrivate: true}
-	endpoint, stopTool, err := server.startToolServer(toolServer, "172.30.0.2")
+	endpoint, stopTool, err := server.startToolServer(toolServer, "172.30.0.2", protocol.BenchVersionV9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +300,7 @@ func TestToolEndpointHealthAndNoCallLeaveTranscriptEmpty(t *testing.T) {
 	toolCase := protocol.ToolCase{ID: "cc9-no-call", ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}}}
 	toolServer.Register(toolCase.ID, toolexec.BuildFixture(9, toolCase))
 	server := &server{broker: broker, allowPrivate: true}
-	endpoint, stopTool, err := server.startToolServer(toolServer, "172.30.0.2")
+	endpoint, stopTool, err := server.startToolServer(toolServer, "172.30.0.2", protocol.BenchVersionV9)
 	if err != nil {
 		t.Fatal(err)
 	}

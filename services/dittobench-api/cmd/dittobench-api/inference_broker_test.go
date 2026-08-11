@@ -1604,6 +1604,68 @@ func toolRouteRequest(
 	return request
 }
 
+func TestLegacyToolRoutePreservesFrozenV8WireAndSourceBinding(t *testing.T) {
+	broker := newInferenceBroker(1)
+	called := 0
+	var forwardedBody string
+	route, stop, err := broker.registerTool(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called++
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Errorf("read forwarded body: %v", readErr)
+		}
+		forwardedBody = string(body)
+		if r.URL.Path != "/tool" || r.URL.RawQuery != "" {
+			t.Errorf("forwarded target path=%q query=%q", r.URL.Path, r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), "192.0.2.20", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	const base = "http://broker.test/v1/tools/legacy-v8/tool"
+	if got := route.endpoint(base, "v9-case", "v9-user"); got != base {
+		t.Fatalf("legacy endpoint=%q want bare %q", got, base)
+	}
+	if got := route.healthEndpoint(base); got != base {
+		t.Fatalf("legacy health endpoint=%q want bare %q", got, base)
+	}
+
+	health := httptest.NewRequest(http.MethodGet, base, nil)
+	health.SetPathValue("id", route.id)
+	health.RemoteAddr = "127.0.0.1:1234"
+	healthRecorder := httptest.NewRecorder()
+	broker.handleTool(healthRecorder, health)
+	if healthRecorder.Code != http.StatusNoContent || called != 0 {
+		t.Fatalf("legacy health status=%d called=%d", healthRecorder.Code, called)
+	}
+
+	// The v8 broker never parsed or coupled the request body to new query
+	// identity fields. Preserve that byte-transparent behavior for old harnesses.
+	const legacyBody = `{"case_id":"v8-case","name":"search_web"}`
+	request := httptest.NewRequest(http.MethodPost, base, strings.NewReader(legacyBody))
+	request.SetPathValue("id", route.id)
+	request.RemoteAddr = "192.0.2.20:1234"
+	recorder := httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusNoContent || called != 1 || forwardedBody != legacyBody {
+		t.Fatalf("legacy source status=%d called=%d body=%q", recorder.Code, called, forwardedBody)
+	}
+
+	// Passing allowNATFallback cannot weaken a legacy route because v8 has no
+	// per-case capability to authenticate a translated source safely.
+	request = httptest.NewRequest(http.MethodPost, base, strings.NewReader(legacyBody))
+	request.SetPathValue("id", route.id)
+	request.RemoteAddr = "192.168.65.1:1234"
+	recorder = httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusUnauthorized || called != 1 {
+		t.Fatalf("legacy sibling source status=%d called=%d", recorder.Code, called)
+	}
+}
+
 func TestToolRouteRequiresSourceAndCaseCapabilityInProduction(t *testing.T) {
 	broker := newInferenceBroker(1)
 	called := 0
@@ -1616,7 +1678,7 @@ func TestToolRouteRequiresSourceAndCaseCapabilityInProduction(t *testing.T) {
 			t.Errorf("capability query forwarded to tool handler: %q", r.URL.RawQuery)
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}), "192.0.2.20", false)
+	}), "192.0.2.20", false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1645,7 +1707,7 @@ func TestToolRouteRequiresSourceAndCaseCapabilityInProduction(t *testing.T) {
 
 func TestToolRouteHealthCheckRequiresDedicatedCapability(t *testing.T) {
 	broker := newInferenceBroker(1)
-	route, stop, err := broker.registerTool(http.NotFoundHandler(), "192.0.2.20", true)
+	route, stop, err := broker.registerTool(http.NotFoundHandler(), "192.0.2.20", true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1676,7 +1738,7 @@ func TestToolRouteAllowsDockerDesktopNATOnlyWithCaseCapability(t *testing.T) {
 	route, stop, err := broker.registerTool(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called++
 		w.WriteHeader(http.StatusNoContent)
-	}), "172.30.0.2", true)
+	}), "172.30.0.2", true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1707,12 +1769,12 @@ func TestToolRouteCapabilityIsBoundToRunCaseAndUser(t *testing.T) {
 		called++
 		w.WriteHeader(http.StatusNoContent)
 	})
-	runA, stopA, err := broker.registerTool(handler, "172.30.0.2", true)
+	runA, stopA, err := broker.registerTool(handler, "172.30.0.2", true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stopA()
-	runB, stopB, err := broker.registerTool(handler, "172.30.0.3", true)
+	runB, stopB, err := broker.registerTool(handler, "172.30.0.3", true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1747,7 +1809,7 @@ func TestToolRouteCapabilityIsBoundToRunCaseAndUser(t *testing.T) {
 
 func TestToolRouteRejectsMalformedAndOversizedAuthenticatedBodies(t *testing.T) {
 	broker := newInferenceBroker(1)
-	route, stop, err := broker.registerTool(http.NotFoundHandler(), "172.30.0.2", true)
+	route, stop, err := broker.registerTool(http.NotFoundHandler(), "172.30.0.2", true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1780,7 +1842,7 @@ func TestToolRouteRejectsOverCapacityBeforeReadingBody(t *testing.T) {
 	called := false
 	registration, stop, err := broker.registerTool(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		called = true
-	}), "192.0.2.80", false)
+	}), "192.0.2.80", false, true)
 	if err != nil {
 		t.Fatal(err)
 	}

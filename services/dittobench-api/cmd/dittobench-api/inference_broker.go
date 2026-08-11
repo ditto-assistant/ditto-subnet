@@ -435,20 +435,22 @@ func (b *inferenceBroker) beginRelayWait(session *brokerSession) func() {
 }
 
 type toolRoute struct {
-	expectedSourceIP string
-	allowNATFallback bool
-	capabilityKey    []byte
-	handler          http.Handler
-	slots            chan struct{}
+	expectedSourceIP      string
+	allowNATFallback      bool
+	requireCaseCapability bool
+	capabilityKey         []byte
+	handler               http.Handler
+	slots                 chan struct{}
 }
 
-// registeredToolRoute is a short-lived capability mint owned by one benchmark
-// run. The key never crosses the trust boundary: callers receive only a
-// case/user-bound MAC in the endpoint URL, and unregistering the route revokes
-// every outstanding capability at once.
+// registeredToolRoute is a short-lived broker registration owned by one
+// benchmark run. V9 registrations mint case/user-bound capabilities; frozen
+// pre-v9 registrations retain their historical bare endpoint. In both modes,
+// unregistering the route revokes access at once.
 type registeredToolRoute struct {
-	id            string
-	capabilityKey []byte
+	id                    string
+	requireCaseCapability bool
+	capabilityKey         []byte
 }
 
 // platformGrantDenied marks a platform inference response that declined to
@@ -1020,6 +1022,7 @@ func (b *inferenceBroker) registerTool(
 	h http.Handler,
 	expectedSourceIP string,
 	allowNATFallback bool,
+	requireCaseCapability bool,
 ) (registeredToolRoute, func(), error) {
 	id, err := randomToken(18)
 	if err != nil {
@@ -1031,11 +1034,12 @@ func (b *inferenceBroker) registerTool(
 	}
 	b.mu.Lock()
 	b.tools[id] = toolRoute{
-		expectedSourceIP: expectedSourceIP,
-		allowNATFallback: allowNATFallback,
-		capabilityKey:    key,
-		handler:          h,
-		slots:            make(chan struct{}, brokerPerSourceConcurrency),
+		expectedSourceIP:      expectedSourceIP,
+		allowNATFallback:      allowNATFallback && requireCaseCapability,
+		requireCaseCapability: requireCaseCapability,
+		capabilityKey:         key,
+		handler:               h,
+		slots:                 make(chan struct{}, brokerPerSourceConcurrency),
 	}
 	b.mu.Unlock()
 	stop := func() {
@@ -1043,7 +1047,11 @@ func (b *inferenceBroker) registerTool(
 		delete(b.tools, id)
 		b.mu.Unlock()
 	}
-	return registeredToolRoute{id: id, capabilityKey: key}, stop, nil
+	return registeredToolRoute{
+		id:                    id,
+		requireCaseCapability: requireCaseCapability,
+		capabilityKey:         key,
+	}, stop, nil
 }
 
 func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
@@ -1055,7 +1063,7 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		if !validToolCapability(route.capabilityKey, "health", "", r.URL.Query().Get("cap")) {
+		if route.requireCaseCapability && !validToolCapability(route.capabilityKey, "health", "", r.URL.Query().Get("cap")) {
 			writeError(w, http.StatusUnauthorized, "tool route unavailable")
 			return
 		}
@@ -1064,7 +1072,7 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 	}
 	caseID := r.URL.Query().Get("case_id")
 	userID := r.URL.Query().Get("user_id")
-	if !validToolCapability(route.capabilityKey, caseID, userID, r.URL.Query().Get("cap")) {
+	if route.requireCaseCapability && !validToolCapability(route.capabilityKey, caseID, userID, r.URL.Query().Get("cap")) {
 		writeError(w, http.StatusUnauthorized, "tool route unavailable")
 		return
 	}
@@ -1081,7 +1089,7 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "tool source is at capacity")
 		return
 	}
-	if !toolRequestMatchesCapability(w, r, caseID, userID) {
+	if route.requireCaseCapability && !toolRequestMatchesCapability(w, r, caseID, userID) {
 		return
 	}
 	forwarded := r.Clone(r.Context())
@@ -1091,6 +1099,9 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (r registeredToolRoute) endpoint(baseURL, caseID, userID string) string {
+	if !r.requireCaseCapability {
+		return baseURL
+	}
 	values := url.Values{
 		"case_id": {caseID},
 		"user_id": {userID},
@@ -1100,6 +1111,9 @@ func (r registeredToolRoute) endpoint(baseURL, caseID, userID string) string {
 }
 
 func (r registeredToolRoute) healthEndpoint(baseURL string) string {
+	if !r.requireCaseCapability {
+		return baseURL
+	}
 	return baseURL + "?cap=" + url.QueryEscape(toolCapability(r.capabilityKey, "health", ""))
 }
 
