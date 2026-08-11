@@ -50,6 +50,10 @@ from ditto.db.queries.tickets import (
     ticket_attempt_cap,
 )
 from ditto.tests.legacy_era import retired_era_writes_allowed
+from ditto_screening_protocol.bench_v9 import (
+    V9_SCORE_CONTRACT_MANIFEST_SHA256,
+    V9_SCORE_CONTRACT_REVISION,
+)
 
 _TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_TOKEN}", "X-Admin-Actor": "operator"}
@@ -226,6 +230,31 @@ async def _seed(
                         )
                     )
     return agent_id
+
+
+async def _set_v9_score_contract(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+    validator_hotkey: str = "validator-0",
+    revision: str | None,
+    manifest_sha256: str | None,
+    rollout_mode: str | None,
+    factor_bps: int = 10_000,
+) -> None:
+    async with maker() as session, session.begin():
+        score = await session.get(Score, (agent_id, 9, validator_hotkey))
+        assert score is not None
+        score.details = {
+            "v9_base": {
+                "score_contract": {
+                    "revision": revision,
+                    "manifest_sha256": manifest_sha256,
+                },
+                "score_gates": {"rollout_mode": rollout_mode},
+                "semantic_gate_factor_bps": factor_bps,
+            }
+        }
 
 
 async def _seed_online_heartbeat(
@@ -1950,6 +1979,198 @@ async def test_replace_score_fails_closed_on_run_change_or_busy_validator(
     )
 
 
+async def test_v9_contract_retest_preview_is_exact_and_includes_evaluating_agents(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    shadow = await _seed(retry_maker, score_count=2, bench_version=9, ticket_count=2)
+    missing = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
+    current = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=shadow,
+        revision="v9-base-shadow-calibration-v1",
+        manifest_sha256="5" * 64,
+        rollout_mode="shadow",
+        factor_bps=0,
+    )
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=shadow,
+        validator_hotkey="validator-1",
+        revision=V9_SCORE_CONTRACT_REVISION,
+        manifest_sha256=V9_SCORE_CONTRACT_MANIFEST_SHA256,
+        rollout_mode="enforce",
+    )
+    # A score with no v9_base at all is also a mismatch; it cannot be treated
+    # as current merely because its ordinary composite is positive.
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=current,
+        revision=V9_SCORE_CONTRACT_REVISION,
+        manifest_sha256=V9_SCORE_CONTRACT_MANIFEST_SHA256,
+        rollout_mode="enforce",
+        factor_bps=0,
+    )
+    async with retry_maker() as session, session.begin():
+        missing_agent = await session.get(Agent, missing)
+        assert missing_agent is not None
+        missing_agent.status = AgentStatus.SCORED
+    _install(app, retry_maker)
+
+    response = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["required_revision"] == V9_SCORE_CONTRACT_REVISION
+    assert body["required_manifest_sha256"] == V9_SCORE_CONTRACT_MANIFEST_SHA256
+    assert body["required_rollout_mode"] == "enforce"
+    assert body["count"] == 2
+    by_agent = {item["agent_id"]: item for item in body["items"]}
+    assert set(by_agent) == {str(shadow), str(missing)}
+    assert by_agent[str(shadow)]["agent_status"] == "evaluating"
+    assert by_agent[str(shadow)]["observed_rollout_mode"] == "shadow"
+    assert by_agent[str(shadow)]["semantic_gate_factor_bps"] == 0
+    assert by_agent[str(shadow)]["queue_allowed"] is True
+    assert by_agent[str(missing)]["observed_revision"] is None
+    assert str(current) not in by_agent
+
+
+async def test_v9_contract_retest_requires_typed_confirmation_and_current_snapshot(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=agent_id,
+        revision="v9-base-shadow-calibration-v1",
+        manifest_sha256="5" * 64,
+        rollout_mode="shadow",
+    )
+    _install(app, retry_maker)
+    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
+    item = preview.json()["items"][0]
+    payload = {
+        "basis": "v9_contract_mismatch",
+        "reason": "Replace a signed shadow score with the authoritative v9 contract",
+        "items": [
+            {
+                "agent_id": str(agent_id),
+                "request_id": str(uuid4()),
+                "expected_snapshot": item["snapshot"],
+                "expected_run_id": item["run_id"],
+            }
+        ],
+    }
+    missing_confirmation = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json=payload,
+    )
+    assert missing_confirmation.status_code == 422
+    wrong_confirmation = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json={**payload, "confirmation": "QUEUE RETESTS"},
+    )
+    assert wrong_confirmation.status_code == 422
+
+    async with retry_maker() as session, session.begin():
+        score = await session.get(Score, (agent_id, 9, "validator-0"))
+        assert score is not None
+        score.details = {
+            "v9_base": {
+                "score_contract": {
+                    "revision": V9_SCORE_CONTRACT_REVISION,
+                    "manifest_sha256": V9_SCORE_CONTRACT_MANIFEST_SHA256,
+                },
+                "score_gates": {"rollout_mode": "enforce"},
+                "semantic_gate_factor_bps": 10_000,
+            }
+        }
+    stale = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json={**payload, "confirmation": "QUEUE V9 CONTRACT RETESTS"},
+    )
+    assert stale.status_code == 200, stale.text
+    assert stale.json()["skipped"] == 1
+    assert "state changed" in stale.json()["results"][0]["detail"]
+
+
+async def test_v9_contract_retests_queue_and_promote_for_evaluating_agents(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_ids = [
+        await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
+        for _ in range(2)
+    ]
+    for agent_id in agent_ids:
+        await _set_v9_score_contract(
+            retry_maker,
+            agent_id=agent_id,
+            revision="v9-base-shadow-calibration-v1",
+            manifest_sha256="5" * 64,
+            rollout_mode="shadow",
+        )
+    _install(app, retry_maker)
+    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
+    by_id = {item["agent_id"]: item for item in preview.json()["items"]}
+    request_ids = {agent_id: uuid4() for agent_id in agent_ids}
+    response = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json={
+            "basis": "v9_contract_mismatch",
+            "confirmation": "QUEUE V9 CONTRACT RETESTS",
+            "reason": (
+                "Replace rollout shadow evidence without deleting accepted scores"
+            ),
+            "items": [
+                {
+                    "agent_id": str(agent_id),
+                    "request_id": str(request_ids[agent_id]),
+                    "expected_snapshot": by_id[str(agent_id)]["snapshot"],
+                    "expected_run_id": by_id[str(agent_id)]["run_id"],
+                }
+                for agent_id in agent_ids
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["queued"] == 2
+    assert [item["queue_position"] for item in response.json()["results"]] == [1, 2]
+
+    async with retry_maker() as session, session.begin():
+        promoted = await activate_next_score_retest(
+            session,
+            validator_hotkey="validator-0",
+            now=datetime.now(UTC),
+            supports_version=lambda version: version == 9,
+        )
+        assert promoted is not None and promoted.agent_id == agent_ids[0]
+        assert promoted.bench_version == 9
+        agent = await session.get(Agent, promoted.agent_id)
+        assert agent is not None and agent.status == AgentStatus.EVALUATING
+        lifecycle = await session.scalar(
+            select(ScoreAuditEntry)
+            .where(
+                ScoreAuditEntry.agent_id == promoted.agent_id,
+                ScoreAuditEntry.event == EVENT_SCORE_RETEST_REQUESTED,
+            )
+            .order_by(ScoreAuditEntry.seq.desc())
+        )
+        assert lifecycle is not None
+        assert lifecycle.payload["basis"] == "v9_contract_mismatch"
+        assert lifecycle.payload["required_v9_contract"]["revision"] == (
+            V9_SCORE_CONTRACT_REVISION
+        )
+
+
 async def test_lists_only_unambiguous_finalized_score_outliers(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -2184,6 +2405,17 @@ async def test_bulk_outlier_queue_waits_behind_validator_and_promotes_serially(
     assert [item["queue_position"] for item in response.json()["results"]] == [1, 2]
 
     async with retry_maker() as session, session.begin():
+        legacy_queue_entry = await session.scalar(
+            select(ScoreAuditEntry)
+            .where(
+                ScoreAuditEntry.agent_id == first,
+                ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
+            )
+            .order_by(ScoreAuditEntry.seq.desc())
+        )
+        assert legacy_queue_entry is not None
+        assert "basis" not in legacy_queue_entry.payload
+        assert "required_v9_contract" not in legacy_queue_entry.payload
         busy = await session.get(
             ValidatorTicket,
             (busy_agent, _BENCH_VERSION, "validator-0"),

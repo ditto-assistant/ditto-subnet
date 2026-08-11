@@ -19,6 +19,10 @@ from ditto.api_models.validator import (
     V9ScoreGateEvidence,
 )
 from ditto.validator.signing import score_signing_message
+from ditto_screening_protocol.bench_v9 import (
+    V9_SCORE_CONTRACT_MANIFEST_SHA256,
+    V9_SCORE_CONTRACT_REVISION,
+)
 
 _ARTIFACT = "ab" * 32
 _DATASET = "cd" * 32
@@ -137,6 +141,10 @@ def test_score_gate_canonical_bytes_match_go_golden() -> None:
 
 def test_python_canonicalization_matches_shared_go_contract_vector() -> None:
     vector = json.loads(_CROSS_LANGUAGE_VECTOR.read_text())["vectors"][0]
+    assert vector["details"]["score_contract"] == {
+        "revision": V9_SCORE_CONTRACT_REVISION,
+        "manifest_sha256": V9_SCORE_CONTRACT_MANIFEST_SHA256,
+    }
     evidence = V9BaseEvidence.model_validate(vector["details"])
     assert (
         evidence.score_gates.canonical_bytes().decode()

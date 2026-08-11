@@ -73,6 +73,8 @@ import {
   confirmationBundleViewSchema,
   setConfirmationBundleSettingsInputSchema,
   sourceReviewFindingSchema,
+  queueValidatorScoreRetestsInputSchema,
+  v9ContractRetestListSchema,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -81,6 +83,68 @@ type GeneratedConfirmationBundleList =
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 
 describe('admin API schemas', () => {
+  it('requires exact confirmation for v9 contract retests only', () => {
+    const base = {
+      validatorHotkey: '5Validator',
+      reason: 'Replace obsolete signed v9 score evidence',
+      items: [{
+        agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+        expectedSnapshot: 'ab'.repeat(32),
+        expectedRunId: 'run-shadow',
+      }],
+    }
+    expect(queueValidatorScoreRetestsInputSchema.parse(base)).toMatchObject({
+      basis: 'statistical_outlier',
+      confirmation: null,
+    })
+    expect(() => queueValidatorScoreRetestsInputSchema.parse({
+      ...base,
+      basis: 'v9_contract_mismatch',
+    })).toThrow(/QUEUE V9 CONTRACT RETESTS/)
+    expect(queueValidatorScoreRetestsInputSchema.parse({
+      ...base,
+      basis: 'v9_contract_mismatch',
+      confirmation: 'QUEUE V9 CONTRACT RETESTS',
+    }).basis).toBe('v9_contract_mismatch')
+    expect(() => queueValidatorScoreRetestsInputSchema.parse({
+      ...base,
+      confirmation: 'QUEUE V9 CONTRACT RETESTS',
+    })).toThrow(/only valid/)
+  })
+
+  it('parses nullable legacy v9 contract evidence without inventing identity', () => {
+    const parsed = v9ContractRetestListSchema.parse({
+      items: [{
+        agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+        agent_name: 'shadow-agent',
+        miner_hotkey: '5Miner',
+        agent_status: 'evaluating',
+        validator_hotkey: '5Validator',
+        run_id: 'run-shadow',
+        composite: 0.7,
+        snapshot: 'ab'.repeat(32),
+        observed_revision: null,
+        observed_manifest_sha256: null,
+        observed_rollout_mode: null,
+        semantic_gate_factor_bps: null,
+        ticket_status: 'scored',
+        replacement_pending: false,
+        replacement_queued: false,
+        queue_position: null,
+        queue_allowed: true,
+        queue_blocking_reason: null,
+      }],
+      count: 1,
+      limit: 100,
+      offset: 0,
+      required_revision: 'v9-base-enforce-efficiency-v1',
+      required_manifest_sha256: 'cd'.repeat(32),
+      required_rollout_mode: 'enforce',
+    })
+    expect(parsed.items[0].observed_revision).toBeNull()
+    expect(parsed.required_rollout_mode).toBe('enforce')
+  })
+
   it('preserves the fenced multi-provider capacity contract', () => {
     const parsed = screenerCapacityViewSchema.parse({
       snapshot: {

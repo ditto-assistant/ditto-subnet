@@ -31,6 +31,8 @@ from ditto.api_models.admin_validation_retry import (
     AdminScoreOutlierScore,
     AdminStuckSubmission,
     AdminStuckSubmissionsResponse,
+    AdminV9ContractRetestItem,
+    AdminV9ContractRetestList,
     AdminValidationQueueEviction,
     AdminValidationQueueEvictionRequest,
     AdminValidationQueueEvictionResponse,
@@ -120,6 +122,10 @@ from ditto.db.queries.score_retests import (
 )
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import ticket_attempt_cap
+from ditto_screening_protocol.bench_v9 import (
+    V9_SCORE_CONTRACT_MANIFEST_SHA256,
+    V9_SCORE_CONTRACT_REVISION,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -246,6 +252,38 @@ def _outlier_score(score: Score) -> AdminScoreOutlierScore:
         validator_hotkey=score.validator_hotkey,
         run_id=score.run_id,
         composite=score.composite,
+    )
+
+
+def _v9_contract_observation(
+    score: Score,
+) -> tuple[str | None, str | None, str | None, int | None]:
+    details = score.details if isinstance(score.details, dict) else {}
+    base = details.get("v9_base")
+    if not isinstance(base, dict):
+        return None, None, None, None
+    contract = base.get("score_contract")
+    revision = contract.get("revision") if isinstance(contract, dict) else None
+    manifest = contract.get("manifest_sha256") if isinstance(contract, dict) else None
+    gates = base.get("score_gates")
+    rollout_mode = gates.get("rollout_mode") if isinstance(gates, dict) else None
+    factor = base.get("semantic_gate_factor_bps")
+    return (
+        revision if isinstance(revision, str) else None,
+        manifest if isinstance(manifest, str) else None,
+        rollout_mode if isinstance(rollout_mode, str) else None,
+        factor if type(factor) is int else None,
+    )
+
+
+def _is_v9_contract_mismatch(score: Score) -> bool:
+    if score.bench_version != 9:
+        return False
+    revision, manifest, rollout_mode, _factor = _v9_contract_observation(score)
+    return (
+        revision != V9_SCORE_CONTRACT_REVISION
+        or manifest != V9_SCORE_CONTRACT_MANIFEST_SHA256
+        or rollout_mode != "enforce"
     )
 
 
@@ -1307,6 +1345,26 @@ def _queue_gate(
     return None
 
 
+def _contract_retest_queue_gate(
+    *,
+    agent: Agent,
+    target: Score | None,
+    ticket: ValidatorTicket | None,
+    replacement_open: bool,
+) -> str | None:
+    if agent.status not in _REPLACEABLE_STATUSES:
+        return "submission is not in a scoreable state"
+    if target is None:
+        return "validator has no accepted score to replace"
+    if not _is_v9_contract_mismatch(target):
+        return "accepted score already uses the authoritative v9 contract"
+    if replacement_open:
+        return "replacement score is already queued or pending"
+    if ticket is None or ticket.status != TicketStatus.SCORED:
+        return "accepted score is not backed by a consumed validator ticket"
+    return None
+
+
 async def _finalized_quorum_state(
     session: AsyncSession,
 ) -> tuple[dict[UUID, list[Score]], dict[UUID, list[ValidatorTicket]], int]:
@@ -1503,6 +1561,128 @@ async def list_score_outliers(
     )
 
 
+@router.get("/v9-contract-retests", response_model=AdminV9ContractRetestList)
+async def list_v9_contract_retests(
+    _admin: AdminDep,
+    session: SessionDep,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> AdminV9ContractRetestList:
+    """Preview accepted v9 scores produced by a non-authoritative contract.
+
+    This is deliberately independent of statistical disagreement and of the
+    active benchmark version. During a rollout, an evaluating agent can hold a
+    validly signed shadow score alongside unfinished v9 tickets; that exact
+    score still needs a same-validator replacement before v9 may activate.
+    """
+    rows = list(
+        (
+            await session.execute(
+                select(Agent, Score)
+                .join(Score, Score.agent_id == Agent.agent_id)
+                .where(
+                    Agent.status.in_(_REPLACEABLE_STATUSES),
+                    Score.bench_version == 9,
+                )
+                .order_by(
+                    Score.validator_hotkey.asc(),
+                    Agent.agent_id.asc(),
+                    Score.run_id.asc(),
+                )
+            )
+        ).all()
+    )
+    candidates = [
+        (agent, score) for agent, score in rows if _is_v9_contract_mismatch(score)
+    ]
+    agent_ids = {agent.agent_id for agent, _score in candidates}
+
+    scores_by_agent: dict[UUID, list[Score]] = {}
+    tickets_by_agent: dict[UUID, list[ValidatorTicket]] = {}
+    if agent_ids:
+        for score in (
+            await session.scalars(
+                select(Score)
+                .where(Score.agent_id.in_(agent_ids), Score.bench_version == 9)
+                .order_by(Score.validator_hotkey.asc(), Score.run_id.asc())
+            )
+        ).all():
+            scores_by_agent.setdefault(score.agent_id, []).append(score)
+        for ticket_row in (
+            await session.scalars(
+                select(ValidatorTicket)
+                .where(
+                    ValidatorTicket.agent_id.in_(agent_ids),
+                    ValidatorTicket.bench_version == 9,
+                )
+                .order_by(
+                    ValidatorTicket.deadline.asc(),
+                    ValidatorTicket.validator_hotkey.asc(),
+                )
+            )
+        ).all():
+            tickets_by_agent.setdefault(ticket_row.agent_id, []).append(ticket_row)
+
+    lifecycle_cache: dict[str, dict[UUID, ScoreAuditEntry]] = {}
+    position_cache: dict[str, dict[UUID, int]] = {}
+    items: list[AdminV9ContractRetestItem] = []
+    for agent, target in candidates:
+        hotkey = target.validator_hotkey
+        if hotkey not in lifecycle_cache:
+            lifecycle_cache[hotkey] = await latest_retest_events_for_validator(
+                session, validator_hotkey=hotkey
+            )
+            position_cache[hotkey] = await score_retest_queue_positions(
+                session, validator_hotkey=hotkey
+            )
+        scores = scores_by_agent.get(agent.agent_id, [])
+        tickets = tickets_by_agent.get(agent.agent_id, [])
+        target_ticket = next(
+            (item for item in tickets if item.validator_hotkey == hotkey), None
+        )
+        latest = lifecycle_cache[hotkey].get(agent.agent_id)
+        blocking = _contract_retest_queue_gate(
+            agent=agent,
+            target=target,
+            ticket=target_ticket,
+            replacement_open=retest_is_open(latest),
+        )
+        revision, manifest, rollout_mode, factor = _v9_contract_observation(target)
+        items.append(
+            AdminV9ContractRetestItem(
+                agent_id=agent.agent_id,
+                agent_name=agent.name,
+                miner_hotkey=agent.miner_hotkey,
+                agent_status=agent.status.value,
+                validator_hotkey=hotkey,
+                run_id=target.run_id,
+                composite=target.composite,
+                snapshot=_snapshot(agent=agent, scores=scores, tickets=tickets),
+                observed_revision=revision,
+                observed_manifest_sha256=manifest,
+                observed_rollout_mode=rollout_mode,
+                semantic_gate_factor_bps=factor,
+                ticket_status=(
+                    target_ticket.status.value if target_ticket is not None else None
+                ),
+                replacement_pending=retest_is_active(latest),
+                replacement_queued=retest_is_queued(latest),
+                queue_position=position_cache[hotkey].get(agent.agent_id),
+                queue_allowed=blocking is None,
+                queue_blocking_reason=blocking,
+            )
+        )
+
+    return AdminV9ContractRetestList(
+        items=items[offset : offset + limit],
+        count=len(items),
+        limit=limit,
+        offset=offset,
+        required_revision=V9_SCORE_CONTRACT_REVISION,
+        required_manifest_sha256=V9_SCORE_CONTRACT_MANIFEST_SHA256,
+    )
+
+
 @router.get(
     "/validation-retries/{agent_id}/validators/{validator_hotkey}",
     response_model=AdminValidatorScoreReplacementDetail,
@@ -1583,7 +1763,7 @@ async def queue_validator_score_retests(
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> AdminValidatorScoreRetestQueueResponse:
-    """Queue exact outliers behind one validator's current assignment.
+    """Queue exact outliers or v9 contract mismatches behind current work.
 
     Every item is independently snapshot/run checked. Accepted scores stay
     canonical; only one request is promoted to an issued ticket at a time.
@@ -1621,6 +1801,8 @@ async def queue_validator_score_retests(
                 if (
                     prior.payload.get("actor") == actor
                     and prior.payload.get("reason") == payload.reason
+                    and prior.payload.get("basis", "statistical_outlier")
+                    == payload.basis
                     and prior.payload.get("run_id") == item.expected_run_id
                     and prior.payload.get("expected_snapshot") == item.expected_snapshot
                 ):
@@ -1651,15 +1833,27 @@ async def queue_validator_score_retests(
             if target is not None and target.run_id != item.expected_run_id:
                 preliminary[item.agent_id] = ("skipped", "accepted score run changed")
                 continue
-            detected = _detect_outlier(scores)
-            if (
-                detected is None
-                or detected[0].validator_hotkey != validator_hotkey
-                or detected[0].run_id != item.expected_run_id
+            if payload.basis == "statistical_outlier":
+                detected = _detect_outlier(scores)
+                if (
+                    detected is None
+                    or detected[0].validator_hotkey != validator_hotkey
+                    or detected[0].run_id != item.expected_run_id
+                ):
+                    preliminary[item.agent_id] = (
+                        "skipped",
+                        "validator score is no longer the detected outlier",
+                    )
+                    continue
+            elif (
+                bench_version != 9
+                or target is None
+                or target.run_id != item.expected_run_id
+                or not _is_v9_contract_mismatch(target)
             ):
                 preliminary[item.agent_id] = (
                     "skipped",
-                    "validator score is no longer the detected outlier",
+                    "validator score no longer has a v9 contract mismatch",
                 )
                 continue
             ticket = next(
@@ -1676,7 +1870,12 @@ async def queue_validator_score_retests(
                 agent_id=item.agent_id,
                 validator_hotkey=validator_hotkey,
             )
-            reason = _queue_gate(
+            gate = (
+                _queue_gate
+                if payload.basis == "statistical_outlier"
+                else _contract_retest_queue_gate
+            )
+            reason = gate(
                 agent=agent,
                 target=target,
                 ticket=ticket,
@@ -1686,22 +1885,34 @@ async def queue_validator_score_retests(
                 preliminary[item.agent_id] = ("skipped", reason)
                 continue
             assert target is not None
+            audit_payload: dict[str, object] = {
+                "request_id": str(item.request_id),
+                "actor": actor,
+                "reason": payload.reason,
+                "expected_snapshot": item.expected_snapshot,
+                "bench_version": bench_version,
+                "run_id": item.expected_run_id,
+                "preserved_score": _score_evidence(target),
+                "preserved_score_count": len(scores),
+                "queue_group_size": len(payload.items),
+            }
+            if payload.basis == "v9_contract_mismatch":
+                audit_payload.update(
+                    {
+                        "basis": payload.basis,
+                        "required_v9_contract": {
+                            "revision": V9_SCORE_CONTRACT_REVISION,
+                            "manifest_sha256": V9_SCORE_CONTRACT_MANIFEST_SHA256,
+                            "rollout_mode": "enforce",
+                        },
+                    }
+                )
             await append_audit_entry(
                 session,
                 agent_id=item.agent_id,
                 validator_hotkey=validator_hotkey,
                 event=EVENT_SCORE_RETEST_QUEUED,
-                payload={
-                    "request_id": str(item.request_id),
-                    "actor": actor,
-                    "reason": payload.reason,
-                    "expected_snapshot": item.expected_snapshot,
-                    "bench_version": bench_version,
-                    "run_id": item.expected_run_id,
-                    "preserved_score": _score_evidence(target),
-                    "preserved_score_count": len(scores),
-                    "queue_group_size": len(payload.items),
-                },
+                payload=audit_payload,
                 recorded_at=now,
             )
             preliminary[item.agent_id] = ("queued", None)

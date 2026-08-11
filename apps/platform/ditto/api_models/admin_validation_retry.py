@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from ditto.api_models.retry_state import RetryState
 
@@ -442,6 +449,10 @@ class AdminValidatorScoreRetestQueueRequest(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, min_length=8),
     ]
+    basis: Literal["statistical_outlier", "v9_contract_mismatch"] = (
+        "statistical_outlier"
+    )
+    confirmation: str | None = None
     items: Annotated[
         list[AdminValidatorScoreRetestQueueItem], Field(min_length=1, max_length=100)
     ]
@@ -456,6 +467,18 @@ class AdminValidatorScoreRetestQueueRequest(BaseModel):
         if len({item.request_id for item in items}) != len(items):
             raise ValueError("duplicate request_id in queue")
         return items
+
+    @model_validator(mode="after")
+    def _confirmation_matches_basis(self) -> AdminValidatorScoreRetestQueueRequest:
+        if self.basis == "v9_contract_mismatch":
+            if self.confirmation != "QUEUE V9 CONTRACT RETESTS":
+                raise ValueError(
+                    "v9 contract retests require exact confirmation "
+                    "QUEUE V9 CONTRACT RETESTS"
+                )
+        elif self.confirmation is not None:
+            raise ValueError("confirmation is only valid for v9 contract retests")
+        return self
 
 
 class AdminValidatorScoreRetestQueueResult(BaseModel):
@@ -540,3 +563,34 @@ class AdminScoreOutlierList(BaseModel):
     belong in an operator's queue. Naming the era on the response keeps the
     page from silently implying it covers submissions it never scanned.
     """
+
+
+class AdminV9ContractRetestItem(BaseModel):
+    agent_id: UUID
+    agent_name: str
+    miner_hotkey: str
+    agent_status: str
+    validator_hotkey: str
+    run_id: str
+    composite: float
+    snapshot: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    observed_revision: str | None
+    observed_manifest_sha256: str | None
+    observed_rollout_mode: str | None
+    semantic_gate_factor_bps: int | None
+    ticket_status: Literal["issued", "scored", "expired"] | None
+    replacement_pending: bool
+    replacement_queued: bool
+    queue_position: int | None
+    queue_allowed: bool
+    queue_blocking_reason: str | None
+
+
+class AdminV9ContractRetestList(BaseModel):
+    items: list[AdminV9ContractRetestItem]
+    count: int
+    limit: int
+    offset: int
+    required_revision: str
+    required_manifest_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    required_rollout_mode: Literal["enforce"] = "enforce"

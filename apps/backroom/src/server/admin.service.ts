@@ -73,6 +73,8 @@ import {
   queueValidatorScoreRetestsResponseSchema,
   scoreOutlierFiltersSchema,
   scoreOutlierListSchema,
+  v9ContractRetestFiltersSchema,
+  v9ContractRetestListSchema,
   validationRetryDetailSchema,
   validationRetryLookupInputSchema,
   listStuckSubmissionsInputSchema,
@@ -1383,6 +1385,16 @@ export async function fetchScoreOutliers(rawInput: unknown) {
   return scoreOutlierListSchema.parse(payload)
 }
 
+export async function fetchV9ContractRetests(rawInput: unknown) {
+  const input = v9ContractRetestFiltersSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  const payload = await platformAdminRequest(`/api/v1/admin/v9-contract-retests?${query}`)
+  return v9ContractRetestListSchema.parse(payload)
+}
+
 export async function queueValidatorScoreRetests(rawInput: unknown, actor: string) {
   const input = queueValidatorScoreRetestsInputSchema.parse(rawInput)
   const items = await Promise.all(
@@ -1391,6 +1403,7 @@ export async function queueValidatorScoreRetests(rawInput: unknown, actor: strin
       request_id: await deriveRequestId('score-replacement', [
         item.agentId,
         input.validatorHotkey,
+        ...(input.basis === 'v9_contract_mismatch' ? [input.basis] : []),
         actor,
         input.reason,
         item.expectedSnapshot,
@@ -1405,7 +1418,15 @@ export async function queueValidatorScoreRetests(rawInput: unknown, actor: strin
     {
       method: 'POST',
       actor,
-      body: { reason: input.reason, items },
+      body:
+        input.basis === 'v9_contract_mismatch'
+          ? {
+              reason: input.reason,
+              basis: input.basis,
+              confirmation: input.confirmation,
+              items,
+            }
+          : { reason: input.reason, items },
     },
   )
   return queueValidatorScoreRetestsResponseSchema.parse(payload)

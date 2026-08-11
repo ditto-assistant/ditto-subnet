@@ -34,6 +34,7 @@ import {
   sourceExcerptInputSchema,
   sourceListingInputSchema,
   scoreOutlierFiltersSchema,
+  v9ContractRetestFiltersSchema,
   queueValidatorScoreRetestsInputSchema,
   replaceValidatorScoreInputSchema,
   releaseValidatorScoreRetestInputSchema,
@@ -91,6 +92,7 @@ import {
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
   fetchScoreOutliers,
+  fetchV9ContractRetests,
   queueValidatorScoreRetests as queueValidatorScoreRetestsService,
   replaceValidatorScore,
   releaseValidatorScoreRetest,
@@ -575,6 +577,15 @@ export const listScoreOutliers = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return fetchScoreOutliers(data)
+  })
+
+export const listV9ContractRetests = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(v9ContractRetestFiltersSchema)
+  .handler(({ data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchV9ContractRetests(data)
   })
 
 export const requestScoreRetest = createServerFn({ method: 'POST' })

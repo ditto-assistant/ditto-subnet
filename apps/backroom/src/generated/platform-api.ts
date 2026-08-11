@@ -1343,6 +1343,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v9-contract-retests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List V9 Contract Retests
+         * @description Preview accepted v9 scores produced by a non-authoritative contract.
+         *
+         *     This is deliberately independent of statistical disagreement and of the
+         *     active benchmark version. During a rollout, an evaluating agent can hold a
+         *     validly signed shadow score alongside unfinished v9 tickets; that exact
+         *     score still needs a same-validator replacement before v9 may activate.
+         */
+        get: operations["list_v9_contract_retests_api_v1_admin_v9_contract_retests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/validation-retries": {
         parameters: {
             query?: never;
@@ -1403,7 +1428,7 @@ export interface paths {
         put?: never;
         /**
          * Queue Validator Score Retests
-         * @description Queue exact outliers behind one validator's current assignment.
+         * @description Queue exact outliers or v9 contract mismatches behind current work.
          *
          *     Every item is independently snapshot/run checked. Accepted scores stay
          *     canonical; only one request is promoted to an issued ticket at a time.
@@ -6300,6 +6325,69 @@ export interface components {
             /** History */
             history: components["schemas"]["SubmissionSettingsRevision"][];
         };
+        /** AdminV9ContractRetestItem */
+        AdminV9ContractRetestItem: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Composite */
+            composite: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Observed Manifest Sha256 */
+            observed_manifest_sha256: string | null;
+            /** Observed Revision */
+            observed_revision: string | null;
+            /** Observed Rollout Mode */
+            observed_rollout_mode: string | null;
+            /** Queue Allowed */
+            queue_allowed: boolean;
+            /** Queue Blocking Reason */
+            queue_blocking_reason: string | null;
+            /** Queue Position */
+            queue_position: number | null;
+            /** Replacement Pending */
+            replacement_pending: boolean;
+            /** Replacement Queued */
+            replacement_queued: boolean;
+            /** Run Id */
+            run_id: string;
+            /** Semantic Gate Factor Bps */
+            semantic_gate_factor_bps: number | null;
+            /** Snapshot */
+            snapshot: string;
+            /** Ticket Status */
+            ticket_status: ("issued" | "scored" | "expired") | null;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** AdminV9ContractRetestList */
+        AdminV9ContractRetestList: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["AdminV9ContractRetestItem"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Required Manifest Sha256 */
+            required_manifest_sha256: string;
+            /** Required Revision */
+            required_revision: string;
+            /**
+             * Required Rollout Mode
+             * @default enforce
+             * @constant
+             */
+            required_rollout_mode: "enforce";
+        };
         /** AdminValidationQueueEviction */
         AdminValidationQueueEviction: {
             /** Actor */
@@ -6810,6 +6898,14 @@ export interface components {
         };
         /** AdminValidatorScoreRetestQueueRequest */
         AdminValidatorScoreRetestQueueRequest: {
+            /**
+             * Basis
+             * @default statistical_outlier
+             * @enum {string}
+             */
+            basis: "statistical_outlier" | "v9_contract_mismatch";
+            /** Confirmation */
+            confirmation?: string | null;
             /** Items */
             items: components["schemas"]["AdminValidatorScoreRetestQueueItem"][];
             /** Reason */
@@ -18841,6 +18937,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_v9_contract_retests_api_v1_admin_v9_contract_retests_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminV9ContractRetestList"];
                 };
             };
             /** @description Validation Error */

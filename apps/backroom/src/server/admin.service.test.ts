@@ -26,6 +26,7 @@ import {
   fetchLeaseRevocations,
   replaceValidatorScore,
   fetchScoreOutliers,
+  fetchV9ContractRetests,
   releaseValidatorScoreRetest,
   queueValidatorScoreRetests,
   refreshBenchmarkContract,
@@ -2472,6 +2473,101 @@ describe('copy review admin service', () => {
             request_id: derivedQueueId,
             expected_snapshot: snapshot,
             expected_run_id: 'run-low',
+          }],
+        }),
+      }),
+    )
+  })
+
+  it('previews and queues exact v9 contract mismatches with a distinct request id', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const validatorHotkey = '5Validator'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const snapshot = 'ab'.repeat(32)
+    const preview = {
+      items: [{
+        agent_id: agentId,
+        agent_name: 'shadow-agent',
+        miner_hotkey: '5Miner',
+        agent_status: 'evaluating',
+        validator_hotkey: validatorHotkey,
+        run_id: 'run-shadow',
+        composite: 0.7,
+        snapshot,
+        observed_revision: 'v9-base-shadow-calibration-v1',
+        observed_manifest_sha256: 'cd'.repeat(32),
+        observed_rollout_mode: 'shadow',
+        semantic_gate_factor_bps: 0,
+        ticket_status: 'scored',
+        replacement_pending: false,
+        replacement_queued: false,
+        queue_position: null,
+        queue_allowed: true,
+        queue_blocking_reason: null,
+      }],
+      count: 1,
+      limit: 100,
+      offset: 0,
+      required_revision: 'v9-base-enforce-efficiency-v1',
+      required_manifest_sha256: 'ef'.repeat(32),
+      required_rollout_mode: 'enforce',
+    }
+    const queued = {
+      validator_hotkey: validatorHotkey,
+      activated: 0,
+      queued: 1,
+      idempotent: 0,
+      skipped: 0,
+      results: [{
+        agent_id: agentId,
+        request_id: '11111111-1111-4111-8111-111111111111',
+        status: 'queued',
+        detail: null,
+        queue_position: 1,
+      }],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(preview))
+      .mockResolvedValueOnce(Response.json(queued))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchV9ContractRetests({ limit: 100, offset: 0 })).resolves.toEqual(preview)
+    await expect(queueValidatorScoreRetests({
+      validatorHotkey,
+      basis: 'v9_contract_mismatch',
+      confirmation: 'QUEUE V9 CONTRACT RETESTS',
+      reason: 'Replace obsolete signed v9 score evidence',
+      items: [{ agentId, expectedSnapshot: snapshot, expectedRunId: 'run-shadow' }],
+    }, 'operator@example.com')).resolves.toEqual(queued)
+    const derivedQueueId = await deriveRequestId('score-replacement', [
+      agentId,
+      validatorHotkey,
+      'v9_contract_mismatch',
+      'operator@example.com',
+      'Replace obsolete signed v9 score evidence',
+      snapshot,
+      'run-shadow',
+    ])
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/v9-contract-retests?limit=100&offset=0',
+      expect.any(Object),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/validators/${validatorHotkey}/queue-score-retests`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          reason: 'Replace obsolete signed v9 score evidence',
+          basis: 'v9_contract_mismatch',
+          confirmation: 'QUEUE V9 CONTRACT RETESTS',
+          items: [{
+            agent_id: agentId,
+            request_id: derivedQueueId,
+            expected_snapshot: snapshot,
+            expected_run_id: 'run-shadow',
           }],
         }),
       }),

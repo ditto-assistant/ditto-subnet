@@ -3601,11 +3601,31 @@ export const replaceValidatorScoreResponseSchema = z.object({
 export const queueValidatorScoreRetestsInputSchema = z.object({
   validatorHotkey: z.string().min(1),
   reason: auditReasonSchema(8),
+  basis: z.enum(['statistical_outlier', 'v9_contract_mismatch']).default('statistical_outlier'),
+  confirmation: z.string().nullable().default(null),
   items: z.array(z.object({
     agentId: z.string().uuid(),
     expectedSnapshot: z.string().regex(/^[0-9a-f]{64}$/),
     expectedRunId: z.string().trim().min(1).max(200),
   })).min(1).max(100),
+}).superRefine((value, context) => {
+  if (
+    value.basis === 'v9_contract_mismatch' &&
+    value.confirmation !== 'QUEUE V9 CONTRACT RETESTS'
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['confirmation'],
+      message: 'Type QUEUE V9 CONTRACT RETESTS to authorize contract replacements',
+    })
+  }
+  if (value.basis === 'statistical_outlier' && value.confirmation !== null) {
+    context.addIssue({
+      code: 'custom',
+      path: ['confirmation'],
+      message: 'Confirmation is only valid for v9 contract retests',
+    })
+  }
 })
 
 export const queueValidatorScoreRetestsResponseSchema = z.object({
@@ -3689,6 +3709,44 @@ export const scoreOutlierListSchema = z.object({
 })
 
 export type ScoreOutlier = z.infer<typeof scoreOutlierSchema>
+
+export const v9ContractRetestFiltersSchema = z.object({
+  limit: z.number().int().min(1).max(200).default(100),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const v9ContractRetestItemSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  miner_hotkey: z.string(),
+  agent_status: z.string(),
+  validator_hotkey: z.string(),
+  run_id: z.string(),
+  composite: z.number().min(0).max(1),
+  snapshot: z.string().regex(/^[0-9a-f]{64}$/),
+  observed_revision: z.string().nullable(),
+  observed_manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  observed_rollout_mode: z.string().nullable(),
+  semantic_gate_factor_bps: z.number().int().min(0).max(10_000).nullable(),
+  ticket_status: z.enum(['issued', 'scored', 'expired']).nullable(),
+  replacement_pending: z.boolean(),
+  replacement_queued: z.boolean(),
+  queue_position: z.number().int().positive().nullable(),
+  queue_allowed: z.boolean(),
+  queue_blocking_reason: z.string().nullable(),
+})
+
+export const v9ContractRetestListSchema = z.object({
+  items: z.array(v9ContractRetestItemSchema),
+  count: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  required_revision: z.string(),
+  required_manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  required_rollout_mode: z.literal('enforce'),
+})
+
+export type V9ContractRetestItem = z.infer<typeof v9ContractRetestItemSchema>
 
 export const benchmarkContractRefreshLookupInputSchema = z.object({
   agentId: z.string().uuid(),

@@ -19,6 +19,15 @@ _V9_MAX_COUNT = 10_000_000
 _V9_MAX_USAGE = 9_007_199_254_740_991
 _BASIS_POINTS = 10_000
 
+# The authoritative ordinary-score identity is shared by Platform admission,
+# operator recovery, and validator evidence validation. Go binds the same pair
+# through the cross-language contract vector; keeping the Python consumers on
+# one definition prevents an operator retest from drifting from score intake.
+V9_SCORE_CONTRACT_REVISION = "v9-base-enforce-efficiency-v1"
+V9_SCORE_CONTRACT_MANIFEST_SHA256 = (
+    "861d161cd031d5c40a4c50f0ae0c3d4a4f99a8513ff7fc87239f22104ebe3bb8"
+)
+
 
 class V9ScoreContract(BaseModel):
     """Frozen identity of the ordinary v9 score contract."""

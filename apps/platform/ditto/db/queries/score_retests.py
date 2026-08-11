@@ -37,6 +37,22 @@ REPLACEMENT_TICKET_TTL = timedelta(minutes=90)
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
 
 
+def _agent_retestable(agent: Agent | None, entry: ScoreAuditEntry) -> bool:
+    if agent is None:
+        return False
+    if agent.status in _FINALIZED_STATUSES:
+        return True
+    # Contract repair is also necessary while a rollout candidate is still
+    # accumulating its quorum. Statistical outliers require a finalized
+    # three-score set, but one already-accepted shadow score is independently
+    # known to be non-authoritative and may be replaced without waiting for the
+    # other validators to finish.
+    return (
+        entry.payload.get("basis") == "v9_contract_mismatch"
+        and agent.status == AgentStatus.EVALUATING
+    )
+
+
 async def try_lock_validator(session: AsyncSession, validator_hotkey: str) -> bool:
     """Try to serialize ticket ownership changes for one validator.
 
@@ -291,8 +307,8 @@ async def activate_next_score_retest(
             Score, (entry.agent_id, bench_version, validator_hotkey)
         )
         stale_reason = None
-        if agent is None or agent.status not in _FINALIZED_STATUSES:
-            stale_reason = "submission is no longer finalized"
+        if not _agent_retestable(agent, entry):
+            stale_reason = "submission is no longer scoreable for this re-test"
         elif ticket is None or ticket.status != TicketStatus.SCORED:
             stale_reason = "accepted score ticket is no longer reusable"
         elif score is None or score.run_id != entry.payload.get("run_id"):
