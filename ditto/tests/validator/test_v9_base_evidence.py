@@ -202,6 +202,48 @@ def test_score_report_accepts_complete_digest_verified_v9_evidence() -> None:
     )
 
 
+def test_score_report_restores_go_omitted_zero_v9_stderr() -> None:
+    report = copy.deepcopy(_report())
+    base = report["details"]["v9_base"]
+    model_use = base["score_gates"]["model_use"]
+    model_use.update(
+        successful_inference_cases=0,
+        missing_inference_cases=10,
+        observed_requests=0,
+        successful_requests=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        request_coverage_bps=0,
+        coverage_bps=0,
+        result="zero_inference",
+        factor_bps=0,
+    )
+    gates = V9ScoreGateEvidence.model_validate(base["score_gates"])
+    base.update(
+        score_gates_sha256=gates.digest_hex(),
+        semantic_gate_factor_bps=0,
+        applied_gate_factor_bps=0,
+        effective_composite_micros=0,
+        effective_stderr_micros=0,
+    )
+    evidence = V9BaseEvidence.model_validate(base)
+    report.update(composite=0.0, base_evidence_sha256=evidence.digest_hex())
+    report.pop("composite_stderr")  # Go float64 `omitempty` zero-score shape.
+
+    parsed = ScoreReport.model_validate(report)
+
+    assert parsed.composite == 0.0
+    assert parsed.composite_stderr == 0.0
+
+
+def test_score_report_does_not_normalize_explicit_null_v9_stderr() -> None:
+    report = copy.deepcopy(_report())
+    report["composite_stderr"] = None
+
+    with pytest.raises(ValidationError, match="effective stderr"):
+        ScoreReport.model_validate(report)
+
+
 @pytest.mark.parametrize(
     ("path", "value", "match"),
     [

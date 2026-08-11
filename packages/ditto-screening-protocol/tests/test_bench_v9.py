@@ -12,6 +12,7 @@ from ditto_screening_protocol.bench_v9 import (
     V9BaseEvidence,
     V9ModelUseGate,
     V9ScoreGateEvidence,
+    normalize_v9_score_report_omitempty,
 )
 
 _SHA = "ab" * 32
@@ -99,6 +100,43 @@ def _base(
         "effective_composite_micros": 812345 if applied_factor else 0,
         "effective_stderr_micros": 12345 if applied_factor else 0,
     }
+
+
+def test_go_omitempty_normalization_is_narrow_and_copy_on_write() -> None:
+    raw = {
+        "bench_version": 9,
+        "details": {"v9_base": {"effective_stderr_micros": 0}},
+    }
+
+    normalized = normalize_v9_score_report_omitempty(raw)
+
+    assert normalized == {**raw, "composite_stderr": 0.0}
+    assert normalized is not raw
+    assert "composite_stderr" not in raw
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"bench_version": 8, "details": {"v9_base": {"effective_stderr_micros": 0}}},
+        {
+            "bench_version": 9,
+            "composite_stderr": None,
+            "details": {"v9_base": {"effective_stderr_micros": 0}},
+        },
+        {"bench_version": 9, "details": {"v9_base": {"effective_stderr_micros": 1}}},
+        {
+            "bench_version": 9,
+            "details": {"v9_base": {"effective_stderr_micros": False}},
+        },
+        {"bench_version": 9, "details": {}},
+        {"bench_version": 9},
+    ],
+)
+def test_go_omitempty_normalization_preserves_every_other_shape(
+    raw: dict[str, object],
+) -> None:
+    assert normalize_v9_score_report_omitempty(raw) is raw
 
 
 def test_score_gate_digest_is_canonical_and_pinned() -> None:

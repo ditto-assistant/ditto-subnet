@@ -30,3 +30,20 @@ func TestRunRequestBenchVersionIsAdditiveForV7Only(t *testing.T) {
 		t.Fatalf("v7 bench_version = %v, want %d", got, BenchVersionV7)
 	}
 }
+
+func TestScoreReportZeroCompositeStderrUsesHistoricalOmitEmptyShape(t *testing.T) {
+	reportJSON, err := json.Marshal(ScoreReport{
+		RunID: "v9-zero", GeneratedAt: "2026-08-11T00:00:00Z",
+		Composite: 0, CompositeStderr: 0, PerCase: []CaseScore{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reportObject map[string]any
+	if err := json.Unmarshal(reportJSON, &reportObject); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := reportObject["composite_stderr"]; present {
+		t.Fatal("zero composite_stderr must preserve the historical omitempty shape")
+	}
+}

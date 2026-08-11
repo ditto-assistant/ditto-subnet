@@ -14,12 +14,22 @@ that marshals a fully-populated ``protocol.ScoreReport`` (see the PR that added
 this file), or copy the emitted report of any bench_version 3 run.
 """
 
+import copy
 import json
 from pathlib import Path
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
 
 from ditto.api_models import ScoreReport
+from ditto.api_models.validator import V9BaseEvidence, V9ScoreGateEvidence
 
 FIXTURE = Path(__file__).parent / "fixtures" / "score_report_v3.json"
+V9_VECTOR = (
+    Path(__file__).resolve().parents[5]
+    / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+)
 
 # Wire keys the Go engine emits whose absence from the parsed model would mean
 # silent data loss. ``details`` is deliberately opaque (dict), so its inner
@@ -115,3 +125,66 @@ def test_report_round_trips_by_value() -> None:
     assert dumped["details"] == raw["details"]
     assert report.composite == raw["composite"]
     assert report.seed == raw["seed"]
+
+
+def _go_omitted_zero_v9_report() -> dict[str, Any]:
+    details = copy.deepcopy(json.loads(V9_VECTOR.read_text())["vectors"][0]["details"])
+    model_use = details["score_gates"]["model_use"]
+    model_use.update(
+        successful_inference_cases=0,
+        missing_inference_cases=3,
+        observed_requests=0,
+        successful_requests=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        case_attribution_complete=True,
+        request_coverage_bps=0,
+        coverage_bps=0,
+        result="zero_inference",
+        factor_bps=0,
+    )
+    gates = V9ScoreGateEvidence.model_validate(details["score_gates"])
+    details.update(
+        score_gates_sha256=gates.digest_hex(),
+        semantic_gate_factor_bps=0,
+        applied_gate_factor_bps=0,
+        effective_composite_micros=0,
+        effective_stderr_micros=0,
+    )
+    evidence = V9BaseEvidence.model_validate(details)
+    return {
+        "run_id": details["run_id"],
+        "bench_version": 9,
+        "base_evidence_sha256": evidence.digest_hex(),
+        "seed": 42,
+        "composite": 0.0,
+        "tool_mean": 0.0,
+        "memory_mean": 0.0,
+        "median_ms": 1,
+        "n": 351,
+        "generated_at": "2026-08-11T00:00:00Z",
+        "per_case": [],
+        "details": {
+            "dataset_sha256": details["dataset_sha256"],
+            "transcript_sha256": details["transcript_sha256"],
+            "v9_base": details,
+        },
+    }
+
+
+def test_go_omitted_zero_v9_stderr_round_trips_into_platform() -> None:
+    raw = _go_omitted_zero_v9_report()
+    assert "composite_stderr" not in raw
+
+    report = ScoreReport.model_validate(raw)
+
+    assert report.composite == 0.0
+    assert report.composite_stderr == 0.0
+
+
+def test_nonzero_v9_evidence_still_rejects_omitted_stderr() -> None:
+    raw = _go_omitted_zero_v9_report()
+    raw["details"]["v9_base"]["effective_stderr_micros"] = 1
+
+    with pytest.raises(ValidationError):
+        ScoreReport.model_validate(raw)

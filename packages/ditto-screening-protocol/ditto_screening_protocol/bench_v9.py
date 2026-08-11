@@ -8,6 +8,7 @@ derivations while retaining their existing public import paths.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -27,6 +28,36 @@ V9_SCORE_CONTRACT_REVISION = "v9-base-enforce-efficiency-v1"
 V9_SCORE_CONTRACT_MANIFEST_SHA256 = (
     "861d161cd031d5c40a4c50f0ae0c3d4a4f99a8513ff7fc87239f22104ebe3bb8"
 )
+
+
+def normalize_v9_score_report_omitempty(value: object) -> object:
+    """Restore a signed zero stderr omitted by Go's JSON encoder.
+
+    ``protocol.ScoreReport.CompositeStderr`` is additive-optional for historical
+    benchmarks and therefore uses ``omitempty``.  An enforced v9 gate can reduce
+    both the effective composite and its stderr to zero, causing Go to omit the
+    top-level field even though the signature-bound v9 base evidence explicitly
+    carries ``effective_stderr_micros = 0``.  Normalize only that exact v9 shape;
+    pre-v9 reports, explicit nulls, non-zero evidence, and malformed evidence
+    retain their existing validation behavior.
+    """
+
+    if not isinstance(value, Mapping):
+        return value
+    if value.get("bench_version") != 9 or "composite_stderr" in value:
+        return value
+    details = value.get("details")
+    if not isinstance(details, Mapping):
+        return value
+    evidence = details.get("v9_base")
+    if not isinstance(evidence, Mapping):
+        return value
+    effective_stderr = evidence.get("effective_stderr_micros")
+    if type(effective_stderr) is not int or effective_stderr != 0:
+        return value
+    normalized = dict(value)
+    normalized["composite_stderr"] = 0.0
+    return normalized
 
 
 class V9ScoreContract(BaseModel):
