@@ -2956,6 +2956,137 @@ class TestClaim:
                 "Late deep-review evidence retained after operator action"
             )
 
+    async def test_deferred_review_health_miss_preserves_hold_and_retries(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.ATH_PENDING_REVIEW,
+            name="deferred-health-retry",
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        opened_at = datetime.now(UTC) - timedelta(minutes=5)
+        async with session_maker() as session, session.begin():
+            session.add(
+                AthReview(
+                    review_id=uuid4(),
+                    agent_id=agent_id,
+                    status="pending",
+                    opened_at=opened_at,
+                    original_reason=(
+                        "Score qualified this submission for deferred source review"
+                    ),
+                    original_policy_version=SCREENING_POLICY_VERSION,
+                    original_evidence={
+                        "previous_status": AgentStatus.SCORED.value,
+                        "score_count": 3,
+                    },
+                    algorithm_provenance={"review_kind": "deferred_source_review"},
+                )
+            )
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=opened_at + timedelta(minutes=1),
+                    deadline=datetime.now(UTC) + timedelta(minutes=30),
+                    build_only=False,
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            attempt_id=attempt_id,
+            outcome="deterministic_reject",
+            reason_code="health-contract",
+            detail="serve check failed: /health never healthy within 90s",
+        )
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+
+        assert response.status_code == replay.status_code == 200
+        assert response.json()["status"] == AgentStatus.ATH_PENDING_REVIEW
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            review = await session.scalar(
+                select(AthReview).where(AthReview.agent_id == agent_id)
+            )
+            assert agent is not None
+            assert agent.status == AgentStatus.ATH_PENDING_REVIEW
+            assert agent.screening_reason == (
+                "Deferred source review runtime verification was interrupted; "
+                "retry scheduled"
+            )
+            assert agent.screening_reason_code == "health-contract"
+            assert attempt is not None and attempt.status == "failed"
+            assert review is not None and review.status == "pending"
+            assert review.resolution is None
+
+    async def test_ordinary_health_contract_failure_still_rejects_submission(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING,
+            name="ordinary-health-reject",
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=30),
+                    build_only=False,
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="deterministic_reject",
+                reason_code="health-contract",
+                detail="serve check failed: /health never healthy within 90s",
+            ),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == AgentStatus.REJECTED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert agent is not None and agent.status == AgentStatus.REJECTED
+            assert agent.screening_reason == "Container failed the health check"
+            assert attempt is not None and attempt.status == "rejected"
+
 
 class TestQuarantineAdmin:
     async def test_list_sorts_oldest_by_default_and_accepts_newest(

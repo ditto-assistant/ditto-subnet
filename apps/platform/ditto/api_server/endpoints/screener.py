@@ -2983,6 +2983,24 @@ async def submit_result(
     ):
         target = AgentStatus.ATH_PENDING_REVIEW
         public_reason = "Deferred source review was interrupted; retry scheduled"
+    elif (
+        deferred_deep_attempt
+        and payload.outcome == ScreenResultOutcome.DETERMINISTIC_REJECT
+        and payload.reason_code == "health-contract"
+    ):
+        # The immutable artifact already passed the score-first mechanical
+        # admission and completed enough validator runs to qualify for this
+        # source-only review. A later container-health miss on a different
+        # screener host is useful operator evidence, but cannot honestly undo
+        # those retained proofs or turn a pending source review into a miner
+        # rejection. Keep the reward hold, mark this attempt retryable, and let
+        # the ordinary bounded retry/expiry policy decide whether another host
+        # can complete the deep review.
+        target = AgentStatus.ATH_PENDING_REVIEW
+        public_reason = (
+            "Deferred source review runtime verification was interrupted; "
+            "retry scheduled"
+        )
     elif outcome_value == "pass_inconclusive":
         target = AgentStatus.EVALUATING
         public_reason = (
