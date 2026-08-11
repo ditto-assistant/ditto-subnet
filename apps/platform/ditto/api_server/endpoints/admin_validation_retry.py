@@ -140,6 +140,9 @@ _REPLACEABLE_STATUSES = {
     AgentStatus.SCORED,
     AgentStatus.LIVE,
 }
+_CONTRACT_RETEST_STATUSES = _REPLACEABLE_STATUSES | {
+    AgentStatus.ATH_PENDING_REVIEW,
+}
 _FINALIZED_STATUSES = {AgentStatus.SCORED, AgentStatus.LIVE}
 OUTLIER_MIN_DEVIATION = 0.15
 OUTLIER_GAP_RATIO = 2.0
@@ -1352,7 +1355,7 @@ def _contract_retest_queue_gate(
     ticket: ValidatorTicket | None,
     replacement_open: bool,
 ) -> str | None:
-    if agent.status not in _REPLACEABLE_STATUSES:
+    if agent.status not in _CONTRACT_RETEST_STATUSES:
         return "submission is not in a scoreable state"
     if target is None:
         return "validator has no accepted score to replace"
@@ -1581,7 +1584,7 @@ async def list_v9_contract_retests(
                 select(Agent, Score)
                 .join(Score, Score.agent_id == Agent.agent_id)
                 .where(
-                    Agent.status.in_(_REPLACEABLE_STATUSES),
+                    Agent.status.in_(_CONTRACT_RETEST_STATUSES),
                     Score.bench_version == 9,
                 )
                 .order_by(

@@ -44,14 +44,14 @@ def _agent_retestable(agent: Agent | None, entry: ScoreAuditEntry) -> bool:
     if agent.status in _FINALIZED_STATUSES:
         return True
     # Contract repair is also necessary while a rollout candidate is still
-    # accumulating its quorum. Statistical outliers require a finalized
-    # three-score set, but one already-accepted shadow score is independently
-    # known to be non-authoritative and may be replaced without waiting for the
-    # other validators to finish.
-    return (
-        entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
-        and agent.status == AgentStatus.EVALUATING
-    )
+    # accumulating its quorum or held for source review. Statistical outliers
+    # require a finalized three-score set, but one already-accepted shadow
+    # score is independently known to be non-authoritative and may be replaced
+    # without waiting for the other validators or the human review to finish.
+    return entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS and agent.status in {
+        AgentStatus.EVALUATING,
+        AgentStatus.ATH_PENDING_REVIEW,
+    }
 
 
 async def try_lock_validator(session: AsyncSession, validator_hotkey: str) -> bool:

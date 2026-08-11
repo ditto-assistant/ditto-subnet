@@ -2171,6 +2171,76 @@ async def test_v9_contract_retests_queue_and_promote_for_evaluating_agents(
         )
 
 
+async def test_v9_contract_retests_repair_scores_while_source_review_is_pending(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A human hold must not preserve a known non-authoritative score.
+
+    Clearing source review changes the agent directly to ``scored``. If the
+    contract-repair lane ignored held agents, an operator could therefore make
+    a signed shadow score rankable without ever giving its validator a chance
+    to replace it under the enforce contract.
+    """
+    agent_id = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=agent_id,
+        revision="v9-base-shadow-calibration-v1",
+        manifest_sha256="5" * 64,
+        rollout_mode="shadow",
+        factor_bps=0,
+    )
+    async with retry_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.ATH_PENDING_REVIEW
+    _install(app, retry_maker)
+
+    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    item = preview.json()["items"][0]
+    assert item["agent_id"] == str(agent_id)
+    assert item["agent_status"] == AgentStatus.ATH_PENDING_REVIEW
+    assert item["observed_rollout_mode"] == "shadow"
+    assert item["queue_allowed"] is True
+
+    queued = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json={
+            "basis": "v9_contract_mismatch",
+            "confirmation": "QUEUE V9 CONTRACT RETESTS",
+            "reason": "Replace held shadow evidence before source review can clear",
+            "items": [
+                {
+                    "agent_id": str(agent_id),
+                    "request_id": str(uuid4()),
+                    "expected_snapshot": item["snapshot"],
+                    "expected_run_id": item["run_id"],
+                }
+            ],
+        },
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["queued"] == 1
+
+    async with retry_maker() as session, session.begin():
+        promoted = await activate_next_score_retest(
+            session,
+            validator_hotkey="validator-0",
+            now=datetime.now(UTC),
+            supports_version=lambda version: version == 9,
+        )
+        assert promoted is not None
+        assert promoted.agent_id == agent_id
+        assert promoted.bench_version == 9
+        held = await session.get(Agent, agent_id)
+        assert held is not None
+        assert held.status == AgentStatus.ATH_PENDING_REVIEW
+
+
 async def test_lists_only_unambiguous_finalized_score_outliers(
     app: FastAPI,
     client: httpx.AsyncClient,
