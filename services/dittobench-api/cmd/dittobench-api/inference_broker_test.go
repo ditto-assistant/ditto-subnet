@@ -307,6 +307,58 @@ func TestCaseGenerationKeepsLateCompletionOutOfNextCase(t *testing.T) {
 	}
 }
 
+func TestCaseGenerationKeepsAdmittedUncountedTailOutOfNextCase(t *testing.T) {
+	broker := newInferenceBroker(1)
+	id := "admitted-uncounted-tail"
+	session := &brokerSession{}
+	broker.mu.Lock()
+	broker.sessions[id] = session
+	broker.mu.Unlock()
+
+	first, _, err := broker.beginCaseSnapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// handleChat has admitted and generation-bound the request, but proxy has
+	// not yet parsed the body or incremented Requests. This is the exact narrow
+	// race seen in production when /run returned while a background call was
+	// still entering the trusted broker.
+	session.mu.Lock()
+	snapshot := session.caseSnapshots[first]
+	snapshot.InFlight++
+	session.caseSnapshots[first] = snapshot
+	session.inFlight++
+	session.mu.Unlock()
+	firstClosed, err := broker.endCaseSnapshot(id, first)
+	if err != nil || firstClosed != (brokerCaseSnapshot{InFlight: 1}) {
+		t.Fatalf("close first generation = %+v, %v", firstClosed, err)
+	}
+	second, secondBefore, err := broker.beginCaseSnapshot(id)
+	if err != nil || second != first+1 || secondBefore != (brokerCaseSnapshot{}) {
+		t.Fatalf("begin second generation = %d %+v, %v", second, secondBefore, err)
+	}
+
+	// The late parser/completion mutates only the closed first generation. The
+	// second remains a clean zero-use window and cannot inherit the tail.
+	session.mu.Lock()
+	firstSnapshot := session.caseSnapshots[first]
+	firstSnapshot.Requests++
+	firstSnapshot.Successes++
+	firstSnapshot.InFlight--
+	session.caseSnapshots[first] = firstSnapshot
+	session.requests++
+	session.successes++
+	session.inFlight--
+	secondSnapshot := session.caseSnapshots[second]
+	session.mu.Unlock()
+	if firstSnapshot != (brokerCaseSnapshot{Requests: 1, Successes: 1}) {
+		t.Fatalf("first generation = %+v", firstSnapshot)
+	}
+	if secondSnapshot != (brokerCaseSnapshot{}) {
+		t.Fatalf("tail bled into second generation: %+v", secondSnapshot)
+	}
+}
+
 func TestLegacyBrokerRetainsBoundedRelayRetries(t *testing.T) {
 	requestCount := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -100,6 +100,62 @@ func TestRunCaseWithModelAttributionExcludesBrokerTailFromReturnedAnswer(t *test
 	}
 }
 
+func TestRunCaseWithModelAttributionExcludesAdmittedUncountedTail(t *testing.T) {
+	broker := newInferenceBroker(1)
+	sessionID := "case-attribution-admitted-tail"
+	session := &brokerSession{}
+	broker.mu.Lock()
+	broker.sessions[sessionID] = session
+	broker.mu.Unlock()
+
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		session.mu.Lock()
+		generation := session.activeCaseGeneration
+		snapshot := session.caseSnapshots[generation]
+		snapshot.InFlight++
+		session.caseSnapshots[generation] = snapshot
+		session.inFlight++
+		session.mu.Unlock()
+		close(requestStarted)
+		go func() {
+			<-releaseRequest
+			session.mu.Lock()
+			snapshot := session.caseSnapshots[generation]
+			snapshot.InFlight--
+			session.caseSnapshots[generation] = snapshot
+			session.inFlight--
+			session.mu.Unlock()
+		}()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"final_text":"ok"}`))
+	}))
+	defer harness.Close()
+
+	type outcome struct {
+		execution runner.CaseExecution
+		err       error
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		_, execution, err := (&server{broker: broker}).runCaseWithModelAttribution(
+			runner.TrustSandbox(context.Background()), sessionID, harness.URL,
+			"case-1", "question", nil, runner.CaseOptions{BenchVersion: protocol.BenchVersionV9},
+		)
+		result <- outcome{execution: execution, err: err}
+	}()
+	<-requestStarted
+	got := <-result
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if !got.execution.ModelAttributionComplete || got.execution.ModelInferenceObserved {
+		t.Fatalf("model attribution = %+v", got.execution)
+	}
+	close(releaseRequest)
+}
+
 func TestRunCaseWithModelAttributionCountsSettledGenerationSuccess(t *testing.T) {
 	broker := newInferenceBroker(1)
 	sessionID := "case-attribution-success"
@@ -394,14 +450,15 @@ func TestV9GenerationCaseDeltaExcludesUnsettledTail(t *testing.T) {
 		beforeErr, afterErr error
 		observed, complete  bool
 	}{
-		{name: "zero use", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 4, Successes: 4}, complete: true},
-		{name: "one success", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}, observed: true, complete: true},
-		{name: "failed request", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 4}, complete: true},
-		{name: "overlap before", before: brokerCaseSnapshot{Requests: 4, Successes: 4, InFlight: 1}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}},
-		{name: "unsettled tail after response", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 4, InFlight: 1}, complete: true},
-		{name: "request rollback", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 4, Successes: 4}},
-		{name: "success rollback", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 3}},
-		{name: "success exceeds requests", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}},
+		{name: "zero use", complete: true},
+		{name: "one success", after: brokerCaseSnapshot{Requests: 1, Successes: 1}, observed: true, complete: true},
+		{name: "failed request", after: brokerCaseSnapshot{Requests: 1}, complete: true},
+		{name: "unfinished counted request", after: brokerCaseSnapshot{Requests: 1, InFlight: 1}, complete: true},
+		{name: "admitted before request count", after: brokerCaseSnapshot{InFlight: 1}, complete: true},
+		{name: "multiple unfinished handlers", after: brokerCaseSnapshot{Requests: 1, InFlight: 2}, complete: true},
+		{name: "nonzero new-generation baseline", before: brokerCaseSnapshot{Requests: 1}, after: brokerCaseSnapshot{Requests: 1}},
+		{name: "negative in-flight", after: brokerCaseSnapshot{InFlight: -1}},
+		{name: "success exceeds requests", after: brokerCaseSnapshot{Successes: 1}},
 		{name: "before unavailable", beforeErr: fmt.Errorf("missing")},
 		{name: "after unavailable", afterErr: fmt.Errorf("missing")},
 	}

@@ -38,7 +38,7 @@ func v9GenerationCaseDelta(
 	beforeErr error,
 	afterErr error,
 ) (observed bool, complete bool) {
-	if beforeErr != nil || afterErr != nil || before.InFlight != 0 || after.InFlight < 0 ||
+	if beforeErr != nil || afterErr != nil || before != (brokerCaseSnapshot{}) || after.InFlight < 0 ||
 		after.Requests < before.Requests || after.Successes < before.Successes {
 		return false, false
 	}
@@ -47,12 +47,11 @@ func v9GenerationCaseDelta(
 	if successDelta > requestDelta {
 		return false, false
 	}
-	if uint64(after.InFlight) > requestDelta-successDelta {
-		return false, false
-	}
 	// A request still in flight after /run returned cannot have contributed to
-	// the returned answer. Its eventual completion stays on this generation and
-	// is conservatively excluded instead of poisoning the next case window.
+	// the returned answer. That includes a handler admitted just before the
+	// response which has not read its body or incremented Requests yet. Exclude
+	// every unfinished call; its eventual completion stays on this generation
+	// and cannot poison this or the next case window.
 	return successDelta > 0, true
 }
 
