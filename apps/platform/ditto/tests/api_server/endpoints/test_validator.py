@@ -5063,6 +5063,15 @@ class TestRequestJob:
             dataset_version=9,
         )
         now = datetime.now(UTC)
+        fresh_agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            name="fresh-during-rollout",
+            created_at=now + timedelta(seconds=1),
+            miner_hotkey="5FreshDuringRollout",
+            sha256="ef" * 32,
+            dataset_version=9,
+        )
         rollout_id = uuid4()
         profile = aggregate_profile_revision(benchmark_model(9), bench_version=9)
         async with session_maker() as session, session.begin():
@@ -5117,7 +5126,12 @@ class TestRequestJob:
             protocol_version=18,
             capabilities=capabilities,
             stack=_V7_STACK,
-            benchmark_capacity=_ACCEPTING_CAPACITY,
+            benchmark_capacity={
+                "configured_slots": 2,
+                "healthy_slots": ["slot-0", "slot-1"],
+                "admission": "accepting",
+                "active": [],
+            },
         )
         _install_db(app, session_maker)
         _install_chain(app)
@@ -5145,6 +5159,7 @@ class TestRequestJob:
 
         assert response.status_code == 200, response.text
         assert response.json()["agent_id"] == str(agent_id)
+        assert response.json()["agent_id"] != str(fresh_agent_id)
         assert response.json()["bench_version"] == 9
         assert response.json()["inference"]["profile_revision"] == profile
         activate_retest.assert_awaited_once()
@@ -5153,6 +5168,18 @@ class TestRequestJob:
         assert call_kwargs["required_basis"] == "v9_contract_mismatch"
         assert call_kwargs["allow_parallel_ordinary"] is True
         assert call_kwargs["allow_parallel_contract_retests"] is True
+
+        # This validator now already holds every frozen member it can advance.
+        # A sibling slot must not park: it falls through to the ordinary v9
+        # lane and keeps fleet capacity full.
+        fallback = await client.post(
+            "/api/v1/validator/job",
+            headers=_AUTH_HEADER,
+            json=_job_payload(slot_id="slot-1"),
+        )
+        assert fallback.status_code == 200, fallback.text
+        assert fallback.json()["agent_id"] == str(fresh_agent_id)
+        assert fallback.json()["bench_version"] == 9
         async with session_maker() as session:
             grant = await session.scalar(
                 select(InferenceGrant).where(
@@ -5162,6 +5189,14 @@ class TestRequestJob:
             )
             assert grant is not None
             assert grant.route_profile == profile
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(ValidatorTicket)
+                    .where(ValidatorTicket.agent_id == fresh_agent_id)
+                )
+                == 1
+            )
 
     async def test_open_v9_rollout_never_resumes_a_live_v8_ticket(
         self,

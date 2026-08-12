@@ -2745,6 +2745,22 @@ async def request_job(
                 if target_benchmark_ready
                 else None
             )
+            # The activation boundary waits for every frozen member, not just
+            # the first-five authority subset.  Give that bounded cohort first
+            # refusal on every capable slot while the rollout is open.  The
+            # rollout allocator already returns ``None`` when this validator
+            # has scored, holds, or exhausted every member it can advance, so
+            # ordinary desired-era work still fills otherwise-idle capacity.
+            if ticket is None and target_benchmark_ready:
+                ticket = await issue_rollout_ticket(
+                    session,
+                    validator_hotkey=payload.validator_hotkey,
+                    now=now,
+                    ttl=_TICKET_TTL,
+                    artifact_mode=artifact_mode,
+                    validator_running_benchmark=slot_running_benchmark,
+                    slot_id=slot_id,
+                )
             fresh_lane_due = (
                 ticket is None
                 and target_benchmark_ready
@@ -2810,20 +2826,6 @@ async def request_job(
                         ),
                     )
                     if fresh_lane_due
-                    else None
-                )
-            if ticket is None:
-                ticket = (
-                    await issue_rollout_ticket(
-                        session,
-                        validator_hotkey=payload.validator_hotkey,
-                        now=now,
-                        ttl=_TICKET_TTL,
-                        artifact_mode=artifact_mode,
-                        validator_running_benchmark=slot_running_benchmark,
-                        slot_id=slot_id,
-                    )
-                    if target_benchmark_ready
                     else None
                 )
             if ticket is None and not fresh_lane_due and target_benchmark_ready:
