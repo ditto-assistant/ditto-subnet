@@ -166,13 +166,16 @@ async def test_concurrent_source_backfill_respects_atomic_fleet_cap(
                 validator_hotkey=validator_hotkey,
                 now=now,
                 # Equal to ``from_version``, which is what "a rollout is open"
-                # means to this lane. The shipped carryover defaults are left
-                # alone deliberately: no setting is needed to reach the lane in
-                # this state, and none exists that could reach it in any other.
+                # means to this lane. Exercise the atomic cap with the
+                # previous-generation lane explicitly enabled; production can
+                # close the entire lane with its master switch.
                 active_version=_SOURCE_VERSION,
                 artifact_mode="screened_only",
                 validator_running_benchmark=False,
                 slot_id="slot-0",
+                carryover_settings=validator_endpoint.PrevGenCarryoverSettings(
+                    enabled=True
+                ),
             )
 
     outcomes = await asyncio.gather(claim("validator-0"), claim("validator-1"))
