@@ -2661,7 +2661,8 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
         ("0.53.1", False),
         ("0.53.2", False),
         ("0.53.4", False),
-        ("0.53.5", True),
+        ("0.53.5", False),
+        ("0.53.6", True),
         ("0.54.0", True),
     ],
 )
@@ -2690,7 +2691,7 @@ async def test_capable_counts_exclude_stale_v9_advertisers(
 ) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     async with session_maker() as session, session.begin():
-        for index, software_version in enumerate(("0.53.4", "source-build", "0.53.5")):
+        for index, software_version in enumerate(("0.53.5", "source-build", "0.53.6")):
             heartbeat = _heartbeat(
                 f"v9-floor-{index}", now, versions=[7, 8, 9], protocol_version=18
             )
