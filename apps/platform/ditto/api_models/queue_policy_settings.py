@@ -146,11 +146,79 @@ ROLLOUT_LOCKED_FIELDS = ("lane_cycle_size", "fresh_submission_slots")
 
 
 class DeferredSourceReviewSettings(BaseModel):
-    """Hot-swappable post-score deep-review admission and anomaly policy."""
+    """Hot-swappable post-score deep-review admission and anomaly policy.
+
+    This board decides *when* the expensive source review runs, not whether
+    source integrity is checked at all. Every mode reviews every submission; they
+    differ in whether the review happens before scoring (automatic, by a
+    screener) or after it (as an operator-adjudicated hold).
+
+    SCOPE -- source integrity only
+    ==============================
+
+    Nothing on this board touches **copy/plagiarism** enforcement. Copy holds
+    (``review_kind: "copy"``) are opened from the duplicate-signal decision at
+    score finalization, which never reads this board, runs *before* the deferred
+    path, and wins outright: a copy hold moves the agent to
+    ``ATH_PENDING_REVIEW``, and the deferred path only acts on agents still in
+    ``SCORED``/``LIVE``. Setting ``mode="off"`` disables the deferred
+    source-integrity branch and **leaves plagiarism detection fully armed**.
+    The same is true of the transform/overfit audit, which has its own switch.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     mode: Literal["off", "observe", "enforce"] = "off"
+    """Where the expensive source review runs, and whether it can hold.
+
+    ``off`` -- the legacy full pre-score review. Every fresh submission gets the
+        complete deep screen *before* it is scoreable, so no deferred hold is
+        ever opened and no post-score qualification is computed. This is the
+        heaviest mode for the screener fleet: the deep review runs on every
+        submission rather than on the handful that qualify.
+
+    ``observe`` -- pre-score review is the same full deep screen as ``off``, but
+        post-score qualification is still computed and written to the append-only
+        score audit (``audit_kind: "deferred_source_review"``, ``enforced:
+        false``). Nothing is held and the agent proceeds to ``SCORED``. This is
+        the mode to pick when turning enforcement off, because it keeps the
+        record of which submissions *would* have been held -- rank, composite,
+        and the MAD thresholds -- so returning to ``enforce`` later leaves no gap
+        in the evidence.
+
+    ``enforce`` -- mechanical-first admission. A fresh submission gets only a
+        cheap build-only screen up front (marked
+        ``deferred-mechanical-admission``) and is scored immediately; the deep
+        review is deferred and runs only for submissions that qualify by
+        top-five rank or by exceeding the robust anomaly thresholds. Qualifying
+        opens a pending ``deferred_source_review`` hold, moves the agent to
+        ``ATH_PENDING_REVIEW``, and excludes it from the emission-eligible
+        ledger until the review completes.
+
+    OPERATIONAL HAZARD -- flipping away from ``enforce`` strands open holds
+    ======================================================================
+
+    Moving to ``observe`` or ``off`` stops new holds, but it also switches off
+    the machinery that *clears* the ones already open. A pending deferred hold
+    is normally resolved automatically: the agent's ``ATH_PENDING_REVIEW`` row
+    is re-claimed by a screener for the deep pass, and a passing verdict clears
+    the hold and releases the agent. That re-claim is gated on this field being
+    ``enforce`` (see ``deferred_ath_eligible`` in
+    ``ditto.db.queries.screening``); in any other mode it is ``false()``, so no
+    screener will ever pick those agents up again.
+
+    The holds therefore do not drain on their own -- they freeze, and every
+    frozen agent stays out of the emission ledger indefinitely. The evidence is
+    deliberately preserved rather than auto-cleared, because a bulk clearance
+    would write an unreasoned resolution onto each agent's public audit record.
+    Releasing them is an explicit operator action per agent
+    (``resolve_ath_review``).
+
+    So the safe order is **drain, then flip**: clear the open queue while still
+    in ``enforce``, and only then move to ``observe``. Flipping first leaves
+    whatever was pending at that instant stuck until it is resolved by hand.
+    """
+
     min_cohort_size: Annotated[int, Field(ge=5, le=100)] = 8
     composite_mad_multiplier: Annotated[float, Field(ge=1.0, le=20.0)] = 6.0
     axis_mad_multiplier: Annotated[float, Field(ge=1.0, le=20.0)] = 6.0
