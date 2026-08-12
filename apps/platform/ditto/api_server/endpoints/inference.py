@@ -268,6 +268,7 @@ async def _post_provider_with_retry(
     *,
     payload: dict[str, Any],
     headers: dict[str, str],
+    retry_backpressure: bool = True,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> _ProviderResult:
     """Run one logical provider request under the shared bounded retry policy.
@@ -295,6 +296,7 @@ async def _post_provider_with_retry(
         if (
             response.status_code in _PROVIDER_RETRY_STATUSES
             and attempt < _PROVIDER_MAX_ATTEMPTS
+            and (retry_backpressure or not _provider_is_backpressure(response))
         ):
             if _provider_is_backpressure(response):
                 delay = _provider_retry_after_seconds(response)
@@ -1909,6 +1911,7 @@ async def proxy_embeddings(
             config.embedding_upstream_url,
             payload=upstream_payload,
             headers=_openrouter_headers(config.openrouter_api_key),
+            retry_backpressure=False,
         )
         upstream = provider_result.response
         upstream_attempts = provider_result.attempts

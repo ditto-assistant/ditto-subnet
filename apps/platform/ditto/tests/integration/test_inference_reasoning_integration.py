@@ -657,7 +657,7 @@ async def test_embedding_provider_backpressure_reaches_broker_as_capacity(
     assert raised.value.headers == {
         "Retry-After": retry_after if retry_after is not None else "1"
     }
-    assert calls == 3
+    assert calls == 1
     async with session_maker() as session:
         request = (
             await session.scalars(
@@ -665,7 +665,7 @@ async def test_embedding_provider_backpressure_reaches_broker_as_capacity(
             )
         ).one()
         assert request.status == "failed"
-        assert request.upstream_attempts == 3
+        assert request.upstream_attempts == 1
         assert request.terminal_error_code == (
             f"embedding_provider_backpressure_{provider_status}"
         )

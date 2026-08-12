@@ -536,12 +536,12 @@ func (platformEmbeddingAtCapacity) Error() string {
 	return "embedding platform lane is at capacity"
 }
 
-// platformEmbeddingCapacityMaxWaits bounds how long one embedding call will
-// queue behind platform backpressure. The request context already caps the call
-// at 65s; this is the second bound, so a platform pinned at zero headroom
-// surfaces as a failed run in bounded time rather than holding every case open
-// until the deadline.
-const platformEmbeddingCapacityMaxWaits = 12
+// platformEmbeddingCapacityMaxWaits is a pathological-loop guard, not the
+// ordinary throttle window. retryAfterDuration has a 250ms floor and the HTTP
+// request context is 65 seconds, so a real call reaches its context deadline
+// before this 260-wait ceiling. Keeping the ceiling protects injected clocks
+// and malformed responders without recreating the old twelve-second cutoff.
+const platformEmbeddingCapacityMaxWaits = 260
 
 // platformChatCapacityMaxWaits bounds how long one chat completion will queue
 // behind platform backpressure, for the same reason its embedding twin exists:

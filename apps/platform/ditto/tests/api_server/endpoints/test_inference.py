@@ -112,6 +112,29 @@ async def test_provider_retry_policy_honors_bounded_backpressure_hints() -> None
     assert sleeps == [5, 5]
 
 
+@pytest.mark.asyncio
+async def test_provider_retry_policy_can_delegate_backpressure_to_caller() -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, headers={"Retry-After": "2"}, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await _post_provider_with_retry(
+            client,
+            "https://provider.example/v1/request",
+            payload={"model": "test"},
+            headers={},
+            retry_backpressure=False,
+        )
+
+    assert result.response.status_code == 429
+    assert result.attempts == 1
+    assert calls == 1
+
+
 @pytest.mark.parametrize(
     ("header", "expected"),
     [("", 1), ("invalid", 1), ("0", 1), ("3", 3), ("999", 5)],

@@ -305,6 +305,48 @@ func TestPlatformCapacityBackpressureIsWaitedOutNotCountedAsAFault(t *testing.T)
 	}
 }
 
+// TestPlatformCapacityBackpressureUsesTheRequestDeadlineRatherThanACount
+// protects long rolling provider windows. Twelve Retry-After responses used to
+// terminate a healthy ticket even though the request still had time remaining.
+// The HTTP request context is already the authoritative 65-second bound, so the
+// broker must keep waiting until that deadline or a successful response.
+func TestPlatformCapacityBackpressureUsesTheRequestDeadlineRatherThanACount(t *testing.T) {
+	vector := make([]float64, embeddingDimensions)
+	var attempts atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) <= 13 {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "embedding provider rolling window is full", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list", "model": hostedEmbeddingModel,
+			"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": vector}},
+			"usage": map[string]int{"prompt_tokens": 4, "total_tokens": 4},
+		})
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
+		llm.V9AggregateProfileRevision, llm.HarnessModelForVersion(protocol.BenchVersionV9))
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.155", protocol.BenchVersionV9)
+	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+		t.Fatal("failed to admit v9 embedding phase")
+	}
+	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+
+	if response := callEmbedding(broker, "192.0.2.155", "hosted text"); response.Code != http.StatusOK {
+		t.Fatalf("rolling backpressure was not absorbed: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if attempts.Load() != 14 {
+		t.Fatalf("deliveries=%d, want 14 (thirteen waits then success)", attempts.Load())
+	}
+}
+
 // TestPlatformFiveHundredThreeWithoutRetryAfterIsStillAFault guards the
 // boundary. Only 503 WITH Retry-After is backpressure; a bare 503 is the
 // platform giving up after its own provider loop, which #103 established as the
