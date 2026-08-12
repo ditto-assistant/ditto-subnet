@@ -106,6 +106,7 @@ _PPLX_EMBED_RESPONSE_MODEL = "pplx-embed-v1-0.6b"
 _MIN_HOSTED_EMBEDDING_BENCH_VERSION = 7
 _PROVIDER_MAX_ATTEMPTS = 3
 _PROVIDER_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+_PROVIDER_RETRY_AFTER_MAX_SECONDS = 5
 
 # Bytes per token, for turning a request body into a token estimate.
 #
@@ -199,6 +200,34 @@ class _ProviderCallError(Exception):
         self.timed_out = timed_out
 
 
+def _provider_retry_after_seconds(response: httpx.Response) -> int:
+    """Return a bounded provider backoff without trusting an upstream delay.
+
+    OpenRouter may omit ``Retry-After`` or return a value that is unsuitable for
+    a live benchmark. The scorer already bounds capacity waiting to twelve
+    rounds, so five seconds is the largest useful single hint and one second is
+    the safe floor for an exhausted provider lane.
+    """
+    raw = response.headers.get("Retry-After", "").strip()
+    try:
+        seconds = int(raw)
+    except ValueError:
+        return 1
+    return min(_PROVIDER_RETRY_AFTER_MAX_SECONDS, max(1, seconds))
+
+
+def _provider_is_backpressure(response: httpx.Response) -> bool:
+    """Recognize rate pressure without laundering an ordinary outage.
+
+    OpenRouter's 429 is rate limiting. A 503 is capacity only when the provider
+    explicitly supplies ``Retry-After``; a bare 503 remains a dependency fault.
+    """
+    return response.status_code == 429 or (
+        response.status_code == 503
+        and response.headers.get("Retry-After", "").strip() != ""
+    )
+
+
 @dataclass(frozen=True)
 class _ChatCompletionResult:
     raw: bytes
@@ -267,8 +296,12 @@ async def _post_provider_with_retry(
             response.status_code in _PROVIDER_RETRY_STATUSES
             and attempt < _PROVIDER_MAX_ATTEMPTS
         ):
+            if _provider_is_backpressure(response):
+                delay = _provider_retry_after_seconds(response)
+            else:
+                delay = 0.25 * (2 ** (attempt - 1))
             await response.aclose()
-            await sleep(0.25 * (2 ** (attempt - 1)))
+            await sleep(delay)
             continue
         return _ProviderResult(response=response, attempts=attempt)
     raise AssertionError("provider retry loop exhausted without a terminal result")
@@ -1868,6 +1901,7 @@ async def proxy_embeddings(
     raw: bytes | None = None
     timed_out = False
     upstream_attempts = 0
+    terminal_error_code: str | None = None
     started = time.monotonic()
     try:
         provider_result = await _post_provider_with_retry(
@@ -1883,6 +1917,18 @@ async def proxy_embeddings(
                 status_code=502, detail="embedding response is too large"
             )
         if upstream.status_code >= 400:
+            if _provider_is_backpressure(upstream):
+                terminal_error_code = (
+                    f"embedding_provider_backpressure_{upstream.status_code}"
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="embedding provider is temporarily at capacity",
+                    headers={
+                        "Retry-After": str(_provider_retry_after_seconds(upstream))
+                    },
+                )
+            terminal_error_code = f"embedding_provider_http_{upstream.status_code}"
             raise HTTPException(
                 status_code=502, detail="embedding provider unavailable"
             )
@@ -1903,6 +1949,11 @@ async def proxy_embeddings(
     except _ProviderCallError as error:
         upstream_attempts = error.attempts
         timed_out = error.timed_out
+        terminal_error_code = (
+            "embedding_provider_timeout"
+            if timed_out
+            else "embedding_provider_transport"
+        )
         detail = (
             "embedding provider timed out"
             if timed_out
@@ -1931,6 +1982,7 @@ async def proxy_embeddings(
                 timed_out=timed_out,
                 latency_ms=max(0, round((time.monotonic() - started) * 1000)),
                 upstream_attempts=upstream_attempts,
+                terminal_error_code=terminal_error_code,
             )
     if not deliverable or raw is None:
         raise HTTPException(status_code=409, detail="embedding grant is no longer live")

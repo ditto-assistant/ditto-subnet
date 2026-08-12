@@ -33,8 +33,10 @@ from ditto.api_server.endpoints.inference import (
     _openrouter_last_attempted_provider,
     _output_token_limit,
     _post_provider_with_retry,
+    _provider_is_backpressure,
     _provider_preferences,
     _provider_rejection_is_route_observable,
+    _provider_retry_after_seconds,
     _ProviderCallError,
     _proxy_message,
     _public_embedding_response,
@@ -81,6 +83,53 @@ async def test_provider_retry_policy_retries_explicit_transient_statuses() -> No
     assert result.response.status_code == 200
     assert result.attempts == 3
     assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_provider_retry_policy_honors_bounded_backpressure_hints() -> None:
+    statuses = iter((429, 503, 200))
+    sleeps: list[float] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            next(statuses), headers={"Retry-After": "120"}, request=request
+        )
+
+    async def record_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await _post_provider_with_retry(
+            client,
+            "https://provider.example/v1/request",
+            payload={"model": "test"},
+            headers={},
+            sleep=record_sleep,
+        )
+
+    assert result.response.status_code == 200
+    assert result.attempts == 3
+    assert sleeps == [5, 5]
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [("", 1), ("invalid", 1), ("0", 1), ("3", 3), ("999", 5)],
+)
+def test_provider_retry_after_is_bounded(header: str, expected: int) -> None:
+    response = httpx.Response(429, headers={"Retry-After": header})
+    assert _provider_retry_after_seconds(response) == expected
+
+
+@pytest.mark.parametrize(
+    ("status", "header", "expected"),
+    [(429, "", True), (503, "2", True), (503, "", False), (502, "2", False)],
+)
+def test_provider_backpressure_classification_is_narrow(
+    status: int, header: str, expected: bool
+) -> None:
+    response = httpx.Response(status, headers={"Retry-After": header})
+    assert _provider_is_backpressure(response) is expected
 
 
 @pytest.mark.asyncio

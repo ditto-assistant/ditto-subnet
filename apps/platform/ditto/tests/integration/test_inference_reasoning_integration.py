@@ -599,6 +599,78 @@ async def test_versioned_hosted_embedding_reaches_provider_and_is_charged(
         assert grant.embedding_tokens == 3
 
 
+@pytest.mark.parametrize(("provider_status", "retry_after"), [(429, "2"), (503, "1")])
+@pytest.mark.asyncio
+async def test_embedding_provider_backpressure_reaches_broker_as_capacity(
+    session_maker: async_sessionmaker[Any],
+    provider_status: int,
+    retry_after: str | None,
+) -> None:
+    """Exhausted upstream pressure must not masquerade as a short-lived 502 fault."""
+    config = _config()
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    grant_id, bearer, generation = await _seed_grant(
+        session_maker,
+        config=config,
+        public_key=base64.urlsafe_b64encode(public).decode().rstrip("="),
+        bench_version=9,
+    )
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        headers = {"Retry-After": retry_after} if retry_after is not None else {}
+        return httpx.Response(provider_status, headers=headers, request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = _App(_State(config=config, session_maker=session_maker, client=client))
+    body = json.dumps(
+        {
+            "model": config.embedding_model,
+            "input": ["temporary provider pressure"],
+            "dimensions": config.embedding_dimensions,
+            "encoding_format": "float",
+        }
+    ).encode()
+
+    try:
+        with pytest.raises(HTTPException) as raised:
+            await proxy_embeddings(
+                **_signed_request(
+                    app=app,
+                    grant_id=grant_id,
+                    bearer=bearer,
+                    generation=generation,
+                    private=private,
+                    body=body,
+                )
+            )
+    finally:
+        await client.aclose()
+
+    assert raised.value.status_code == 503
+    assert raised.value.headers == {
+        "Retry-After": retry_after if retry_after is not None else "1"
+    }
+    assert calls == 3
+    async with session_maker() as session:
+        request = (
+            await session.scalars(
+                select(InferenceRequest).where(InferenceRequest.grant_id == grant_id)
+            )
+        ).one()
+        assert request.status == "failed"
+        assert request.upstream_attempts == 3
+        assert request.terminal_error_code == (
+            f"embedding_provider_backpressure_{provider_status}"
+        )
+
+
 @pytest.mark.asyncio
 async def test_structured_outputs_reach_the_provider_and_return_unmangled(
     session_maker: async_sessionmaker[Any],
