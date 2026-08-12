@@ -1323,6 +1323,62 @@ func TestInferenceBrokerTrustedProbeUsesControlPlaneSession(t *testing.T) {
 	}
 }
 
+// The trusted probe is the first hosted embedding request on a scored lease.
+// It must obey the same provider-backpressure contract as the run it guards:
+// otherwise one rolling-window 429 (translated by Platform to 503 +
+// Retry-After) discards the lease before the benchmark's bounded retry path can
+// ever run. This is deliberately a preflight test rather than another harness
+// embedding test; those already covered the later path while production still
+// failed here.
+func TestInferenceBrokerTrustedProbeWaitsOutPlatformEmbeddingBackpressure(t *testing.T) {
+	var chatCalls atomic.Int64
+	var embeddingCalls atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == platformEmbeddingAPIPath {
+			if embeddingCalls.Add(1) == 1 {
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "embedding provider rolling window is full", http.StatusServiceUnavailable)
+				return
+			}
+			vector := make([]float64, embeddingDimensions)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"object": "list", "model": hostedEmbeddingModel,
+				"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": vector}},
+				"usage": map[string]int{"prompt_tokens": 3, "total_tokens": 3},
+			})
+			return
+		}
+		chatCalls.Add(1)
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", llm.V9AggregateProfileRevision, llm.HarnessModelForVersion(protocol.BenchVersionV9))
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV9)
+
+	if err := broker.trustedProbe(context.Background(), prepared["session_id"]); err != nil {
+		t.Fatalf("trusted probe discarded a healthy backpressured lease: %v", err)
+	}
+	if got := chatCalls.Load(); got != 1 {
+		t.Fatalf("chat probe deliveries=%d, want 1", got)
+	}
+	if got := embeddingCalls.Load(); got != 2 {
+		t.Fatalf("embedding probe deliveries=%d, want one wait then success", got)
+	}
+	snapshot, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.InfrastructureFailures != 0 || snapshot.GrantDenials != 0 || snapshot.EmbeddingRetries != 0 {
+		t.Fatalf("provider backpressure was booked as a probe fault: %+v", snapshot)
+	}
+}
+
 // TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly replaces the
 // single-attempt contract #97 introduced. The platform still owns the first
 // line of provider retry, but one attempt here meant a fault it could not

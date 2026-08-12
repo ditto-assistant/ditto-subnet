@@ -2581,7 +2581,7 @@ func (b *inferenceBroker) trustedProbe(ctx context.Context, id string) error {
 	benchVersion := session.benchVersion
 	session.mu.Unlock()
 	if usesPlatformEmbedding(benchVersion) {
-		embedding, err := b.forwardPlatformEmbedding(ctx, session, []string{"validator embedding preflight"})
+		embedding, err := b.forwardPlatformEmbeddingWithRetry(ctx, session, []string{"validator embedding preflight"})
 		if err != nil {
 			return fmt.Errorf("ticket embedding probe failed: %w", err)
 		}
