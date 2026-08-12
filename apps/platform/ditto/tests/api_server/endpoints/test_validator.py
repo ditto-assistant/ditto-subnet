@@ -4090,6 +4090,44 @@ class TestRequestJob:
         issue.assert_not_awaited()
         outstanding.assert_awaited()
 
+    async def test_source_backfill_master_switch_disables_resume_and_admission(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The carryover switch closes both previous-generation lanes."""
+        now = datetime.now(UTC)
+        rollout = MagicMock(
+            rollout_id=uuid4(),
+            from_version=_BENCH_VERSION,
+            desired_version=_BENCH_VERSION + 1,
+            cohort_size=10,
+        )
+        session = AsyncMock()
+        supports = MagicMock(return_value=True)
+        issue = AsyncMock(return_value=MagicMock())
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.validator.heartbeat_supports_version",
+            supports,
+        )
+        monkeypatch.setattr("ditto.api_server.endpoints.validator.issue_ticket", issue)
+
+        ticket = await _issue_source_backfill_ticket(
+            session,
+            rollout=rollout,
+            heartbeat=MagicMock(),
+            validator_hotkey="validator-a",
+            now=now,
+            active_version=_BENCH_VERSION,
+            artifact_mode="screened_only",
+            validator_running_benchmark=True,
+            slot_id="slot-6",
+            carryover_settings=PrevGenCarryoverSettings(enabled=False),
+        )
+
+        assert ticket is None
+        supports.assert_not_called()
+        issue.assert_not_awaited()
+        session.scalar.assert_not_awaited()
+
     async def test_source_backfill_never_tickets_a_retired_era(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -4376,6 +4414,7 @@ class TestRequestJob:
             artifact_mode="screened_only",
             validator_running_benchmark=False,
             slot_id="slot-1",
+            carryover_settings=PrevGenCarryoverSettings(enabled=True),
         )
         assert blocked is None
         issue.assert_not_awaited()
@@ -4390,6 +4429,7 @@ class TestRequestJob:
             artifact_mode="screened_only",
             validator_running_benchmark=False,
             slot_id="slot-1",
+            carryover_settings=PrevGenCarryoverSettings(enabled=True),
         )
         assert ticket is issued
         supports_version.assert_any_call(heartbeat, now=now, version=_BENCH_VERSION)

@@ -1160,6 +1160,13 @@ async def _issue_source_backfill_ticket(
     still count. That is the ONLY case this lane serves now -- see the floor
     below.
     """
+    # Both previous-generation lanes answer to the same master switch. The
+    # adopted-carryover helper already enforced it, but source-era backfill did
+    # not, so `enabled=false` still issued ordinary v8 work during the v9
+    # rollout. Check before resumption and new admission alike: an operator who
+    # turns this policy off is closing the whole previous-generation lane.
+    if not carryover_settings.enabled:
+        return None
     # The floor, checked before anything else and before the resume path.
     #
     # Two separate conditions, because they fail for different reasons and one
