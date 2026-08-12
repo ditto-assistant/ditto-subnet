@@ -8,7 +8,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -80,9 +82,9 @@ func main() {
 		log.Fatalf("invalid -port %q", *port)
 	}
 	pprofserver.Start(context.Background(), "provider-relay", parsedPort)
-	apiKey := strings.TrimSpace(os.Getenv("PROVIDER_RELAY_API_KEY"))
-	if apiKey == "" {
-		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+	apiKey, err := providerAPIKey()
+	if err != nil {
+		log.Fatal(err)
 	}
 	r := &relay{
 		upstream: strings.TrimSpace(*upstream),
@@ -107,6 +109,35 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+*port, mux))
 }
 
+func providerAPIKey() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("PROVIDER_RELAY_API_KEY_FILE")); path != "" {
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", fmt.Errorf("provider key file is unavailable: %w", err)
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+			return "", errors.New("provider key file must be a mode-0600 regular file")
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("provider key file is unavailable: %w", err)
+		}
+		key := strings.TrimSpace(string(raw))
+		for i := range raw {
+			raw[i] = 0
+		}
+		if key == "" || strings.ContainsAny(key, "\r\n\x00") {
+			return "", errors.New("provider key file is invalid")
+		}
+		return key, nil
+	}
+	apiKey := strings.TrimSpace(os.Getenv("PROVIDER_RELAY_API_KEY"))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+	}
+	return apiKey, nil
+}
+
 func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 	started := time.Now()
 	raw, err := io.ReadAll(io.LimitReader(req.Body, maxBody))
@@ -121,8 +152,16 @@ func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 	}
 	body["model"] = r.model
 	body["stream"] = false
-	body["reasoning"] = map[string]any{"enabled": false, "exclude": false}
-	body["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+	if r.model == "openai/gpt-oss-20b" {
+		if err := normalizeReasoning(body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		delete(body, "chat_template_kwargs")
+	} else {
+		body["reasoning"] = map[string]any{"enabled": false, "exclude": false}
+		body["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+	}
 	if r.provider != "" {
 		body["provider"] = map[string]any{
 			"only": []string{r.provider}, "order": []string{r.provider},
@@ -163,6 +202,40 @@ func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(responseBody)
+}
+
+func normalizeReasoning(body map[string]any) error {
+	effort := ""
+	if nestedRaw, ok := body["reasoning"]; ok {
+		nested, ok := nestedRaw.(map[string]any)
+		if !ok || len(nested) != 1 {
+			return errors.New("invalid reasoning")
+		}
+		candidate, ok := nested["effort"].(string)
+		if !ok {
+			return errors.New("invalid reasoning effort")
+		}
+		effort = candidate
+	}
+	if flatRaw, ok := body["reasoning_effort"]; ok {
+		candidate, ok := flatRaw.(string)
+		if !ok {
+			return errors.New("invalid reasoning_effort")
+		}
+		if effort != "" && effort != candidate {
+			return errors.New("conflicting reasoning effort")
+		}
+		effort = candidate
+	}
+	if effort == "" {
+		effort = "medium"
+	}
+	if effort != "low" && effort != "medium" && effort != "high" {
+		return errors.New("invalid reasoning effort")
+	}
+	delete(body, "reasoning_effort")
+	body["reasoning"] = map[string]any{"effort": effort, "exclude": true}
+	return nil
 }
 
 func (r *relay) recordUpstreamError(elapsed time.Duration) {

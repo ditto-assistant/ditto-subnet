@@ -14,3 +14,8 @@ counterfactual model dependence, model tool selection, endpoint execution,
 result use, and post-model insertion. Transport failures and inconclusive
 results are rendered as `uncertain`; they never become evidence of guilt or a
 benchmark pass. Any uncertainty on a non-control fixture blocks readiness.
+
+Local fixture execution may select `bench_version: 10` on the practice route
+only when the scorer starts with `DITTOBENCH_PRIVATE_V10_QUALIFICATION=1`.
+This opt-in does not add v10 to capability negotiation, the canonical score
+route, release metadata, or activation state.

@@ -236,7 +236,7 @@ func SeedForVersion(ctx context.Context, harnessURL string, req protocol.SeedReq
 // removes wave metadata and makes all collection fields explicit arrays. This
 // is a wire-only shape; the canonical SeedRequest remains the artifact model.
 func marshalSeedRequest(req protocol.SeedRequest, benchVersion int) ([]byte, error) {
-	if benchVersion != protocol.BenchVersionV9 {
+	if benchVersion < protocol.BenchVersionV9 {
 		return json.Marshal(req)
 	}
 	type v9SeedRequest struct {

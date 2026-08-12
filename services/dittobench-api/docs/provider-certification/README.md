@@ -90,6 +90,11 @@ OPENROUTER_API_KEY=... go run ./cmd/provider-relay \
   -provider deepinfra -port 11435
 ```
 
+For secret-manager-backed local qualification, prefer
+`PROVIDER_RELAY_API_KEY_FILE` over a process environment value. The relay
+accepts only a regular file with no group/other permissions (mode `0600`), and
+the file remains on the trusted host; never mount it into the harness container.
+
 The relay forces `qwen/qwen3-32b`, disables thinking and streaming, overwrites
 any caller routing fields, disables fallbacks, and replaces the sandbox's
 authorization header with the host key. Do not give the key to a harness
