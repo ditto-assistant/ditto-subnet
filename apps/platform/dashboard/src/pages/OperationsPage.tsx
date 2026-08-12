@@ -7,7 +7,7 @@
 // papered over). Validator display names arrive on a separate feed and are
 // optional untrusted decoration: reset on every refetch, rendered as inert
 // text, never a substitute for the hotkey identity.
-import { For, createEffect, createMemo, createSignal, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { FleetLedger, FleetRow, RetiredFleetRow } from "../components/operations/FleetTable";
@@ -75,6 +75,16 @@ interface FleetView {
   generatedAt: string | null;
 }
 
+type OperationsView = "validators" | "screeners" | "builds";
+
+const OPERATIONS_VIEWS: readonly OperationsView[] = ["validators", "screeners", "builds"];
+
+const OPERATIONS_VIEW_LABELS: Record<OperationsView, string> = {
+  validators: "Validators",
+  screeners: "Screeners",
+  builds: "Targon builds",
+};
+
 export function OperationsPage(
   props: {
     operations?: ResourceState<OperationsPayload>;
@@ -96,7 +106,7 @@ export function OperationsPage(
   const opsUnavailable = () => Boolean(operations.error()) && !ops();
   const opsLoading = () => !ops() && !opsUnavailable();
 
-  const [showScreeners, setShowScreeners] = createSignal(false);
+  const [operationsView, setOperationsView] = createSignal<OperationsView>("validators");
 
   // Applied once per payload, like the monolith's single mutation at load
   // time: empty slots inherit their prior signed progress through the
@@ -154,7 +164,7 @@ export function OperationsPage(
   });
 
   const fleet = createMemo<FleetView>(() => {
-    const screenersShown = showScreeners();
+    const screenersShown = operationsView() === "screeners";
     const kind = screenersShown ? ("screeners" as const) : ("validators" as const);
     const singular: FleetSingular = screenersShown ? "screener" : "validator";
     const Kind = screenersShown ? ("Screener" as const) : ("Validator" as const);
@@ -270,8 +280,26 @@ export function OperationsPage(
   createEffect(() => {
     const entity = entityRoute();
     if (!entity || (entity.kind !== "validator" && entity.kind !== "screener")) return;
-    setShowScreeners(entity.kind === "screener");
+    setOperationsView(entity.kind === "screener" ? "screeners" : "validators");
   });
+
+  function selectOperationsView(view: OperationsView, focus = false): void {
+    setOperationsView(view);
+    if (focus) document.getElementById("operations-tab-" + view)?.focus();
+  }
+
+  function onOperationsTabKeyDown(ev: KeyboardEvent, view: OperationsView): void {
+    const index = OPERATIONS_VIEWS.indexOf(view);
+    let next = index;
+    if (ev.key === "ArrowRight") next = (index + 1) % OPERATIONS_VIEWS.length;
+    else if (ev.key === "ArrowLeft")
+      next = (index - 1 + OPERATIONS_VIEWS.length) % OPERATIONS_VIEWS.length;
+    else if (ev.key === "Home") next = 0;
+    else if (ev.key === "End") next = OPERATIONS_VIEWS.length - 1;
+    else return;
+    ev.preventDefault();
+    selectOperationsView(OPERATIONS_VIEWS[next]!, true);
+  }
 
   let rootEl: HTMLElement | undefined = undefined;
   let focusedKey = "";
@@ -319,20 +347,6 @@ export function OperationsPage(
       }}
     >
       <section class="operations" aria-labelledby="page-title">
-        <div class="operations-head">
-          <label class="fleet-toggle" for="show-screeners">
-            <input
-              id="show-screeners"
-              type="checkbox"
-              checked={showScreeners()}
-              onChange={(ev) => setShowScreeners(ev.currentTarget.checked)}
-            />
-            <span class="fleet-option fleet-option-validators">Validators</span>
-            <span class="fleet-option fleet-option-screeners">Screeners</span>
-            <span class="sr-only">Show screeners</span>
-          </label>
-        </div>
-
         <div class="fleet-atlas">
           <div class="pipeline-map">
             <div class="atlas-label">
@@ -363,150 +377,205 @@ export function OperationsPage(
               loading={opsLoading()}
             />
           </div>
-          <FleetLedger counts={fleet().counts} />
         </div>
 
-        <SubmissionBuildLane
-          snapshot={ops()?.submission_builds}
-          unavailable={opsUnavailable()}
-          loading={opsLoading()}
-        />
-
-        <div class="fleet-table-head">
-          <div>
-            <h2>Fleet health</h2>
-            <span class="hint" id="fleet-summary" aria-live="polite">
-              {fleetSummary()}
-            </span>
+        <div class="operations-workspace">
+          <div class="operations-head">
+            <div>
+              <h2>Operational capacity</h2>
+              <p>Live worker capacity and trusted miner-image builds.</p>
+            </div>
+            <div class="operations-tabs" role="tablist" aria-label="Operational capacity views">
+              <For each={OPERATIONS_VIEWS}>
+                {(view) => (
+                  <button
+                    type="button"
+                    id={"operations-tab-" + view}
+                    class="operations-tab"
+                    role="tab"
+                    aria-selected={operationsView() === view ? "true" : "false"}
+                    aria-controls={"operations-panel-" + view}
+                    tabindex={operationsView() === view ? 0 : -1}
+                    onClick={() => selectOperationsView(view)}
+                    onKeyDown={(ev) => onOperationsTabKeyDown(ev, view)}
+                  >
+                    {OPERATIONS_VIEW_LABELS[view]}
+                  </button>
+                )}
+              </For>
+            </div>
           </div>
-        </div>
-        <div
-          class="board validators"
-          tabindex="0"
-          role="region"
-          aria-label="Fleet health table, horizontally scrollable on small screens"
-        >
-          <table class="fleet-table" aria-label={fleet().Kind + " fleet health"} id="fleet-table">
-            <thead>
-              <tr>
-                <th scope="col" id="fleet-node-heading" style="width:240px">
-                  {fleet().Kind}
-                </th>
-                <th scope="col" style="width:100px">
-                  Status
-                </th>
-                <th scope="col" style="width:88px">
-                  First seen
-                </th>
-                <th scope="col" style="width:96px">
-                  Last heartbeat
-                </th>
-                <th scope="col" class="fleet-work-col" style="width:248px">
-                  Current work
-                </th>
-                <th scope="col" style="width:108px">
-                  Version
-                </th>
-                <th scope="col" style="width:88px">
-                  CPU
-                </th>
-                <th scope="col" style="width:88px">
-                  Memory
-                </th>
-                <th scope="col" style="width:88px">
-                  Disk
-                </th>
-                <th scope="col" style="width:78px">
-                  Containers
-                </th>
-              </tr>
-            </thead>
-            <tbody id="fleet-rows">
-              {fleet().unavailable ? (
-                <EmptyRow colspan={10}>
-                  {fleet().Kind + " status is temporarily unavailable."}
-                </EmptyRow>
-              ) : fleet().loading ? (
-                <EmptyRow colspan={10}>{"Loading " + fleet().kind + "…"}</EmptyRow>
-              ) : !fleet().entries.length ? (
-                <EmptyRow colspan={10}>
-                  {"No active " + fleet().singular + " software reports."}
-                </EmptyRow>
-              ) : (
-                <For each={fleet().entries}>
-                  {(entry) => (
-                    <FleetRow
-                      entry={entry}
-                      singular={fleet().singular}
-                      names={nameData().names}
-                      slotPolicy={fleet().slotPolicy}
-                      benchVersion={benchVersion()}
-                      highlightId={highlightId()}
-                    />
-                  )}
-                </For>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <details class="fleet-retired" id="fleet-retired" hidden={!fleet().retired.length}>
-          <summary>
-            <strong id="fleet-retired-title">
-              {fleet().singular === "screener" ? "Recently offline" : "Inoperative validators"}
-            </strong>
-            <span id="fleet-retired-summary">{retiredSummary()}</span>
-          </summary>
-          <p class="fleet-retired-note" id="fleet-retired-note">
-            {retiredNote()}
-          </p>
-          <div
-            class="board validators"
-            tabindex="0"
-            role="region"
-            aria-label="Offline fleet nodes, horizontally scrollable on small screens"
+
+          <Show
+            when={operationsView() !== "builds"}
+            fallback={
+              <section
+                id="operations-panel-builds"
+                class="operations-panel"
+                role="tabpanel"
+                aria-labelledby="operations-tab-builds"
+                tabindex="0"
+              >
+                <SubmissionBuildLane
+                  snapshot={ops()?.submission_builds}
+                  unavailable={opsUnavailable()}
+                  loading={opsLoading()}
+                />
+              </section>
+            }
           >
-            <table
-              class="fleet-table fleet-retired-table"
-              id="fleet-retired-table"
-              aria-label={
-                fleet().singular === "screener" ? "Offline screeners" : "Offline validators"
-              }
+            <section
+              id={"operations-panel-" + operationsView()}
+              class="operations-panel"
+              role="tabpanel"
+              aria-labelledby={"operations-tab-" + operationsView()}
+              tabindex="0"
             >
-              <thead>
-                <tr>
-                  <th scope="col" id="fleet-retired-node-heading" style="width:240px">
-                    {fleet().Kind}
-                  </th>
-                  <th scope="col" style="width:100px">
-                    Status
-                  </th>
-                  <th scope="col" style="width:130px">
-                    Last heartbeat
-                  </th>
-                  <th scope="col" style="width:180px">
-                    Last reported state
-                  </th>
-                  <th scope="col" style="width:108px">
-                    Version
-                  </th>
-                </tr>
-              </thead>
-              <tbody id="fleet-retired-rows">
-                <For each={fleet().retired}>
-                  {(entry) => (
-                    <RetiredFleetRow
-                      entry={entry}
-                      singular={fleet().singular}
-                      names={nameData().names}
-                      benchVersion={benchVersion()}
-                      highlightId={highlightId()}
-                    />
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </div>
-        </details>
+              <div class="fleet-table-head">
+                <div>
+                  <h2>{fleet().Kind} fleet</h2>
+                  <span class="hint" id="fleet-summary" aria-live="polite">
+                    {fleetSummary()}
+                  </span>
+                </div>
+                <FleetLedger counts={fleet().counts} />
+              </div>
+              <div
+                class="board validators"
+                tabindex="0"
+                role="region"
+                aria-label="Fleet health table, horizontally scrollable on small screens"
+              >
+                <table
+                  class="fleet-table"
+                  aria-label={fleet().Kind + " fleet health"}
+                  id="fleet-table"
+                >
+                  <thead>
+                    <tr>
+                      <th scope="col" id="fleet-node-heading" style="width:240px">
+                        {fleet().Kind}
+                      </th>
+                      <th scope="col" style="width:100px">
+                        Status
+                      </th>
+                      <th scope="col" style="width:88px">
+                        First seen
+                      </th>
+                      <th scope="col" style="width:96px">
+                        Last heartbeat
+                      </th>
+                      <th scope="col" class="fleet-work-col" style="width:276px">
+                        Current work
+                      </th>
+                      <th scope="col" style="width:108px">
+                        Version
+                      </th>
+                      <th scope="col" style="width:88px">
+                        CPU
+                      </th>
+                      <th scope="col" style="width:88px">
+                        Memory
+                      </th>
+                      <th scope="col" style="width:88px">
+                        Disk
+                      </th>
+                      <th scope="col" style="width:78px">
+                        Containers
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody id="fleet-rows">
+                    {fleet().unavailable ? (
+                      <EmptyRow colspan={10}>
+                        {fleet().Kind + " status is temporarily unavailable."}
+                      </EmptyRow>
+                    ) : fleet().loading ? (
+                      <EmptyRow colspan={10}>{"Loading " + fleet().kind + "…"}</EmptyRow>
+                    ) : !fleet().entries.length ? (
+                      <EmptyRow colspan={10}>
+                        {"No active " + fleet().singular + " software reports."}
+                      </EmptyRow>
+                    ) : (
+                      <For each={fleet().entries}>
+                        {(entry) => (
+                          <FleetRow
+                            entry={entry}
+                            singular={fleet().singular}
+                            names={nameData().names}
+                            slotPolicy={fleet().slotPolicy}
+                            benchVersion={benchVersion()}
+                            highlightId={highlightId()}
+                          />
+                        )}
+                      </For>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <details class="fleet-retired" id="fleet-retired" hidden={!fleet().retired.length}>
+                <summary>
+                  <strong id="fleet-retired-title">
+                    {fleet().singular === "screener"
+                      ? "Recently offline"
+                      : "Inoperative validators"}
+                  </strong>
+                  <span id="fleet-retired-summary">{retiredSummary()}</span>
+                </summary>
+                <p class="fleet-retired-note" id="fleet-retired-note">
+                  {retiredNote()}
+                </p>
+                <div
+                  class="board validators"
+                  tabindex="0"
+                  role="region"
+                  aria-label="Offline fleet nodes, horizontally scrollable on small screens"
+                >
+                  <table
+                    class="fleet-table fleet-retired-table"
+                    id="fleet-retired-table"
+                    aria-label={
+                      fleet().singular === "screener" ? "Offline screeners" : "Offline validators"
+                    }
+                  >
+                    <thead>
+                      <tr>
+                        <th scope="col" id="fleet-retired-node-heading" style="width:240px">
+                          {fleet().Kind}
+                        </th>
+                        <th scope="col" style="width:100px">
+                          Status
+                        </th>
+                        <th scope="col" style="width:130px">
+                          Last heartbeat
+                        </th>
+                        <th scope="col" style="width:180px">
+                          Last reported state
+                        </th>
+                        <th scope="col" style="width:108px">
+                          Version
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody id="fleet-retired-rows">
+                      <For each={fleet().retired}>
+                        {(entry) => (
+                          <RetiredFleetRow
+                            entry={entry}
+                            singular={fleet().singular}
+                            names={nameData().names}
+                            benchVersion={benchVersion()}
+                            highlightId={highlightId()}
+                          />
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            </section>
+          </Show>
+        </div>
       </section>
     </section>
   );

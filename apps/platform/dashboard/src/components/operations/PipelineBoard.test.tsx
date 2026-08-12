@@ -238,6 +238,23 @@ describe("continual retests and rescores in Evaluating", () => {
 });
 
 describe("screening cross-feed and policy labels", () => {
+  it("merges waiting and active admission work while naming each row's state", () => {
+    const container = board(
+      [
+        waiting({ agent_id: "queued", status: "waiting_screening" }),
+        waiting({ agent_id: "building", status: "screening" }),
+      ],
+      { statusCounts: { waiting_screening: 2, screening: 3 } },
+    );
+    expect(container.querySelector("#pipeline-admission-count")?.textContent).toBe("5");
+    const states = Array.from(
+      container.querySelectorAll("#pipeline-admission .pipeline-admission-state"),
+      (node) => node.textContent,
+    );
+    expect(states).toEqual(["Waiting for admission", "Building image & admission"]);
+    expect(container.querySelectorAll("#pipeline-admission .pipeline-item")).toHaveLength(2);
+  });
+
   it("overlays the live screener stage onto the screening card", () => {
     const screeners: FleetReport = {
       screeners: [
@@ -253,8 +270,11 @@ describe("screening cross-feed and policy labels", () => {
       [waiting({ agent_id: "in-screening", status: "screening", validator_queue_rank: null })],
       { statusCounts: { screening: 1 }, screeners },
     );
-    const card = container.querySelector("#pipeline-screening .pipeline-item");
+    const card = container.querySelector("#pipeline-admission .pipeline-item");
     expect(card?.querySelector(".screener-progress-stage")?.textContent).toContain(
+      "L1 source review · 40%",
+    );
+    expect(card?.querySelector(".pipeline-admission-state")?.textContent).toBe(
       "L1 source review · 40%",
     );
     expect(card?.getAttribute("aria-label")).toContain("L1 source review · 40%");
@@ -323,15 +343,15 @@ describe("stated absence", () => {
       container.querySelectorAll(".pipeline-empty"),
       (el) => el.textContent,
     );
-    expect(empties).toEqual(Array.from({ length: 5 }, () => "Queue unavailable."));
+    expect(empties).toEqual(Array.from({ length: 4 }, () => "Queue unavailable."));
     expect(container.querySelector("#pipeline-scored-count")?.textContent).toBe("–");
   });
 
   it("shows the loading placeholders before the first snapshot", () => {
     const container = board([], { loading: true });
-    expect(container.querySelector("#pipeline-wait-screen .pipeline-empty")?.textContent).toBe(
+    expect(container.querySelector("#pipeline-admission .pipeline-empty")?.textContent).toBe(
       "Loading…",
     );
-    expect(container.querySelector("#pipeline-wait-screen-count")?.textContent).toBe("–");
+    expect(container.querySelector("#pipeline-admission-count")?.textContent).toBe("–");
   });
 });

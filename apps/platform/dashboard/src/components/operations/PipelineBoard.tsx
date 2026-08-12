@@ -147,15 +147,19 @@ function PipelineCard(props: {
     );
   };
   const screener = () =>
-    props.column === "screening" ? activeScreenerFor(props.screeners, entry().agent_id) : null;
+    props.column === "admission" && entry().status === "screening"
+      ? activeScreenerFor(props.screeners, entry().agent_id)
+      : null;
   const screeningLabel = () => {
     const active = screener();
     return active ? screenerStageLabel(active.screening_progress?.stage) : "";
   };
-  const policyLabel = () =>
-    props.column === "waiting_screening" || props.column === "screening"
-      ? policyScreeningLabel(entry())
-      : "";
+  const admissionLabel = () => {
+    if (props.column !== "admission") return "";
+    if (entry().status === "waiting_screening") return "Waiting for admission";
+    return screeningLabel() || "Building image & admission";
+  };
+  const policyLabel = () => (props.column === "admission" ? policyScreeningLabel(entry()) : "");
   const provisionalScore = () =>
     props.column === "waiting_validator" && entry().provisional_composite != null
       ? "Provisional " + fx(Number(entry().provisional_composite))
@@ -168,7 +172,7 @@ function PipelineCard(props: {
     (isUpNext() ? ", up next for validator assignment" : "") +
     (queueGate() ? ", " + queueGate()?.aria : "") +
     (rescore()?.isQualification ? ", inherited benchmark cohort qualification in progress" : "") +
-    (screeningLabel() ? ", " + screeningLabel() : "");
+    (admissionLabel() ? ", " + admissionLabel() : "");
   const benchmarks = (): BenchmarkProgress[] =>
     props.column === "evaluating" ? entry().active_benchmarks || [] : [];
   return (
@@ -234,6 +238,9 @@ function PipelineCard(props: {
       </Show>
       <Show when={provisionalScore()}>
         <span class="pipeline-item-priority-detail">{provisionalScore()}</span>
+      </Show>
+      <Show when={admissionLabel()}>
+        <span class="pipeline-admission-state">{admissionLabel()}</span>
       </Show>
       <Show when={policyLabel()}>
         <span class="pipeline-item-policy">{policyLabel()}</span>
@@ -392,16 +399,18 @@ export function IntegrityReviewBranch(props: {
 }): JSX.Element {
   const view = createMemo(() => integrityReviewView(props.entries, props.statusCounts));
   return (
-    <aside class="pipeline-review-branch" aria-labelledby="pipeline-review-title">
-      <div>
-        <span class="pipeline-review-eyebrow">Conditional after scoring</span>
-        <strong class="pipeline-review-title" id="pipeline-review-title">
-          Source integrity review
-        </strong>
-      </div>
-      <span class="pipeline-review-count" id="pipeline-review-count">
-        {props.unavailable || props.loading ? "–" : String(view().count)}
-      </span>
+    <details class="pipeline-review-branch" aria-labelledby="pipeline-review-title">
+      <summary class="pipeline-review-summary">
+        <span>
+          <span class="pipeline-review-eyebrow">Conditional after scoring</span>
+          <strong class="pipeline-review-title" id="pipeline-review-title">
+            Source integrity review
+          </strong>
+        </span>
+        <span class="pipeline-review-count" id="pipeline-review-count">
+          {props.unavailable || props.loading ? "–" : String(view().count)}
+        </span>
+      </summary>
       <p class="pipeline-review-copy">
         Only leaderboard qualifiers and robust anomaly holds enter this branch. Other admitted
         submissions go directly through validator scoring.
@@ -461,6 +470,6 @@ export function IntegrityReviewBranch(props: {
           </Show>
         </Show>
       </div>
-    </aside>
+    </details>
   );
 }

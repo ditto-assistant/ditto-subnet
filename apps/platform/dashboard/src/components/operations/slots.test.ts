@@ -399,11 +399,18 @@ function validator(hotkey: string, extra: FleetEntryExt): FleetEntryExt {
 }
 
 describe("slot fan-out in the fleet table", () => {
-  it("gives every slot its own row and its own style hook", async () => {
+  it("summarises inactive slots by default and keeps every exact state in a disclosure", async () => {
     await renderFleet();
+    const disclosure = workCell(DITTO).querySelector(
+      ".fleet-slot-disclosure",
+    ) as HTMLDetailsElement;
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.querySelector("summary")?.textContent).toBe(
+      "8 slots · 0 running · 6 idle · 2 capped",
+    );
     const rows = slotRows(DITTO);
-    // Eight advertised slots, eight rows — each naming itself, each its own
-    // element rather than one cell of comma-joined ids.
+    // The disclosure still preserves all eight exact slot states in numeric
+    // order; they simply do not make the default table row eight times taller.
     expect(rows.length).toBe(8);
     expect(rows.map((row) => row.querySelector(".fleet-protocol")?.textContent)).toEqual([
       "slot-0",
@@ -418,10 +425,9 @@ describe("slot fan-out in the fleet table", () => {
     expect(rows.map((row) => row.getAttribute("title"))).toEqual(
       rows.map((row) => row.querySelector(".fleet-protocol")?.textContent),
     );
-    // The hook exists so stacked slots read as separate lines inside the work
-    // cell without the table growing a column per slot.
+    expect(rows.every((row) => row.classList.contains("fleet-slot-inactive"))).toBe(true);
     expect(OPERATIONS_CSS).toContain(".fleet-slot {");
-    expect(OPERATIONS_CSS).toContain(".fleet-slot + .fleet-slot");
+    expect(OPERATIONS_CSS).toContain(".fleet-slot-disclosure");
   });
 
   it("renders a capped slot as its own state — not Idle, not Unavailable", async () => {
@@ -479,15 +485,23 @@ describe("slot fan-out in the fleet table", () => {
     });
     await renderFleet(snapshotWith([overflow, concurrent]));
 
-    const overflowRows = slotRows(String(overflow.validator_hotkey));
-    expect(overflowRows.map((row) => row.querySelector(".fleet-protocol")?.textContent)).toEqual([
-      "slot-0",
+    const overflowCell = workCell(String(overflow.validator_hotkey));
+    const visibleRows = Array.from(
+      overflowCell.querySelectorAll<HTMLElement>(".fleet-slot-running"),
+    );
+    const foldedRows = Array.from(
+      overflowCell.querySelectorAll<HTMLElement>(".fleet-slot-inactive"),
+    );
+    expect(visibleRows.map((row) => row.querySelector(".fleet-protocol")?.textContent)).toEqual([
       "slot-3",
     ]);
+    expect(foldedRows.map((row) => row.querySelector(".fleet-protocol")?.textContent)).toEqual([
+      "slot-0",
+    ]);
     // The out-of-range slot is where the work is; it must be the row that
-    // shows a running benchmark.
-    expect(overflowRows[0]?.querySelector(".benchmark-progress")).toBeNull();
-    expect(overflowRows[1]?.querySelector(".benchmark-progress")).toBeTruthy();
+    // stays visible and shows a running benchmark.
+    expect(visibleRows[0]?.querySelector(".benchmark-progress")).toBeTruthy();
+    expect(foldedRows[0]?.querySelector(".benchmark-progress")).toBeNull();
 
     const cell = workCell(String(concurrent.validator_hotkey));
     expect(cell.querySelectorAll(".fleet-slot").length).toBe(2);

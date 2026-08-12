@@ -73,7 +73,8 @@ export function SubmissionBuildLane(props: {
           <h2 id="submission-builds-title">Targon build lane</h2>
           <p>
             Kaniko builds miner submissions on Targon before the archive returns for health, policy,
-            and signing gates. The fleet table below tracks screening workers, not these builders.
+            and signing gates. Validator and screener capacity live in their fleet tabs; this view
+            tracks builders only.
           </p>
         </div>
         <span class="submission-builds-window">

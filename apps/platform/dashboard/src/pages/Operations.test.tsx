@@ -79,7 +79,7 @@ describe("accessible fleet status (row 15)", () => {
     expect(fetchedPaths().some((u) => u.includes("/public/validator-names"))).toBe(true);
     expect(fetchedPaths().some((u) => u.includes("/public/screeners"))).toBe(true);
 
-    expect(document.querySelector(".fleet-table-head h2")?.textContent).toBe("Fleet health");
+    expect(document.querySelector(".fleet-table-head h2")?.textContent).toBe("Validator fleet");
     // available + " of " + entries.length + " active " + kind — never the
     // removed '" reporting " + kind' phrasing.
     expect(text("fleet-summary")).toContain("3 of 3 active validators available");
@@ -106,15 +106,26 @@ describe("accessible fleet status (row 15)", () => {
     expect(document.getElementById("fleet-retired-rows")).toBeTruthy();
   });
 
-  it("carries the screener toggle and swaps both fleets through it", async () => {
+  it("uses accessible tabs and swaps the fleet panel through them", async () => {
     await renderPage();
-    const toggle = document.getElementById("show-screeners") as HTMLInputElement;
-    expect(toggle).toHaveAttribute("type", "checkbox");
-    expect(document.querySelector('label.fleet-toggle[for="show-screeners"]')).toBeTruthy();
+    const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Validators",
+      "Screeners",
+      "Targon builds",
+    ]);
+    expect(document.getElementById("operations-tab-validators")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(text("fleet-node-heading")).toBe("Validator");
 
-    fireEvent.click(toggle);
+    fireEvent.click(document.getElementById("operations-tab-screeners") as HTMLButtonElement);
     await waitFor(() => expect(text("fleet-node-heading")).toBe("Screener"));
+    expect(document.getElementById("operations-tab-screeners")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(text("fleet-summary")).toContain("2 of 2 active screeners available");
     expect(document.getElementById("fleet-table")).toHaveAttribute(
       "aria-label",
@@ -123,6 +134,21 @@ describe("accessible fleet status (row 15)", () => {
     // The screener fold keeps the old title + 24h retention note.
     expect(text("fleet-retired-title")).toBe("Recently offline");
     expect(text("fleet-retired-note")).toContain("Heartbeat history remains visible for 24 hours");
+
+    const screenersTab = document.getElementById("operations-tab-screeners") as HTMLButtonElement;
+    fireEvent.keyDown(screenersTab, { key: "ArrowRight" });
+    expect(document.getElementById("operations-tab-builds")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(document.activeElement).toBe(document.getElementById("operations-tab-builds"));
+    expect(document.getElementById("fleet-table")).toBeNull();
+
+    fireEvent.keyDown(document.activeElement as HTMLButtonElement, { key: "Home" });
+    expect(document.getElementById("operations-tab-validators")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("fills the ledger (unknown bucket included) and explains missing telemetry", async () => {
@@ -481,7 +507,7 @@ describe("accessible benchmark progress (row 22)", () => {
     await waitFor(() =>
       expect(document.getElementById("fleet-summary")?.textContent).toContain("active validators"),
     );
-    fireEvent.click(document.getElementById("show-screeners") as HTMLInputElement);
+    fireEvent.click(document.getElementById("operations-tab-screeners") as HTMLButtonElement);
     await waitFor(() =>
       expect(document.querySelector("td.fleet-work-col .screener-progress")).toBeTruthy(),
     );
@@ -578,19 +604,13 @@ describe("validator names are untrusted decoration (row 26)", () => {
 
 // ── Pipeline board on the shared snapshot (map: operations markup 2742–2862) ─
 describe("pipeline board from the shared snapshot", () => {
-  it("renders the five stage columns with authoritative counts", async () => {
+  it("renders the four stage columns with authoritative counts", async () => {
     await renderPage();
     const stages = Array.from(
       document.querySelectorAll("#pipeline-overview .pipeline-column"),
       (col) => col.getAttribute("data-pipeline-stage"),
     );
-    expect(stages).toEqual([
-      "waiting_screening",
-      "screening",
-      "waiting_validator",
-      "evaluating",
-      "scored",
-    ]);
+    expect(stages).toEqual(["admission", "waiting_validator", "evaluating", "scored"]);
     expect(text("pipeline-scored-count")).toContain("628");
     expect(document.querySelectorAll("#pipeline-scored .pipeline-item").length).toBe(50);
     expect(document.querySelector("#pipeline-scored .pipeline-more")?.textContent).toBe(
@@ -681,6 +701,7 @@ describe("Targon submission build provenance", () => {
     restoreFetch = fixtures;
 
     const { container } = render(() => <OperationsPage />);
+    fireEvent.click(container.querySelector("#operations-tab-builds") as HTMLButtonElement);
     await waitFor(() => {
       expect(container.querySelector(".submission-builds")?.textContent).toContain(
         "12Targon imports",
@@ -691,9 +712,8 @@ describe("Targon submission build provenance", () => {
     expect(lane?.textContent).toContain("Targon TrialSubmission v3TargonImported1");
     expect(lane?.textContent).toContain("Targon → local allowed");
     expect(lane?.textContent).toContain("Builder container crashed");
-    expect(lane?.textContent).toContain(
-      "fleet table below tracks screening workers, not these builders",
-    );
+    expect(lane?.textContent).toContain("this view tracks builders only");
+    expect(container.querySelector("#fleet-table")).toBeNull();
   });
 });
 
@@ -705,13 +725,11 @@ describe("weekend drift: board reshape and refresh resilience", () => {
   it("renders the mechanical-admission lane names and the atlas explainer", async () => {
     const { container } = render(() => <OperationsPage />);
     await waitFor(() => {
-      expect(container.querySelector("#pipeline-wait-screen-title")?.textContent).toBe(
-        "Waiting for admission",
+      expect(container.querySelector("#pipeline-admission-title")?.textContent).toBe(
+        "Build & admission",
       );
     });
-    expect(container.querySelector("#pipeline-screening-title")?.textContent).toBe(
-      "Image build & admission",
-    );
+    expect(container.querySelectorAll("#pipeline-overview .pipeline-column")).toHaveLength(4);
     expect(container.querySelector("#pipeline-wait-validator-title")?.textContent).toBe(
       "Waiting for validators",
     );

@@ -65,6 +65,10 @@ function stageClass(tone: string): string {
   return "stage" + (tone ? " " + tone : "");
 }
 
+function SlotLabel(props: { slotId: string }): JSX.Element {
+  return <span class="fleet-protocol">{props.slotId}</span>;
+}
+
 function hotkeyOf(entry: FleetEntryExt, singular: FleetSingular): string {
   return (singular === "validator" ? entry.validator_hotkey : entry.screener_hotkey) || "Unknown";
 }
@@ -274,59 +278,118 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
         String(props.slotPolicy.max_concurrent_slots) +
         " concurrent slots per validator. No ticket is issued here."
       : "Held back by the operator slot cap. No ticket is issued here.";
+
+  const slots = createMemo(() => validatorSlotIds(props.entry));
+  const benchmarkFor = (slotId: string) => bySlot().active[slotId] || bySlot().assigned[slotId];
+  const orphanFor = (slotId: string) => bySlot().orphans[slotId];
+  const runningSlots = createMemo(() => slots().filter((slotId) => Boolean(benchmarkFor(slotId))));
+  const orphanedSlots = createMemo(() =>
+    slots().filter((slotId) => !benchmarkFor(slotId) && Boolean(orphanFor(slotId))),
+  );
+  const inactiveSlots = createMemo(() =>
+    slots().filter((slotId) => !benchmarkFor(slotId) && !orphanFor(slotId)),
+  );
+  const slotCounts = createMemo(() => {
+    let idle = 0;
+    let cappedCount = 0;
+    let unavailable = 0;
+    inactiveSlots().forEach((slotId) => {
+      if (props.entry.admission !== "accepting") unavailable += 1;
+      else if ((props.entry.healthy_slots || []).indexOf(slotId) < 0) unavailable += 1;
+      else if (capped()[slotId]) cappedCount += 1;
+      else idle += 1;
+    });
+    return {
+      total: slots().length,
+      running: runningSlots().length,
+      attention: orphanedSlots().length,
+      idle,
+      capped: cappedCount,
+      unavailable,
+    };
+  });
+  const summary = () => {
+    const counts = slotCounts();
+    const parts = [counts.total + " slots", counts.running + " running"];
+    if (counts.attention) parts.push(counts.attention + " attention");
+    if (counts.idle) parts.push(counts.idle + " idle");
+    if (counts.capped) parts.push(counts.capped + " capped");
+    if (counts.unavailable) parts.push(counts.unavailable + " unavailable");
+    return parts.join(" · ");
+  };
+
+  const inactiveState = (slotId: string): { label: string; tone: string; title?: string } => {
+    if (props.entry.admission !== "accepting") {
+      return { label: String(props.entry.admission), tone: "warn" };
+    }
+    if ((props.entry.healthy_slots || []).indexOf(slotId) < 0) {
+      return { label: "Unavailable", tone: "warn" };
+    }
+    if (capped()[slotId]) return { label: "Capped", tone: "capped", title: cappedTitle() };
+    return { label: "Idle", tone: "success" };
+  };
+
   return (
-    <For each={validatorSlotIds(props.entry)}>
-      {(slotId) => {
-        const benchmark = () => bySlot().active[slotId] || bySlot().assigned[slotId];
-        const orphan = () => bySlot().orphans[slotId];
-        return (
-          <div class="fleet-slot" title={slotId}>
-            <span class="fleet-protocol">{slotId}</span>{" "}
-            <Show
-              when={benchmark()}
-              fallback={
-                <Show
-                  when={orphan()}
-                  fallback={
-                    <Show
-                      when={props.entry.admission === "accepting"}
-                      fallback={<span class="stage warn">{props.entry.admission}</span>}
-                    >
-                      <Show
-                        when={(props.entry.healthy_slots || []).indexOf(slotId) >= 0}
-                        fallback={<span class="stage warn">Unavailable</span>}
-                      >
-                        <Show
-                          when={capped()[slotId]}
-                          fallback={<span class="stage success">Idle</span>}
-                        >
-                          <span class="stage capped" title={cappedTitle()}>
-                            Capped
-                          </span>
-                        </Show>
-                      </Show>
-                    </Show>
-                  }
-                >
-                  {(view) => (
-                    <>
-                      <span class="stage warn" title={view().detail}>
-                        {view().label}
-                      </span>
-                      <span class="current-agent" title={view().agentId}>
-                        <EntityButton kind="agent" id={view().agentId} label={view().agentLabel} />
-                      </span>
-                    </>
-                  )}
-                </Show>
-              }
-            >
-              {(progress) => <BenchmarkProgressView progress={progress()} showAgent={true} />}
-            </Show>
+    <div class="fleet-slot-overview">
+      <For each={runningSlots()}>
+        {(slotId) => (
+          <div class="fleet-slot fleet-slot-running" title={slotId}>
+            <SlotLabel slotId={slotId} />
+            <BenchmarkProgressView progress={benchmarkFor(slotId)!} showAgent={true} />
           </div>
-        );
-      }}
-    </For>
+        )}
+      </For>
+      <For each={orphanedSlots()}>
+        {(slotId) => {
+          const view = () => orphanFor(slotId);
+          return (
+            <div class="fleet-slot fleet-slot-attention" title={slotId}>
+              <SlotLabel slotId={slotId} />
+              <span class="stage warn" title={view()?.detail}>
+                {view()?.label}
+              </span>
+              <span class="current-agent" title={view()?.agentId}>
+                <EntityButton
+                  kind="agent"
+                  id={view()?.agentId || ""}
+                  label={view()?.agentLabel || "Agent"}
+                />
+              </span>
+            </div>
+          );
+        }}
+      </For>
+      <Show when={!runningSlots().length && !orphanedSlots().length}>
+        <span class="stage unknown">No active work</span>
+      </Show>
+      <Show
+        when={inactiveSlots().length > 0}
+        fallback={<div class="fleet-slot-summary">{summary()}</div>}
+      >
+        <details
+          class="fleet-slot-disclosure"
+          onClick={(ev) => ev.stopPropagation()}
+          onKeyDown={(ev) => ev.stopPropagation()}
+        >
+          <summary>{summary()}</summary>
+          <div class="fleet-slot-details" aria-label="Inactive validator slot states">
+            <For each={inactiveSlots()}>
+              {(slotId) => {
+                const state = () => inactiveState(slotId);
+                return (
+                  <div class="fleet-slot fleet-slot-inactive" title={slotId}>
+                    <SlotLabel slotId={slotId} />
+                    <span class={stageClass(state().tone)} title={state().title}>
+                      {state().label}
+                    </span>
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+        </details>
+      </Show>
+    </div>
   );
 }
 

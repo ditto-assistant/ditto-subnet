@@ -184,24 +184,14 @@ export interface PipelineColumnDef {
 
 export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
   {
-    status: "waiting_screening",
-    statuses: ["waiting_screening"],
-    bodyId: "pipeline-wait-screen",
-    countId: "pipeline-wait-screen-count",
-    titleId: "pipeline-wait-screen-title",
-    title: "Waiting for admission",
+    status: "admission",
+    statuses: ["waiting_screening", "screening"],
+    bodyId: "pipeline-admission",
+    countId: "pipeline-admission-count",
+    titleId: "pipeline-admission-title",
+    title: "Build & admission",
     node: "1",
-    empty: "No submissions waiting.",
-  },
-  {
-    status: "screening",
-    statuses: ["screening"],
-    bodyId: "pipeline-screening",
-    countId: "pipeline-screening-count",
-    titleId: "pipeline-screening-title",
-    title: "Image build & admission",
-    node: "2",
-    empty: "No active screening job.",
+    empty: "No submissions awaiting admission.",
   },
   {
     status: "waiting_validator",
@@ -210,7 +200,7 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
     countId: "pipeline-wait-validator-count",
     titleId: "pipeline-wait-validator-title",
     title: "Waiting for validators",
-    node: "3",
+    node: "2",
     empty: "No submissions waiting.",
   },
   {
@@ -220,7 +210,7 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
     countId: "pipeline-evaluating-count",
     titleId: "pipeline-evaluating-title",
     title: "Scoring",
-    node: "4",
+    node: "3",
     empty: "No active evaluation.",
   },
   {
@@ -230,7 +220,7 @@ export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
     countId: "pipeline-scored-count",
     titleId: "pipeline-scored-title",
     title: "Scored & live",
-    node: "5",
+    node: "4",
     empty: "No scores yet. Finalized agents will appear here.",
   },
 ];

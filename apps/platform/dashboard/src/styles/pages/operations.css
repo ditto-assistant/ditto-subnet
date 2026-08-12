@@ -241,7 +241,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px 9px;
   color: var(--text-dim);
   font-size: 12px;
@@ -539,78 +539,77 @@
    The pipeline is a real operational map, so its local graph grid carries
    meaning rather than serving as page decoration. */
 .operations {
+  --ops-space-xs: 4px;
+  --ops-space-sm: 8px;
+  --ops-space-md: 12px;
+  --ops-space-lg: 16px;
+  --ops-space-xl: 24px;
+  --ops-space-2xl: 32px;
+  --ops-space-3xl: 48px;
   margin: 30px 0 44px;
 }
 .operations-head {
   display: flex;
   align-items: flex-end;
-  justify-content: flex-end;
-  gap: 24px;
-  margin-bottom: 16px;
+  justify-content: space-between;
+  gap: var(--ops-space-xl);
+  margin-bottom: var(--ops-space-lg);
 }
-.atlas-title {
+.operations-head h2 {
   margin: 0;
-  color: var(--text-dim);
-  font: 700 10px/1.2 var(--mono);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1.1;
 }
-.fleet-toggle {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  flex: none;
-  min-height: 40px;
+.operations-head p {
+  margin: var(--ops-space-xs) 0 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.operations-workspace {
+  margin-top: var(--ops-space-2xl);
+}
+.operations-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: 44px;
   padding: 2px;
-  gap: 0;
+  gap: 2px;
   border: 1px solid var(--border-strong);
   border-radius: 5px;
   background: var(--bg-elev);
+}
+.operations-tab {
+  min-height: 38px;
+  padding: var(--ops-space-sm) var(--ops-space-lg);
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
   color: var(--text-dim);
   cursor: pointer;
-}
-.fleet-toggle input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-.fleet-option {
-  display: grid;
-  min-width: 108px;
-  min-height: 34px;
-  place-items: center;
-  padding: 7px 14px;
-  border-radius: 3px;
   font: 650 12px/1 var(--mono);
   transition:
     background 160ms ease-out,
     color 160ms ease-out;
 }
-.fleet-option-validators {
-  background: color-mix(in oklch, var(--gold) 24%, var(--bg-elev));
+.operations-tab[aria-selected="true"] {
+  background: color-mix(in oklch, var(--gold) 22%, var(--bg-elev));
   color: var(--text);
 }
-.fleet-toggle input:checked ~ .fleet-option-validators {
-  background: transparent;
-  color: var(--text-dim);
-}
-.fleet-toggle input:checked ~ .fleet-option-screeners {
-  background: color-mix(in oklch, var(--accent-2) 18%, var(--bg-elev));
+.operations-tab:hover {
   color: var(--text);
 }
-.fleet-toggle:has(input:focus-visible) {
+.operations-tab:focus-visible,
+.operations-panel:focus-visible {
   outline: 3px solid color-mix(in oklch, var(--focus) 30%, transparent);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
-.fleet-toggle:hover .fleet-option {
-  color: var(--text);
+.operations-panel {
+  min-width: 0;
 }
 
 .fleet-atlas {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 218px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background-color: var(--bg-elev);
@@ -710,7 +709,7 @@
    specificity; keep it below the base spec (monolith comment 2101). */
 .pipeline-overview {
   display: grid;
-  grid-template-columns: repeat(5, minmax(148px, 1fr));
+  grid-template-columns: repeat(4, minmax(172px, 1fr));
   margin: 0;
   overflow: visible;
   border: 0;
@@ -816,6 +815,13 @@
 .pipeline-item .screener-progress {
   margin-top: 6px;
 }
+.pipeline-admission-state {
+  display: block;
+  width: fit-content;
+  margin-top: var(--ops-space-xs);
+  color: var(--accent);
+  font: 700 9.5px/1.35 var(--mono);
+}
 .pipeline-empty {
   padding: 7px 4px;
   text-align: center;
@@ -823,16 +829,20 @@
 }
 
 .fleet-ledger {
-  padding: 48px 20px 20px;
-  border-left: 1px solid var(--border);
-  background: color-mix(in oklch, var(--bg-elev) 92%, transparent);
+  display: flex;
+  flex: 1 1 640px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ops-space-lg);
+  min-width: 0;
 }
 .fleet-ledger-row {
-  display: grid;
-  grid-template-columns: 9px 28px 1fr;
-  align-items: baseline;
-  gap: 9px;
-  padding: 8px 0;
+  display: inline-grid;
+  grid-template-columns: 8px auto auto;
+  align-items: center;
+  gap: var(--ops-space-sm);
+  padding: 0;
 }
 .fleet-ledger-dot {
   width: 8px;
@@ -842,7 +852,7 @@
 }
 .fleet-ledger-row strong {
   font-family: var(--display);
-  font-size: 23px;
+  font-size: 18px;
   font-weight: 400;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -874,9 +884,10 @@
   background: var(--text-faint);
 }
 .fleet-ledger p {
-  margin: 16px 0 0;
+  max-width: 260px;
+  margin: 0;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
@@ -885,7 +896,9 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 18px;
-  margin: 32px 0 10px;
+  margin: 0 0 var(--ops-space-md);
+  padding-top: var(--ops-space-lg);
+  border-top: 1px solid var(--border);
 }
 .fleet-table-head h2 {
   margin: 0;
@@ -1047,8 +1060,11 @@
   font: 10px/1 var(--mono);
   font-variant-numeric: tabular-nums;
 }
-/* One row per concurrent benchmark slot, stacked inside the work cell so
-   the fleet table keeps its column count as slot counts grow. */
+/* Active work stays visible; routine free-slot state folds into one compact
+   capacity summary so an eight-slot validator does not become eight rows. */
+.fleet-slot-overview {
+  min-width: 0;
+}
 .fleet-slot {
   display: flex;
   align-items: baseline;
@@ -1056,13 +1072,45 @@
   min-width: 0;
 }
 .fleet-slot + .fleet-slot {
-  margin-top: 4px;
-  padding-top: 4px;
+  margin-top: var(--ops-space-sm);
+  padding-top: var(--ops-space-sm);
   border-top: 1px solid var(--border);
 }
 .fleet-slot > .fleet-protocol {
   flex: none;
   font-variant-numeric: tabular-nums;
+}
+.fleet-slot-summary,
+.fleet-slot-disclosure summary {
+  margin-top: var(--ops-space-sm);
+  color: var(--text-dim);
+  font: 650 9.5px/1.4 var(--mono);
+}
+.fleet-slot-disclosure {
+  margin-top: var(--ops-space-sm);
+  border-top: 1px solid var(--border);
+}
+.fleet-slot-disclosure summary {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  margin: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  list-style-position: inside;
+}
+.fleet-slot-disclosure summary:hover {
+  color: var(--text);
+}
+.fleet-slot-disclosure summary:focus-visible {
+  outline: 3px solid color-mix(in oklch, var(--focus) 30%, transparent);
+  outline-offset: 2px;
+}
+.fleet-slot-details {
+  padding: 0 0 var(--ops-space-sm) var(--ops-space-md);
+}
+.fleet-slot-inactive {
+  justify-content: space-between;
 }
 .fleet-container-health {
   color: var(--text);
@@ -1079,7 +1127,7 @@
 
 /* ── Trusted miner-image build provenance ── */
 .submission-builds {
-  margin: 18px 0 24px;
+  margin: 0;
   border-block: 1px solid var(--border);
   background: color-mix(in oklab, var(--accent) 3%, transparent);
 }
@@ -1220,29 +1268,17 @@
 }
 
 @media (max-width: 1180px) {
-  .fleet-atlas {
-    grid-template-columns: 1fr;
-  }
   .pipeline-map {
     overflow-x: auto;
   }
   .pipeline-overview {
-    min-width: 860px;
+    min-width: 760px;
   }
   .fleet-ledger {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(92px, 1fr));
-    gap: 10px;
-    padding: 14px 18px;
-    border-top: 1px solid var(--border);
-    border-left: 0;
-  }
-  .fleet-ledger-row {
-    grid-template-columns: 9px 24px 1fr;
+    justify-content: flex-start;
   }
   .fleet-ledger p {
-    grid-column: 1 / -1;
-    margin: 2px 0 0;
+    flex-basis: 100%;
   }
 }
 @media (max-width: 720px) {
@@ -1251,12 +1287,13 @@
   }
   .operations-head {
     align-items: flex-start;
+    flex-direction: column;
   }
-  .fleet-toggle {
+  .operations-tabs {
     width: 100%;
   }
-  .fleet-option {
-    min-width: 0;
+  .operations-tab {
+    flex: 1 1 auto;
   }
   .fleet-atlas {
     margin-inline: -16px;
@@ -1276,16 +1313,16 @@
     height: 28px;
   }
   .pipeline-overview {
-    min-width: 820px;
+    min-width: 720px;
   }
   .fleet-ledger {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--ops-space-md);
   }
   .fleet-ledger-row {
-    padding: 5px 0;
+    flex: 1 1 100px;
   }
   .fleet-ledger p {
-    grid-column: 1 / -1;
+    flex-basis: 100%;
   }
   .fleet-table-head {
     align-items: flex-start;
@@ -1318,7 +1355,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fleet-option {
+  .operations-tab {
     transition: none;
   }
 }
@@ -1327,13 +1364,9 @@
    2193–2220) — the conditional post-scoring aside under the board. */
 .pipeline-review-branch {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px 16px;
   width: calc(40% - 14px);
   min-width: 300px;
   margin: 16px 0 0 auto;
-  padding: 12px 13px;
   border: 1px solid color-mix(in oklch, var(--accent-2) 44%, var(--border));
   border-radius: 4px;
   background: color-mix(in oklch, var(--accent-2) 7%, var(--bg-elev));
@@ -1346,6 +1379,34 @@
   width: 1px;
   height: 16px;
   background: color-mix(in oklch, var(--accent-2) 52%, var(--border));
+}
+.pipeline-review-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--ops-space-lg);
+  min-height: 52px;
+  align-items: center;
+  padding: var(--ops-space-md);
+  cursor: pointer;
+  list-style: none;
+}
+.pipeline-review-summary::-webkit-details-marker {
+  display: none;
+}
+.pipeline-review-summary::after {
+  content: "Expand";
+  color: var(--text-faint);
+  font: 650 9px/1 var(--mono);
+}
+.pipeline-review-branch[open] .pipeline-review-summary::after {
+  content: "Collapse";
+}
+.pipeline-review-summary:hover .pipeline-review-title {
+  color: var(--accent-2);
+}
+.pipeline-review-summary:focus-visible {
+  outline: 3px solid color-mix(in oklch, var(--focus) 30%, transparent);
+  outline-offset: 2px;
 }
 .pipeline-review-eyebrow {
   display: block;
@@ -1362,8 +1423,8 @@
   line-height: 1.3;
 }
 .pipeline-review-copy {
-  grid-column: 1 / -1;
   margin: 0;
+  padding: 0 var(--ops-space-md) var(--ops-space-sm);
   color: var(--text-dim);
   font-size: 10.5px;
   line-height: 1.45;
@@ -1375,9 +1436,9 @@
   font: 400 18px/1 var(--display);
 }
 .pipeline-review-items {
-  grid-column: 1 / -1;
   display: grid;
   gap: 3px;
+  padding: 0 var(--ops-space-md) var(--ops-space-md);
 }
 .pipeline-review-items .pipeline-item {
   border-top-color: color-mix(in oklch, var(--accent-2) 32%, var(--border));
