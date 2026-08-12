@@ -5122,6 +5122,131 @@ class TestRequestJob:
             assert grant is not None
             assert grant.route_profile == profile
 
+    async def test_v9_rollout_fallback_rejects_pre_contract_scorer(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Every desired-era lane must share the scorer release floor.
+
+        ``issue_rollout_ticket`` already rejected this heartbeat, but the
+        fresh-submission fallback called ``issue_ticket`` directly and checked
+        only inference readiness.  In production that handed v9 work to a
+        v0.53.8 scorer minutes after Platform raised the floor to v0.53.10.
+        Keep a fully operational route and eligible agent in the fixture so a
+        204 can only mean the scorer capability stopped every fallback lane.
+        """
+        from ditto.api_server.inference_routing import (
+            AGGREGATE_PROVIDER,
+            aggregate_profile_revision,
+            benchmark_model,
+        )
+
+        await _seed_activated_era(session_maker, version=8)
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            dataset_version=9,
+        )
+        now = datetime.now(UTC)
+        profile = aggregate_profile_revision(benchmark_model(9), bench_version=9)
+        async with session_maker() as session, session.begin():
+            rollout_id = uuid4()
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=rollout_id,
+                    from_version=8,
+                    desired_version=9,
+                    status="collecting",
+                    cohort_size=5,
+                    rescore_cohort_target=5,
+                    priority_cohort_target=5,
+                    created_at=now,
+                )
+            )
+            session.add(
+                BenchmarkRolloutMember(
+                    rollout_id=rollout_id,
+                    agent_id=agent_id,
+                    position=1,
+                    frozen_miner_hotkey=_MINER_HOTKEY,
+                    frozen_composite=0.9,
+                )
+            )
+            session.add(
+                InferenceProviderRoute(
+                    model=benchmark_model(9),
+                    provider=AGGREGATE_PROVIDER,
+                    profile_revision=profile,
+                    status="discovered",
+                    calibration_status="shadow",
+                    calibration_manifest_sha256=None,
+                    calibration_tool_accuracy=None,
+                    calibration_composite=None,
+                    calibration_sample_count=0,
+                    ewma_error_rate=0,
+                    ewma_timeout_rate=0,
+                    sample_count=0,
+                    selected_ticket_count=0,
+                    exploration_ticket_count=0,
+                    discovered_at=now,
+                    updated_at=now,
+                )
+            )
+
+        capabilities = _scorer_capable_capabilities(now=now, versions=(9,))
+        scorer = capabilities["scorer_benchmarks"]
+        assert isinstance(scorer, dict)
+        scorer.update(
+            software_version="0.53.9",
+            source_revision="9" * 40,
+        )
+        scorer.pop("v7_calibration")
+        stack = json.loads(json.dumps(_V7_STACK))
+        scorer_component = stack["components"]["dittobench_api"]
+        scorer_component.update(
+            version="0.53.9",
+            source_revision="9" * 40,
+        )
+        await _seed_validator_heartbeat(
+            session_maker,
+            software_version="0.53.9",
+            protocol_version=18,
+            capabilities=capabilities,
+            stack=stack,
+            benchmark_capacity=_ACCEPTING_CAPACITY,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.config = replace(
+            app.state.config,
+            inference_proxy=replace(
+                app.state.config.inference_proxy,
+                enabled=True,
+                openrouter_api_key="test-only",
+                allowed_models=(benchmark_model(9),),
+                routing_mode="aggregate_throughput",
+            ),
+        )
+
+        response = await client.post(
+            "/api/v1/validator/job",
+            headers=_AUTH_HEADER,
+            json=_job_payload(slot_id=_SLOT_ID),
+        )
+
+        assert response.status_code == 204, response.text
+        async with session_maker() as session:
+            assert (
+                await session.scalar(select(func.count()).select_from(ValidatorTicket))
+                == 0
+            )
+            assert (
+                await session.scalar(select(func.count()).select_from(InferenceGrant))
+                == 0
+            )
+
     async def test_required_proxy_issues_only_to_v10_ticket_inference_slots(
         self,
         app: FastAPI,

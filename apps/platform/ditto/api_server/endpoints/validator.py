@@ -2616,6 +2616,20 @@ async def request_job(
                 )
             ):
                 target_inference_ready = False
+        # One authority for every lane that can issue desired-era work.
+        #
+        # The rollout helpers already validate the signed scorer capability,
+        # but the fresh-submission fallback below calls ``issue_ticket``
+        # directly.  Gating that fallback only on inference readiness let a
+        # scorer rejected by the semantic release floor fall through the
+        # cohort helper and immediately receive the same v9 work here.  Keep
+        # inference and scorer eligibility coupled once, before any rollout
+        # lane can reserve a ticket.
+        target_benchmark_ready = (
+            target_inference_ready
+            and heartbeat is not None
+            and heartbeat_supports_version(heartbeat, now=now, version=target_version)
+        )
         slot_id = payload.slot_id or "slot-0"
         slot_running_benchmark = validator_state == "running_benchmark"
         if heartbeat is not None and heartbeat.protocol_version >= 10:
@@ -2720,16 +2734,12 @@ async def request_job(
                     required_basis=V9_CONTRACT_RETEST_BASIS,
                     allow_parallel_ordinary=True,
                 )
-                if target_inference_ready
+                if target_benchmark_ready
                 else None
             )
             fresh_lane_due = (
                 ticket is None
-                and target_inference_ready
-                and heartbeat is not None
-                and heartbeat_supports_version(
-                    heartbeat, now=now, version=rollout.desired_version
-                )
+                and target_benchmark_ready
                 and await _fresh_submission_lane_due(
                     session,
                     validator_hotkey=payload.validator_hotkey,
@@ -2751,7 +2761,7 @@ async def request_job(
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
                     settings=queue_policy.prev_gen_carryover,
-                    target_inference_ready=target_inference_ready,
+                    target_inference_ready=target_benchmark_ready,
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
                     owner_concurrent_submission_limit=(
@@ -2805,10 +2815,10 @@ async def request_job(
                         validator_running_benchmark=slot_running_benchmark,
                         slot_id=slot_id,
                     )
-                    if target_inference_ready
+                    if target_benchmark_ready
                     else None
                 )
-            if ticket is None and not fresh_lane_due and target_inference_ready:
+            if ticket is None and not fresh_lane_due and target_benchmark_ready:
                 ticket = await issue_ticket(
                     session,
                     validator_hotkey=payload.validator_hotkey,
@@ -2839,7 +2849,7 @@ async def request_job(
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
                     settings=queue_policy.prev_gen_carryover,
-                    target_inference_ready=target_inference_ready,
+                    target_inference_ready=target_benchmark_ready,
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
                     owner_concurrent_submission_limit=(
