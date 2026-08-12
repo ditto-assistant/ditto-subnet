@@ -1,8 +1,9 @@
-"""Serialized, append-only score re-tests for one validator.
+"""Append-only score re-tests with slot-scoped execution ownership.
 
 The score stays canonical while an operator request waits in the audit log.
-Only the queue head owns an issued ticket; completion or release promotes the
-next compatible request atomically in the same transaction.
+Ordinary re-tests remain single-flight. Activation-critical v9 contract repair
+may use several distinct free slots on one validator; the validator advisory
+lock still serializes queue promotion and preserves deterministic FIFO order.
 """
 
 from __future__ import annotations
@@ -301,17 +302,22 @@ async def activate_next_score_retest(
     slot_id: str = "slot-0",
     required_basis: str | None = None,
     allow_parallel_ordinary: bool = False,
+    allow_parallel_contract_retests: bool = False,
 ) -> ValidatorTicket | None:
     """Resume the active re-test or promote the oldest runnable queued item.
 
     Must be called inside a transaction. Stale requests close append-only and
     never mutate the accepted score. By default an unrelated live assignment
     keeps all queued requests waiting. Activation-critical contract repair may
-    explicitly use one otherwise-free slot alongside ordinary rollout work;
-    re-tests themselves remain serialized to one per validator.
+    explicitly use otherwise-free slots alongside ordinary rollout work and
+    other contract repairs. Each slot still owns at most one lease, and the
+    advisory lock serializes promotion so one queue entry cannot be claimed
+    twice by concurrent slot polls.
     """
-    if allow_parallel_ordinary and required_basis != V9_CONTRACT_RETEST_BASIS:
-        raise ValueError("parallel ordinary work is reserved for v9 contract retests")
+    if (
+        allow_parallel_ordinary or allow_parallel_contract_retests
+    ) and required_basis != V9_CONTRACT_RETEST_BASIS:
+        raise ValueError("parallel execution is reserved for v9 contract retests")
     # Look before locking. A validator with no re-test lifecycle at all cannot
     # reach any mutating branch below -- `issued` needs a REQUESTED entry and
     # `queued` needs a QUEUED one, so an empty history returns None down every
@@ -340,8 +346,7 @@ async def activate_next_score_retest(
         probe = {
             agent_id: entry
             for agent_id, entry in probe.items()
-            if entry.event == EVENT_SCORE_RETEST_REQUESTED
-            or entry.payload.get("basis") == required_basis
+            if entry.payload.get("basis") == required_basis
         }
     if not probe:
         return None
@@ -375,21 +380,26 @@ async def activate_next_score_retest(
             )
         ).all()
     )
+    issued_retests = [
+        ticket
+        for ticket in issued_rows
+        if ticket.purpose == TicketPurpose.CANONICAL_QUORUM
+        and ticket.purpose_revision > 0
+        if (lifecycle := latest.get(ticket.agent_id)) is not None
+        and lifecycle.event == EVENT_SCORE_RETEST_REQUESTED
+        and (required_basis is None or lifecycle.payload.get("basis") == required_basis)
+    ]
     issued = next(
-        (
-            ticket
-            for ticket in issued_rows
-            if ticket.purpose == TicketPurpose.CANONICAL_QUORUM
-            and ticket.purpose_revision > 0
-            if (lifecycle := latest.get(ticket.agent_id)) is not None
-            and lifecycle.event == EVENT_SCORE_RETEST_REQUESTED
-        ),
-        None,
+        (ticket for ticket in issued_retests if ticket.slot_id == slot_id), None
     )
     # Retests remain serialized behind every live ticket by default. A typed,
-    # activation-critical caller may share the validator with ordinary work,
-    # but never with a second re-test and never on an already-owned slot.
+    # activation-critical caller may share the validator with ordinary work and
+    # other contract repairs. Ownership stays slot-scoped: a poll resumes only
+    # the repair already bound to its own slot and can never displace another
+    # live lease.
     if issued_rows and issued is None and not allow_parallel_ordinary:
+        return None
+    if issued_retests and issued is None and not allow_parallel_contract_retests:
         return None
     if issued is None and any(ticket.slot_id == slot_id for ticket in issued_rows):
         return None

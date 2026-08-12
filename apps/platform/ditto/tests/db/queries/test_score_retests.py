@@ -200,6 +200,7 @@ class TestScoreRetestLockingAndPriority:
                 slot_id="slot-1",
                 required_basis=V9_CONTRACT_RETEST_BASIS,
                 allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
             )
 
             assert promoted is not None
@@ -262,6 +263,7 @@ class TestScoreRetestLockingAndPriority:
                 supports_version=lambda version: version == 9,
                 required_basis=V9_CONTRACT_RETEST_BASIS,
                 allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
             )
 
             assert promoted is None
@@ -334,6 +336,7 @@ class TestScoreRetestLockingAndPriority:
                 supports_version=lambda version: version == 9,
                 required_basis=V9_CONTRACT_RETEST_BASIS,
                 allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
             )
             assert promoted is not None
             assert promoted.agent_id == cohort_id
@@ -342,14 +345,14 @@ class TestScoreRetestLockingAndPriority:
         self, session: AsyncSession
     ) -> None:
         with pytest.raises(
-            ValueError, match="parallel ordinary work is reserved for v9 contract"
+            ValueError, match="parallel execution is reserved for v9 contract"
         ):
             await activate_next_score_retest(
                 session,
                 validator_hotkey=_HOTKEY,
                 now=_NOW,
                 supports_version=lambda _version: True,
-                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
             )
 
     async def test_returns_none_without_waiting_on_a_held_ticket_row(
@@ -386,17 +389,19 @@ class TestScoreRetestLockingAndPriority:
                 )
             assert promoted is None
 
-    async def test_contract_retest_uses_one_free_slot_during_ordinary_work(
+    async def test_contract_retests_fill_distinct_free_slots_during_ordinary_work(
         self, session: AsyncSession
     ) -> None:
-        """Typed contract repair skips older outliers and stays single-flight."""
+        """Typed repairs skip outliers and use each free execution slot once."""
         statistical_id = uuid4()
         contract_id = uuid4()
+        second_contract_id = uuid4()
         busy_id = uuid4()
         async with session.begin():
             for agent_id, status, name in (
                 (statistical_id, AgentStatus.SCORED, "statistical"),
                 (contract_id, AgentStatus.EVALUATING, "contract"),
+                (second_contract_id, AgentStatus.EVALUATING, "second contract"),
                 (busy_id, AgentStatus.EVALUATING, "ordinary"),
             ):
                 session.add(
@@ -413,6 +418,7 @@ class TestScoreRetestLockingAndPriority:
             for agent_id, run_id in (
                 (statistical_id, "statistical-run"),
                 (contract_id, "contract-run"),
+                (second_contract_id, "second-contract-run"),
             ):
                 session.add(
                     ValidatorTicket(
@@ -483,6 +489,19 @@ class TestScoreRetestLockingAndPriority:
                 },
                 recorded_at=_NOW,
             )
+            await append_audit_entry(
+                session,
+                agent_id=second_contract_id,
+                validator_hotkey=_HOTKEY,
+                event=EVENT_SCORE_RETEST_QUEUED,
+                payload={
+                    "request_id": str(uuid4()),
+                    "basis": "v9_contract_mismatch",
+                    "bench_version": 9,
+                    "run_id": "second-contract-run",
+                },
+                recorded_at=_NOW + timedelta(seconds=1),
+            )
 
             occupied = await activate_next_score_retest(
                 session,
@@ -492,6 +511,7 @@ class TestScoreRetestLockingAndPriority:
                 slot_id="slot-0",
                 required_basis="v9_contract_mismatch",
                 allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
             )
             assert occupied is None
 
@@ -503,6 +523,7 @@ class TestScoreRetestLockingAndPriority:
                 slot_id="slot-1",
                 required_basis="v9_contract_mismatch",
                 allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
             )
 
             assert promoted is not None
@@ -525,8 +546,24 @@ class TestScoreRetestLockingAndPriority:
                 slot_id="slot-2",
                 required_basis="v9_contract_mismatch",
                 allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
             )
-            assert second is None
+            assert second is not None
+            assert second.agent_id == second_contract_id
+            assert second.slot_id == "slot-2"
+            assert promoted.agent_id != second.agent_id
+
+            resumed = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                slot_id="slot-1",
+                required_basis="v9_contract_mismatch",
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+            assert resumed is promoted
 
     async def test_returns_none_without_waiting_on_the_advisory_lock(
         self,

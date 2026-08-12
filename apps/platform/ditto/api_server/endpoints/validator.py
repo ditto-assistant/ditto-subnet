@@ -2733,6 +2733,7 @@ async def request_job(
                     slot_id=slot_id,
                     required_basis=V9_CONTRACT_RETEST_BASIS,
                     allow_parallel_ordinary=True,
+                    allow_parallel_contract_retests=True,
                 )
                 if target_benchmark_ready
                 else None

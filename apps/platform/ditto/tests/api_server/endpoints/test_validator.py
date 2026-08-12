@@ -5112,6 +5112,7 @@ class TestRequestJob:
         call_kwargs = activate_retest.await_args.kwargs
         assert call_kwargs["required_basis"] == "v9_contract_mismatch"
         assert call_kwargs["allow_parallel_ordinary"] is True
+        assert call_kwargs["allow_parallel_contract_retests"] is True
         async with session_maker() as session:
             grant = await session.scalar(
                 select(InferenceGrant).where(
