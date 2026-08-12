@@ -415,7 +415,11 @@ def _ticket_item(ticket: ValidatorTicket) -> AdminValidationTicket:
 
 
 async def _load(
-    session: AsyncSession, *, agent_id: UUID, for_update: bool
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    for_update: bool,
+    required_bench_version: int | None = None,
 ) -> tuple[
     Agent | None,
     int,
@@ -449,10 +453,14 @@ async def _load(
         ticket_query = ticket_query.with_for_update()
     all_tickets = list((await session.scalars(ticket_query)).all())
     canonical_version = await active_bench_version(session)
-    bench_version = resolve_bench_version(
-        all_tickets=all_tickets,
-        all_scores=all_scores,
-        canonical_version=canonical_version,
+    bench_version = (
+        required_bench_version
+        if required_bench_version is not None
+        else resolve_bench_version(
+            all_tickets=all_tickets,
+            all_scores=all_scores,
+            canonical_version=canonical_version,
+        )
     )
     scores = [score for score in all_scores if score.bench_version == bench_version]
     tickets = [
@@ -1301,9 +1309,13 @@ async def _replacement_state(
     agent_id: UUID,
     validator_hotkey: str,
     for_update: bool,
+    required_bench_version: int | None = None,
 ) -> tuple[Agent | None, int, list[Score], list[ValidatorTicket], Score | None]:
     agent, bench_version, scores, tickets, _ = await _load(
-        session, agent_id=agent_id, for_update=for_update
+        session,
+        agent_id=agent_id,
+        for_update=for_update,
+        required_bench_version=required_bench_version,
     )
     target = next(
         (score for score in scores if score.validator_hotkey == validator_hotkey),
@@ -1843,6 +1855,9 @@ async def queue_validator_score_retests(
                 agent_id=item.agent_id,
                 validator_hotkey=validator_hotkey,
                 for_update=True,
+                required_bench_version=(
+                    9 if payload.basis == "v9_contract_mismatch" else None
+                ),
             )
             if agent is None:
                 preliminary[item.agent_id] = ("skipped", "agent not found")

@@ -2163,6 +2163,77 @@ async def test_v9_contract_retest_requires_typed_confirmation_and_current_snapsh
     assert "state changed" in stale.json()["results"][0]["detail"]
 
 
+async def test_v9_contract_retest_ignores_expired_v8_work_history(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed(
+        retry_maker,
+        score_count=1,
+        bench_version=9,
+        ticket_count=1,
+    )
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=agent_id,
+        revision="v9-base-shadow-calibration-v1",
+        manifest_sha256="5" * 64,
+        rollout_mode="shadow",
+    )
+    async with retry_maker() as session, session.begin():
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="legacy-v8-validator",
+                status=TicketStatus.EXPIRED,
+                issued_at=_T0,
+                deadline=_T0 + timedelta(minutes=90),
+                bench_version=8,
+                attempt_count=MAX_ATTEMPTS_PER_VERSION,
+                manual_retry_grants=0,
+                retry_after=_T0,
+                purpose=TicketPurpose.CONTINUAL_RETEST,
+            )
+        )
+    _install(app, retry_maker)
+
+    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    [item] = preview.json()["items"]
+    assert item["agent_id"] == str(agent_id)
+    assert item["queue_allowed"] is True
+
+    response = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json={
+            "basis": "v9_contract_mismatch",
+            "confirmation": "QUEUE V9 CONTRACT RETESTS",
+            "reason": "Replace v9 evidence without reviving retired v8 work",
+            "items": [
+                {
+                    "agent_id": str(agent_id),
+                    "request_id": str(uuid4()),
+                    "expected_snapshot": item["snapshot"],
+                    "expected_run_id": item["run_id"],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["queued"] == 1
+    assert response.json()["skipped"] == 0
+
+    async with retry_maker() as session:
+        legacy = await session.get(
+            ValidatorTicket,
+            (agent_id, 8, "legacy-v8-validator"),
+        )
+        assert legacy is not None
+        assert legacy.status == TicketStatus.EXPIRED
+
+
 async def test_v9_contract_retests_queue_and_promote_for_evaluating_agents(
     app: FastAPI,
     client: httpx.AsyncClient,
