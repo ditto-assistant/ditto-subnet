@@ -16,7 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
-from ditto.db.models import Agent, Score, ScoreAuditEntry, ValidatorTicket
+from ditto.db.models import (
+    Agent,
+    BenchmarkRollout,
+    BenchmarkRolloutMember,
+    Score,
+    ScoreAuditEntry,
+    ValidatorTicket,
+)
 from ditto.db.queries.audit import (
     EVENT_SCORE_INVALIDATED,
     EVENT_SCORE_RETEST_QUEUED,
@@ -35,6 +42,7 @@ from ditto.db.queries.lease_liveness import (
 
 REPLACEMENT_TICKET_TTL = timedelta(minutes=90)
 V9_CONTRACT_RETEST_BASIS = "v9_contract_mismatch"
+MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 3
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
 
 
@@ -98,13 +106,10 @@ async def score_retest_queue_positions(
     latest = await latest_retest_events_for_validator(
         session, validator_hotkey=validator_hotkey
     )
-    queued = sorted(
-        (
-            entry
-            for entry in latest.values()
-            if entry.event == EVENT_SCORE_RETEST_QUEUED
-        ),
-        key=lambda entry: entry.seq,
+    queued = await _ordered_queued_retests(
+        session,
+        latest=latest,
+        required_basis=None,
     )
     return {entry.agent_id: index for index, entry in enumerate(queued, start=1)}
 
@@ -131,6 +136,158 @@ async def _close_unserviceable(
             "automatic": True,
         },
         recorded_at=now,
+    )
+
+
+async def _requeue_failed_contract_retests(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    latest: dict[UUID, ScoreAuditEntry],
+    now: datetime,
+) -> None:
+    """Return failed v9 contract replacements to their preserved queue.
+
+    A replacement reuses the consumed score ticket. ``fail_job`` therefore
+    changes that row to ``expired`` while the append-only lifecycle remains
+    ``score_retest_requested``. Without a matching transition the promoter sees
+    neither an issued replacement nor a queued one, so the repair disappears
+    forever. Restore the accepted score's consumed-ticket state and append a
+    fresh queue event. The exact request is bounded: persistent agent failures
+    close visibly after three attempts and require a new operator decision.
+    """
+    for entry in tuple(latest.values()):
+        if (
+            entry.event != EVENT_SCORE_RETEST_REQUESTED
+            or entry.payload.get("basis") != V9_CONTRACT_RETEST_BASIS
+        ):
+            continue
+        bench_version = int(entry.payload.get("bench_version", -1))
+        ticket = await session.get(
+            ValidatorTicket,
+            (entry.agent_id, bench_version, validator_hotkey),
+            with_for_update=True,
+        )
+        if ticket is None or ticket.status != TicketStatus.EXPIRED:
+            continue
+        # The accepted score is still canonical while its repair is retried or
+        # released. Restore the consumed-ticket shape before either transition;
+        # leaving it expired would make the preserved score impossible to queue
+        # again through the guarded operator endpoint.
+        ticket.status = TicketStatus.SCORED
+        ticket.retry_after = None
+        score = await session.get(
+            Score, (entry.agent_id, bench_version, validator_hotkey)
+        )
+        agent = await session.get(Agent, entry.agent_id)
+        if (
+            not _agent_retestable(agent, entry)
+            or score is None
+            or score.run_id != entry.payload.get("run_id")
+        ):
+            await _close_unserviceable(
+                session,
+                entry=entry,
+                now=now,
+                reason="accepted score changed after replacement failure",
+            )
+            continue
+
+        request_id = entry.payload.get("request_id")
+        if request_id is None:
+            await _close_unserviceable(
+                session,
+                entry=entry,
+                now=now,
+                reason="replacement lifecycle is missing its request id",
+            )
+            continue
+        attempts = int(
+            await session.scalar(
+                select(func.count(ScoreAuditEntry.seq)).where(
+                    ScoreAuditEntry.agent_id == entry.agent_id,
+                    ScoreAuditEntry.validator_hotkey == validator_hotkey,
+                    ScoreAuditEntry.event == EVENT_SCORE_RETEST_REQUESTED,
+                    ScoreAuditEntry.payload["bench_version"].as_integer()
+                    == bench_version,
+                    ScoreAuditEntry.payload["request_id"].as_string()
+                    == str(request_id),
+                )
+            )
+            or 0
+        )
+        if attempts >= MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS:
+            await _close_unserviceable(
+                session,
+                entry=entry,
+                now=now,
+                reason="replacement failed three times; operator review required",
+            )
+            continue
+
+        payload = dict(entry.payload)
+        payload.pop("replacement_deadline", None)
+        payload["automatic_requeue"] = True
+        payload["failed_replacement_attempts"] = attempts
+        await append_audit_entry(
+            session,
+            agent_id=entry.agent_id,
+            validator_hotkey=validator_hotkey,
+            event=EVENT_SCORE_RETEST_QUEUED,
+            payload=payload,
+            recorded_at=now,
+        )
+
+
+async def _rollout_member_positions(
+    session: AsyncSession, *, bench_version: int
+) -> dict[UUID, int]:
+    rollout = await session.scalar(
+        select(BenchmarkRollout).where(
+            BenchmarkRollout.desired_version == bench_version,
+            BenchmarkRollout.status.in_(("collecting", "blocked_ineligible")),
+        )
+    )
+    if rollout is None:
+        return {}
+    rows = await session.execute(
+        select(BenchmarkRolloutMember.agent_id, BenchmarkRolloutMember.position).where(
+            BenchmarkRolloutMember.rollout_id == rollout.rollout_id
+        )
+    )
+    return dict(rows.tuples().all())
+
+
+async def _ordered_queued_retests(
+    session: AsyncSession,
+    *,
+    latest: dict[UUID, ScoreAuditEntry],
+    required_basis: str | None,
+) -> list[ScoreAuditEntry]:
+    """Use one ordering contract for issuance and operator-visible positions."""
+    queued = [
+        entry
+        for entry in latest.values()
+        if entry.event == EVENT_SCORE_RETEST_QUEUED
+        and (required_basis is None or entry.payload.get("basis") == required_basis)
+    ]
+    contract_versions = {
+        int(entry.payload.get("bench_version", -1))
+        for entry in queued
+        if entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
+    }
+    rollout_positions: dict[UUID, int] = {}
+    for bench_version in contract_versions:
+        rollout_positions.update(
+            await _rollout_member_positions(session, bench_version=bench_version)
+        )
+    return sorted(
+        queued,
+        key=lambda entry: (
+            0 if entry.agent_id in rollout_positions else 1,
+            rollout_positions.get(entry.agent_id, entry.seq),
+            entry.seq,
+        ),
     )
 
 
@@ -193,6 +350,15 @@ async def activate_next_score_retest(
         return None
     # Re-read under the lock; the unlocked probe above decides only whether
     # there is anything worth locking for, never what to do with it.
+    latest = await latest_retest_events_for_validator(
+        session, validator_hotkey=validator_hotkey
+    )
+    await _requeue_failed_contract_retests(
+        session,
+        validator_hotkey=validator_hotkey,
+        latest=latest,
+        now=now,
+    )
     latest = await latest_retest_events_for_validator(
         session, validator_hotkey=validator_hotkey
     )
@@ -286,17 +452,12 @@ async def activate_next_score_retest(
         else:
             return None
 
-    queued = sorted(
-        (
-            entry
-            for entry in latest.values()
-            if entry.event == EVENT_SCORE_RETEST_QUEUED
-        ),
-        key=lambda entry: entry.seq,
+    queued = await _ordered_queued_retests(
+        session,
+        latest=latest,
+        required_basis=required_basis,
     )
     for entry in queued:
-        if required_basis is not None and entry.payload.get("basis") != required_basis:
-            continue
         bench_version = int(entry.payload.get("bench_version", -1))
         # The floor comes first, and it is a different KIND of check from the
         # one below it. ``supports_version`` asks what this validator says it
@@ -384,6 +545,7 @@ def retest_is_queued(entry: ScoreAuditEntry | None) -> bool:
 __all__ = [
     "EVENT_SCORE_INVALIDATED",
     "REPLACEMENT_TICKET_TTL",
+    "MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS",
     "V9_CONTRACT_RETEST_BASIS",
     "activate_next_score_retest",
     "try_lock_validator",

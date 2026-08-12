@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
@@ -39,9 +39,25 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
-from ditto.db.models import Agent, Score, ValidatorTicket
-from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED, append_audit_entry
-from ditto.db.queries.score_retests import activate_next_score_retest
+from ditto.db.models import (
+    Agent,
+    BenchmarkRollout,
+    BenchmarkRolloutMember,
+    Score,
+    ScoreAuditEntry,
+    ValidatorTicket,
+)
+from ditto.db.queries.audit import (
+    EVENT_SCORE_RETEST_QUEUED,
+    EVENT_SCORE_RETEST_RELEASED,
+    EVENT_SCORE_RETEST_REQUESTED,
+    append_audit_entry,
+)
+from ditto.db.queries.score_retests import (
+    V9_CONTRACT_RETEST_BASIS,
+    activate_next_score_retest,
+    score_retest_queue_positions,
+)
 
 _NOW = datetime(2026, 7, 28, 18, 3, 1, tzinfo=UTC)
 _HOTKEY = "5CFtzzb4"
@@ -89,7 +105,239 @@ async def _seed_issued_ticket(
     return ticket
 
 
+async def _seed_contract_retest(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    run_id: str,
+    event: str,
+    request_id: str,
+    name: str,
+) -> None:
+    session.add(
+        Agent(
+            agent_id=agent_id,
+            miner_hotkey=f"miner-{agent_id}",
+            name=name,
+            sha256=f"{agent_id.int:064x}"[-64:],
+            status=AgentStatus.SCORED,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+            created_at=_NOW - timedelta(days=1),
+        )
+    )
+    session.add(
+        ValidatorTicket(
+            agent_id=agent_id,
+            validator_hotkey=_HOTKEY,
+            bench_version=9,
+            status=(
+                TicketStatus.EXPIRED
+                if event == EVENT_SCORE_RETEST_REQUESTED
+                else TicketStatus.SCORED
+            ),
+            purpose=TicketPurpose.CANONICAL_QUORUM,
+            purpose_revision=1,
+            issued_at=_NOW - timedelta(hours=2),
+            deadline=_NOW - timedelta(minutes=30),
+            attempt_count=1,
+            retry_after=_NOW - timedelta(minutes=1),
+        )
+    )
+    session.add(
+        Score(
+            agent_id=agent_id,
+            bench_version=9,
+            validator_hotkey=_HOTKEY,
+            run_id=run_id,
+            seed=1,
+            composite=0.5,
+            tool_mean=0.5,
+            memory_mean=0.5,
+            median_ms=100,
+            n=351,
+            details={"bench_version": 9},
+            generated_at=_NOW - timedelta(hours=1),
+        )
+    )
+    await session.flush()
+    await append_audit_entry(
+        session,
+        agent_id=agent_id,
+        validator_hotkey=_HOTKEY,
+        event=event,
+        payload={
+            "request_id": request_id,
+            "basis": V9_CONTRACT_RETEST_BASIS,
+            "bench_version": 9,
+            "run_id": run_id,
+            "replacement_deadline": (_NOW - timedelta(minutes=30)).isoformat(),
+        },
+        recorded_at=_NOW - timedelta(hours=1),
+    )
+
+
 class TestScoreRetestLockingAndPriority:
+    async def test_failed_contract_replacement_requeues_and_reissues(
+        self, session: AsyncSession
+    ) -> None:
+        agent_id = uuid4()
+        request_id = str(uuid4())
+        async with session.begin():
+            await _seed_contract_retest(
+                session,
+                agent_id=agent_id,
+                run_id="failed-replacement",
+                event=EVENT_SCORE_RETEST_REQUESTED,
+                request_id=request_id,
+                name="failed replacement",
+            )
+
+            promoted = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                slot_id="slot-1",
+                required_basis=V9_CONTRACT_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+            )
+
+            assert promoted is not None
+            assert promoted.agent_id == agent_id
+            assert promoted.status == TicketStatus.ISSUED
+            assert promoted.slot_id == "slot-1"
+            assert promoted.retry_after is None
+            lifecycle = list(
+                (
+                    await session.scalars(
+                        select(ScoreAuditEntry)
+                        .where(ScoreAuditEntry.agent_id == agent_id)
+                        .order_by(ScoreAuditEntry.seq.asc())
+                    )
+                ).all()
+            )
+            assert [entry.event for entry in lifecycle] == [
+                EVENT_SCORE_RETEST_REQUESTED,
+                EVENT_SCORE_RETEST_QUEUED,
+                EVENT_SCORE_RETEST_REQUESTED,
+            ]
+            assert lifecycle[1].payload["automatic_requeue"] is True
+            assert lifecycle[1].payload["failed_replacement_attempts"] == 1
+            assert "replacement_deadline" not in lifecycle[1].payload
+            assert lifecycle[2].payload["request_id"] == request_id
+
+    async def test_failed_contract_replacement_stops_after_three_attempts(
+        self, session: AsyncSession
+    ) -> None:
+        agent_id = uuid4()
+        request_id = str(uuid4())
+        async with session.begin():
+            await _seed_contract_retest(
+                session,
+                agent_id=agent_id,
+                run_id="persistent-failure",
+                event=EVENT_SCORE_RETEST_REQUESTED,
+                request_id=request_id,
+                name="persistent failure",
+            )
+            for offset in (2, 1):
+                await append_audit_entry(
+                    session,
+                    agent_id=agent_id,
+                    validator_hotkey=_HOTKEY,
+                    event=EVENT_SCORE_RETEST_REQUESTED,
+                    payload={
+                        "request_id": request_id,
+                        "basis": V9_CONTRACT_RETEST_BASIS,
+                        "bench_version": 9,
+                        "run_id": "persistent-failure",
+                    },
+                    recorded_at=_NOW - timedelta(minutes=offset),
+                )
+
+            promoted = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                required_basis=V9_CONTRACT_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+            )
+
+            assert promoted is None
+            ticket = await session.get(ValidatorTicket, (agent_id, 9, _HOTKEY))
+            assert ticket is not None
+            assert ticket.status == TicketStatus.SCORED
+            assert ticket.retry_after is None
+            latest = await session.scalar(
+                select(ScoreAuditEntry)
+                .where(ScoreAuditEntry.agent_id == agent_id)
+                .order_by(ScoreAuditEntry.seq.desc())
+            )
+            assert latest is not None
+            assert latest.event == EVENT_SCORE_RETEST_RELEASED
+            assert latest.payload["automatic"] is True
+            assert "failed three times" in latest.payload["reason"]
+
+    async def test_rollout_cohort_contract_repair_precedes_older_queue_work(
+        self, session: AsyncSession
+    ) -> None:
+        older_id = uuid4()
+        cohort_id = uuid4()
+        rollout_id = uuid4()
+        async with session.begin():
+            await _seed_contract_retest(
+                session,
+                agent_id=older_id,
+                run_id="older-noncohort",
+                event=EVENT_SCORE_RETEST_QUEUED,
+                request_id=str(uuid4()),
+                name="older noncohort",
+            )
+            await _seed_contract_retest(
+                session,
+                agent_id=cohort_id,
+                run_id="newer-cohort",
+                event=EVENT_SCORE_RETEST_QUEUED,
+                request_id=str(uuid4()),
+                name="newer cohort",
+            )
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=rollout_id,
+                    from_version=8,
+                    desired_version=9,
+                    status="collecting",
+                    cohort_size=5,
+                )
+            )
+            session.add(
+                BenchmarkRolloutMember(
+                    rollout_id=rollout_id,
+                    agent_id=cohort_id,
+                    position=1,
+                    frozen_miner_hotkey="cohort-miner",
+                    frozen_composite=0.9,
+                )
+            )
+            await session.flush()
+
+            positions = await score_retest_queue_positions(
+                session, validator_hotkey=_HOTKEY
+            )
+            assert positions == {cohort_id: 1, older_id: 2}
+
+            promoted = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                required_basis=V9_CONTRACT_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+            )
+            assert promoted is not None
+            assert promoted.agent_id == cohort_id
+
     async def test_parallel_ordinary_mode_is_contract_only(
         self, session: AsyncSession
     ) -> None:
