@@ -320,6 +320,29 @@ def _kaniko_script(build: dict[str, Any]) -> str:
     )
 
 
+def _delete_rental(client: TargonClient, uid: str) -> bool:
+    """Delete first; suspend only as the zero-replica failure fallback.
+
+    Targon's DELETE contract tears down the runtime itself. Suspending first can
+    race that teardown and leave an otherwise successful one-shot build in a
+    terminal provider state that can no longer be deleted.
+    """
+    try:
+        client.delete(uid)
+        return True
+    except TargonAPIError:
+        try:
+            state = client.state(uid)
+        except TargonAPIError:
+            state = {}
+        if str(state.get("status", "")).casefold() == "deleted":
+            return True
+        if str(state.get("status", "")).casefold() != "suspended":
+            with contextlib.suppress(TargonAPIError):
+                client.suspend(uid)
+        return False
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str
@@ -408,15 +431,7 @@ def run_one(settings: Settings, client: TargonClient, control: BuildControl) -> 
         return True
     finally:
         if uid is not None:
-            with contextlib.suppress(TargonAPIError):
-                state = client.state(uid)
-                if str(state.get("status", "")).casefold() not in {
-                    "suspended",
-                    "deleted",
-                }:
-                    client.suspend(uid)
-            with contextlib.suppress(TargonAPIError):
-                client.delete(uid)
+            _delete_rental(client, uid)
 
 
 def run_one_submission(
@@ -547,22 +562,9 @@ def run_one_submission(
             )
         return True
     finally:
-        if uid is not None:
-            try:
-                state = client.state(uid)
-            except TargonAPIError:
-                state = {}
-            if str(state.get("status", "")).casefold() not in {
-                "suspended",
-                "deleted",
-            }:
-                with contextlib.suppress(TargonAPIError):
-                    client.suspend(uid)
-            try:
-                client.delete(uid)
-            except TargonAPIError:
-                with contextlib.suppress(ControllerError):
-                    control.cleanup_required(build_id, provider_resource_id=uid)
+        if uid is not None and not _delete_rental(client, uid):
+            with contextlib.suppress(ControllerError):
+                control.cleanup_required(build_id, provider_resource_id=uid)
 
 
 def build_parser() -> argparse.ArgumentParser:

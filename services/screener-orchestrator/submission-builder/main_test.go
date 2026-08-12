@@ -10,7 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestSuccessHoldCoversControllerReconciliation(t *testing.T) {
+	if successHoldDuration < time.Minute {
+		t.Fatalf("success hold is too short for controller reconciliation: %s", successHoldDuration)
+	}
+}
 
 func TestDecodeURLRequiresTLS(t *testing.T) {
 	encoded := "aHR0cDovL2V4YW1wbGUudGVzdC9hcnRpZmFjdA=="

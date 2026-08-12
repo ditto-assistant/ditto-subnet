@@ -6,6 +6,7 @@ from typing import Any
 from screener_capacity.builder import (
     Settings,
     SubmissionBuildControl,
+    _delete_rental,
     _docker_config,
     _kaniko_script,
     run_one_submission,
@@ -76,12 +77,14 @@ class _Targon:
         deploy_error: TargonAPIError | None = None,
         state_status: str = "running",
         state_message: str = "",
+        state_after_delete_failure: str | None = None,
     ) -> None:
         self.delete_fails = delete_fails
         self.available = available
         self.deploy_error = deploy_error
         self.state_status = state_status
         self.state_message = state_message
+        self.state_after_delete_failure = state_after_delete_failure
         self.created: dict[str, Any] | None = None
         self.deployed: list[str] = []
         self.suspended: list[str] = []
@@ -101,7 +104,10 @@ class _Targon:
         return {}
 
     def state(self, _uid: str) -> dict[str, Any]:
-        return {"status": self.state_status, "message": self.state_message}
+        status = self.state_status
+        if self.deleted and self.delete_fails and self.state_after_delete_failure:
+            status = self.state_after_delete_failure
+        return {"status": status, "message": self.state_message}
 
     def suspend(self, uid: str) -> dict[str, Any]:
         self.suspended.append(uid)
@@ -155,7 +161,7 @@ def test_submission_rental_receives_only_attempt_capability_and_pinned_image() -
         ],
     }
     assert targon.deployed == ["wrk-build-1"]
-    assert targon.suspended == ["wrk-build-1"]
+    assert targon.suspended == []
     assert targon.deleted == ["wrk-build-1"]
     assert control.updates == [
         (
@@ -189,8 +195,18 @@ def test_submission_delete_failure_is_suspended_and_audited() -> None:
 
     assert run_one_submission(_settings(), targon, control)
 
+    assert targon.deleted == ["wrk-build-1"]
     assert targon.suspended == ["wrk-build-1"]
     assert control.cleanup == [(_submission()["build_id"], "wrk-build-1")]
+
+
+def test_delete_lost_response_reconciles_provider_deleted_state() -> None:
+    targon = _Targon(delete_fails=True, state_after_delete_failure="deleted")
+
+    assert _delete_rental(targon, "wrk-build-1")
+
+    assert targon.deleted == ["wrk-build-1"]
+    assert targon.suspended == []
 
 
 def test_submission_deploy_failure_is_distinct_from_runtime_failure() -> None:
