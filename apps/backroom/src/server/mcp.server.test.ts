@@ -69,6 +69,7 @@ describe('Backroom MCP tools', () => {
       [
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
+        'force_update_validator_fleet',
         'get_backroom_access',
         'get_backroom_tool_help',
         'get_ath_review',
@@ -84,6 +85,7 @@ describe('Backroom MCP tools', () => {
         'get_inference_concurrency_settings',
         'get_queue_policy_settings',
         'get_validator_slot_settings',
+        'get_validator_fleet_update',
         'list_confirmation_bundles',
         'set_burn_settings',
         'set_continual_retest_settings',
@@ -2118,6 +2120,85 @@ describe('Backroom MCP tools', () => {
       reason: 'ramp the fleet to three slots now that dispatch is stable',
       actor: 'peyton@omniaura.ai',
       confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('previews and forces a validator fleet update with exact MCP guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const requestId = '11111111-1111-4111-8111-111111111111'
+    const snapshot = 'ab'.repeat(32)
+    const target = {
+      validator_hotkey: '5ManagedValidator',
+      software_version: '0.53.14',
+      stack_revision: 'cd'.repeat(20),
+      active_lease_count: 2,
+      acknowledged: false,
+    }
+    const preview = {
+      generated_at: '2026-08-12T16:00:00Z',
+      snapshot,
+      target_count: 1,
+      active_lease_count: 2,
+      targets: [target],
+      latest_operation: null,
+      confirmation: 'FORCE UPDATE VALIDATOR FLEET',
+    }
+    const operation = {
+      operation_id: requestId,
+      expected_snapshot: snapshot,
+      targets: [target],
+      revoked_lease_count: 2,
+      acknowledged_count: 0,
+      actor: 'peyton@omniaura.ai',
+      reason: 'emergency scorer repair across the managed fleet',
+      created_at: '2026-08-12T16:00:01Z',
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(preview))
+      .mockResolvedValueOnce(Response.json({ operation, idempotent: false }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const inspection = await client.callTool({
+      name: 'get_validator_fleet_update',
+      arguments: {},
+    })
+    expect(inspection.isError).not.toBe(true)
+    expect(readJsonResult(inspection)).toMatchObject({
+      snapshot,
+      target_count: 1,
+      active_lease_count: 2,
+    })
+
+    const forced = await client.callTool({
+      name: 'force_update_validator_fleet',
+      arguments: {
+        requestId,
+        expectedSnapshot: snapshot,
+        reason: operation.reason,
+        confirmation: 'FORCE UPDATE VALIDATOR FLEET',
+      },
+    })
+    expect(forced.isError).not.toBe(true)
+    expect(readJsonResult(forced)).toMatchObject({
+      operation: { operation_id: requestId, revoked_lease_count: 2 },
+      idempotent: false,
+    })
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-fleet-update',
+    )
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      request_id: requestId,
+      expected_snapshot: snapshot,
+      reason: operation.reason,
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'FORCE UPDATE VALIDATOR FLEET',
     })
 
     await client.close()

@@ -2524,6 +2524,59 @@ export type ValidatorSlotSettingsRevision = z.infer<
   typeof validatorSlotSettingsRevisionSchema
 >
 
+// Fleet-wide emergency stop/update. The preview snapshot binds one destructive
+// request to the exact managed validators and ordinary benchmark leases the
+// operator saw; the Platform rechecks it under the lease transaction.
+export const VALIDATOR_FLEET_UPDATE_CONFIRMATION = 'FORCE UPDATE VALIDATOR FLEET'
+
+export const validatorFleetUpdateTargetSchema = z.object({
+  validator_hotkey: z.string(),
+  software_version: z.string(),
+  stack_revision: z.string().nullable(),
+  active_lease_count: z.number().int().nonnegative(),
+  acknowledged: z.boolean(),
+})
+
+export const validatorFleetUpdateOperationSchema = z.object({
+  operation_id: z.string().uuid(),
+  expected_snapshot: z.string().regex(/^[0-9a-f]{64}$/),
+  targets: z.array(validatorFleetUpdateTargetSchema),
+  revoked_lease_count: z.number().int().nonnegative(),
+  acknowledged_count: z.number().int().nonnegative(),
+  actor: z.string(),
+  reason: z.string(),
+  created_at: z.string(),
+})
+
+export const validatorFleetUpdatePreviewSchema = z.object({
+  generated_at: z.string(),
+  snapshot: z.string().regex(/^[0-9a-f]{64}$/),
+  target_count: z.number().int().nonnegative(),
+  active_lease_count: z.number().int().nonnegative(),
+  targets: z.array(validatorFleetUpdateTargetSchema),
+  latest_operation: validatorFleetUpdateOperationSchema.nullable(),
+  confirmation: z.literal(VALIDATOR_FLEET_UPDATE_CONFIRMATION),
+})
+
+export const validatorFleetUpdateResponseSchema = z.object({
+  operation: validatorFleetUpdateOperationSchema,
+  idempotent: z.boolean(),
+})
+
+export const forceValidatorFleetUpdateInputSchema = z.object({
+  requestId: z.string().uuid(),
+  expectedSnapshot: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(VALIDATOR_FLEET_UPDATE_CONFIRMATION),
+})
+
+export type ValidatorFleetUpdatePreview = z.infer<
+  typeof validatorFleetUpdatePreviewSchema
+>
+export type ValidatorFleetUpdateOperation = z.infer<
+  typeof validatorFleetUpdateOperationSchema
+>
+
 // What the operator screen needs from the fleet to choose a cap, read from the
 // platform's existing public validator heartbeat view. It is decoration, not
 // policy: the cap is a subnet-global number and the platform resolves it without

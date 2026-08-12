@@ -48,6 +48,8 @@ import {
   fetchValidatorSlotSettings,
   setValidatorSlotSettings,
   fetchValidatorFleet,
+  fetchValidatorFleetUpdate,
+  forceValidatorFleetUpdate,
   fetchAgentScores,
   fetchAgentScoreHistory,
   fetchScoreLeaderboard,
@@ -3576,6 +3578,101 @@ describe('validator slot administration', () => {
       ),
     ).rejects.toThrow()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('validator fleet forced update', () => {
+  const operation = {
+    operation_id: '11111111-1111-4111-8111-111111111111',
+    expected_snapshot: 'a'.repeat(64),
+    targets: [
+      {
+        validator_hotkey: '5ManagedValidator',
+        software_version: '0.53.14',
+        stack_revision: 'b'.repeat(40),
+        active_lease_count: 1,
+        acknowledged: false,
+      },
+    ],
+    revoked_lease_count: 1,
+    acknowledged_count: 0,
+    actor: 'operator@omniaura.ai',
+    reason: 'emergency scorer repair across the managed fleet',
+    created_at: '2026-08-12T16:00:00Z',
+  }
+  const preview = {
+    generated_at: '2026-08-12T15:59:00Z',
+    snapshot: 'a'.repeat(64),
+    target_count: 1,
+    active_lease_count: 1,
+    targets: operation.targets,
+    latest_operation: null,
+    confirmation: 'FORCE UPDATE VALIDATOR FLEET',
+  }
+
+  it('previews and forwards the exact snapshot guard and signed-in actor', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const response = { operation, idempotent: false }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(preview))
+      .mockResolvedValueOnce(Response.json(response))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchValidatorFleetUpdate()).resolves.toEqual(preview)
+    await expect(
+      forceValidatorFleetUpdate(
+        {
+          requestId: operation.operation_id,
+          expectedSnapshot: preview.snapshot,
+          reason: operation.reason,
+          confirmation: 'FORCE UPDATE VALIDATOR FLEET',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).resolves.toEqual(response)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-fleet-update',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          request_id: operation.operation_id,
+          expected_snapshot: preview.snapshot,
+          reason: operation.reason,
+          actor: 'operator@omniaura.ai',
+          confirmation: 'FORCE UPDATE VALIDATOR FLEET',
+        }),
+      }),
+    )
+  })
+
+  it('rejects a stale snapshot with an explicit re-preview recovery', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json(
+            { detail: 'validator fleet changed; refresh before forcing an update' },
+            { status: 409 },
+          ),
+        ),
+    )
+
+    await expect(
+      forceValidatorFleetUpdate(
+        {
+          requestId: operation.operation_id,
+          expectedSnapshot: preview.snapshot,
+          reason: operation.reason,
+          confirmation: 'FORCE UPDATE VALIDATOR FLEET',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(/get_validator_fleet_update/)
   })
 })
 

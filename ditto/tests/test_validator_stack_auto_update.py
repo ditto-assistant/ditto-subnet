@@ -1048,6 +1048,36 @@ def test_success_replaces_and_commits_the_complete_stack(
     assert "unrelated-container" not in {call[-1] for call in state["calls"] if call}
 
 
+def test_platform_forced_drain_skips_second_drain_and_updates_complete_stack(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["compose_calls"] = []
+    state["runtime_state"].update(
+        {
+            "state": "drained",
+            "fleet_update_operation_id": "11111111-1111-4111-8111-111111111111",
+        }
+    )
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert "honoring platform-requested forced update" in result.stderr
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.1"
+    final = json.loads(state_path.read_text())
+    signals = [call[1] for call in final["calls"] if call[:1] == ["kill"]]
+    assert "--signal=USR1" not in signals
+    assert signals[-1:] == ["--signal=USR2"]
+    assert final["runtime_state"]["state"] == "working"
+
+
 def test_update_reacquires_pruned_current_descriptor_before_validation(
     stack_updater_env: tuple[dict[str, str], Path, Path, Path],
 ) -> None:

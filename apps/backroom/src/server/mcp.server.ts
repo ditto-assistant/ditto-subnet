@@ -61,6 +61,7 @@ import {
   setInferenceConcurrencySettingsInputSchema,
   setQueuePolicySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
+  forceValidatorFleetUpdateInputSchema,
   updateSubmissionSettingsInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   retryFailedScreeningNowInputSchema,
@@ -127,6 +128,8 @@ import {
   setQueuePolicySettings,
   fetchValidatorSlotSettings,
   setValidatorSlotSettings,
+  fetchValidatorFleetUpdate,
+  forceValidatorFleetUpdate,
   fetchBurnSettings,
   setBurnSettings,
   fetchSubmissionSettingsControl,
@@ -358,6 +361,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read one submission retry ledger and fresh concurrency snapshot before recovery. Returns failure_reason, silently_expired, infra_retry_grants, live_ticket_count, eviction_allowed, eviction_blocking_reason, evicted_validator_hotkeys, reinstatement_allowed, and reinstated_at. Use list_lease_revocations for platform-ended leases.',
   set_validator_slot_settings:
     'Apply the complete two-field validator-slot policy with expectedRevision and "APPLY VALIDATOR SLOT CAP <n>". It is deliberately not derived from settings, a partial write is rejected, and a lower cap never revokes tickets a validator already holds. This is subnet dispatch policy; Ditto app entitlement flags are not served by this server.',
+  force_update_validator_fleet:
+    'EMERGENCY managed-validator stop/update request with snapshot, UUID, reason, and exact confirmation. Verify revisions separately.',
+  get_validator_fleet_update:
+    'Preview fleet-update targets, leases, and acknowledgements. Read-only.',
   reinstate_evicted_submission_to_queue:
     'Reverse an active-era removal using a fresh snapshot and "REINSTATE TO VALIDATOR QUEUE", not "EVICT LIVE VALIDATOR LEASES" or "REMOVE FROM VALIDATOR QUEUE". It does not mint a no-fault retry grant or restore attempts; retry_budget_snapshot records that invariant. Refused when the removal era is no longer the active one.',
   set_inference_concurrency_settings:
@@ -1369,6 +1376,29 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => setValidatorSlotSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_validator_fleet_update',
+    {
+      title: 'Preview validator fleet update',
+      description:
+        'Read the exact online managed validator fleet eligible for an emergency update, the ordinary live benchmark leases that would be revoked, and the stable snapshot required by force_update_validator_fleet. Also returns the latest operation and per-validator signed heartbeat acknowledgement progress. This only targets validators advertising managed stack identity and stack_updater support; offline, self-managed, or stale validators are excluded. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchValidatorFleetUpdate()),
+  )
+
+  registerTool(
+    'force_update_validator_fleet',
+    {
+      title: 'Stop work and update managed validator fleet',
+      description:
+        'Emergency fleet-wide operation. Supply a fresh requestId, expectedSnapshot from get_validator_fleet_update, an audit reason, and exact confirmation "FORCE UPDATE VALIDATOR FLEET". In one Platform transaction it force-expires every ordinary live benchmark lease held by the previewed managed validators and records no-fault compensation so affected submissions can be issued again. The authoritative next heartbeat roster cancels those scorer runs; the fleet command also cancels the private Bench v9 confirmation lane, enters the validator drain, and asks the installed managed-stack updater to replace the stack on its next timer poll. Offline, stale, and self-managed validators are excluded. A successful response proves the command was recorded and leases were revoked, not that a newer release exists, a deployment succeeded, or every host acknowledged; follow get_validator_fleet_update until acknowledgements arrive and verify runtime revisions separately. Requires backroom:write.',
+      inputSchema: forceValidatorFleetUpdateInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => forceValidatorFleetUpdate(input, props.session.email)),
   )
 
   registerTool(

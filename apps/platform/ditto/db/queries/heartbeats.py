@@ -246,6 +246,7 @@ async def upsert_validator_heartbeat(
     stack_health: dict | None = None,
     benchmark_capacity: dict | None = None,
     claimed_slots: list[dict] | None = None,
+    last_fleet_update_operation_id: UUID | None = None,
 ) -> tuple[ValidatorHeartbeat, bool]:
     """Persist only a strictly newer heartbeat; return ``(row, accepted)``."""
     row = await session.scalar(
@@ -277,6 +278,7 @@ async def upsert_validator_heartbeat(
             "reported_at": reported_at,
             "seen_at": seen_at,
             "signature": signature,
+            "last_fleet_update_operation_id": last_fleet_update_operation_id,
         }
         dialect_name = session.get_bind().dialect.name
         inserted: str | None = None
@@ -390,6 +392,7 @@ async def upsert_validator_heartbeat(
     row.reported_at = reported_at
     row.seen_at = seen_at
     row.signature = signature
+    row.last_fleet_update_operation_id = last_fleet_update_operation_id
     await session.flush()
     return row, True
 

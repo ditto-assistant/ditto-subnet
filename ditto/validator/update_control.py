@@ -9,6 +9,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 
@@ -33,6 +34,17 @@ def _bootstrap_resumed_path() -> Path:
 VALIDATOR_BOOTSTRAP_RESUMED_PATH = _bootstrap_resumed_path()
 
 ValidatorUpdateState = Literal["starting", "ready", "working", "drained", "stopping"]
+_fleet_update_operation_id: UUID | None = None
+
+
+def request_fleet_update(operation_id: UUID) -> None:
+    """Persist the Platform command in every updater-visible state write."""
+    global _fleet_update_operation_id
+    _fleet_update_operation_id = operation_id
+
+
+def fleet_update_operation_id() -> UUID | None:
+    return _fleet_update_operation_id
 
 
 def bootstrap_should_start_drained(
@@ -82,6 +94,11 @@ def write_update_state(
         "platform_accepted": platform_accepted,
         "state": state,
         "update_protocol": VALIDATOR_UPDATE_PROTOCOL,
+        "fleet_update_operation_id": (
+            str(_fleet_update_operation_id)
+            if _fleet_update_operation_id is not None
+            else None
+        ),
     }
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:

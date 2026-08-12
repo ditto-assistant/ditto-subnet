@@ -1697,6 +1697,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/validator-fleet-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Validator Fleet Update
+         * @description Preview the exact managed fleet and leases a forced update would touch.
+         */
+        get: operations["preview_validator_fleet_update_api_v1_admin_validator_fleet_update_get"];
+        put?: never;
+        /**
+         * Force Validator Fleet Update
+         * @description Revoke live benchmark leases and command every managed validator to update.
+         */
+        post: operations["force_validator_fleet_update_api_v1_admin_validator_fleet_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/validator-slot-settings": {
         parameters: {
             query?: never;
@@ -6798,6 +6822,31 @@ export interface components {
             status: "expired";
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /** AdminValidatorFleetUpdateRequest */
+        AdminValidatorFleetUpdateRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Snapshot */
+            expected_snapshot: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+        };
+        /** AdminValidatorFleetUpdateResponse */
+        AdminValidatorFleetUpdateResponse: {
+            /** Idempotent */
+            idempotent: boolean;
+            operation: components["schemas"]["ValidatorFleetUpdateOperationView"];
         };
         /** AdminValidatorScoreReplacementDetail */
         AdminValidatorScoreReplacementDetail: {
@@ -16140,6 +16189,89 @@ export interface components {
             version?: string | null;
         };
         /**
+         * ValidatorFleetUpdateCommand
+         * @description One Platform-issued request to stop active work and run the host updater.
+         */
+        ValidatorFleetUpdateCommand: {
+            /**
+             * Operation Id
+             * Format: uuid
+             */
+            operation_id: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+        };
+        /** ValidatorFleetUpdateOperationView */
+        ValidatorFleetUpdateOperationView: {
+            /** Acknowledged Count */
+            acknowledged_count: number;
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expected Snapshot */
+            expected_snapshot: string;
+            /**
+             * Operation Id
+             * Format: uuid
+             */
+            operation_id: string;
+            /** Reason */
+            reason: string;
+            /** Revoked Lease Count */
+            revoked_lease_count: number;
+            /** Targets */
+            targets: components["schemas"]["ValidatorFleetUpdateTarget"][];
+        };
+        /** ValidatorFleetUpdatePreview */
+        ValidatorFleetUpdatePreview: {
+            /** Active Lease Count */
+            active_lease_count: number;
+            /**
+             * Confirmation
+             * @default FORCE UPDATE VALIDATOR FLEET
+             * @constant
+             */
+            confirmation: "FORCE UPDATE VALIDATOR FLEET";
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            latest_operation?: components["schemas"]["ValidatorFleetUpdateOperationView"] | null;
+            /** Snapshot */
+            snapshot: string;
+            /** Target Count */
+            target_count: number;
+            /** Targets */
+            targets: components["schemas"]["ValidatorFleetUpdateTarget"][];
+        };
+        /** ValidatorFleetUpdateTarget */
+        ValidatorFleetUpdateTarget: {
+            /**
+             * Acknowledged
+             * @default false
+             */
+            acknowledged: boolean;
+            /**
+             * Active Lease Count
+             * @default 0
+             */
+            active_lease_count: number;
+            /** Software Version */
+            software_version: string;
+            /** Stack Revision */
+            stack_revision?: string | null;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
          * ValidatorHeartbeatRequest
          * @description Signed proof of the validator build currently serving a hotkey.
          *
@@ -16164,6 +16296,11 @@ export interface components {
              * @description SHA-256 of the installed validator Python source.
              */
             code_digest: string;
+            /**
+             * Last Fleet Update Operation Id
+             * @description Latest forced fleet update command received under v19.
+             */
+            last_fleet_update_operation_id?: string | null;
             /**
              * Protocol Version
              * @description Heartbeat protocol version.
@@ -16227,6 +16364,7 @@ export interface components {
         ValidatorHeartbeatResponse: {
             /** Accepted */
             accepted: boolean;
+            fleet_update?: components["schemas"]["ValidatorFleetUpdateCommand"] | null;
             /**
              * Leases
              * @description Protocol v17 authoritative lease roster. ``null`` means 'not answered' and is never grounds to cancel work; an empty list means 'you hold no lease'.
@@ -19515,6 +19653,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminValidatorAssignmentReleaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_validator_fleet_update_api_v1_admin_validator_fleet_update_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidatorFleetUpdatePreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    force_validator_fleet_update_api_v1_admin_validator_fleet_update_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminValidatorFleetUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminValidatorFleetUpdateResponse"];
                 };
             };
             /** @description Validation Error */

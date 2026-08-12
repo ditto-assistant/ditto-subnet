@@ -309,6 +309,12 @@ state_drained() {
     [[ "$state" == *'"state":"drained"'* ]]
 }
 
+state_forced_update() {
+  local state="$1" container="$2"
+  state_drained "$state" "$container" &&
+    grep -Eq '"fleet_update_operation_id":"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"' <<<"$state"
+}
+
 assert_stack_matches() {
   local dir="$1" index service key ref expected actual container services=() image_keys=()
   while IFS= read -r service; do services+=("$service"); done < <(release_services "$dir")
@@ -528,7 +534,7 @@ recover_transaction() {
 }
 
 perform_update() {
-  local candidate_ref="$1" allow_downgrade="$2" previous_ref current_version candidate_version old_container current_container
+  local candidate_ref="$1" allow_downgrade="$2" previous_ref current_version candidate_version old_container current_container current_state forced_update=false
   previous_ref="$(managed_release)"
   # The immutable descriptor is updater metadata, not a runtime component, so
   # routine Docker cleanup may remove its local image after installation. Pull
@@ -539,18 +545,38 @@ perform_update() {
   [ -d "$CURRENT_DIR" ] && validate_descriptor "$previous_ref" "$CURRENT_DIR" || die "managed current descriptor is missing or invalid"
   assert_stack_matches "$CURRENT_DIR" || die "running stack has drifted from its managed release"
   current_container="$(service_container "$CURRENT_DIR" ditto-subnet)"
-  state_ready "$(runtime_state "$current_container")" "$current_container" || { log "validator is not freshly platform-accepted; deferring"; return 0; }
+  current_state="$(runtime_state "$current_container")"
+  if state_ready "$current_state" "$current_container"; then
+    :
+  elif state_forced_update "$current_state" "$current_container"; then
+    forced_update=true
+    DRAINED_CONTAINER="$current_container"
+    DRAINED_RELEASE_DIR="$CURRENT_DIR"
+    log "honoring platform-requested forced update from an already drained validator"
+  else
+    log "validator is not freshly platform-accepted; deferring"
+    return 0
+  fi
   docker pull "$candidate_ref" >/dev/null
   extract_descriptor "$candidate_ref" "$STAGED_DIR" || die "candidate descriptor is invalid"
   pull_release_images "$STAGED_DIR" || die "candidate component pull failed before drain"
   current_version="$(manifest_value "$CURRENT_DIR/manifest.env" STACK_VERSION)"
   candidate_version="$(manifest_value "$STAGED_DIR/manifest.env" STACK_VERSION)"
-  if [ "$candidate_ref" = "$previous_ref" ]; then log "already running stack $current_version"; rm -rf -- "$STAGED_DIR"; return 0; fi
+  if [ "$candidate_ref" = "$previous_ref" ]; then
+    log "already running stack $current_version"
+    rm -rf -- "$STAGED_DIR"
+    if [ "$forced_update" = true ]; then
+      resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "current stack did not resume after forced update check"
+    fi
+    return 0
+  fi
   if [ "$allow_downgrade" != true ] && ! semver_greater_same_major "$candidate_version" "$current_version"; then die "candidate $candidate_version requires supervised major migration or is not newer"; fi
   rm -rf -- "$PREVIOUS_DIR"
   cp -R "$CURRENT_DIR" "$PREVIOUS_DIR"
   record_transaction prepared "$previous_ref" "$candidate_ref"
-  request_drain "$CURRENT_DIR" "$drain_timeout" "$check_seconds" || { rm -f "$TRANSACTION_FILE"; return 0; }
+  if [ "$forced_update" != true ]; then
+    request_drain "$CURRENT_DIR" "$drain_timeout" "$check_seconds" || { rm -f "$TRANSACTION_FILE"; return 0; }
+  fi
   record_transaction drained "$previous_ref" "$candidate_ref"
   old_container="$(service_container "$CURRENT_DIR" ditto-subnet)"
   docker stop --time 30 "$old_container" >/dev/null || die "could not stop drained validator"

@@ -45,6 +45,8 @@ from ditto.api_models.validator import (
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
     ScorerLivenessProbe,
+    ValidatorCapabilities,
+    ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
     V9ConfirmationCompletionReport,
@@ -101,7 +103,11 @@ from ditto.validator.transform_audit import (
     brittleness_signature,
     pool_audit_pairs,
 )
-from ditto.validator.update_control import write_update_state
+from ditto.validator.update_control import (
+    fleet_update_operation_id,
+    request_fleet_update,
+    write_update_state,
+)
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
     Top5ConfirmationPlan,
@@ -445,6 +451,8 @@ class ValidatorWorker:
         self._coalesced_heartbeat_task: asyncio.Task[bool] | None = None
         self._background_heartbeat_tasks: set[asyncio.Task[bool]] = set()
         self._platform_accepted = False
+        self._drain_requested: asyncio.Event | None = None
+        self._force_cancel_requested = asyncio.Event()
         self._bootstrap_resume_ready = False
         # Cooperative updater drains are acknowledged only after both the
         # independent scoring and weight loops have finished their current
@@ -1201,6 +1209,7 @@ class ValidatorWorker:
                 stack=stack,
                 stack_health=stack_health,
                 benchmark_capacity=capacity,
+                last_fleet_update_operation_id=fleet_update_operation_id(),
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -1216,6 +1225,7 @@ class ValidatorWorker:
                 stack=stack,
                 stack_health=stack_health,
                 benchmark_capacity=capacity,
+                last_fleet_update_operation_id=fleet_update_operation_id(),
                 timestamp=timestamp,
                 signature=signature,
             )
@@ -1228,6 +1238,11 @@ class ValidatorWorker:
                 scorer_benchmarks, stack_health
             )
             self._apply_lease_roster(response, advertised=capacity)
+            self._apply_fleet_update_command(
+                response,
+                capabilities=capabilities,
+                stack=stack,
+            )
             return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
             # Reached when the heartbeat never landed: unreachable platform,
@@ -1279,6 +1294,40 @@ class ValidatorWorker:
                 slot_id,
             )
             slot.revoked.set()
+
+    def _apply_fleet_update_command(
+        self,
+        response: ValidatorHeartbeatResponse,
+        *,
+        capabilities: ValidatorCapabilities,
+        stack: ValidatorStackIdentity,
+    ) -> None:
+        """Enter an updater-owned drain only on a managed, updater-capable stack."""
+        command = response.fleet_update
+        if command is None or command.operation_id == fleet_update_operation_id():
+            return
+        if stack.mode != "managed" or not capabilities.stack_updater:
+            logger.error(
+                "ignoring fleet update command %s on a stack without the "
+                "managed updater",
+                command.operation_id,
+            )
+            return
+        if self._drain_requested is None:
+            logger.error(
+                "ignoring fleet update command %s before drain control was installed",
+                command.operation_id,
+            )
+            return
+        logger.warning(
+            "platform requested fleet update %s; stopping active benchmark work "
+            "and entering the host updater drain",
+            command.operation_id,
+        )
+        request_fleet_update(command.operation_id)
+        self._force_cancel_requested.set()
+        self._drain_requested.set()
+        write_update_state("working", platform_accepted=self._platform_accepted)
 
     async def _heartbeat_while_active(self, stop: asyncio.Event) -> None:
         """Refresh ``running_benchmark`` until the current scorer call ends."""
@@ -1891,9 +1940,43 @@ class ValidatorWorker:
         heartbeat_task = asyncio.create_task(
             keep_validator_visible(), name="validator-v9-confirmation-heartbeat"
         )
-        try:
+
+        async def run_candidates() -> None:
             await asyncio.gather(*(run_slot(slot_id) for slot_id in candidates))
+
+        async def wait_for_force() -> None:
+            await self._force_cancel_requested.wait()
+
+        work = asyncio.create_task(
+            run_candidates(), name="validator-v9-confirmation-work"
+        )
+        forced = asyncio.create_task(
+            wait_for_force(),
+            name="validator-v9-confirmation-force-cancel",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                {work, forced}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if forced in done and not work.done():
+                work.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await work
+            else:
+                await work
+        except asyncio.CancelledError:
+            # Parent cancellation is the ordinary shutdown/drain path. The
+            # candidate task must receive it and finish its lease hand-back
+            # before this lane re-raises, or the Platform keeps a confirmation
+            # ticket assigned to work that no longer exists.
+            work.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await work
+            raise
         finally:
+            forced.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await forced
             heartbeat_stop.set()
             await heartbeat_task
 
@@ -3252,6 +3335,7 @@ class ValidatorWorker:
         cooperative updater drain stops both loops from starting new work and
         is acknowledged only after their current work has completed.
         """
+        self._drain_requested = drain_requested
         write_update_state("ready", platform_accepted=self._platform_accepted)
         weight_task = asyncio.create_task(
             self._run_weights_forever(stop, drain_requested=drain_requested),
@@ -3486,6 +3570,12 @@ class ValidatorWorker:
             bootstrap_resume=bootstrap_resume,
         )
         if not stop.is_set():
+            # A forced update may discover that the channel already points at
+            # this exact release and resume the same process with SIGUSR2. The
+            # cancellation latch belongs to that one drain; keeping it set
+            # would permanently suppress the private confirmation lane after
+            # an otherwise successful no-op update check.
+            self._force_cancel_requested.clear()
             self._admission = "accepting"
             write_update_state("ready", platform_accepted=self._platform_accepted)
 

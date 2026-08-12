@@ -1092,6 +1092,46 @@ def test_protocol_v11_heartbeat_uses_the_platform_v11_domain() -> None:
     assert b":11:" in message
 
 
+def test_protocol_v19_signature_binds_fleet_update_acknowledgement() -> None:
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 19
+    capacity = BenchmarkCapacity(configured_slots=2, healthy_slots=["slot-0", "slot-1"])
+    operation_id = UUID("11111111-1111-4111-8111-111111111111")
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    signature = sign_heartbeat(
+        keypair,
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+        last_fleet_update_operation_id=operation_id,
+    )
+    acknowledged = heartbeat_signing_message(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+        last_fleet_update_operation_id=operation_id,
+    )
+    unacknowledged = heartbeat_signing_message(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+    )
+
+    assert acknowledged.startswith(b"ditto-validator-heartbeat:v19:")
+    assert acknowledged.endswith(f":{operation_id}:1784020800".encode())
+    assert unacknowledged.endswith(b"::1784020800")
+    assert keypair.verify(acknowledged, bytes.fromhex(signature))
+    assert not keypair.verify(unacknowledged, bytes.fromhex(signature))
+
+
 def _signed_ledger_entry(
     *, bench_version: int = 7, tamper_median: bool = False
 ) -> LedgerEntry:

@@ -1662,6 +1662,9 @@ class ValidatorHeartbeat(Base):
     )
     seen_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     signature: Mapped[str] = mapped_column(Text, nullable=False)
+    last_fleet_update_operation_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -1697,12 +1700,65 @@ class ValidatorHeartbeat(Base):
             ondelete="SET NULL",
             name="validator_heartbeats_benchmark_progress_agent_id_fkey",
         ),
+        ForeignKeyConstraint(
+            ["last_fleet_update_operation_id"],
+            ["validator_fleet_update_operations.operation_id"],
+            ondelete="SET NULL",
+            name="validator_heartbeats_last_fleet_update_fkey",
+        ),
         Index("validator_heartbeats_seen_at_idx", "seen_at"),
         Index(
             "validator_heartbeats_active_agent_idx",
             "active_agent_id",
             postgresql_where=text("active_agent_id IS NOT NULL"),
         ),
+    )
+
+
+class ValidatorFleetUpdateOperation(Base):
+    """One append-only request to interrupt and update the managed fleet."""
+
+    __tablename__ = "validator_fleet_update_operations"
+
+    operation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    expected_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    target_validator_hotkeys: Mapped[list] = mapped_column(
+        _JSON_VARIANT, nullable=False
+    )
+    target_stack_revisions: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    revoked_lease_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(expected_snapshot) = 64",
+            name="validator_fleet_updates_snapshot_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(target_validator_hotkeys) = 'array'",
+            name="validator_fleet_updates_targets_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(target_stack_revisions) = 'object'",
+            name="validator_fleet_updates_revisions_check",
+        ),
+        CheckConstraint(
+            "revoked_lease_count >= 0",
+            name="validator_fleet_updates_revoked_count_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="validator_fleet_updates_actor_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="validator_fleet_updates_reason_check",
+        ),
+        Index("validator_fleet_updates_created_idx", "created_at"),
     )
 
 
