@@ -1289,6 +1289,17 @@ class TestPublicBenchmarkTimeline:
                         activated_at=datetime(2026, 7, 18, 16, 0, tzinfo=UTC),
                     )
                 )
+                session.add(
+                    BenchmarkRollout(
+                        rollout_id=uuid4(),
+                        from_version=8,
+                        desired_version=9,
+                        status="collecting",
+                        cohort_size=5,
+                        created_at=datetime(2026, 8, 11, 15, 30, tzinfo=UTC),
+                        activated_at=None,
+                    )
+                )
                 for agent_id, recorded_at in (
                     (UUID(first_id), datetime(2026, 7, 8, tzinfo=UTC)),
                     (UUID(second_id), datetime(2026, 7, 9, tzinfo=UTC)),
@@ -1342,6 +1353,12 @@ class TestPublicBenchmarkTimeline:
         assert body["releases"][0]["released_at"] == "2026-07-07T00:00:00Z"
         assert body["releases"][1]["released_at"] == "2026-07-18T14:30:00Z"
         assert body["releases"][1]["activated_at"] == "2026-07-18T16:00:00Z"
+        release_by_version = {
+            release["bench_version"]: release for release in body["releases"]
+        }
+        assert {8, 9}.issubset(release_by_version)
+        assert release_by_version[9]["released_at"] == "2026-08-11T15:30:00Z"
+        assert release_by_version[9]["activated_at"] is None
         assert [point["agent_id"] for point in body["points"]] == [
             first_id,
             second_id,
@@ -9386,11 +9403,11 @@ def test_bench_glossary_explains_every_v5_category_and_metric() -> None:
     metrics = {m["key"] for m in bg.metric_entries()}
     # bench_version changelog is present, newest first, complete per version.
     versions = bg.version_entries()
-    assert [v["version"] for v in versions] == [7, 6, 5, 4, 3, 2]
+    assert [v["version"] for v in versions] == [9, 8, 7, 6, 5, 4, 3, 2]
     for v in versions:
         assert v["title"] and v["summary"] and v["epoch"]
 
-    v7 = versions[0]
+    v7 = next(version for version in versions if version["version"] == 7)
     assert v7["title"] == "GPT-OSS inference contract"
     assert "openai/gpt-oss-20b" in v7["summary"]
     assert "medium" in v7["summary"]

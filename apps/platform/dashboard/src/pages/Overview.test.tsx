@@ -19,6 +19,7 @@ import {
   resetMemoryFieldCache,
 } from "../components/overview/memory-timeline";
 import { resetBoardState, setLeaderboardVersionView } from "../components/board/board-state";
+import { refreshAllEndpoints } from "../data/useEndpoint";
 import { fx, pct } from "../lib/format";
 import { dethroneFloor, displayComposite, rankEntries } from "../lib/scoring";
 import { syncFromLocation } from "../stores/routeStore";
@@ -354,7 +355,9 @@ describe("off-network harness comparison (row 2)", () => {
     expect(document.querySelector("details.harness-comparison-method")).toBeTruthy();
     const section = document.querySelector(".harness-comparison") as HTMLElement;
     expect(section.textContent).toContain("Method and comparability caveats");
-    expect(section.textContent).toContain("Hermes Agent and OpenClaw measured retrospectively");
+    expect(section.textContent).toContain(
+      "Hermes Agent and OpenClaw measured retrospectively where reference runs are available",
+    );
     // Dropped affordances stay dropped: no harness filter, no chart-row
     // layout, no "Reference only" kicker above the title.
     expect(document.getElementById("third-party-harness-filter")).toBeNull();
@@ -458,6 +461,27 @@ describe("memory timeline field + champion (row 5)", () => {
     expect(v7).toBe(2);
   });
 
+  it("keeps the rendered graph mounted when unchanged data is refetched", async () => {
+    const paths: string[] = [];
+    renderOverview({ onRequest: (path) => paths.push(path) });
+    await waitFor(
+      () => {
+        expect(document.querySelectorAll(".timeline-field").length).toBeGreaterThan(0);
+      },
+      { timeout: 4000 },
+    );
+    const svg = document.querySelector(".memory-timeline-svg");
+    const latestBoard = "/public/leaderboard?bench_version=7";
+    const before = paths.filter((path) => path === latestBoard).length;
+
+    refreshAllEndpoints();
+
+    await waitFor(() => {
+      expect(paths.filter((path) => path === latestBoard).length).toBeGreaterThan(before);
+    });
+    expect(document.querySelector(".memory-timeline-svg")).toBe(svg);
+  });
+
   it("gives every contract an equal band and says so in the reading notes", async () => {
     renderOverview();
     await waitFor(() => expect(document.querySelector(".memory-timeline-svg")).toBeTruthy(), {
@@ -494,7 +518,7 @@ describe("memory timeline field + champion (row 5)", () => {
 // one implies an immovable rank. Both states are derived from data (harness
 // records + /public/bench/rollout) so later contracts inherit the treatment.
 describe("memory timeline gaps (row 6)", () => {
-  const releases = [2, 3, 4, 5, 6, 7, 8].map((v) => ({
+  const releases = [2, 3, 4, 5, 6, 7, 8, 9].map((v) => ({
     bench_version: v,
     released_at: "2026-07-0" + Math.min(9, v) + "T00:00:00Z",
     activated_at: null,
@@ -517,37 +541,38 @@ describe("memory timeline gaps (row 6)", () => {
     const out = memoryTimelineHtml(timeline, {
       width: 960,
       phoneViewport: false,
-      rollout: { active_version: 7, desired_version: 8, status: "collecting" },
+      rollout: { active_version: 8, desired_version: 9, status: "collecting" },
       championHotkey: null,
       fieldByVersion: {},
-      pendingByVersion: { 8: 2 },
+      pendingByVersion: { 9: 2 },
     });
     if (out.kind !== "chart") throw new Error("expected a chart");
     return out.html;
   }
 
-  it("derives complete v8 coverage from the harness records, never a version literal", () => {
-    const shown: Record<number, boolean> = { 6: true, 7: true, 8: true };
+  it("derives v8 coverage and the v9 gap from harness records, never version literals", () => {
+    const shown: Record<number, boolean> = { 7: true, 8: true, 9: true };
     for (const evidence of THIRD_PARTY_HARNESSES) {
       expect(harnessMeasuredVersions(evidence)).toContain(8);
-      expect(harnessUnmeasuredVersions(evidence, shown)).toEqual([]);
+      expect(harnessUnmeasuredVersions(evidence, shown)).toEqual([9]);
     }
   });
 
-  it("extends both reference lines through v8 without rendering a false gap", () => {
+  it("extends both reference lines through v8 and names the omitted v9 measurements", () => {
     const html = renderGapChart();
-    expect(html).not.toContain('class="timeline-unmeasured"');
+    expect(html).toContain('class="timeline-unmeasured"');
     expect(html).not.toContain("· not on v8");
-    expect(html).not.toContain("not yet measured");
-    expect(html).toContain("Every contract shown carries a reference measurement.");
+    expect(html).toContain("· not on v9");
+    expect(html).toContain("not yet measured");
+    expect(html).toContain("No reference harness has been run on v9");
   });
 
   it("marks the collecting rollout's band open with the rollout strip's vocabulary", () => {
     const html = renderGapChart();
     expect(html).toContain('class="timeline-band open"');
-    expect(html).toContain("v8 collecting");
+    expect(html).toContain("v9 collecting");
     expect(html).toContain("rollout still collecting");
-    expect(html).toContain("The v8 rollout is still collecting");
+    expect(html).toContain("The v9 rollout is still collecting");
     // Scored-but-pre-quorum runs are counted, never plotted.
     expect(html).toContain("awaiting quorum");
     expect(html).toContain("a rank here can never move retroactively");

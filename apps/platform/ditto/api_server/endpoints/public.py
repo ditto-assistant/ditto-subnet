@@ -337,13 +337,12 @@ _SUBMISSION_BUILD_LIMIT = 8
 _TIMELINE_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 # v1 predates the memory subscore, so it has nothing to plot on this axis.
 _TIMELINE_MIN_BENCH_VERSION = 2
-# The window is bounded for two reasons that both point at the same number. The
-# read below is a per-version scan of the score ledger, so an unbounded range
-# grows more expensive with every contract that ships; and the dashboard renders
-# the contracts as an ordinal colour ramp whose adjacent steps stop being
-# distinguishable past six. Serving the newest six keeps both honest, and a new
-# bench_version enters the window with no code change.
-_TIMELINE_MAX_RELEASES = 6
+# Keep the complete scored memory era available to consumers without letting the
+# per-version ledger scan grow without bound. The dashboard may apply a tighter
+# presentation window to preserve legibility, but the public response retains v2
+# through the current v9 rollout so a consumer never has to invent missing release
+# metadata.
+_TIMELINE_MAX_RELEASES = 8
 # A leaderboard pinned to a *settled* benchmark version is finished work: the
 # rollout has moved past it, so nothing routine writes to it again. It is still
 # not immutable (an ATH review or a score replacement can correct an old row),
@@ -2180,7 +2179,9 @@ async def benchmark_timeline(
                 BenchmarkRollout.desired_version.in_(
                     [int(entry["version"]) for entry in version_docs]
                 ),
-                BenchmarkRollout.status == "activated",
+                BenchmarkRollout.status.in_(
+                    ("collecting", "blocked_ineligible", "activated")
+                ),
             )
             .order_by(
                 BenchmarkRollout.desired_version,
@@ -2188,7 +2189,23 @@ async def benchmark_timeline(
             )
         )
     ).all()
-    rollout_by_version = {int(row.desired_version): row for row in rollout_rows}
+    # Prefer the activation record for settled contracts. An open contract has
+    # no activation timestamp yet, so its latest collecting row supplies the
+    # real rollout start instead of the changelog's fallback epoch.
+    rollout_by_version: dict[int, Any] = {}
+    for row in rollout_rows:
+        version = int(row.desired_version)
+        current = rollout_by_version.get(version)
+        if (
+            current is None
+            or (current.activated_at is None and row.activated_at is not None)
+            or (
+                current.activated_at is None
+                and row.activated_at is None
+                and row.created_at > current.created_at
+            )
+        ):
+            rollout_by_version[version] = row
     releases = [
         PublicBenchmarkRelease(
             bench_version=int(entry["version"]),

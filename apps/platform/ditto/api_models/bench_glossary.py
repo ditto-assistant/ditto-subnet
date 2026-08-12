@@ -793,6 +793,40 @@ BENCH_VERSIONS: list[dict] = [
             "provider fallback",
         ],
     },
+    {
+        "version": 8,
+        "epoch": "2026-07-27",
+        "title": "Answering-machine-proof release",
+        "summary": (
+            "Keeps v7's locked model and deterministic scoring boundary while "
+            "moving tool and memory cases into one seeded procedural world. Natural "
+            "requests now depend on prior context, semantic identifiers, composed "
+            "reasoning, and stricter deterministic answer grading."
+        ),
+        "highlights": [
+            "One shared seeded world spans tool prerequisites and memory waves",
+            "At least 65% composed, seed-bound tool and memory cases",
+            "Semantic identifiers and typed answers replace magic free-form strings",
+            "Frozen GPT-OSS-20B inference contract and judge-free scoring",
+        ],
+    },
+    {
+        "version": 9,
+        "epoch": "2026-08-04",
+        "title": "Hostile-harness qualification contract",
+        "summary": (
+            "Keeps v8 ordinary execution and adds the versioned Bench v9 family mix "
+            "and launch gates. Ordinary scores remain visible while the transition "
+            "collects, but v8 stays authoritative for weights until the rollout "
+            "activates."
+        ),
+        "highlights": [
+            "Versioned v9 family mix with public deterministic grader audits",
+            "Evidence-bound launch gates and semantic confirmation",
+            "Ordinary v9 scores stay separate from rollout authority",
+            "V8 remains the active weight contract until activation",
+        ],
+    },
 ]
 
 

@@ -60,6 +60,11 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
 
   let section: HTMLElement | undefined;
   let chart: HTMLDivElement | undefined;
+  // A poll returns a fresh object even when its chart-visible content is
+  // unchanged. Keep the existing DOM in that case: replacing innerHTML would
+  // restart every entrance animation, discard focus, and make the graph flash
+  // as though it had new data.
+  let renderedResult: string | null = null;
   // The chart lays itself out to its measured width, so a resize (or a phone
   // rotating) has to re-render rather than stretch. Only a material width
   // change re-renders, so dragging a window edge does not thrash the DOM.
@@ -114,10 +119,16 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
       pendingByVersion: snapshot.pendingByVersion,
     });
     if (result.kind === "state") {
+      const resultKey = "state:" + result.text;
+      if (renderedResult === resultKey) return;
+      renderedResult = resultKey;
       target.className = "harness-comparison-state";
       target.textContent = result.text;
       return;
     }
+    const resultKey = "chart:" + result.html;
+    if (renderedResult === resultKey) return;
+    renderedResult = resultKey;
     target.className = "";
     target.innerHTML = result.html;
     if (section) bindTimelineTooltips(section);
@@ -139,7 +150,7 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
               Memory subscores only
             </Tip>
             . Follow the best finalized miner as each benchmark generation unfolds, with Hermes
-            Agent and OpenClaw measured retrospectively on every contract.
+            Agent and OpenClaw measured retrospectively where reference runs are available.
           </p>
         </div>
       </div>
