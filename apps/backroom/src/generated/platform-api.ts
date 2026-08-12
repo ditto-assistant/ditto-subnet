@@ -9385,6 +9385,11 @@ export interface components {
          */
         LedgerResponse: {
             /**
+             * Active Bench Version
+             * @description Platform-authoritative benchmark version for autonomous retest planning. None is reserved for rolling compatibility with a pre-field Platform response.
+             */
+            active_bench_version?: number | null;
+            /**
              * Age Seconds
              * @description Age of the snapshot in seconds (0 on a fresh read).
              * @default 0
