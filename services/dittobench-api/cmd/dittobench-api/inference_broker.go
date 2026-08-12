@@ -120,22 +120,30 @@ type brokerSession struct {
 	// reachable only after this broker has authenticated the sandbox source;
 	// unlike a loopback HTTP listener it cannot be scanned or called by another
 	// host process to spend the server-owned provider session.
-	trustedChatHandler    http.Handler
-	generation            int
-	expiresAt             time.Time
-	expectedSourceIP      string
-	provider              string
-	model                 string
-	requestModel          string
-	profileRevision       string
-	preparedAt            time.Time
-	ticketAgentID         string
-	ticketSlotID          string
-	ticketDeadline        time.Time
-	boundRunID            string
-	benchVersion          int
-	confirmationSession   bool
-	inFlight              int
+	trustedChatHandler  http.Handler
+	generation          int
+	expiresAt           time.Time
+	expectedSourceIP    string
+	provider            string
+	model               string
+	requestModel        string
+	profileRevision     string
+	preparedAt          time.Time
+	ticketAgentID       string
+	ticketSlotID        string
+	ticketDeadline      time.Time
+	boundRunID          string
+	benchVersion        int
+	confirmationSession bool
+	inFlight            int
+	// caseGeneration binds every admitted v9 chat request to the ordinary case
+	// window in which it started. A harness may return its /run response while
+	// a background request is still inside the broker's bounded recovery loop;
+	// run-wide counter deltas cannot distinguish that tail from the next case.
+	// Generation-local counters keep the tail attached to its original window.
+	caseGeneration        uint64
+	activeCaseGeneration  uint64
+	caseSnapshots         map[uint64]brokerCaseSnapshot
 	embeddingPhaseStarted bool
 	embeddingPhaseActive  bool
 	embeddingInFlight     int
@@ -1543,14 +1551,28 @@ func (b *inferenceBroker) handleChat(w http.ResponseWriter, r *http.Request, ses
 		writeError(w, http.StatusTooManyRequests, "inference source is at capacity")
 		return
 	}
+	caseGeneration := session.activeCaseGeneration
+	if caseGeneration != 0 {
+		if session.caseSnapshots == nil {
+			session.caseSnapshots = make(map[uint64]brokerCaseSnapshot)
+		}
+		snapshot := session.caseSnapshots[caseGeneration]
+		snapshot.InFlight++
+		session.caseSnapshots[caseGeneration] = snapshot
+	}
 	session.inFlight++
 	session.mu.Unlock()
 	defer func() {
 		session.mu.Lock()
 		session.inFlight--
+		if caseGeneration != 0 {
+			snapshot := session.caseSnapshots[caseGeneration]
+			snapshot.InFlight--
+			session.caseSnapshots[caseGeneration] = snapshot
+		}
 		session.mu.Unlock()
 	}()
-	b.proxy(w, r, session)
+	b.proxy(w, r, session, caseGeneration)
 }
 
 type embeddingRequest struct {
@@ -2150,7 +2172,12 @@ func callTrustedChatHandler(ctx context.Context, handler http.Handler, body []by
 	return recorder.Result(), nil
 }
 
-func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session *brokerSession) {
+func (b *inferenceBroker) proxy(
+	w http.ResponseWriter,
+	r *http.Request,
+	session *brokerSession,
+	caseGeneration uint64,
+) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, brokerBodyLimit+1))
 	if err != nil || len(body) > brokerBodyLimit {
 		writeError(w, http.StatusRequestEntityTooLarge, "inference request too large")
@@ -2244,6 +2271,11 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	session.requests++
+	if caseGeneration != 0 {
+		snapshot := session.caseSnapshots[caseGeneration]
+		snapshot.Requests++
+		session.caseSnapshots[caseGeneration] = snapshot
+	}
 	session.promptBytes += uint64(len(body))
 	session.mu.Unlock()
 
@@ -2492,6 +2524,11 @@ func (b *inferenceBroker) proxy(w http.ResponseWriter, r *http.Request, session 
 	usageOK := json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil && decoded.Usage.PromptTokens >= 0 && decoded.Usage.CompletionTokens >= 0
 	session.mu.Lock()
 	session.successes++
+	if caseGeneration != 0 {
+		snapshot := session.caseSnapshots[caseGeneration]
+		snapshot.Successes++
+		session.caseSnapshots[caseGeneration] = snapshot
+	}
 	session.providerLatency += totalLatency
 	if usageOK {
 		session.usageAvailable++
@@ -2530,7 +2567,7 @@ func (b *inferenceBroker) trustedProbe(ctx context.Context, id string) error {
 	req.RemoteAddr = net.JoinHostPort(session.expectedSourceIP, "1")
 	session.mu.Unlock()
 	recorder := httptest.NewRecorder()
-	b.proxy(recorder, req, session)
+	b.proxy(recorder, req, session, 0)
 	if recorder.Code < 200 || recorder.Code >= 300 {
 		return fmt.Errorf("ticket inference probe returned %d", recorder.Code)
 	}
@@ -2586,6 +2623,75 @@ type brokerCaseSnapshot struct {
 	Requests  uint64
 	Successes uint64
 	InFlight  int
+}
+
+// beginCaseSnapshot advances the source-bound generation before one ordinary
+// v9 case starts. Requests admitted before this point remain attached to the
+// preceding generation even if their provider recovery finishes later.
+func (b *inferenceBroker) beginCaseSnapshot(id string) (uint64, brokerCaseSnapshot, error) {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return 0, brokerCaseSnapshot{}, fmt.Errorf("inference session unavailable")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.activeCaseGeneration != 0 {
+		return 0, brokerCaseSnapshot{}, fmt.Errorf("inference case generation already active")
+	}
+	session.caseGeneration++
+	if session.caseSnapshots == nil {
+		session.caseSnapshots = make(map[uint64]brokerCaseSnapshot)
+	}
+	generation := session.caseGeneration
+	session.activeCaseGeneration = generation
+	session.caseSnapshots[generation] = brokerCaseSnapshot{}
+	snapshot := session.caseSnapshots[generation]
+	return generation, snapshot, nil
+}
+
+// endCaseSnapshot atomically closes one ordinary case before returning its
+// counters. A request admitted after the harness response is therefore never
+// mistaken for evidence that informed that response, while a request admitted
+// earlier retains the captured generation until it finishes.
+func (b *inferenceBroker) endCaseSnapshot(id string, generation uint64) (brokerCaseSnapshot, error) {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return brokerCaseSnapshot{}, fmt.Errorf("inference session unavailable")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if generation == 0 || session.activeCaseGeneration != generation {
+		return brokerCaseSnapshot{}, fmt.Errorf("inference case generation unavailable")
+	}
+	session.activeCaseGeneration = 0
+	return session.caseSnapshots[generation], nil
+}
+
+// generationCaseSnapshot returns only calls admitted during one ordinary case
+// generation. InFlight is intentionally preserved for audit: a request still
+// running after the harness has returned cannot have informed that response,
+// so the scorer excludes it without letting its eventual completion bleed into
+// the next case.
+func (b *inferenceBroker) generationCaseSnapshot(
+	id string,
+	generation uint64,
+) (brokerCaseSnapshot, error) {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return brokerCaseSnapshot{}, fmt.Errorf("inference session unavailable")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if _, ok := session.caseSnapshots[generation]; generation == 0 || !ok {
+		return brokerCaseSnapshot{}, fmt.Errorf("inference case generation unavailable")
+	}
+	return session.caseSnapshots[generation], nil
 }
 
 // caseSnapshot is the ticket-scoped boundary used to attribute model use to

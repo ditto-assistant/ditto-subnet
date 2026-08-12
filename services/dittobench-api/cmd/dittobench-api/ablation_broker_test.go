@@ -267,7 +267,7 @@ func TestV9AblationBrokerCancellationSourceAndReplayMismatchFailClosed(t *testin
 		wrongSource := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 		wrongSource.RemoteAddr = "127.0.0.2:1234"
 		wrongRecorder := httptest.NewRecorder()
-		broker.proxy(wrongRecorder, wrongSource, broker.sessions[id])
+		broker.proxy(wrongRecorder, wrongSource, broker.sessions[id], 0)
 		if wrongRecorder.Code != http.StatusUnauthorized {
 			t.Fatalf("wrong-source status = %d", wrongRecorder.Code)
 		}
@@ -277,7 +277,7 @@ func TestV9AblationBrokerCancellationSourceAndReplayMismatchFailClosed(t *testin
 		cancelled := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)).WithContext(cancelledContext)
 		cancelled.RemoteAddr = "127.0.0.1:1234"
 		cancelledRecorder := httptest.NewRecorder()
-		broker.proxy(cancelledRecorder, cancelled, broker.sessions[id])
+		broker.proxy(cancelledRecorder, cancelled, broker.sessions[id], 0)
 		if cancelledRecorder.Code != http.StatusRequestTimeout {
 			t.Fatalf("cancelled status = %d", cancelledRecorder.Code)
 		}

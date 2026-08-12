@@ -232,6 +232,81 @@ func TestCaseSnapshotExposesOnlySettledSourceBoundCalls(t *testing.T) {
 	}
 }
 
+func TestCaseGenerationKeepsLateCompletionOutOfNextCase(t *testing.T) {
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(arrived)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	runID := uuid.NewString()
+	id, err := broker.prepareLegacy(runID, protocol.BenchVersionV6, upstream.URL, relayHealthSnapshot{
+		Provider: "openrouter", ProfileRevision: llm.OpenRouterRelayProfileRevision,
+		Model: llm.LockedHarnessModel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceIP = "192.0.2.100"
+	if !broker.bindSource(id, runID, sourceIP) {
+		t.Fatal("failed to bind source")
+	}
+	first, before, err := broker.beginCaseSnapshot(id)
+	if err != nil || before != (brokerCaseSnapshot{}) {
+		t.Fatalf("begin first generation = %d %+v, %v", first, before, err)
+	}
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		request := httptest.NewRequest(http.MethodPost, "/v1/inference/chat/completions", bytes.NewBufferString(`{"model":"ignored"}`))
+		request.RemoteAddr = sourceIP + ":4321"
+		request.SetPathValue("rest", "chat/completions")
+		recorder := httptest.NewRecorder()
+		broker.handle(recorder, request)
+		done <- recorder
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("first-generation call did not reach upstream")
+	}
+	firstInFlight, err := broker.generationCaseSnapshot(id, first)
+	if err != nil || firstInFlight != (brokerCaseSnapshot{Requests: 1, InFlight: 1}) {
+		close(release)
+		t.Fatalf("first generation in flight = %+v, %v", firstInFlight, err)
+	}
+	firstClosed, err := broker.endCaseSnapshot(id, first)
+	if err != nil || firstClosed != firstInFlight {
+		close(release)
+		t.Fatalf("close first generation = %+v, %v", firstClosed, err)
+	}
+	second, secondBefore, err := broker.beginCaseSnapshot(id)
+	if err != nil || second != first+1 || secondBefore != (brokerCaseSnapshot{}) {
+		close(release)
+		t.Fatalf("begin second generation = %d %+v, %v", second, secondBefore, err)
+	}
+
+	close(release)
+	response := <-done
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d: %s", response.Code, response.Body.String())
+	}
+	firstSettled, err := broker.generationCaseSnapshot(id, first)
+	if err != nil || firstSettled != (brokerCaseSnapshot{Requests: 1, Successes: 1}) {
+		t.Fatalf("first generation settled = %+v, %v", firstSettled, err)
+	}
+	secondAfter, err := broker.generationCaseSnapshot(id, second)
+	if err != nil || secondAfter != (brokerCaseSnapshot{}) {
+		t.Fatalf("late completion bled into second generation: %+v, %v", secondAfter, err)
+	}
+}
+
 func TestLegacyBrokerRetainsBoundedRelayRetries(t *testing.T) {
 	requestCount := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

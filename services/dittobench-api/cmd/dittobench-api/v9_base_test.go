@@ -18,7 +18,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-func TestRunCaseWithModelAttributionWaitsForBrokerTail(t *testing.T) {
+func TestRunCaseWithModelAttributionExcludesBrokerTailFromReturnedAnswer(t *testing.T) {
 	broker := newInferenceBroker(1)
 	sessionID := "case-attribution-tail"
 	session := &brokerSession{requests: 10, successes: 10}
@@ -34,6 +34,11 @@ func TestRunCaseWithModelAttributionWaitsForBrokerTail(t *testing.T) {
 			return
 		}
 		session.mu.Lock()
+		generation := session.activeCaseGeneration
+		snapshot := session.caseSnapshots[generation]
+		snapshot.Requests++
+		snapshot.InFlight++
+		session.caseSnapshots[generation] = snapshot
 		session.requests++
 		session.inFlight++
 		session.mu.Unlock()
@@ -41,6 +46,10 @@ func TestRunCaseWithModelAttributionWaitsForBrokerTail(t *testing.T) {
 		go func() {
 			<-releaseRequest
 			session.mu.Lock()
+			snapshot := session.caseSnapshots[generation]
+			snapshot.Successes++
+			snapshot.InFlight--
+			session.caseSnapshots[generation] = snapshot
 			session.successes++
 			session.inFlight--
 			session.mu.Unlock()
@@ -64,27 +73,63 @@ func TestRunCaseWithModelAttributionWaitsForBrokerTail(t *testing.T) {
 	}()
 	<-requestStarted
 	select {
-	case early := <-result:
-		t.Fatalf("case returned before broker tail settled: %+v", early)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(releaseRequest)
-	select {
 	case got := <-result:
 		if got.err != nil {
 			t.Fatal(got.err)
 		}
-		if !got.execution.ModelAttributionComplete || !got.execution.ModelInferenceObserved {
+		if !got.execution.ModelAttributionComplete || got.execution.ModelInferenceObserved {
 			t.Fatalf("model attribution = %+v", got.execution)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("case did not finish after broker request settled")
+		t.Fatal("case waited for a request that could not inform its returned answer")
+	}
+	close(releaseRequest)
+	deadline := time.Now().Add(time.Second)
+	for {
+		snapshot, err := broker.generationCaseSnapshot(sessionID, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot == (brokerCaseSnapshot{Requests: 1, Successes: 1}) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tail did not remain on original generation: %+v", snapshot)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
-func TestV9CaseAttributionSettleTimeoutCoversFullV7PlusCaseEnvelope(t *testing.T) {
-	if v9CaseAttributionSettleTimeout != 5*time.Minute {
-		t.Fatalf("settle timeout = %s, want full 5m v7+ case envelope", v9CaseAttributionSettleTimeout)
+func TestRunCaseWithModelAttributionCountsSettledGenerationSuccess(t *testing.T) {
+	broker := newInferenceBroker(1)
+	sessionID := "case-attribution-success"
+	session := &brokerSession{}
+	broker.mu.Lock()
+	broker.sessions[sessionID] = session
+	broker.mu.Unlock()
+	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		session.mu.Lock()
+		generation := session.activeCaseGeneration
+		snapshot := session.caseSnapshots[generation]
+		snapshot.Requests++
+		snapshot.Successes++
+		session.caseSnapshots[generation] = snapshot
+		session.requests++
+		session.successes++
+		session.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"final_text":"ok"}`))
+	}))
+	defer harness.Close()
+	_, execution, err := (&server{broker: broker}).runCaseWithModelAttribution(
+		runner.TrustSandbox(context.Background()), sessionID, harness.URL,
+		"case-1", "question", nil, runner.CaseOptions{BenchVersion: protocol.BenchVersionV9},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !execution.ModelAttributionComplete || !execution.ModelInferenceObserved {
+		t.Fatalf("model attribution = %+v", execution)
 	}
 }
 
@@ -342,7 +387,7 @@ func TestV9AggregateModelTelemetryCompletenessMatrix(t *testing.T) {
 	}
 }
 
-func TestV9ModelCaseDeltaFailsClosedOnAmbiguousWindows(t *testing.T) {
+func TestV9GenerationCaseDeltaExcludesUnsettledTail(t *testing.T) {
 	tests := []struct {
 		name                string
 		before, after       brokerCaseSnapshot
@@ -353,7 +398,7 @@ func TestV9ModelCaseDeltaFailsClosedOnAmbiguousWindows(t *testing.T) {
 		{name: "one success", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}, observed: true, complete: true},
 		{name: "failed request", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 4}, complete: true},
 		{name: "overlap before", before: brokerCaseSnapshot{Requests: 4, Successes: 4, InFlight: 1}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}},
-		{name: "overlap after", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 4, InFlight: 1}},
+		{name: "unsettled tail after response", before: brokerCaseSnapshot{Requests: 4, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 4, InFlight: 1}, complete: true},
 		{name: "request rollback", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 4, Successes: 4}},
 		{name: "success rollback", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 3}},
 		{name: "success exceeds requests", before: brokerCaseSnapshot{Requests: 5, Successes: 4}, after: brokerCaseSnapshot{Requests: 5, Successes: 5}},
@@ -362,7 +407,7 @@ func TestV9ModelCaseDeltaFailsClosedOnAmbiguousWindows(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			observed, complete := v9ModelCaseDelta(tt.before, tt.after, tt.beforeErr, tt.afterErr)
+			observed, complete := v9GenerationCaseDelta(tt.before, tt.after, tt.beforeErr, tt.afterErr)
 			if observed != tt.observed || complete != tt.complete {
 				t.Fatalf("got observed=%t complete=%t, want %t/%t", observed, complete, tt.observed, tt.complete)
 			}

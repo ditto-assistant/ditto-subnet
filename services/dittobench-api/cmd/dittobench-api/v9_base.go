@@ -3,21 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-api/internal/v9base"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
-
-// A v9 case may return its harness response before the trusted relay has
-// consumed the provider's terminal usage frame.  That tail is still part of
-// the case and may legitimately last as long as one ordinary v9 model call.
-// Keep the next case closed for the same five-minute envelope as the v7+
-// harness request rather than turning a slow terminal frame into ambiguous
-// evidence for the whole run.
-const v9CaseAttributionSettleTimeout = 5 * time.Minute
 
 func (s *server) runCaseWithModelAttribution(
 	ctx context.Context,
@@ -31,29 +22,23 @@ func (s *server) runCaseWithModelAttribution(
 	if opts.BenchVersion != protocol.BenchVersionV9 || inferenceSessionID == "" {
 		return runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
 	}
-	before, beforeErr := s.settledV9CaseSnapshot(ctx, inferenceSessionID)
+	generation, before, beforeErr := s.broker.beginCaseSnapshot(inferenceSessionID)
 	response, execution, runErr := runner.RunCaseWithTelemetry(
 		ctx, harnessURL, caseID, prompt, tools, opts,
 	)
-	after, afterErr := s.settledV9CaseSnapshot(ctx, inferenceSessionID)
+	after, afterErr := s.broker.endCaseSnapshot(inferenceSessionID, generation)
 	execution.ModelInferenceObserved, execution.ModelAttributionComplete =
-		v9ModelCaseDelta(before, after, beforeErr, afterErr)
+		v9GenerationCaseDelta(before, after, beforeErr, afterErr)
 	return response, execution, runErr
 }
 
-func (s *server) settledV9CaseSnapshot(ctx context.Context, inferenceSessionID string) (brokerCaseSnapshot, error) {
-	settleCtx, cancel := context.WithTimeout(ctx, v9CaseAttributionSettleTimeout)
-	defer cancel()
-	return s.broker.settledCaseSnapshot(settleCtx, inferenceSessionID)
-}
-
-func v9ModelCaseDelta(
+func v9GenerationCaseDelta(
 	before brokerCaseSnapshot,
 	after brokerCaseSnapshot,
 	beforeErr error,
 	afterErr error,
 ) (observed bool, complete bool) {
-	if beforeErr != nil || afterErr != nil || before.InFlight != 0 || after.InFlight != 0 ||
+	if beforeErr != nil || afterErr != nil || before.InFlight != 0 || after.InFlight < 0 ||
 		after.Requests < before.Requests || after.Successes < before.Successes {
 		return false, false
 	}
@@ -62,6 +47,12 @@ func v9ModelCaseDelta(
 	if successDelta > requestDelta {
 		return false, false
 	}
+	if uint64(after.InFlight) > requestDelta-successDelta {
+		return false, false
+	}
+	// A request still in flight after /run returned cannot have contributed to
+	// the returned answer. Its eventual completion stays on this generation and
+	// is conservatively excluded instead of poisoning the next case window.
 	return successDelta > 0, true
 }
 
