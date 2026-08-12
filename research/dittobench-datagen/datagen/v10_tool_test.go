@@ -11,6 +11,7 @@ import (
 func TestV10RoutesSameRequestShapeFromSeededState(t *testing.T) {
 	routes := map[string]bool{}
 	seen := 0
+	seenSharedWorldCarrier := false
 	for seed := int64(1); seed <= 20; seed++ {
 		rotated, err := protocol.RotateSeedForVersion(seed, protocol.BenchVersionV10)
 		if err != nil {
@@ -22,9 +23,14 @@ func TestV10RoutesSameRequestShapeFromSeededState(t *testing.T) {
 				continue
 			}
 			seen++
-			if len(tc.PrerequisitePairs) != 1 {
-				t.Fatalf("seed %d case %s has %d route records", seed, tc.ID, len(tc.PrerequisitePairs))
+			routeRecord := false
+			for _, pair := range tc.PrerequisitePairs {
+				routeRecord = routeRecord || strings.HasPrefix(pair.SessionID, "v10-tool-route-")
 			}
+			if !routeRecord {
+				t.Fatalf("seed %d case %s has no state-dependent route record", seed, tc.ID)
+			}
+			seenSharedWorldCarrier = seenSharedWorldCarrier || len(tc.PrerequisitePairs) > 1
 			visible := strings.ToLower(tc.Prompt)
 			if strings.Contains(visible, "workflow") || strings.Contains(visible, "ditto code") || strings.Contains(visible, "one-off") {
 				t.Fatalf("seed %d prompt reveals the selected route: %q", seed, tc.Prompt)
@@ -43,6 +49,9 @@ func TestV10RoutesSameRequestShapeFromSeededState(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("v10 did not generate state-dependent routing cases")
+	}
+	if !seenSharedWorldCarrier {
+		t.Fatal("qualification seeds did not preserve a shared-world carrier converted to state-dependent routing")
 	}
 	for _, route := range []string{"execute_agent_job", "create_workflow", "list_workflows -> run_workflow"} {
 		if !routes[route] {

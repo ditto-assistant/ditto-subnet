@@ -1354,12 +1354,14 @@ func applyV10StateDependentActions(seed int64, cases []protocol.ToolCase) {
 			behavior = "resolve the planning decision, list saved workflows, and run the approved existing workflow"
 		}
 
+		originalPrerequisites := cases[i].PrerequisitePairs
+		originalProtected := cases[i].WritingProtected
 		tc := fuzzyWorldTool(cases[i].ID, "v10_state_dependent_routing", prompt, expected, behavior)
-		tc.PrerequisitePairs = []protocol.MemoryPair{{
+		tc.PrerequisitePairs = append(append([]protocol.MemoryPair(nil), originalPrerequisites...), protocol.MemoryPair{
 			PairID: pairID, SessionID: fmt.Sprintf("v10-tool-route-%02d", projectIndex), Timestamp: "2026-01-15T10:00:00Z",
 			Prompt: planningPrompt, Response: planningResponse,
-		}}
-		tc.WritingProtected = append(tc.WritingProtected, project.Alias, project.Client, project.Name)
+		})
+		tc.WritingProtected = append(append([]string(nil), originalProtected...), project.Alias, project.Client, project.Name)
 		cases[i] = tc
 	}
 }
