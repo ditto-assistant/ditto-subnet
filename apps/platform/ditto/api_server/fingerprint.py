@@ -18,6 +18,20 @@ Before sketching, shingles found in the complete official starter-kit mainline
 history are removed. Shared reference scaffolding is therefore neutral evidence;
 only the miner-authored residual contributes to a near-copy comparison.
 
+**Two layers of reference subtraction.** Window subtraction (above) is what makes
+the kit lines *inside* a file the miner edited neutral. It cannot make an
+*untouched* kit file neutral on its own, because it only removes windows from the
+revisions the bundle was built from, and miners fork the kit at revisions that
+bundle does not contain — an untouched July ``README.md`` then survives whole and
+reads as shared authored text between every miner who forked there. So a member
+is dropped *before* shingling when its exact content is published kit content at
+any revision we know about (:func:`is_stock_kit_content`, digests in
+``ditto/anticopy/kit_file_digests_v1.json``), and when it is a generated lockfile
+(:func:`is_generated_lockfile`) whose content is a deterministic function of a
+manifest the miner did write. Both are content-based, not a filename denylist:
+miners do edit ``src/catalog.rs``, and an edited kit file stays in the sketch in
+full.
+
 **Storage — a MinHash (bottom-k) sketch.** Keeping the full shingle set would grow
 with harness size; instead the fingerprint stores the ``k`` smallest shingle
 hashes (a KMV / bottom-k MinHash sketch) plus the true set cardinality. That is a
@@ -113,6 +127,36 @@ _REFERENCE_BUNDLES = {
     "normalized": "reference_normalized_v2.bin",
     "prompt": "reference_prompt_v2.bin",
 }
+# Digests of every published starter-kit file we know about, across every kit
+# revision reachable from the monorepo kit path, the upstream mainline lineage
+# already packaged for operator review, and any curated additions. Built by
+# ``scripts/build_kit_file_digests.py``; see that module for how to add a
+# revision.
+_KIT_DIGEST_BUNDLE = "kit_file_digests_v1.json"
+# Lockfiles are *generated*: their content is a deterministic function of the
+# manifest the miner actually wrote, so two miners who declare the same
+# dependencies get byte-identical lockfiles they never typed. Cargo.lock is 5,439
+# lines in the SN118 kit — an order of magnitude more text than the file that
+# carries a miner's work — so leaving it in the sketch lets resolver output
+# outvote authorship. Excluded by name because that IS the property being
+# excluded (this file is machine-written), and unlike kit source there is no
+# version of a lockfile whose content is the miner's own evidence. A miner who
+# hand-edits one still gets the change counted everywhere it matters: Cargo.toml
+# is fingerprinted normally.
+_GENERATED_LOCKFILES = frozenset(
+    {
+        "Cargo.lock",
+        "Gemfile.lock",
+        "bun.lockb",
+        "composer.lock",
+        "flake.lock",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "uv.lock",
+        "yarn.lock",
+    }
+)
 
 
 @lru_cache(maxsize=1)
@@ -122,11 +166,21 @@ def _reference_corpus_provenance() -> tuple[str, str, str, str]:
         .joinpath("reference_manifest_v2.json")
         .read_text()
     )
+    # The corpus identity covers EVERYTHING subtracted from a sketch, not just
+    # the shingle bundles: two sketches are only comparable when the same kit
+    # content was removed from both. Folding the file-exclusion set in makes an
+    # exclusion refresh behave exactly like a shingle-bundle refresh — old rows
+    # become same-version/different-corpus, which the gate skips as transition
+    # metadata rather than holding (see ``docs/anti-copy-reference.md``). A
+    # sketch-format change would still need ``_FP_VERSION``; this is not one.
+    corpus_id = hashlib.sha256(
+        f"{manifest['commit_set_sha256']}\x00{_kit_digests()[2]}".encode()
+    ).hexdigest()
     return (
         str(manifest["source"]),
         str(manifest["revision"]),
-        str(manifest["commit_set_sha256"]),
-        "starter-kit-mainline-history",
+        corpus_id,
+        "starter-kit-mainline-history+stock-file-exclusion",
     )
 
 
@@ -135,7 +189,8 @@ def reference_corpus_provenance() -> dict[str, str]:
 
     The returned mapping is safe to expose as comparison provenance: it contains
     only the public canonical repository, the exact mainline revision, and the
-    digest of the included commit set. It never contains submitted artifact data.
+    digest binding the included commit set to the stock-file exclusion set. It
+    never contains submitted artifact data.
     """
     source, revision, corpus_id, exclusion_mode = _reference_corpus_provenance()
     return {
@@ -223,6 +278,67 @@ def _without_reference(shingles: set[str], channel: str) -> set[str]:
     return residual
 
 
+@lru_cache(maxsize=1)
+def _kit_digests() -> tuple[frozenset[str], frozenset[str], str]:
+    """Load ``(exact, normalized, identity)`` digests of known kit file content."""
+    bundle = json.loads(
+        resource_files("ditto.anticopy").joinpath(_KIT_DIGEST_BUNDLE).read_text()
+    )
+    if bundle.get("format") != "kit-file-digests-v1":
+        raise RuntimeError(f"unexpected kit digest format in {_KIT_DIGEST_BUNDLE}")
+    return (
+        frozenset(bundle["raw_sha256"]),
+        frozenset(bundle["normalized_sha256"]),
+        str(bundle["identity"]),
+    )
+
+
+def kit_exclusion_provenance() -> dict[str, str]:
+    """Public identity + size of the stock-file exclusion set.
+
+    Safe to expose: digest counts and a digest-of-digests, never a path, a line,
+    or submitted artifact data.
+    """
+    exact, normalized, identity = _kit_digests()
+    return {
+        "identity": identity,
+        "exact_digests": str(len(exact)),
+        "normalized_digests": str(len(normalized)),
+    }
+
+
+def is_generated_lockfile(path: str) -> bool:
+    """Whether ``path`` names a machine-generated dependency lockfile."""
+    return path.rsplit("/", 1)[-1] in _GENERATED_LOCKFILES
+
+
+def is_stock_kit_content(raw: bytes) -> bool:
+    """Whether these bytes are published starter-kit content at *any* known revision.
+
+    Exact-bytes first, then the anti-copy canonicalization (comments and
+    whitespace removed) so a kit file that a packaging step only reformatted is
+    still recognized as unauthored. Deliberately *content*-keyed and not
+    path-keyed: a miner who rewrites ``src/catalog.rs`` keeps every edited byte
+    in the sketch, and a miner who renames an untouched kit file gains nothing.
+
+    A file the kit never published is never excluded here, so a genuine copy of
+    another miner's work is untouched by this check — that is what keeps the
+    near-duplicate signal alive after the kit is subtracted.
+    """
+    exact, normalized, _ = _kit_digests()
+    if hashlib.sha256(raw).hexdigest() in exact:
+        return True
+    canonical = _normalized_source(raw)
+    if not canonical:
+        return False
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest() in normalized
+
+
+def _excluded_from_fingerprints(path: str, raw: bytes) -> bool:
+    """Whether a tar member carries no miner-authored evidence at all."""
+    return is_generated_lockfile(path) or is_stock_kit_content(raw)
+
+
 def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     """Return a MinHash shingle sketch of the tarball's source, or ``None``.
 
@@ -231,6 +347,11 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     cardinality, and the sorted bottom-``k`` residual hashes — JSON-serializable
     for the ``agents.content_fingerprint`` column and consumed by
     :func:`content_similarity`.
+
+    Members carrying no miner-authored evidence — published kit files at any
+    known revision, and generated lockfiles — are dropped whole before shingling
+    (:func:`_excluded_from_fingerprints`), so an unmodified fork of the kit
+    sketches empty however much bulk text it ships.
 
     Returns ``None`` when the bytes are not a readable tar.gz, contain no source
     lines, or trip the bomb/work guards. A valid artifact with too little
@@ -241,6 +362,7 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     content signal (the validator/screener still reject a broken harness downstream).
     """
     shingles: set[str] = set()
+    excluded_any = False
     total = 0
     members = 0
     try:
@@ -265,6 +387,9 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
                 if total > _MAX_TOTAL_BYTES:
                     logger.warning("fingerprint: >%d bytes, skipping", _MAX_TOTAL_BYTES)
                     return None
+                if _excluded_from_fingerprints(member.name, raw):
+                    excluded_any = True
+                    continue
                 for shingle in _file_shingles(raw):
                     shingles.add(shingle)
                     if len(shingles) > _MAX_SHINGLES:
@@ -274,8 +399,12 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
         logger.info("fingerprint: unreadable tarball (%s)", type(e).__name__)
         return None
 
-    if not shingles:
+    if not shingles and not excluded_any:
         return None
+    # An artifact whose every member was excluded is not *unreadable* — it is an
+    # unmodified kit fork, which is affirmative "nothing custom here" evidence.
+    # Returning ``None`` would instead mean "no content signal" and let the
+    # legacy archive-size fallback hold two such forks on size proximity alone.
     shingles = _without_reference(shingles, "lexical")
     if len(shingles) < _MIN_CONTENT_SHINGLES:
         return {
@@ -347,6 +476,8 @@ def compute_normalized_source_hash(tar_gz_bytes: bytes) -> str | None:
                 if total > _MAX_TOTAL_BYTES:
                     logger.warning("nsh: >%d bytes, skipping", _MAX_TOTAL_BYTES)
                     return None
+                if _excluded_from_fingerprints(member.name, raw):
+                    continue
                 shingles.update(_normalized_source_shingles(raw))
     except (tarfile.TarError, gzip.BadGzipFile, EOFError, OSError) as e:
         logger.info("nsh: unreadable tarball (%s)", type(e).__name__)
@@ -398,6 +529,7 @@ def compute_prompt_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     before it can hold an agent; this function only produces the sketch.
     """
     shingles: set[str] = set()
+    excluded_any = False
     total = 0
     members = 0
     try:
@@ -420,6 +552,9 @@ def compute_prompt_fingerprint(tar_gz_bytes: bytes) -> dict | None:
                 if total > _MAX_TOTAL_BYTES:
                     logger.warning("prompt-fp: >%d bytes, skipping", _MAX_TOTAL_BYTES)
                     return None
+                if _excluded_from_fingerprints(member.name, raw):
+                    excluded_any = True
+                    continue
                 for shingle in _prompt_shingles(raw):
                     shingles.add(shingle)
                     if len(shingles) > _MAX_SHINGLES:
@@ -429,7 +564,7 @@ def compute_prompt_fingerprint(tar_gz_bytes: bytes) -> dict | None:
         logger.info("prompt-fp: unreadable tarball (%s)", type(e).__name__)
         return None
 
-    if not shingles:
+    if not shingles and not excluded_any:
         return None
     shingles = _without_reference(shingles, "prompt")
     if len(shingles) < _MIN_PROMPT_SHINGLES:
@@ -469,6 +604,13 @@ def compute_embedding_input(tar_gz_bytes: bytes) -> str | None:
     line (no path names), so renaming or reordering files does not change the input.
     The result is prefix-truncated to :data:`_EMBED_INPUT_MAX_CHARS` to fit the
     model's context window; the sorted concatenation makes that truncation stable.
+
+    Unlike the three sketch channels this input is deliberately **not** filtered
+    through :func:`_excluded_from_fingerprints`. Nothing holds an agent on the
+    embedding channel yet, the stored vectors carry no algorithm version to make
+    a change comparable, and re-embedding the ledger is a separate operation from
+    the fingerprint backfill. Excluding stock kit files here belongs with the
+    work that turns this channel on.
 
     Returns ``None`` ("no embedding input", read downstream as no code-embedding signal)
     on an

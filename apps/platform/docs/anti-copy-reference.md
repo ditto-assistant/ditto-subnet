@@ -7,6 +7,61 @@ reachable from the official starter-kit `main` history. The committed
 identity; `scripts/build_reference_fingerprints.py` regenerates the deterministic
 bundles and that manifest together.
 
+## Stock-kit file exclusion (whole-file side)
+
+Shingle subtraction removes kit *windows*. That is the right instrument for a
+file a miner edited — the kit lines inside it wash out and the edit survives —
+and the wrong one for a file the miner never touched, because it only removes
+windows from the revisions the bundles were built from. Those bundles are built
+from the in-monorepo kit path, so they know nothing about the upstream revisions
+miners forked before the kit moved in here. An untouched July `README.md` then
+survives subtraction whole and reads as shared authored text between every miner
+who forked at that revision. Production consequence, 2026-07-20: two
+independently written agents (`bf57c7ea` / `6334962e`, different coldkeys) were
+held at containment `0.954` on 21 byte-identical kit files while the one file
+carrying miner work was 0.9062 similar and their prompt overlap was 0.320.
+
+`ditto/anticopy/kit_file_digests_v1.json` answers the file-level question
+instead: *is this exact content published kit content at any revision we know
+of?* A member matching it is dropped **before** shingling, in the lexical,
+normalized-source, and prompt channels alike. Matching is by content — exact
+bytes, then the anti-copy canonicalization — never by path or extension, because
+miners do edit `src/catalog.rs` and that edit is authored work that must still
+count. A renamed but untouched kit file gains nothing; an edited kit file stays
+in the sketch in full.
+
+Generated dependency lockfiles are excluded by name, and deliberately so: their
+content is a deterministic function of a manifest the miner did write, they are
+identical between miners who declare the same dependencies, and the kit's
+`Cargo.lock` is 5,439 lines — an order of magnitude more text than the file that
+carries the miner's work. `Cargo.toml` is fingerprinted normally, so a real
+dependency change is still evidence.
+
+`scripts/build_kit_file_digests.py` unions four sources and records each in the
+bundle's `sources`: every blob ever committed under the monorepo kit path
+(binary included), the upstream mainline digests already committed in the
+operator baseline bundle, any `--extra-tree` directory (**the documented way to
+add a revision** — check out the published revision and point the script at it),
+and hand-curated entries in `kit_revisions_extra.json` for a revision that can no
+longer be checked out. The daily refresh workflow regenerates it beside the
+shingle bundles.
+
+An artifact whose every member is excluded is an unmodified kit fork. It stores a
+versioned *empty* sketch rather than no sketch, so it reads as "nothing custom
+here" and cannot fall through to the legacy archive-size fallback.
+
+The exclusion set's identity is folded into the corpus identity stored on every
+fingerprint, so refreshing it behaves exactly like refreshing the shingle
+bundles: older rows become same-version / different-corpus, which the gate skips
+as transition metadata rather than holding. This is deliberately **not** a
+`_FP_VERSION` bump — the sketch format is unchanged, only what is subtracted from
+it — and a version bump would instead route every score-close cross-version pair
+into an inconclusive operator hold for the length of the backfill.
+
+The code-embedding input (`compute_embedding_input`) is intentionally left
+unfiltered: nothing holds an agent on that channel yet, and the stored vectors
+carry no version to make a mixed ledger comparable.
+
 ## Operator baseline bundle (text side)
 
 The corpus above is one-way: it answers "was this window ever in the kit?" and
@@ -39,8 +94,10 @@ baseline bundle is review-only and safe to refresh whenever the kit moves.
 - Normalized-source equality, lexical similarity, and size fallback compare a
   candidate only with chronologically earlier submissions from another miner.
   Submission time is authoritative; UUID order breaks equal-time ties.
-- Lexical v2 subtracts the canonical corpus before sketching. The public Jaccard
-  and containment thresholds remain `0.75` and `0.95`.
+- Lexical v2 drops stock-kit files and generated lockfiles, then subtracts the
+  canonical corpus from what remains, before sketching. The public Jaccard and
+  containment thresholds remain `0.75` and `0.95`: after whole-file exclusion the
+  residual is miner-authored surface, so the thresholds now mean what they say.
 - Lexical similarity carries no score-proximity precondition. A matching
   fingerprint holds on its own, in either score direction and at any distance.
   The former `0.03` composite window assumed between-seed noise of `σ ≤ 0.01`;

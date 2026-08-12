@@ -1,0 +1,5 @@
+{
+  "format": "kit-revisions-extra-v1",
+  "note": "Hand-curated starter-kit file digests for published revisions that scripts/build_kit_file_digests.py cannot reach on its own. Prefer --extra-tree with a checked-out revision; use this file only when the revision can no longer be checked out (a deleted branch, a release tarball kept offline). Each entry lists sha256 digests of the revision's file bytes (raw_sha256) and, for UTF-8 files, sha256 of ditto.api_server.fingerprint._normalized_source of those bytes (normalized_sha256). Regenerate the bundle after editing: uv run python scripts/build_kit_file_digests.py",
+  "revisions": []
+}

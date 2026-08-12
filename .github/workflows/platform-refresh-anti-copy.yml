@@ -33,6 +33,14 @@ jobs:
       - name: Regenerate deterministic reference bundles
         run: python3 scripts/build_reference_fingerprints.py ../../miners/dittobench-starter-kit
 
+      # The shingle bundles neutralize kit code INSIDE a file a miner edited.
+      # This digest set neutralizes a kit file the miner never touched, at any
+      # revision we know of — including the pre-import upstream lineage the
+      # shingle bundles cannot see. Both must move together: the corpus identity
+      # stored on every fingerprint binds them.
+      - name: Regenerate the stock-kit file digest set
+        run: python3 scripts/build_kit_file_digests.py
+
       - name: Open or refresh reference update PR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,6 +51,7 @@ jobs:
             ditto/anticopy/reference_normalized_v2.bin
             ditto/anticopy/reference_prompt_v2.bin
             ditto/anticopy/reference_manifest_v2.json
+            ditto/anticopy/kit_file_digests_v1.json
           )
           if git diff --quiet -- "${outputs[@]}"; then
             echo "Anti-copy reference already matches the in-tree starter kit."

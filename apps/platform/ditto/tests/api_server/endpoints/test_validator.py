@@ -7695,7 +7695,9 @@ class TestAntiCopyGate:
                 "algorithm_version": "reference-aware-v2",
                 "canonical_reference_revision": provenance["revision"],
                 "reference_corpus_id": provenance["corpus_id"],
-                "reference_exclusion_mode": "starter-kit-mainline-history",
+                "reference_exclusion_mode": (
+                    "starter-kit-mainline-history+stock-file-exclusion"
+                ),
                 "backfilled": False,
                 "opened_at_source": "agent_finalized_audit",
             }
