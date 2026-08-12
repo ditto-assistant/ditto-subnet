@@ -82,6 +82,12 @@ func TestRunCaseWithModelAttributionWaitsForBrokerTail(t *testing.T) {
 	}
 }
 
+func TestV9CaseAttributionSettleTimeoutCoversFullV7PlusCaseEnvelope(t *testing.T) {
+	if v9CaseAttributionSettleTimeout != 5*time.Minute {
+		t.Fatalf("settle timeout = %s, want full 5m v7+ case envelope", v9CaseAttributionSettleTimeout)
+	}
+}
+
 const (
 	v9ArtifactSHA   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	v9DatasetSHA    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -189,6 +195,42 @@ func TestApplyV9BaseEvidenceAcceptsHealthyZeroInferenceAsFactorZero(t *testing.T
 	}
 	if got.Composite != 0 || got.CompositeStderr != 0 || base.AppliedGateFactorBPS != 0 {
 		t.Fatalf("enforce zero-inference did not zero score: %+v", got)
+	}
+}
+
+func TestApplyV9BaseEvidenceRejectsIncompleteCaseAttribution(t *testing.T) {
+	perCase := []protocol.CaseScore{{CaseID: "memory"}}
+	tests := []struct {
+		name      string
+		usage     protocol.TokenUsage
+		execution relayExecutionSummary
+	}{
+		{
+			name:      "successful relay request",
+			usage:     completeUsage(1, 1, 100, 20),
+			execution: relayExecutionSummary{Requests: 1, Successes: 1},
+		},
+		{
+			name:      "zero inference",
+			usage:     completeUsage(0, 0, 0, 0),
+			execution: relayExecutionSummary{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := applyV9BaseEvidence(
+				sampleV9Report(),
+				submitRequest{BenchVersion: protocol.BenchVersionV9, TarballSHA256: v9ArtifactSHA},
+				perCase,
+				[]transcriptCase{{CaseID: "memory"}},
+				tt.usage,
+				tt.execution,
+				v9TranscriptSHA,
+			)
+			if err == nil || !strings.Contains(err.Error(), "v9 case attribution unavailable") {
+				t.Fatalf("error = %v, want typed attribution failure", err)
+			}
+		})
 	}
 }
 

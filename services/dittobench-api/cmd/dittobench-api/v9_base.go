@@ -11,7 +11,13 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-const v9CaseAttributionSettleTimeout = 15 * time.Second
+// A v9 case may return its harness response before the trusted relay has
+// consumed the provider's terminal usage frame.  That tail is still part of
+// the case and may legitimately last as long as one ordinary v9 model call.
+// Keep the next case closed for the same five-minute envelope as the v7+
+// harness request rather than turning a slow terminal frame into ambiguous
+// evidence for the whole run.
+const v9CaseAttributionSettleTimeout = 5 * time.Minute
 
 func (s *server) runCaseWithModelAttribution(
 	ctx context.Context,
@@ -109,6 +115,11 @@ func applyV9BaseEvidence(
 	// the tarball identity at this trust boundary.
 	artifactSHA256 := req.TarballSHA256
 	model := v9AggregateModelTelemetry(usage, execution, perCase, transcripts)
+	if !model.DistinctCaseAttributionComplete {
+		return protocol.ScoreReport{}, fmt.Errorf(
+			"v9 case attribution unavailable: trusted relay windows did not settle",
+		)
+	}
 	gates, err := v9base.BuildGateEvidence(perCase, model, true)
 	if err != nil {
 		return protocol.ScoreReport{}, fmt.Errorf("build v9 score-gate evidence: %w", err)
