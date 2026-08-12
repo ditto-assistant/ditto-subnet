@@ -27,9 +27,18 @@ func (r FamilyResult) Accuracy() float64 {
 }
 
 type Result struct {
-	Correct  int
-	Total    int
-	Families map[string]FamilyResult
+	Correct                int
+	Total                  int
+	ArgumentValues         int
+	VerbatimArgumentValues int
+	Families               map[string]FamilyResult
+}
+
+func (r Result) VerbatimArgumentShare() float64 {
+	if r.ArgumentValues == 0 {
+		return 0
+	}
+	return float64(r.VerbatimArgumentValues) / float64(r.ArgumentValues)
 }
 
 func (r Result) Accuracy() float64 {
@@ -76,6 +85,7 @@ func Run(benchVersion int, runSize string, trainStart int64, trainSeeds, heldOut
 		for _, tc := range artifact.ToolCases {
 			want := toolOutcomeSignature(tc, needles[tc.ID])
 			got := nearestSignature(char4grams(tc.Prompt), train)
+			countArgumentExposure(&result, tc)
 			family := result.Families[tc.Category]
 			family.Total++
 			result.Total++
@@ -87,6 +97,21 @@ func Run(benchVersion int, runSize string, trainStart int64, trainSeeds, heldOut
 		}
 	}
 	return result, nil
+}
+
+func countArgumentExposure(result *Result, tc protocol.ToolCase) {
+	prompt := strings.ToLower(tc.Prompt)
+	for _, spec := range tc.ExpectedTools {
+		for _, value := range spec.RequiredArgs {
+			if value == "" {
+				continue
+			}
+			result.ArgumentValues++
+			if strings.Contains(prompt, strings.ToLower(value)) {
+				result.VerbatimArgumentValues++
+			}
+		}
+	}
 }
 
 func SortedFamilies(result Result) []string {

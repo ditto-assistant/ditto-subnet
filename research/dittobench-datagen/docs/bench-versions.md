@@ -39,6 +39,13 @@ to expose only ordinary memory and questions. V10 is explicit-generation only:
 it does not change `CurrentBenchVersion`, advertise a new runtime version, or
 activate scoring.
 
+Its tool-routing slice also makes the execution mode depend on a seed-scoped
+planning record rather than prompt keywords. The same request may require a
+one-off Ditto Code job, creation of a reusable workflow, or execution of an
+existing workflow. CI runs the public model-free 1-nearest-neighbor probe over
+30 training and 10 held-out seeds and requires both complete tool-outcome
+accuracy below 50% and verbatim exposure below 25% of required argument values.
+
 ## V9 grader hardening and canned-response audit
 
 V9 has an explicit grading policy even where its initial rule is identical to

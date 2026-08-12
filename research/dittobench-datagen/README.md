@@ -97,7 +97,7 @@ active. For the public full-profile seed
 | 7 | `2026-11-01T00:00:00Z` | `f5f42f7a550e0bfef8ef2b14f810cbbd4b140ca5985e9f0cceaa509689d9e218` |
 | 8 | `2026-12-01T00:00:00Z` | `6a09587706c95b5f61d3e65e0e34b317fc8ce24d0c927c66864d2869c8728e98` |
 | 9 (pre-activation) | `2027-01-01T00:00:00Z` | `b12edd3649dece3af415ad289a24a1a8615b7d906773e718ee637da14cbd541f` |
-| 10 (private, pre-activation) | `2027-02-01T00:00:00Z` | `a7d9b9a385137311db87c493d649b0f3f5ea7dfbd5cabacd2b9966d103705a96` |
+| 10 (private, pre-activation) | `2027-02-01T00:00:00Z` | `c7346a779b948c6924d6d5c23848fea22ccdd8e2289b747e9b6a1e450832e874` |
 
 Each is regenerated and asserted by CI (`TestV2KnownVector` and friends), so a
 value here that disagrees with `cmd/generate` is a bug in this table, not in the

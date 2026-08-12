@@ -22,6 +22,7 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("bench v%d %s: %d/%d = %.4f complete tool-outcome accuracy\n", *version, *runSize, result.Correct, result.Total, result.Accuracy())
+	fmt.Printf("required arguments visible verbatim: %d/%d = %.4f\n", result.VerbatimArgumentValues, result.ArgumentValues, result.VerbatimArgumentShare())
 	for _, family := range toolprobe.SortedFamilies(result) {
 		f := result.Families[family]
 		fmt.Printf("%-40s %4d/%-4d %.4f\n", family, f.Correct, f.Total, f.Accuracy())

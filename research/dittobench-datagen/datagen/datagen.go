@@ -1307,6 +1307,63 @@ func applyV9WorldActions(seed int64, cases []protocol.ToolCase) {
 	applyWorldActions(seed, cases, true)
 }
 
+// applyV10StateDependentActions removes the last easy prompt-to-tool shortcut
+// from the shared-world suite. The visible request names the work but not the
+// execution mode; a seed-scoped planning record decides whether the user
+// approved a one-off Ditto Code job, creation of a reusable workflow, or a run
+// of an existing workflow. The same prompt surface therefore maps to different
+// correct tool outcomes across seeds while every answer remains deterministically
+// recoverable from ordinary harness-visible state.
+func applyV10StateDependentActions(seed int64, cases []protocol.ToolCase) {
+	if len(cases) == 0 {
+		return
+	}
+	scale := 1
+	if len(cases) >= 80 {
+		scale = 3
+	} else if len(cases) >= 30 {
+		scale = 2
+	}
+	world := universe.Generate(seed, scale)
+	routes := toolMixRNG(seed, protocol.BenchVersionV10, len(cases), "state-dependent-route")
+	projectIndex := 0
+	for i := range cases {
+		if cases[i].Category != "world_agent_job_dispatch" {
+			continue
+		}
+		project := world.Projects[projectIndex%len(world.Projects)]
+		projectIndex++
+		pairID := protocol.OpaqueCaseID(seed, "v10-tool-route", i)
+		planningPrompt := fmt.Sprintf("Planning decision for dependency-risk work on %q at %s.", project.Alias, project.Client)
+		prompt := fmt.Sprintf("Handle the dependency-risk review for %q using the operating choice I approved in our planning note. Start that work now.", project.Alias)
+
+		var planningResponse, behavior string
+		var expected []protocol.ToolSpec
+		switch routes.Intn(3) {
+		case 0:
+			planningResponse = "Approved route: dispatch one one-off Ditto Code job. Do not create or run a reusable workflow."
+			expected = []protocol.ToolSpec{{Name: "execute_agent_job"}}
+			behavior = "resolve the planning decision and dispatch the approved one-off Ditto Code job for user approval"
+		case 1:
+			planningResponse = fmt.Sprintf("Approved route: create a new reusable workflow named %q. Do not dispatch a one-off job or run an existing workflow.", project.Name)
+			expected = []protocol.ToolSpec{{Name: "create_workflow", RequiredArgs: map[string]string{"name": project.Name}}}
+			behavior = "resolve the planning decision and create the approved reusable workflow under its canonical name"
+		case 2:
+			planningResponse = fmt.Sprintf("Approved route: run the existing workflow named %q. List saved workflows first; do not create a replacement or dispatch a one-off job.", project.Name)
+			expected = []protocol.ToolSpec{{Name: "list_workflows"}, {Name: "run_workflow", RequiredArgs: map[string]string{"name": project.Name}}}
+			behavior = "resolve the planning decision, list saved workflows, and run the approved existing workflow"
+		}
+
+		tc := fuzzyWorldTool(cases[i].ID, "v10_state_dependent_routing", prompt, expected, behavior)
+		tc.PrerequisitePairs = []protocol.MemoryPair{{
+			PairID: pairID, SessionID: fmt.Sprintf("v10-tool-route-%02d", projectIndex), Timestamp: "2026-01-15T10:00:00Z",
+			Prompt: planningPrompt, Response: planningResponse,
+		}}
+		tc.WritingProtected = append(tc.WritingProtected, project.Alias, project.Client, project.Name)
+		cases[i] = tc
+	}
+}
+
 func v9RetiredSourceFamily(category string) bool {
 	switch category {
 	case "email_send", "memory_delete", "memory_update", "link_read",
@@ -1968,6 +2025,9 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		applyV9WorldActions(seed, cases)
 	} else if benchVersion >= protocol.BenchVersionV8 {
 		applyV8WorldActions(seed, cases)
+	}
+	if benchVersion >= protocol.BenchVersionV10 {
+		applyV10StateDependentActions(seed, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV8 {
 		applyV8WritingNoise(seed, cases)
