@@ -46,6 +46,17 @@ existing workflow. CI runs the public model-free 1-nearest-neighbor probe over
 30 training and 10 held-out seeds and requires both complete tool-outcome
 accuracy below 50% and verbatim exposure below 25% of required argument values.
 
+The memory slice binds every scored question to its reviewer-only evidence IDs
+and audits answer exposure against those records. Short values use lexical
+boundaries, so an unrelated year cannot make the answer `8` look retrievable.
+Across the qualification seeds, at least half of evidence-bound answers must be
+computed or transformed, and fewer than half may be copied verbatim. Missing
+evidence fails the audit instead of counting as artificial difficulty.
+
+```sh
+go run ./cmd/memoryprobe -seed 41 -run-size full
+```
+
 ## V9 grader hardening and canned-response audit
 
 V9 has an explicit grading policy even where its initial rule is identical to

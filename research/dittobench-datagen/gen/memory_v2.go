@@ -20,7 +20,8 @@ type StagedCase struct {
 	Case         protocol.MemoryCase
 	RunAfterWave int
 	// RequiredPairIDs records the planted evidence used by V8 answerability
-	// checks. It is generator-only and never crosses the harness wire.
+	// checks. V10 copies it into the reviewer artifact for source-aware audits,
+	// but it never crosses the harness wire.
 	RequiredPairIDs []string
 	// UserID is the memory graph the case must be answered under (multi-graph
 	// isolation). Empty means the primary graph (PrimaryUser); isolation
@@ -704,9 +705,9 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 func v10ProgramCaseCount(n int) int {
 	switch {
 	case n >= 100:
-		return 12
+		return 40
 	case n >= 40:
-		return 8
+		return 20
 	default:
 		return 4
 	}

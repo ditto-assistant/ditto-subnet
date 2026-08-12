@@ -335,7 +335,7 @@ func renderV10Scenario(seed int64, renderer V10Renderer, schema v10Schema, scena
 	}
 	pairs := make([]protocol.MemoryPair, 0, len(rows))
 	for i, row := range rows {
-		prompt, response := renderV10Record(renderer, i, row)
+		prompt, response := renderV10Record(renderer, i, row, scenario.Alias)
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID: pairIDs[i], SessionID: fmt.Sprintf("v10-%s-%d", renderer, i),
 			Timestamp: fmt.Sprintf("2026-01-%02dT%02d:00:00Z", 2+i, 9+i),
@@ -345,16 +345,17 @@ func renderV10Scenario(seed int64, renderer V10Renderer, schema v10Schema, scena
 	return pairs
 }
 
-func renderV10Record(renderer V10Renderer, index int, row string) (string, string) {
+func renderV10Record(renderer V10Renderer, index int, row, alias string) (string, string) {
+	context := " I’ll keep this entry tied to the " + alias + " reconciliation set."
 	switch renderer {
 	case V10ConversationRenderer:
-		return "I am going to describe one line from a custom workspace schema: " + row, "Understood — I will interpret those labels using this workspace's glossary."
+		return "I am going to describe one line from a custom workspace schema: " + row, "Understood — I will interpret those labels using this workspace's glossary." + context
 	case V10EmailRenderer:
-		return fmt.Sprintf("Subject: workspace record %d\nFrom: operations@example.invalid\n\n%s", index+1, row), "I have filed this email as part of the same reconciliation thread."
+		return fmt.Sprintf("Subject: workspace record %d\nFrom: operations@example.invalid\n\n%s", index+1, row), "I have filed this email as part of the same reconciliation thread." + context
 	case V10TableRenderer:
-		return fmt.Sprintf("Pasted table row %d\n| payload |\n|---|\n| %s |", index+1, row), "I will preserve the row and its per-run field meanings."
+		return fmt.Sprintf("Pasted table row %d\n| payload |\n|---|\n| %s |", index+1, row), "I will preserve the row and its per-run field meanings." + context
 	case V10OpsRenderer:
-		return fmt.Sprintf("operations_dump[%d] { %s }", index, strings.ReplaceAll(row, "; ", ", ")), "Recorded as an operational event; later replacement markers take precedence."
+		return fmt.Sprintf("operations_dump[%d] { %s }", index, strings.ReplaceAll(row, "; ", ", ")), "Recorded as an operational event; later replacement markers take precedence." + context
 	default:
 		panic("unhandled v10 renderer")
 	}

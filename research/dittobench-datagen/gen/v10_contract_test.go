@@ -63,8 +63,8 @@ func TestV10ArtifactBindsOpenProgramsAndMetamorphicGroups(t *testing.T) {
 			}
 		}
 	}
-	if len(cases) != 12 || len(renderers) != 4 || len(groups) != 3 {
-		t.Fatalf("v10 coverage cases/renderers/groups=%d/%d/%d, want 12/4/3", len(cases), len(renderers), len(groups))
+	if len(cases) != 40 || len(renderers) != 4 || len(groups) != 10 {
+		t.Fatalf("v10 coverage cases/renderers/groups=%d/%d/%d, want 40/4/10", len(cases), len(renderers), len(groups))
 	}
 	for group, members := range groups {
 		if len(members) != 4 {

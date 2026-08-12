@@ -45,9 +45,10 @@ type DatasetArtifact struct {
 // (ForbiddenAnswer rides on the embedded MemoryCase.)
 type ArtifactCase struct {
 	protocol.MemoryCase
-	UserID        string                      `json:"user_id,omitempty"`
-	RunAfterWave  int                         `json:"run_after_wave,omitempty"`
-	V10Provenance *universe.V10CaseProvenance `json:"v10_provenance,omitempty"`
+	UserID             string                      `json:"user_id,omitempty"`
+	RunAfterWave       int                         `json:"run_after_wave,omitempty"`
+	V10EvidencePairIDs []string                    `json:"v10_evidence_pair_ids,omitempty"`
+	V10Provenance      *universe.V10CaseProvenance `json:"v10_provenance,omitempty"`
 }
 
 // FixtureDigest is the hashable snapshot of one case's mock-tool environment: the
@@ -131,7 +132,11 @@ func BuildArtifactForVersion(seed int64, benchVersion int, toolCases []protocol.
 	}
 	flat := make([]ArtifactCase, 0, len(memCases))
 	for _, sc := range memCases {
-		flat = append(flat, ArtifactCase{MemoryCase: sc.Case, UserID: sc.UserID, RunAfterWave: sc.RunAfterWave, V10Provenance: sc.V10Provenance})
+		artifactCase := ArtifactCase{MemoryCase: sc.Case, UserID: sc.UserID, RunAfterWave: sc.RunAfterWave, V10Provenance: sc.V10Provenance}
+		if benchVersion >= protocol.BenchVersionV10 {
+			artifactCase.V10EvidencePairIDs = append([]string(nil), sc.RequiredPairIDs...)
+		}
+		flat = append(flat, artifactCase)
 	}
 	fixtures := make([]FixtureDigest, 0, len(toolCases))
 	for _, c := range toolCases {
