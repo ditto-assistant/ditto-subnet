@@ -3667,6 +3667,18 @@
       }
     },
     "properties": {
+      "active_bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "age_seconds": {
         "default": 0,
         "minimum": 0,

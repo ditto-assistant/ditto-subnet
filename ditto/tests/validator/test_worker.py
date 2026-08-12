@@ -520,7 +520,7 @@ def _report(run_id: str, composite: float) -> ScoreReport:
 
 
 def _confirmation_pins(
-    agent_id: UUID, *, count: int = 3
+    agent_id: UUID, *, bench_version: int = 8, count: int = 3
 ) -> list[ConfirmationDatasetPin]:
     return [
         ConfirmationDatasetPin(
@@ -529,7 +529,7 @@ def _confirmation_pins(
             run_size="full",
         )
         for seed in worker_mod.confirmation_seeds(
-            [str(agent_id)], version=8, count=count
+            [str(agent_id)], version=bench_version, count=count
         )
     ]
 
@@ -557,7 +557,10 @@ def _config() -> MagicMock:
 
 
 def _platform_with_ledger(
-    *, jobs: list[JobResponse], ledger: list[LedgerEntry]
+    *,
+    jobs: list[JobResponse],
+    ledger: list[LedgerEntry],
+    active_bench_version: int | None = 8,
 ) -> MagicMock:
     platform = MagicMock()
     platform.submit_heartbeat = AsyncMock(
@@ -572,7 +575,11 @@ def _platform_with_ledger(
     )
     platform.submit_top5_confirmation_score = AsyncMock()
     platform.get_ledger = AsyncMock(
-        return_value=LedgerResponse(entries=ledger, count=len(ledger))
+        return_value=LedgerResponse(
+            entries=ledger,
+            active_bench_version=active_bench_version,
+            count=len(ledger),
+        )
     )
     platform.get_artifact = AsyncMock(
         return_value=ArtifactResponse(
@@ -603,6 +610,47 @@ def _platform_with_ledger(
 
 
 class TestTop5ConfirmationLane:
+    async def test_cold_start_plans_v9_from_platform_ledger_authority(self) -> None:
+        entry = _entry("5MinerV9" + "x" * 39, 0.9).model_copy(
+            update={"bench_version": 9}
+        )
+        platform = _platform_with_ledger(
+            jobs=[], ledger=[entry], active_bench_version=9
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker._run_top5_confirmation_lane()
+
+        platform.request_top5_confirmation_job.assert_awaited_once_with(
+            champion_agent_id=entry.agent_id,
+            member_agent_id=entry.agent_id,
+        )
+
+    async def test_older_ledger_without_authority_does_not_guess_v8(self) -> None:
+        entry = _entry("5MinerV9" + "x" * 39, 0.9).model_copy(
+            update={"bench_version": 9}
+        )
+        platform = _platform_with_ledger(
+            jobs=[], ledger=[entry], active_bench_version=None
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker._run_top5_confirmation_lane()
+
+        platform.request_top5_confirmation_job.assert_not_awaited()
+
     async def test_idle_slots_catch_up_distinct_members_concurrently(self) -> None:
         entries = [
             _entry(f"5Miner{index}" + "x" * 40, 0.90 - index * 0.01).model_copy(
@@ -754,7 +802,6 @@ class TestTop5ConfirmationLane:
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
-        worker._current_bench_version = 8
         broker = InferenceBrokerSession(
             session_id="top5-session",
             activation_secret="activation",
@@ -807,7 +854,6 @@ class TestTop5ConfirmationLane:
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
-        worker._current_bench_version = 8
         worker._evaluate = AsyncMock()  # type: ignore[method-assign]
 
         await worker._run_top5_confirmation_lane()
@@ -1466,6 +1512,7 @@ class TestRunOnce:
             # Write through the contextvar-backed property from four overlapping
             # tasks, then read it back after every sibling has also written.
             worker._active_agent_id = job.agent_id
+            worker._slot_state().bench_version = job.bench_version
             if active == 4:
                 all_started.set()
             await release.wait()
@@ -4267,10 +4314,12 @@ class TestConfirmAndSubmit:
             )
         )
         w = await self._worker(dittobench, platform)
-        w._current_bench_version = 8
-
         out = await w._confirm_and_submit(
-            agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
+            agent_id,
+            "ab" * 32,
+            "5Miner" + "x" * 42,
+            bench_version=8,
+            seeds=[10, 20, 30],
         )
 
         # One evaluation per seed, but exactly one submitted score.
@@ -4329,10 +4378,12 @@ class TestConfirmAndSubmit:
             )
         )
         w = await self._worker(dittobench, platform)
-        w._current_bench_version = 8
-
         report = await w._confirm_and_submit(
-            agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
+            agent_id,
+            "ab" * 32,
+            "5Miner" + "x" * 42,
+            bench_version=8,
+            seeds=[10, 20, 30],
         )
         assert platform.submit_score.await_count == 1
         assert report is not None
@@ -4365,10 +4416,12 @@ class TestConfirmAndSubmit:
             )
         )
         w = await self._worker(dittobench, platform)
-        w._current_bench_version = 7
-
         out = await w._confirm_and_submit(
-            agent_id, "ab" * 32, "5Miner" + "x" * 42, seeds=[10, 20, 30]
+            agent_id,
+            "ab" * 32,
+            "5Miner" + "x" * 42,
+            bench_version=7,
+            seeds=[10, 20, 30],
         )
         assert out is None
         platform.submit_score.assert_not_awaited()
@@ -4558,7 +4611,7 @@ class TestContestedDethroneConfirmation:
         w = self._worker(dittobench, platform)
 
         await w._confirm_contested_dethrone(
-            LedgerResponse(entries=[champ, chall], count=2)
+            LedgerResponse(entries=[champ, chall], active_bench_version=8, count=2)
         )
 
         # Both agents run all three common seeds; one signed score each.
@@ -4571,9 +4624,7 @@ class TestContestedDethroneConfirmation:
         # so they are stable across sweeps as challengers come and go.
         from ditto.validator.crn import confirmation_seeds
 
-        expected = confirmation_seeds(
-            [str(champ.agent_id)], version=w._current_bench_version, count=3
-        )
+        expected = confirmation_seeds([str(champ.agent_id)], version=8, count=3)
         # The report seed-sorts its pairs; compare as sets.
         assert set(reports[0].confirmation_seeds) == set(expected)
 
@@ -4623,7 +4674,7 @@ class TestContestedDethroneConfirmation:
         w = self._worker(dittobench, platform)
 
         await w._confirm_contested_dethrone(
-            LedgerResponse(entries=[champ, entrant], count=2)
+            LedgerResponse(entries=[champ, entrant], active_bench_version=8, count=2)
         )
 
         # Only the entrant runs (3 seeds, 1 submission); the champion is untouched.
@@ -4650,7 +4701,7 @@ class TestContestedDethroneConfirmation:
         w = self._worker(dittobench, platform)
 
         await w._confirm_contested_dethrone(
-            LedgerResponse(entries=[champ, chall], count=2)
+            LedgerResponse(entries=[champ, chall], active_bench_version=8, count=2)
         )
 
         dittobench.score_tarball.assert_not_awaited()
@@ -4666,7 +4717,7 @@ class TestContestedDethroneConfirmation:
         w = self._worker(dittobench, platform)
 
         await w._confirm_contested_dethrone(
-            LedgerResponse(entries=[champ, laggard], count=2)
+            LedgerResponse(entries=[champ, laggard], active_bench_version=8, count=2)
         )
 
         dittobench.score_tarball.assert_not_awaited()
@@ -4740,6 +4791,7 @@ class TestSlotIsClaimedBeforeInferenceActivation:
         agent_id = uuid4()
         slot = worker._slots["slot-0"]
         slot.active_agent_id = agent_id
+        slot.bench_version = 9
         slot.progress = None
 
         active = worker._capacity_snapshot().active
@@ -4969,6 +5021,7 @@ class TestResourceConstrainedAdmission:
         worker, _ = self._worker(collector=self._collector(disk=95))
         worker._admission = "resource_constrained"
         worker._slots["slot-1"].active_agent_id = uuid4()
+        worker._slots["slot-1"].bench_version = 9
 
         capacity = worker._capacity_snapshot()
 

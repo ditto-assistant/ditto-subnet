@@ -129,18 +129,19 @@ class TestRescoreSweepUsesCommonSeed:
         self,
     ) -> None:
         w = _worker()
-        w._current_bench_version = 3
         w._confirm_and_submit = AsyncMock(return_value=SimpleNamespace())
         champ, r1 = uuid4(), uuid4()
         stale_ledger = SimpleNamespace(
             entries=[
-                _entry(champ, 0.90, version=2, minutes=0),
-                _entry(r1, 0.70, version=2, minutes=1),
-            ]
+                _entry(champ, 0.90, version=8, minutes=0),
+                _entry(r1, 0.70, version=8, minutes=1),
+            ],
+            active_bench_version=9,
         )
         w._platform.get_ledger = AsyncMock(
             return_value=SimpleNamespace(
-                entries=[_entry(champ, 0.55, version=3, minutes=0)]
+                entries=[_entry(champ, 0.55, version=9, minutes=0)],
+                active_bench_version=9,
             )
         )
 
@@ -154,7 +155,7 @@ class TestRescoreSweepUsesCommonSeed:
         assert seed_sets[0] == seed_sets[1]
         # ...which are exactly the deterministic K confirmation seeds for the set
         # (K=3 by config), with k=0 equal to the classic single CRN seed.
-        expected = confirmation_seeds([str(champ), str(r1)], version=3, count=3)
+        expected = confirmation_seeds([str(champ), str(r1)], version=9, count=3)
         assert seed_sets[0] == tuple(expected)
         assert len(set(expected)) == 3
-        assert expected[0] == crn_seed([str(champ), str(r1)], version=3)
+        assert expected[0] == crn_seed([str(champ), str(r1)], version=9)

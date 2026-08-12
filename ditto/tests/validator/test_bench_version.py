@@ -184,9 +184,10 @@ def _worker() -> Any:
 class TestWorkerRescoreSweep:
     async def test_inert_when_ledger_has_no_versions(self) -> None:
         w = _worker()
-        w._current_bench_version = 3
         w._confirm_and_submit = AsyncMock()
-        ledger = SimpleNamespace(entries=[_e("a", 0.9), _e("b", 0.8)])
+        ledger = SimpleNamespace(
+            entries=[_e("a", 0.9), _e("b", 0.8)], active_bench_version=3
+        )
         w._platform.get_ledger = AsyncMock()
         out = await w._rescore_stale_champion_and_tail(ledger)
         # No version info ⇒ no re-score, no re-fetch, same ledger back.
@@ -196,15 +197,18 @@ class TestWorkerRescoreSweep:
 
     async def test_rescore_then_refetch(self) -> None:
         w = _worker()
-        w._current_bench_version = 3
         w._confirm_and_submit = AsyncMock(return_value=SimpleNamespace())
         stale_ledger = SimpleNamespace(
             entries=[
                 _e("champ", 0.90, version=2, minutes=0),
                 _e("r1", 0.70, version=2, minutes=1),
-            ]
+            ],
+            active_bench_version=9,
         )
-        refreshed = SimpleNamespace(entries=[_e("champ", 0.55, version=3, minutes=0)])
+        refreshed = SimpleNamespace(
+            entries=[_e("champ", 0.55, version=9, minutes=0)],
+            active_bench_version=9,
+        )
         w._platform.get_ledger = AsyncMock(return_value=refreshed)
 
         out = await w._rescore_stale_champion_and_tail(stale_ledger)
@@ -215,9 +219,10 @@ class TestWorkerRescoreSweep:
 
     async def test_current_version_ledger_not_rescored(self) -> None:
         w = _worker()
-        w._current_bench_version = 3
         w._confirm_and_submit = AsyncMock()
-        ledger = SimpleNamespace(entries=[_e("champ", 0.9, version=3)])
+        ledger = SimpleNamespace(
+            entries=[_e("champ", 0.9, version=9)], active_bench_version=9
+        )
         w._platform.get_ledger = AsyncMock()
         out = await w._rescore_stale_champion_and_tail(ledger)
         w._confirm_and_submit.assert_not_called()

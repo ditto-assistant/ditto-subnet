@@ -95,6 +95,7 @@ class _LedgerSnapshot:
 
     entries: list[LedgerEntry]
     generated_at: datetime
+    active_bench_version: int
     burn_share: float = 0.0
     """The burn share that was current when this snapshot was taken.
 
@@ -460,6 +461,7 @@ async def scores(
         _LedgerSnapshot(
             entries=entries,
             generated_at=generated_at,
+            active_bench_version=canonical_version,
             burn_share=burn_settings.burn_share,
             v9_confirmation_mode=v9_confirmation_mode,
         ),
@@ -471,6 +473,7 @@ async def scores(
     )
     return LedgerResponse(
         entries=entries,
+        active_bench_version=canonical_version,
         v9_confirmation_mode=v9_confirmation_mode,
         count=len(entries),
         generated_at=generated_at,
@@ -541,6 +544,9 @@ def _serve_last_known(
     ]
     return LedgerResponse(
         entries=entries,
+        # Replayed from the same last-known-good snapshot as the rows. Never
+        # infer rollout authority from the highest row while the DB is down.
+        active_bench_version=snapshot.active_bench_version,
         v9_confirmation_mode=snapshot.v9_confirmation_mode,
         count=len(entries),
         generated_at=snapshot.generated_at,

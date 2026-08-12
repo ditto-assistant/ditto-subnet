@@ -141,13 +141,30 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_ACTIVE_BENCH_VERSION = 8
-
 
 def _supports_bench_version(bench_version: int | None) -> bool:
     """Return whether this validator can execute a platform-issued contract."""
 
     return bench_version in SUPPORTED_BENCH_VERSIONS
+
+
+def _ledger_active_bench_version(ledger: LedgerResponse) -> int | None:
+    """Return Platform's rollout authority, or fail closed for retest work.
+
+    Older Platform versions omit the additive field. Inferring from ledger rows
+    is unsafe during a rollout because the highest row can legitimately remain
+    on the previous benchmark until the frozen cohort settles.
+    """
+
+    bench_version = ledger.active_bench_version
+    if not _supports_bench_version(bench_version):
+        logger.warning(
+            "ledger omitted or advertised unsupported active benchmark version %r; "
+            "skipping version-sensitive autonomous work",
+            bench_version,
+        )
+        return None
+    return bench_version
 
 
 _DRAIN_HEARTBEAT_SECONDS = 5.0
@@ -356,7 +373,7 @@ class _SweepOutcome:
 class _SlotState:
     slot_id: str
     active_agent_id: UUID | None = None
-    bench_version: int = _ACTIVE_BENCH_VERSION
+    bench_version: int | None = None
     ticket_deadline: datetime | None = None
     run_token: str | None = None
     progress: BenchmarkProgress | None = None
@@ -432,12 +449,6 @@ class ValidatorWorker:
             validator_hotkey=config.validator_hotkey,
             netuid=config.netuid,
         )
-        # The newest bench_version this validator's scorer has produced (learned
-        # from each scored run's details). Drives the §9 re-score sweep: ledger
-        # entries scored below this are stale and re-evaluated before the fold.
-        # Starts at the baseline so a just-booted validator that has not scored
-        # anything yet never mistakes the whole ledger for stale.
-        self._current_bench_version = _ACTIVE_BENCH_VERSION
         self._last_heartbeat_timestamp = 0
         self._heartbeat_clock = heartbeat_clock or _new_heartbeat_clock()
         self._pending_heartbeat_state: ValidatorRuntimeState | None = None
@@ -595,6 +606,10 @@ class ValidatorWorker:
         for slot in self._slots.values():
             if slot.active_agent_id is None:
                 continue
+            if slot.bench_version is None:
+                raise RuntimeError(
+                    f"active benchmark slot {slot.slot_id} has no bench version"
+                )
             # `progress is None` is NOT a reason to omit the slot. A leased slot
             # with nothing to report yet is occupied, and the platform cannot
             # tell an omitted slot from a free one -- which is how a live lease
@@ -1500,7 +1515,7 @@ class ValidatorWorker:
         self._benchmark_progress = None
         self._last_progress_heartbeat_monotonic = None
         self._last_progress_bucket = None
-        self._slot_state().bench_version = _ACTIVE_BENCH_VERSION
+        self._slot_state().bench_version = None
 
     async def _update_weights(self) -> _WeightOutcome:
         """Recompute weights from the durable ledger and submit them.
@@ -1920,9 +1935,12 @@ class ValidatorWorker:
             except PlatformError as exc:
                 logger.warning("top-five confirmation ledger fetch failed: %s", exc)
                 return
+            current_version = _ledger_active_bench_version(ledger)
+            if current_version is None:
+                return
             plan = top5_confirmation_set(
                 ledger.entries,
-                current_version=self._current_bench_version,
+                current_version=current_version,
                 margin=self._config.koth_margin,
                 dethrone_z=self._config.koth_dethrone_z,
                 tail_size=self._config.koth_tail_size,
@@ -2244,6 +2262,9 @@ class ValidatorWorker:
         nothing is stale. One agent failing to re-score is logged and skipped; it
         must never stall weight-setting.
         """
+        current_version = _ledger_active_bench_version(ledger)
+        if current_version is None:
+            return ledger
         entries = ledger.entries
         # Only act once the ledger actually distinguishes versions; otherwise we
         # cannot tell stale from current and must not re-score on every epoch.
@@ -2251,7 +2272,7 @@ class ValidatorWorker:
             return ledger
         stale = agents_needing_rescore(
             entries,
-            current_version=self._current_bench_version,
+            current_version=current_version,
             margin=self._config.koth_margin,
             tail_size=self._config.koth_tail_size,
             dethrone_z=self._config.koth_dethrone_z,
@@ -2267,13 +2288,13 @@ class ValidatorWorker:
         # dethrone must replicate across seeds, not ride one lucky draw.
         sweep_seeds = confirmation_seeds(
             (str(e.agent_id) for e in stale),
-            version=self._current_bench_version,
+            version=current_version,
             count=self._config.koth_confirmation_seeds,
         )
         logger.info(
             "bench_version %d re-score sweep: %d stale champion/tail agent(s) "
             "(CRN seeds=%s)",
-            self._current_bench_version,
+            current_version,
             len(stale),
             sweep_seeds,
         )
@@ -2282,7 +2303,11 @@ class ValidatorWorker:
             if self._new_work_blocked(stop_requested, drain_requested):
                 break
             submitted = await self._confirm_and_submit(
-                e.agent_id, e.sha256, e.miner_hotkey, seeds=sweep_seeds
+                e.agent_id,
+                e.sha256,
+                e.miner_hotkey,
+                bench_version=current_version,
+                seeds=sweep_seeds,
             )
             if submitted is not None:
                 rescored += 1
@@ -2332,9 +2357,12 @@ class ValidatorWorker:
         losses never trigger this. One member failing to re-score is logged
         and its ledger score stands.
         """
+        current_version = _ledger_active_bench_version(ledger)
+        if current_version is None:
+            return
         contested = contested_confirmation_set(
             ledger.entries,
-            current_version=self._current_bench_version,
+            current_version=current_version,
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
         )
@@ -2346,7 +2374,7 @@ class ValidatorWorker:
         # version, so it is stable across sweeps and identical fleet-wide.
         seeds = confirmation_seeds(
             [str(champion.agent_id)],
-            version=self._current_bench_version,
+            version=current_version,
             count=self._config.koth_confirmation_seeds,
         )
         logger.info(
@@ -2366,7 +2394,11 @@ class ValidatorWorker:
             if self._new_work_blocked(stop_requested, drain_requested):
                 return
             submitted = await self._confirm_and_submit(
-                e.agent_id, e.sha256, e.miner_hotkey, seeds=seeds
+                e.agent_id,
+                e.sha256,
+                e.miner_hotkey,
+                bench_version=current_version,
+                seeds=seeds,
             )
             if submitted is None:
                 logger.warning(
@@ -3169,6 +3201,7 @@ class ValidatorWorker:
         expected_sha256: str,
         miner_hotkey: str,
         *,
+        bench_version: int,
         seeds: Sequence[int],
     ) -> ScoreReport | None:
         """P4 re-score of one stale agent over ``seeds`` (K common CRN seeds).
@@ -3195,7 +3228,7 @@ class ValidatorWorker:
                         agent_id,
                         expected_sha256,
                         seed=s,
-                        bench_version=self._current_bench_version,
+                        bench_version=bench_version,
                     )
                 )
             except (PlatformError, DittobenchError) as exc:

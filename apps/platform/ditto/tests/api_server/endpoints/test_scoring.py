@@ -294,6 +294,7 @@ class TestScoringLedger:
         assert resp.headers["Cache-Control"] == "no-store"
         body = resp.json()
         assert body["count"] == 2
+        assert body["active_bench_version"] == _BENCH_VERSION
         assert [e["miner_hotkey"] for e in body["entries"]] == [_MINER_B, _MINER]
         assert body["entries"][0]["composite"] == pytest.approx(0.9)
         assert body["entries"][0]["signature"] == "ab" * 64
@@ -394,6 +395,7 @@ class TestScoringLedger:
         body = resp.json()
         assert body["entries"] == []
         assert body["count"] == 0
+        assert body["active_bench_version"] == _BENCH_VERSION
         # A fresh read is never stale.
         assert body["stale"] is False
         assert body["age_seconds"] == 0
@@ -579,6 +581,7 @@ class TestScoringLiveness:
         assert stale.status_code == 200
         body = stale.json()
         assert body["stale"] is True
+        assert body["active_bench_version"] == _BENCH_VERSION
         assert body["count"] == 1
         assert body["entries"][0]["miner_hotkey"] == _MINER
         assert body["age_seconds"] >= 0

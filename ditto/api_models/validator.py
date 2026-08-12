@@ -1398,6 +1398,18 @@ class LedgerResponse(BaseModel):
             )
         ),
     ]
+    active_bench_version: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=1,
+            description=(
+                "Platform-authoritative benchmark version for autonomous retest "
+                "planning. None means the responding Platform predates this field; "
+                "validators must then skip version-sensitive background work."
+            ),
+        ),
+    ] = None
     v9_confirmation_mode: Annotated[
         Literal["enforce"] | None,
         Field(
