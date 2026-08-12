@@ -352,7 +352,7 @@ class TestGateOutcomeOnBothProductionPairs:
             validator_hotkey="5Validator",
             signature="ab" * 64,
             status=AgentStatus.SCORED,
-            miner_coldkey="5IncumbentCold",
+            miner_coldkey="5ColdInc",
             content_fingerprint=compute_content_fingerprint(tar),
             structural_fingerprint=None,
             normalized_source_hash=compute_normalized_source_hash(tar),
@@ -365,7 +365,7 @@ class TestGateOutcomeOnBothProductionPairs:
         return evaluate_duplicate_signals(
             agent_id=uuid4(),
             miner_hotkey="5Challenger",
-            miner_coldkey="5ChallengerCold",
+            miner_coldkey="5ColdCha",
             submitted_at=_CANDIDATE_SEEN,
             sha256="bb" * 32,
             # The recorded composite delta of the false-positive pair (0.0108),
