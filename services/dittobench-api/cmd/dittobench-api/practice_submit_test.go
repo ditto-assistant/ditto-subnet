@@ -63,24 +63,6 @@ func TestPracticeSubmitDefaultsOmittedVersionToV9(t *testing.T) {
 	}
 }
 
-func TestPracticeSubmitPrivateV10QualificationOptIn(t *testing.T) {
-	t.Setenv("DITTOBENCH_PRIVATE_V10_QUALIFICATION", "")
-	if _, message := requestedPracticeBenchVersion(protocol.BenchVersionV10); message == "" {
-		t.Fatal("v10 practice was accepted without the private qualification opt-in")
-	}
-
-	t.Setenv("DITTOBENCH_PRIVATE_V10_QUALIFICATION", "1")
-	version, message := requestedPracticeBenchVersion(protocol.BenchVersionV10)
-	if message != "" || version != protocol.BenchVersionV10 {
-		t.Fatalf("private v10 practice = (%d, %q), want (%d, empty)", version, message, protocol.BenchVersionV10)
-	}
-	for _, advertised := range supportedBenchVersions() {
-		if advertised == protocol.BenchVersionV10 {
-			t.Fatalf("private practice opt-in advertised v10 capability: %v", supportedBenchVersions())
-		}
-	}
-}
-
 // The exemption is keyed on the source kind, so both build modes stay gated on
 // the same deployment.
 func TestPracticeSubmitStillRejectsV8SourceBuilds(t *testing.T) {

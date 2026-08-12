@@ -365,8 +365,8 @@ func TestRunCase(t *testing.T) {
 	}
 }
 
-func TestRunCaseSendsBenchVersionOnlyForV7Plus(t *testing.T) {
-	versions := make(chan int, 2)
+func TestRunCaseSendsPublicHarnessBenchVersion(t *testing.T) {
+	versions := make(chan int, 3)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req protocol.RunRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -377,7 +377,7 @@ func TestRunCaseSendsBenchVersionOnlyForV7Plus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	for _, version := range []int{6, 7} {
+	for _, version := range []int{6, 7, protocol.BenchVersionV10} {
 		if _, err := RunCase(
 			sandboxContext(), srv.URL, "m1", "question", nil,
 			CaseOptions{BenchVersion: version},
@@ -390,6 +390,9 @@ func TestRunCaseSendsBenchVersionOnlyForV7Plus(t *testing.T) {
 	}
 	if got := <-versions; got != 7 {
 		t.Fatalf("v7 wire bench_version = %d, want 7", got)
+	}
+	if got := <-versions; got != protocol.BenchVersionV9 {
+		t.Fatalf("private v10 wire bench_version = %d, want public v9 contract", got)
 	}
 }
 

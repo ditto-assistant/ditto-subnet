@@ -1223,13 +1223,6 @@ func requestedPracticeBenchVersion(version int) (int, string) {
 	if version == 0 {
 		version = protocol.BenchVersionV9
 	}
-	// Bench v10 remains private and must never appear in capability negotiation
-	// or the canonical score route before qualification. A local operator may
-	// nevertheless exercise the complete generator/scorer path explicitly while
-	// building the private evidence set.
-	if version == protocol.BenchVersionV10 && envBool("DITTOBENCH_PRIVATE_V10_QUALIFICATION") {
-		return version, ""
-	}
 	return requestedBenchVersion(version)
 }
 
