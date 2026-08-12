@@ -29,6 +29,7 @@ jobs:
           COMPOSE_SHA256: ${{ matrix.compose-sha256 }}
         run: |
           curl --fail --silent --show-error --location \
+            --retry 5 --retry-all-errors --retry-delay 2 \
             "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-x86_64" \
             --output /tmp/docker-compose
           echo "$COMPOSE_SHA256  /tmp/docker-compose" | sha256sum --check --strict

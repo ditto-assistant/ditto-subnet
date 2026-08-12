@@ -180,9 +180,10 @@ curl localhost:8000/health
 # {"status":"ok"}
 ```
 
-### `GET /v1/dataset?n=&seed=`
+### `GET /v1/dataset?n=&seed=&bench_version=`
 Pull a fresh randomized dataset to practice against. `seed` is random unless
-pinned (pinning only reproduces a specific set); `n` defaults to 30.
+pinned (pinning only reproduces a specific set); `n` defaults to 30 and
+`bench_version` defaults to v9. Explicit v8 remains available for compatibility.
 ```sh
 curl 'localhost:8000/v1/dataset?n=10'
 ```
@@ -256,8 +257,9 @@ layer. `POST /v1/score` remains available during the mixed-fleet migration and
 maps an omitted version to the exact historical v2 path. `/v1/submit` retains
 the same omission rule for public practice compatibility.
 
-### `GET /v1/catalog`
-The Ditto tool catalog the harness receives on every `/run`.
+### `GET /v1/catalog?bench_version=`
+The Ditto tool catalog the harness receives on every `/run`. It defaults to v9
+and accepts explicit v8 for compatibility.
 ```sh
 curl localhost:8000/v1/catalog
 ```

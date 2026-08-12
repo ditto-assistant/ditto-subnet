@@ -201,7 +201,11 @@ func runOnce(seed int64, n int) (float64, map[string]float64) {
 func memRunOnce(seed int64, nMem int, profile map[string]float64) float64 {
 	// Calibration measures the CURRENT benchmark, so pin the version explicitly;
 	// the un-suffixed wrapper now defaults to the frozen v2 contract.
-	suite, err := gen.GenerateMemorySuiteForVersion(gen.NewRNG(seed), seed, nMem, 1, 0, benchVersion)
+	rng, err := gen.NewRNGForVersion(seed, benchVersion)
+	if err != nil {
+		log.Fatalf("generate memory RNG: %v", err)
+	}
+	suite, err := gen.GenerateMemorySuiteForVersion(rng, seed, nMem, 1, 0, benchVersion)
 	if err != nil {
 		log.Fatalf("generate memory suite: %v", err)
 	}

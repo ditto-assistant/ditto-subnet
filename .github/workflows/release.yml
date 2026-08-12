@@ -992,17 +992,19 @@ jobs:
           [[ "$candidate_url" == https://* ]]
 
           test -n "$DATAGEN_ID_TOKEN"
-          http_status="$(curl --silent --show-error \
-            --retry 3 --retry-all-errors \
-            --request POST \
-            --header "Authorization: Bearer $DATAGEN_ID_TOKEN" \
-            --dump-header "$headers_file" \
-            --output "$response_file" \
-            --write-out '%{http_code}' \
-            "$candidate_url/generate?seed=42&run_size=small&bench_version=8")"
-          test "$http_status" = "200"
-          tr -d '\r' <"$headers_file" | grep -Eqi '^x-bench-version: 8$'
-          jq -e . "$response_file" >/dev/null
+          for bench_version in 8 9; do
+            http_status="$(curl --silent --show-error \
+              --retry 3 --retry-all-errors \
+              --request POST \
+              --header "Authorization: Bearer $DATAGEN_ID_TOKEN" \
+              --dump-header "$headers_file" \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              "$candidate_url/generate?seed=42&run_size=small&bench_version=$bench_version")"
+            test "$http_status" = "200"
+            tr -d '\r' <"$headers_file" | grep -Eqi "^x-bench-version: $bench_version$"
+            jq -e . "$response_file" >/dev/null
+          done
 
           # Promotion also restores the declarative "latest receives 100%"
           # traffic policy so future semantic releases converge the same way.
@@ -1115,6 +1117,19 @@ jobs:
               (.source_revision_mismatch | not) and
               (.supported_bench_versions | sort == [8, 9])
             ' >/dev/null
+          for bench_version in 8 9; do
+            headers_file="$(mktemp)"
+            body_file="$(mktemp)"
+            trap 'rm -f "$headers_file" "$body_file"' EXIT
+            curl --fail --silent --show-error --retry 5 \
+              --retry-all-errors --retry-delay 10 --max-time 30 \
+              --dump-header "$headers_file" --output "$body_file" \
+              "$service_url/v1/dataset?seed=42&n=1&bench_version=$bench_version"
+            tr -d '\r' <"$headers_file" | grep -Eqi "^x-bench-version: $bench_version$"
+            jq -e '.tool_cases | length == 1' "$body_file" >/dev/null
+            rm -f "$headers_file" "$body_file"
+            trap - EXIT
+          done
 
   # ---------------------------------------------------------------------------
   # Fan-in: every component image exists and the source re-verified. Authenticate

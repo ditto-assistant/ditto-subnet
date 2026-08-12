@@ -37,7 +37,7 @@ func TestValidateBenchVersionResultRejectsContradictions(t *testing.T) {
 	}
 }
 
-func TestCatalogEndpointUsesOnlyV8Surface(t *testing.T) {
+func TestCatalogEndpointUsesCurrentPracticeSurface(t *testing.T) {
 	rr := httptest.NewRecorder()
 	(&server{}).handleCatalog(rr, httptest.NewRequest(http.MethodGet, "/v1/catalog", nil))
 	if rr.Code != http.StatusOK {

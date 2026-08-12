@@ -815,21 +815,39 @@ func fillerForLegacy(r *rand.Rand, cat string) string {
 	}
 }
 
-// Generate produces a deterministic-per-seed dataset of n tool-calling cases.
-// n is clamped to [1, 200]; the practice default is small (20-40).
+// Generate preserves the frozen v2 package contract for legacy callers.
 func Generate(seed int64, n int) protocol.Dataset {
+	ds, err := GenerateForVersion(seed, n, protocol.BenchVersionV2)
+	if err != nil {
+		panic(err) // v2 is a compile-time supported contract.
+	}
+	return ds
+}
+
+// GenerateForVersion produces a deterministic tool-practice dataset for one
+// explicit immutable benchmark contract. n is clamped to [1, 200].
+func GenerateForVersion(seed int64, n, benchVersion int) (protocol.Dataset, error) {
 	if n < 1 {
 		n = 1
 	}
 	if n > 200 {
 		n = 200
 	}
-	r := rand.New(rand.NewSource(protocol.RotateSeed(seed)))
+	rotated, err := protocol.RotateSeedForVersion(seed, benchVersion)
+	if err != nil {
+		return protocol.Dataset{}, err
+	}
+	epoch, err := protocol.DatasetEpochForVersion(benchVersion)
+	if err != nil {
+		return protocol.Dataset{}, err
+	}
+	r := rand.New(rand.NewSource(rotated))
+	cases, _ := GenerateCasesWithFillersForVersion(r, seed, n, benchVersion)
 	return protocol.Dataset{
 		Seed:        seed,
-		GeneratedAt: protocol.DatasetEpochRFC3339,
-		ToolCases:   GenerateCases(r, seed, n),
-	}
+		GeneratedAt: epoch.Format("2006-01-02T15:04:05Z07:00"),
+		ToolCases:   cases,
+	}, nil
 }
 
 // stratifiedCategoryOrder returns n category indices with a FIXED per-category

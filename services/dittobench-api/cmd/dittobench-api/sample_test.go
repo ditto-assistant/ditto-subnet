@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
+	"github.com/ditto-assistant/dittobench-datagen/datagen"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -168,6 +169,9 @@ func TestPracticeCatalogDefaultsToV9(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("catalog status = %d, want 200: %s", rr.Code, rr.Body.String())
 	}
+	if got := rr.Header().Get("X-Bench-Version"); got != "9" {
+		t.Fatalf("catalog version header = %q, want 9", got)
+	}
 	var got []protocol.ToolDefinition
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode catalog: %v", err)
@@ -175,6 +179,62 @@ func TestPracticeCatalogDefaultsToV9(t *testing.T) {
 	want := catalog.CatalogForVersion(protocol.BenchVersionV9)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("practice catalog does not match v9: got %#v want %#v", got, want)
+	}
+}
+
+func TestPracticeDatasetDefaultsToV9AndCanSelectV8(t *testing.T) {
+	s := &server{allowPrivate: true}
+	for _, tc := range []struct {
+		name    string
+		query   string
+		version int
+	}{
+		{name: "default v9", query: "?seed=42&n=12", version: protocol.BenchVersionV9},
+		{name: "explicit v8", query: "?seed=42&n=12&bench_version=8", version: protocol.BenchVersionV8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			s.handleDataset(rr, httptest.NewRequest(http.MethodGet, "/v1/dataset"+tc.query, nil))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("dataset status = %d, want 200: %s", rr.Code, rr.Body.String())
+			}
+			if got := rr.Header().Get("X-Bench-Version"); got != itoa(tc.version) {
+				t.Fatalf("dataset version header = %q, want %d", got, tc.version)
+			}
+			var got protocol.Dataset
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode dataset: %v", err)
+			}
+			want, err := datagen.GenerateForVersion(42, 12, tc.version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotJSON, _ := json.Marshal(got)
+			wantJSON, _ := json.Marshal(want)
+			if !reflect.DeepEqual(gotJSON, wantJSON) {
+				t.Fatalf("dataset does not match explicit v%d generation", tc.version)
+			}
+		})
+	}
+}
+
+func TestPracticeDatasetAndCatalogRejectUnsupportedVersions(t *testing.T) {
+	s := &server{allowPrivate: true}
+	for _, path := range []string{
+		"/v1/dataset?bench_version=7",
+		"/v1/catalog?bench_version=10",
+		"/v1/dataset?bench_version=not-a-number",
+	} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if strings.HasPrefix(path, "/v1/catalog") {
+			s.handleCatalog(rr, req)
+		} else {
+			s.handleDataset(rr, req)
+		}
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400: %s", path, rr.Code, rr.Body.String())
+		}
 	}
 }
 

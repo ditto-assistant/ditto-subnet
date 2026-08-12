@@ -84,14 +84,15 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert '--image="$image"' in deploy["run"]
     assert "--no-traffic" in deploy["run"]
     assert '--tag="$candidate_tag"' in deploy["run"]
-    assert "bench_version=8" in deploy["run"]
+    assert "for bench_version in 8 9" in deploy["run"]
+    assert "bench_version=$bench_version" in deploy["run"]
     assert deploy["env"]["DATAGEN_ID_TOKEN"] == (
         "${{ steps.datagen-smoke-auth.outputs.id_token }}"
     )
     assert 'test "$service_url" = "$DATAGEN_SERVICE_URL"' in deploy["run"]
     assert "gcloud auth print-identity-token" not in deploy["run"]
     assert "Authorization: Bearer $DATAGEN_ID_TOKEN" in deploy["run"]
-    assert "^x-bench-version: 8$" in deploy["run"]
+    assert "^x-bench-version: $bench_version$" in deploy["run"]
     assert '--remove-tags="$candidate_tag"' in deploy["run"]
     assert "--to-latest" in deploy["run"]
 
@@ -283,6 +284,17 @@ def test_public_screener_dependency_needs_no_private_authentication() -> None:
         assert "DITTO_SCREENER_PROTOCOL_READ_KEY" not in text
         assert "GIT_SSH_COMMAND" not in text
         assert "insteadOf" not in text
+
+
+def test_compose_asset_download_is_pinned_and_retried() -> None:
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text())
+    install = _step(
+        workflow["jobs"]["compose-config"]["steps"],
+        "Install pinned Docker Compose ${{ matrix.compose-version }}",
+    )
+
+    assert "--retry 5 --retry-all-errors --retry-delay 2" in install["run"]
+    assert "sha256sum --check --strict" in install["run"]
 
 
 def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:

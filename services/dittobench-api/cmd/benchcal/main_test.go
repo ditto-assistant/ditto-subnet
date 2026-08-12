@@ -146,8 +146,12 @@ func TestCalibrateWithMemProfileSeam(t *testing.T) {
 	// will score so an unlisted family cannot silently take the neutral 0.5
 	// fallback and make this seam test vacuous.
 	for seed := int64(1); seed <= 5; seed++ {
+		rng, err := gen.NewRNGForVersion(seed, benchVersion)
+		if err != nil {
+			t.Fatalf("generate memory RNG for seed %d: %v", seed, err)
+		}
 		suite, err := gen.GenerateMemorySuiteForVersion(
-			gen.NewRNG(seed), seed, 20, 1, 0, benchVersion,
+			rng, seed, 20, 1, 0, benchVersion,
 		)
 		if err != nil {
 			t.Fatalf("generate memory suite for seed %d: %v", seed, err)

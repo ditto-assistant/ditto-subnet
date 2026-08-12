@@ -1,11 +1,41 @@
 package datagen
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
+
+func TestGenerateForVersionUsesExplicitV9Stream(t *testing.T) {
+	const seed = int64(424242)
+	v8, err := GenerateForVersion(seed, 30, protocol.BenchVersionV8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v9, err := GenerateForVersion(seed, 30, protocol.BenchVersionV9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v9Again, err := GenerateForVersion(seed, 30, protocol.BenchVersionV9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(v9, v9Again) {
+		t.Fatal("v9 generation is not deterministic")
+	}
+	if reflect.DeepEqual(v8, v9) {
+		t.Fatal("v8 and v9 generation streams unexpectedly match")
+	}
+	v9Epoch, _ := protocol.DatasetEpochForVersion(protocol.BenchVersionV9)
+	if v9.GeneratedAt != v9Epoch.Format("2006-01-02T15:04:05Z07:00") {
+		t.Fatalf("v9 epoch = %q, want %q", v9.GeneratedAt, v9Epoch)
+	}
+	if _, err := GenerateForVersion(seed, 30, 10); err == nil {
+		t.Fatal("unsupported benchmark version accepted")
+	}
+}
 
 // TestDeterministicPerSeed: same seed yields byte-identical datasets. With
 // seed-derived time the GeneratedAt envelope is the pinned dataset epoch, not

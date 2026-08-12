@@ -478,13 +478,36 @@ func verifyDatasetHash(expected, actual string, hashErr error) error {
 	return nil
 }
 
-func (s *server) handleCatalog(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(protocol.BenchVersionV9))
+func practiceBenchVersion(r *http.Request) (int, string) {
+	value := strings.TrimSpace(r.URL.Query().Get("bench_version"))
+	if value == "" {
+		return protocol.BenchVersionV9, ""
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, "bench_version must be an integer"
+	}
+	return requestedPracticeBenchVersion(parsed)
+}
+
+func (s *server) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	benchVersion, msg := practiceBenchVersion(r)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	w.Header().Set("X-Bench-Version", strconv.Itoa(benchVersion))
+	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(benchVersion))
 }
 
 // handleDataset returns a fresh dataset for practice. Seed is random unless
 // pinned via ?seed=, n defaults to 30 (clamped in datagen).
 func (s *server) handleDataset(w http.ResponseWriter, r *http.Request) {
+	benchVersion, msg := practiceBenchVersion(r)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	n := parseIntDefault(r.URL.Query().Get("n"), defaultN)
 	seed := freshSeed()
 	if sv := r.URL.Query().Get("seed"); sv != "" {
@@ -492,7 +515,12 @@ func (s *server) handleDataset(w http.ResponseWriter, r *http.Request) {
 			seed = parsed
 		}
 	}
-	ds := datagen.Generate(seed, n)
+	ds, err := datagen.GenerateForVersion(seed, n, benchVersion)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("X-Bench-Version", strconv.Itoa(benchVersion))
 	// The oracle (expected tools/answers, category labels, grading params) is
 	// validator-internal grading data. On the public hosted deployment we serve
 	// only what the harness itself sees at scoring time (the prompt/question), so
