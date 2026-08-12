@@ -160,6 +160,9 @@ func LoadSelectedDataset(ctx context.Context, source io.ReadSeeker, profile Prof
 			if err := validateDatasetCase(entry); err != nil {
 				return err
 			}
+			if err := validateProfileHistoryFloor(entry, profile); err != nil {
+				return err
+			}
 			rows[entry.QuestionID] = entry
 		}
 		return nil
@@ -176,6 +179,25 @@ func LoadSelectedDataset(ctx context.Context, source io.ReadSeeker, profile Prof
 		Selection: selection,
 		selected:  rows,
 	}, nil
+}
+
+func validateProfileHistoryFloor(entry DatasetCase, profile Profile) error {
+	if profile.BenchVersion < 10 {
+		return nil
+	}
+	if len(entry.HaystackSessions) < profile.MinHistorySessions {
+		return fmt.Errorf("selected deep-history case %q has %d sessions, requires %d", entry.QuestionID, len(entry.HaystackSessions), profile.MinHistorySessions)
+	}
+	historyBytes := 0
+	for _, session := range entry.HaystackSessions {
+		for _, turn := range session {
+			historyBytes += len([]byte(turn.Content))
+		}
+	}
+	if historyBytes < profile.MinHistoryBytes {
+		return fmt.Errorf("selected deep-history case %q has %d history bytes, requires %d", entry.QuestionID, historyBytes, profile.MinHistoryBytes)
+	}
+	return nil
 }
 
 // scanVerifiedDataset independently applies the source-size ceiling and frozen

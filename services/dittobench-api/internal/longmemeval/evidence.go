@@ -199,7 +199,7 @@ func (e Evidence) Validate(profile Profile, selection Selection) error {
 }
 
 func (e Evidence) normalized(profile Profile, selection Selection) (Evidence, error) {
-	if e.SchemaVersion != EvidenceSchemaVersion || e.BenchVersion != 9 ||
+	if e.SchemaVersion != EvidenceSchemaVersion || e.BenchVersion != profile.BenchVersion ||
 		!validSHA256(e.ArtifactSHA256) || !validSHA256(e.ProfileChecksum) ||
 		!validSHA256(e.CaseSetDigest) || !validSHA256(e.DatasetSHA256) ||
 		strings.TrimSpace(e.DatasetRevision) == "" {

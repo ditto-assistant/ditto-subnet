@@ -76,6 +76,16 @@ selection privately and exposes validation-gated `Validate`/`Digest` methods;
 only its `Evidence` field may enter the signed report. The durable cache key remains
 `(artifact_sha256, bench_version, profile_checksum)`.
 
+## Private Bench v10 deep-history profile
+
+The same trusted executor can validate an offline Bench v10 profile without
+making v10 reachable from the active v9 confirmation transport. V10 uses
+independent selection, case-set, and projection domains; at least eight cases
+from each of the six capability strata; and content-bound per-case floors of 55
+sessions and 400,000 UTF-8 history bytes (roughly the 100k-token scale). A selected row below either floor
+fails before projection or harness seeding. V9 omits these fields, retains its
+frozen checksum and domains, and remains the only advertised confirmation wire.
+
 The checked-in `testdata/profile-v1.json` caps are fixture values, not launch
 calibration. No p50/p95 runtime, provider cost, or composite weight is claimed
 here.

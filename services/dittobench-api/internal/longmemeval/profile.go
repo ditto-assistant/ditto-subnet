@@ -11,10 +11,13 @@ import (
 )
 
 const (
-	ProfileSchemaVersion  = 1
-	EvidenceSchemaVersion = 2
-	SelectorRevisionV1    = "longmemeval-s-stratified-sha256-v1"
-	AuthoritativeCostV1   = "provider_receipt_v1"
+	ProfileSchemaVersion     = 1
+	EvidenceSchemaVersion    = 2
+	SelectorRevisionV1       = "longmemeval-s-stratified-sha256-v1"
+	AuthoritativeCostV1      = "provider_receipt_v1"
+	V10MinCasesPerCapability = 8
+	V10MinHistorySessions    = 55
+	V10MinHistoryBytes       = 400_000
 )
 
 // Capability is one of the six disjoint LongMemEval confirmation strata.
@@ -70,6 +73,8 @@ type Profile struct {
 	SelectorRevision   string           `json:"selector_revision"`
 	SelectionSeed      uint64           `json:"selection_seed"`
 	CasesPerCapability int              `json:"cases_per_capability"`
+	MinHistorySessions int              `json:"min_history_sessions,omitempty"`
+	MinHistoryBytes    int              `json:"min_history_bytes,omitempty"`
 	Providers          []ProviderPolicy `json:"providers"`
 }
 
@@ -80,8 +85,8 @@ func (p Profile) Validate() error {
 	if strings.TrimSpace(p.Revision) == "" || strings.TrimSpace(p.DatasetRevision) == "" {
 		return errors.New("profile revision and dataset revision are required")
 	}
-	if p.BenchVersion != 9 {
-		return errors.New("LongMemEval confirmation profile must select bench_version 9")
+	if p.BenchVersion != 9 && p.BenchVersion != 10 {
+		return errors.New("LongMemEval confirmation profile must select bench_version 9 or 10")
 	}
 	if !validSHA256(p.DatasetSHA256) {
 		return errors.New("dataset_sha256 must be 64 lowercase hexadecimal characters")
@@ -91,6 +96,13 @@ func (p Profile) Validate() error {
 	}
 	if p.CasesPerCapability < 2 {
 		return errors.New("cases_per_capability must be at least 2 for uncertainty")
+	}
+	if p.BenchVersion == 9 && (p.MinHistorySessions != 0 || p.MinHistoryBytes != 0) {
+		return errors.New("bench_version 9 does not define deep-history floors")
+	}
+	if p.BenchVersion == 10 && (p.CasesPerCapability < V10MinCasesPerCapability ||
+		p.MinHistorySessions < V10MinHistorySessions || p.MinHistoryBytes < V10MinHistoryBytes) {
+		return errors.New("bench_version 10 profile is below the deep-history case or history floor")
 	}
 	if len(p.Providers) == 0 {
 		return errors.New("at least one provider policy is required")

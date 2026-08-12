@@ -80,7 +80,7 @@ func ProjectSelectedCases(dataset LoadedDataset, key []byte, seedBatchPairs int)
 		}
 		projected = append(projected, projectedOrder{
 			value: item,
-			rank:  keyedDigest(key, "case-order", dataset.Selection.CaseSetDigest, entry.QuestionID),
+			rank:  keyedDigest(key, selectionBenchVersion(dataset.Selection), "case-order", dataset.Selection.CaseSetDigest, entry.QuestionID),
 		})
 	}
 	sort.Slice(projected, func(i, j int) bool {
@@ -102,9 +102,10 @@ func projectCase(selection Selection, entry DatasetCase, key []byte, seedBatchPa
 	if err := validateDatasetCase(entry); err != nil {
 		return ProjectedCase{}, err
 	}
-	userID := opaqueUUID(key, "user", selection.CaseSetDigest, entry.QuestionID)
-	caseID := opaqueUUID(key, "case", selection.CaseSetDigest, entry.QuestionID)
-	pairs, err := projectPairs(entry, key, selection.CaseSetDigest)
+	benchVersion := selectionBenchVersion(selection)
+	userID := opaqueUUID(key, benchVersion, "user", selection.CaseSetDigest, entry.QuestionID)
+	caseID := opaqueUUID(key, benchVersion, "case", selection.CaseSetDigest, entry.QuestionID)
+	pairs, err := projectPairsForVersion(entry, key, selection.CaseSetDigest, benchVersion)
 	if err != nil {
 		return ProjectedCase{}, err
 	}
@@ -134,7 +135,7 @@ func projectCase(selection Selection, entry DatasetCase, key []byte, seedBatchPa
 			SystemPrompt: fmt.Sprintf(nativeMemorySystemPrompt, entry.QuestionDate),
 			UserInput:    entry.Question,
 			Tools:        NativeMemoryTools(),
-			BenchVersion: 9,
+			BenchVersion: benchVersion,
 			UserID:       userID,
 		},
 		questionID: entry.QuestionID,
@@ -147,13 +148,17 @@ type logicalPair struct {
 }
 
 func projectPairs(entry DatasetCase, key []byte, caseSetDigest string) ([]protocol.MemoryPair, error) {
+	return projectPairsForVersion(entry, key, caseSetDigest, 9)
+}
+
+func projectPairsForVersion(entry DatasetCase, key []byte, caseSetDigest string, benchVersion int) ([]protocol.MemoryPair, error) {
 	logical := make([]logicalPair, 0)
 	for sessionIndex, sessionID := range entry.HaystackSessionIDs {
 		timestamp, err := normalizeTimestamp(entry.HaystackDates[sessionIndex])
 		if err != nil {
 			return nil, fmt.Errorf("selected LongMemEval history has invalid timestamp: %w", err)
 		}
-		sessionAlias := opaqueUUID(key, "session", caseSetDigest, entry.QuestionID, sessionID)
+		sessionAlias := opaqueUUID(key, benchVersion, "session", caseSetDigest, entry.QuestionID, sessionID)
 		turns := entry.HaystackSessions[sessionIndex]
 		var pending *pendingUser
 		appendPair := func(first, last int, prompt, response string) {
@@ -164,7 +169,7 @@ func projectPairs(entry DatasetCase, key []byte, caseSetDigest string) ([]protoc
 			logical = append(logical, logicalPair{
 				pairID: identity,
 				pair: protocol.MemoryPair{
-					PairID:    opaqueUUID(key, "pair", caseSetDigest, identity),
+					PairID:    opaqueUUID(key, benchVersion, "pair", caseSetDigest, identity),
 					SessionID: sessionAlias,
 					Timestamp: timestamp,
 					Prompt:    prompt,
@@ -227,9 +232,13 @@ func normalizeTimestamp(value string) (string, error) {
 	return fmt.Sprintf("%s-%s-%sT%s:%s:00Z", parts[1], parts[2], parts[3], parts[4], parts[5]), nil
 }
 
-func keyedDigest(key []byte, domain string, parts ...string) [sha256.Size]byte {
+func keyedDigest(key []byte, benchVersion int, domain string, parts ...string) [sha256.Size]byte {
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte("ditto-v9-longmemeval-projection-v1"))
+	projectionDomain := "ditto-v9-longmemeval-projection-v1"
+	if benchVersion >= 10 {
+		projectionDomain = "ditto-v10-deep-history-projection-v1"
+	}
+	mac.Write([]byte(projectionDomain))
 	mac.Write([]byte{0})
 	mac.Write([]byte(domain))
 	for _, part := range parts {
@@ -241,12 +250,19 @@ func keyedDigest(key []byte, domain string, parts ...string) [sha256.Size]byte {
 	return result
 }
 
-func opaqueUUID(key []byte, domain string, parts ...string) string {
-	digest := keyedDigest(key, domain, parts...)
+func opaqueUUID(key []byte, benchVersion int, domain string, parts ...string) string {
+	digest := keyedDigest(key, benchVersion, domain, parts...)
 	value := append([]byte(nil), digest[:16]...)
 	value[6] = (value[6] & 0x0f) | 0x40
 	value[8] = (value[8] & 0x3f) | 0x80
 	return uuid.Must(uuid.FromBytes(value)).String()
+}
+
+func selectionBenchVersion(selection Selection) int {
+	if selection.BenchVersion >= 10 {
+		return selection.BenchVersion
+	}
+	return 9
 }
 
 // NativeMemoryTools returns a fresh copy of the exact four-tool catalog used

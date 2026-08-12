@@ -10,7 +10,10 @@ import (
 	"strings"
 )
 
-const selectionDomain = "ditto-v9-longmemeval-selection-v1"
+const (
+	selectionDomainV9  = "ditto-v9-longmemeval-selection-v1"
+	selectionDomainV10 = "ditto-v10-deep-history-selection-v1"
+)
 
 // Case is the private dataset metadata required by the selector. Reference
 // answers and histories never enter selection.
@@ -27,6 +30,7 @@ type SelectedCase struct {
 type Selection struct {
 	ProfileChecksum string         `json:"profile_checksum"`
 	DatasetSHA256   string         `json:"dataset_sha256"`
+	BenchVersion    int            `json:"bench_version,omitempty"`
 	Cases           []SelectedCase `json:"cases"`
 	CaseSetDigest   string         `json:"case_set_digest"`
 }
@@ -59,7 +63,7 @@ func Select(profile Profile, cases []Case) (Selection, error) {
 		}
 		strata[capability] = append(strata[capability], rankedCase{
 			Case: candidate,
-			Rank: selectionRank(profileChecksum, profile.SelectionSeed, candidate.QuestionID),
+			Rank: selectionRankForVersion(profile.BenchVersion, profileChecksum, profile.SelectionSeed, candidate.QuestionID),
 		})
 	}
 
@@ -90,6 +94,9 @@ func Select(profile Profile, cases []Case) (Selection, error) {
 		ProfileChecksum: profileChecksum,
 		DatasetSHA256:   profile.DatasetSHA256,
 		Cases:           selected,
+	}
+	if profile.BenchVersion >= 10 {
+		selection.BenchVersion = profile.BenchVersion
 	}
 	selection.CaseSetDigest = caseSetDigest(selection)
 	return selection, nil
@@ -124,8 +131,12 @@ func capabilityForCase(candidate Case) (Capability, error) {
 }
 
 func selectionRank(profileChecksum string, seed uint64, questionID string) [sha256.Size]byte {
+	return selectionRankForVersion(9, profileChecksum, seed, questionID)
+}
+
+func selectionRankForVersion(benchVersion int, profileChecksum string, seed uint64, questionID string) [sha256.Size]byte {
 	hash := sha256.New()
-	hash.Write([]byte(selectionDomain))
+	hash.Write([]byte(selectionDomainForVersion(benchVersion)))
 	hash.Write([]byte{0})
 	hash.Write([]byte(profileChecksum))
 	hash.Write([]byte{0})
@@ -139,9 +150,20 @@ func selectionRank(profileChecksum string, seed uint64, questionID string) [sha2
 	return result
 }
 
+func selectionDomainForVersion(benchVersion int) string {
+	if benchVersion >= 10 {
+		return selectionDomainV10
+	}
+	return selectionDomainV9
+}
+
 func caseSetDigest(selection Selection) string {
 	hash := sha256.New()
-	hash.Write([]byte("ditto-v9-longmemeval-case-set-v1"))
+	domain := "ditto-v9-longmemeval-case-set-v1"
+	if selection.BenchVersion >= 10 {
+		domain = "ditto-v10-deep-history-case-set-v1"
+	}
+	hash.Write([]byte(domain))
 	hash.Write([]byte{0})
 	hash.Write([]byte(selection.ProfileChecksum))
 	hash.Write([]byte{0})
