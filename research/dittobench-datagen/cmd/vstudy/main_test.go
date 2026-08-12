@@ -154,14 +154,14 @@ func TestSeedsForMath(t *testing.T) {
 }
 
 func TestParseBenchVersions(t *testing.T) {
-	got, err := parseBenchVersions(" 8,9,8 ")
+	got, err := parseBenchVersions(" 8,9,10,8 ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, []int{protocol.BenchVersionV8, protocol.BenchVersionV9}) {
-		t.Fatalf("versions=%v, want [8 9]", got)
+	if !reflect.DeepEqual(got, []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10}) {
+		t.Fatalf("versions=%v, want [8 9 10]", got)
 	}
-	for _, raw := range []string{"", ",", "9,garbage", "10"} {
+	for _, raw := range []string{"", ",", "9,garbage", "11"} {
 		if _, err := parseBenchVersions(raw); err == nil {
 			t.Errorf("parseBenchVersions(%q) unexpectedly succeeded", raw)
 		}

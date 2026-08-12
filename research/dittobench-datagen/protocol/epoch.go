@@ -75,6 +75,11 @@ import (
 // v8 product-semantic world and adds a final scored-family floor whose residual
 // mix varies by seed. CurrentBenchVersion deliberately remains v8: supporting
 // deterministic v9 generation is not the same as advertising or activating it.
+//
+// v10 is the generator-as-specification contract. It adds seed-scoped ontology
+// and schema labels, recursive query programs, independent renderers, and
+// first-class metamorphic/counterfactual provenance. It is generation-only
+// until the private qualification stack proves durable headroom.
 const (
 	BenchVersionV2      = 2
 	BenchVersionV3      = 3
@@ -84,6 +89,7 @@ const (
 	BenchVersionV7      = 7
 	BenchVersionV8      = 8
 	BenchVersionV9      = 9
+	BenchVersionV10     = 10
 	CurrentBenchVersion = BenchVersionV8
 
 	// BenchVersion is retained as a source-compatible alias for consumers that
@@ -93,14 +99,15 @@ const (
 )
 
 var (
-	datasetEpochV2 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	datasetEpochV3 = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	datasetEpochV4 = time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	datasetEpochV5 = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	datasetEpochV6 = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	datasetEpochV7 = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	datasetEpochV8 = time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
-	datasetEpochV9 = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV2  = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV3  = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV4  = time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV5  = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV6  = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV7  = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV8  = time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV9  = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV10 = time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC)
 
 	// DatasetEpoch and DatasetEpochRFC3339 retain the v2 values for legacy
 	// package callers. Canonical versioned generation uses DatasetEpochForVersion.
@@ -113,7 +120,8 @@ func SupportedBenchVersion(version int) bool {
 	return version == BenchVersionV2 || version == BenchVersionV3 ||
 		version == BenchVersionV4 || version == BenchVersionV5 ||
 		version == BenchVersionV6 || version == BenchVersionV7 ||
-		version == BenchVersionV8 || version == BenchVersionV9
+		version == BenchVersionV8 || version == BenchVersionV9 ||
+		version == BenchVersionV10
 }
 
 // DatasetEpochForVersion returns the immutable reference instant for version.
@@ -135,8 +143,10 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 		return datasetEpochV8, nil
 	case BenchVersionV9:
 		return datasetEpochV9, nil
+	case BenchVersionV10:
+		return datasetEpochV10, nil
 	default:
-		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9)", version)
+		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10)", version)
 	}
 }
 
@@ -144,7 +154,7 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 // It is deterministic and retains the exact historical v2 mixing function.
 func RotateSeedForVersion(seed int64, version int) (int64, error) {
 	if !SupportedBenchVersion(version) {
-		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9)", version)
+		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10)", version)
 	}
 	v := uint64(version)
 	x := uint64(seed) ^ (v * 0x9E3779B97F4A7C15)

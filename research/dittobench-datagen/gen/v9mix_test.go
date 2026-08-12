@@ -51,7 +51,7 @@ func TestV9ProfilesAreExplicitAndPinned(t *testing.T) {
 	if got, ok := ProfileForVersion("unknown", protocol.BenchVersionV9); ok || got != want["small"] {
 		t.Errorf("unknown v9 run size=(%+v,%v), want explicit small fallback plus false", got, ok)
 	}
-	for _, future := range []int{0, 1, protocol.BenchVersionV9 + 1, 99} {
+	for _, future := range []int{0, 1, protocol.BenchVersionV10 + 1, 99} {
 		if got, ok := ProfileForVersion("full", future); ok || got != (Profile{}) {
 			t.Errorf("future/unknown version %d inherited profile (%+v,%v)", future, got, ok)
 		}

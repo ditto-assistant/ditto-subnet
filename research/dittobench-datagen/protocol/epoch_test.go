@@ -49,11 +49,12 @@ func TestVersionedRotationAndEpoch(t *testing.T) {
 	e7, _ := DatasetEpochForVersion(BenchVersionV7)
 	e8, _ := DatasetEpochForVersion(BenchVersionV8)
 	e9, _ := DatasetEpochForVersion(BenchVersionV9)
+	e10, _ := DatasetEpochForVersion(BenchVersionV10)
 	if !e3.After(e2) {
 		t.Fatalf("v3 epoch %s must follow v2 %s", e3, e2)
 	}
-	if !e7.After(e3) || !e8.After(e7) || !e9.After(e8) || CurrentBenchVersion != BenchVersionV8 {
-		t.Fatalf("v9 generation scaffold or v8 activation boundary invalid: v7=%s v8=%s v9=%s current=%d", e7, e8, e9, CurrentBenchVersion)
+	if !e7.After(e3) || !e8.After(e7) || !e9.After(e8) || !e10.After(e9) || CurrentBenchVersion != BenchVersionV8 {
+		t.Fatalf("v10 generation scaffold or v8 activation boundary invalid: v7=%s v8=%s v9=%s v10=%s current=%d", e7, e8, e9, e10, CurrentBenchVersion)
 	}
 	if _, err := RotateSeedForVersion(seed, 99); err == nil {
 		t.Fatal("unsupported rotation version accepted")

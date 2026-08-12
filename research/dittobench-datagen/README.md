@@ -82,9 +82,9 @@ Run sizes: `small` (smoke), `medium`, `full` (the scored profile).
 
 `-bench-version` is required. Use the version published with the score you are
 auditing; never substitute the latest version. Explicit generation supports v2
-through the pre-activation v9 contract. `CurrentBenchVersion` remains v8 while
-the runtime advertises both executable contracts, v8 and v9; Platform rollout
-state separately controls which one is active. For the public full-profile seed
+through the private, pre-activation v10 contract. `CurrentBenchVersion` remains
+v8; Platform rollout state separately controls which executable contract is
+active. For the public full-profile seed
 `123456789`, the canonical SHA-256 vectors are:
 
 | Version | Dataset epoch | SHA-256 |
@@ -97,6 +97,7 @@ state separately controls which one is active. For the public full-profile seed
 | 7 | `2026-11-01T00:00:00Z` | `f5f42f7a550e0bfef8ef2b14f810cbbd4b140ca5985e9f0cceaa509689d9e218` |
 | 8 | `2026-12-01T00:00:00Z` | `6a09587706c95b5f61d3e65e0e34b317fc8ce24d0c927c66864d2869c8728e98` |
 | 9 (pre-activation) | `2027-01-01T00:00:00Z` | `b12edd3649dece3af415ad289a24a1a8615b7d906773e718ee637da14cbd541f` |
+| 10 (private, pre-activation) | `2027-02-01T00:00:00Z` | `a7d9b9a385137311db87c493d649b0f3f5ea7dfbd5cabacd2b9966d103705a96` |
 
 Each is regenerated and asserted by CI (`TestV2KnownVector` and friends), so a
 value here that disagrees with `cmd/generate` is a bug in this table, not in the

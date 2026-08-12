@@ -21,6 +21,23 @@ applied to an existing version. It ships as a new one.
 | 7 | `2026-11-01` | Platform-owned OpenRouter inference with locked `openai/gpt-oss-20b`, and the difficulty release: a version-gated hard-case suite roughly an order of magnitude harder for a non-reasoning harness while a correct trajectory still scores full marks. |
 | 8 | `2026-12-01` | The answering-machine-proof release: natural requests whose route depends on seeded prior context, semantic enum/identifier resolution without magic free-form strings, a larger computed-memory share, and stricter deterministic answer grading. |
 | 9 (pre-activation) | `2027-01-01` | A qualification contract for the Bench v9 family mix and launch gates. Explicit generation, offline audit, and ordinary runtime execution are available; Platform activation remains separate and v8 stays current until rollout. |
+| 10 (private, pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime activation remains separate. |
+
+## V10 generator-as-spec contract
+
+V10 starts from a seed-scoped semantic specification rather than a reusable
+question template. The specification contains an ontology, a schema, a
+recursive query program, evidence records, and an explicit answer relation.
+Independent renderers project the same semantics as conversations, email
+threads, tables, or operations dumps. Linked invariant cases preserve the
+answer while changing renderer or adding a distractor; the linked causal
+counterfactual changes one source fact and must change the answer.
+
+The generated artifact carries reviewer-only provenance sufficient to replay
+the specification and verify those relations. The harness projection continues
+to expose only ordinary memory and questions. V10 is explicit-generation only:
+it does not change `CurrentBenchVersion`, advertise a new runtime version, or
+activate scoring.
 
 ## V9 grader hardening and canned-response audit
 

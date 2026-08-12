@@ -119,6 +119,16 @@ var profilesV9 = map[string]Profile{
 	"full":   {Tools: 100, Mem: 225, Waves: 5, RawPairsFrac: 0.5, IsoCases: 9},
 }
 
+// profilesV10 is explicit even though its ordinary-score envelope initially
+// matches v9. The difficult deep-history dimension is a separate, bounded
+// confirmation profile; silently inheriting a future version here would make a
+// half-built contract runnable without review.
+var profilesV10 = map[string]Profile{
+	"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
+	"medium": {Tools: 48, Mem: 64, Waves: 4, RawPairsFrac: 0.45, IsoCases: 5},
+	"full":   {Tools: 100, Mem: 225, Waves: 5, RawPairsFrac: 0.5, IsoCases: 9},
+}
+
 // ProfileFor returns the Profile for a run_size, defaulting to small. Uses the
 // historical (v2/v3/v4) sizes; canonical versioned callers use ProfileForVersion.
 func ProfileFor(runSize string) (Profile, bool) {
@@ -146,6 +156,8 @@ func ProfileForVersion(runSize string, benchVersion int) (Profile, bool) {
 		profiles = profilesV8
 	case protocol.BenchVersionV9:
 		profiles = profilesV9
+	case protocol.BenchVersionV10:
+		profiles = profilesV10
 	default:
 		return Profile{}, false
 	}

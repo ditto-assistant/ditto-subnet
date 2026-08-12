@@ -142,12 +142,11 @@ func scopedAliases(prf projectionPRF, domain string, values []string) ([]ScopedI
 	return out, lookup
 }
 
-// BuildHarnessProjection constructs the complete V9 hostile-wire view. It is
-// intentionally V9-only: callers must leave older versions on their exact
-// historical path.
+// BuildHarnessProjection constructs the complete hostile-wire view for v9 and
+// later contracts. Older versions remain on their exact historical path.
 func BuildHarnessProjection(seed int64, blindingKey []byte, benchVersion int, toolCases []protocol.ToolCase, memoryCases []StagedCase, waves []protocol.SeedRequest) (*HarnessProjection, error) {
-	if benchVersion != protocol.BenchVersionV9 {
-		return nil, fmt.Errorf("harness projection requires bench version 9")
+	if benchVersion < protocol.BenchVersionV9 {
+		return nil, fmt.Errorf("harness projection requires bench version 9 or later")
 	}
 	prf, err := newProjectionPRF(seed, blindingKey)
 	if err != nil {

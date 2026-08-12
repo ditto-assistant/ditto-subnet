@@ -26,6 +26,10 @@ type StagedCase struct {
 	// isolation). Empty means the primary graph (PrimaryUser); isolation
 	// cases set it explicitly so the pipeline scopes RunRequest.UserID per case.
 	UserID string
+	// V10Provenance is content-bound generator audit evidence for open query
+	// programs and metamorphic groups. It is copied into DatasetArtifact but is
+	// never projected into the submitted harness request.
+	V10Provenance *universe.V10CaseProvenance
 }
 
 // MemorySuite is the full v2 memory dataset: the ordered seeding waves (Tier C),
@@ -646,15 +650,26 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 	}
 	scale, _ := v8WorldProfile(n)
 	world := universe.Generate(seed, scale)
-	plans, err := world.QuestionPlans(budget)
+	v10Count := 0
+	if benchVersion >= protocol.BenchVersionV10 {
+		v10Count = v10ProgramCaseCount(n)
+	}
+	plans, err := world.QuestionPlans(budget - v10Count)
 	if err != nil {
 		return MemorySuite{}, fmt.Errorf("v8 world questions: %w", err)
+	}
+	var v10Programs []universe.V10GeneratedCase
+	if v10Count > 0 {
+		v10Programs, err = universe.GenerateV10Programs(seed, v10Count)
+		if err != nil {
+			return MemorySuite{}, fmt.Errorf("v10 open programs: %w", err)
+		}
 	}
 
 	integrity := v8WorldIntegrityCases(seed, world, benchVersion)
 	suite := MemorySuite{
 		SeedingWaves:           nWaves,
-		WorldCases:             len(plans) + len(integrity) - v8WorldConversationalCaseCount,
+		WorldCases:             len(plans) + len(v10Programs) + len(integrity) - v8WorldConversationalCaseCount,
 		ConversationalCases:    v8WorldConversationalCaseCount,
 		StoredInstructionCases: v8WorldInjectionCaseCount,
 		Waves:                  make([]protocol.SeedRequest, nWaves),
@@ -671,9 +686,30 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 			RequiredPairIDs: append([]string(nil), plan.RequiredPairIDs...),
 		})
 	}
+	for i := range v10Programs {
+		generated := &v10Programs[i]
+		provenance := generated.Provenance
+		suite.Cases = append(suite.Cases, StagedCase{
+			Case: generated.Plan.Case, RunAfterWave: 0,
+			RequiredPairIDs: append([]string(nil), generated.Plan.RequiredPairIDs...),
+			V10Provenance:   &provenance,
+		})
+		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, generated.Pairs...)
+	}
 	suite.Cases = append(suite.Cases, integrity...)
 	suite.WritingNoiseQuestions, suite.WritingNoisePairs = applyV8MemoryWritingNoise(seed, suite.Cases, suite.Waves)
 	return suite, nil
+}
+
+func v10ProgramCaseCount(n int) int {
+	switch {
+	case n >= 100:
+		return 12
+	case n >= 40:
+		return 8
+	default:
+		return 4
+	}
 }
 
 const (

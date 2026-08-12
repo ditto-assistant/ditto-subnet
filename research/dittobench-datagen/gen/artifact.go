@@ -11,6 +11,7 @@ import (
 	v2gen "github.com/ditto-assistant/dittobench-datagen/internal/v2gen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/toolexec"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 // DatasetArtifact is the canonical, hashable snapshot of a fully-rendered run
@@ -44,8 +45,9 @@ type DatasetArtifact struct {
 // (ForbiddenAnswer rides on the embedded MemoryCase.)
 type ArtifactCase struct {
 	protocol.MemoryCase
-	UserID       string `json:"user_id,omitempty"`
-	RunAfterWave int    `json:"run_after_wave,omitempty"`
+	UserID        string                      `json:"user_id,omitempty"`
+	RunAfterWave  int                         `json:"run_after_wave,omitempty"`
+	V10Provenance *universe.V10CaseProvenance `json:"v10_provenance,omitempty"`
 }
 
 // FixtureDigest is the hashable snapshot of one case's mock-tool environment: the
@@ -129,7 +131,7 @@ func BuildArtifactForVersion(seed int64, benchVersion int, toolCases []protocol.
 	}
 	flat := make([]ArtifactCase, 0, len(memCases))
 	for _, sc := range memCases {
-		flat = append(flat, ArtifactCase{MemoryCase: sc.Case, UserID: sc.UserID, RunAfterWave: sc.RunAfterWave})
+		flat = append(flat, ArtifactCase{MemoryCase: sc.Case, UserID: sc.UserID, RunAfterWave: sc.RunAfterWave, V10Provenance: sc.V10Provenance})
 	}
 	fixtures := make([]FixtureDigest, 0, len(toolCases))
 	for _, c := range toolCases {
@@ -281,7 +283,9 @@ func generateV2Frozen(seed int64, prof Profile) (DatasetArtifact, error) {
 		MemoryWaves:  a.MemoryWaves,
 	}
 	for _, c := range a.MemoryCases {
-		out.MemoryCases = append(out.MemoryCases, ArtifactCase(c))
+		out.MemoryCases = append(out.MemoryCases, ArtifactCase{
+			MemoryCase: c.MemoryCase, UserID: c.UserID, RunAfterWave: c.RunAfterWave,
+		})
 	}
 	for _, f := range a.ToolFixtures {
 		out.ToolFixtures = append(out.ToolFixtures, FixtureDigest(f))

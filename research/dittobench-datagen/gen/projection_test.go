@@ -67,12 +67,15 @@ func mustProjection(t *testing.T, seed int64) *HarnessProjection {
 
 func testBlindingKey(fill byte) []byte { return slices.Repeat([]byte{fill}, 32) }
 
-func TestV9ProjectionRejectsEveryOtherVersion(t *testing.T) {
+func TestHostileProjectionRejectsPreV9Versions(t *testing.T) {
 	tools, memory, waves := projectionFixture()
-	for _, version := range []int{0, protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9 + 1} {
+	for _, version := range []int{0, protocol.BenchVersionV7, protocol.BenchVersionV8} {
 		if _, err := BuildHarnessProjection(1, testBlindingKey(1), version, tools, memory, waves); err == nil {
 			t.Fatalf("version %d unexpectedly accepted", version)
 		}
+	}
+	if _, err := BuildHarnessProjection(1, testBlindingKey(1), protocol.BenchVersionV10, tools, memory, waves); err != nil {
+		t.Fatalf("v10 did not inherit hostile projection: %v", err)
 	}
 }
 
