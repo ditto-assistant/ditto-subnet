@@ -9251,7 +9251,12 @@ class TestBenchConfig:
         body = json.dumps(
             {
                 "execution": {"cases": 1, "succeeded": 1, "max_duration_ms": 25},
-                "model_relay": {"requests": 2, "successes": 1},
+                "model_relay": {
+                    "requests": 2,
+                    "successes": 1,
+                    "route_probe_attempts": 2,
+                    "route_probe_routed": 1,
+                },
                 "cases": [
                     {
                         "prompt": "private question",
@@ -9307,6 +9312,8 @@ class TestBenchConfig:
                 "caller_cancellations": 0,
                 "upstream_attempts": 0,
                 "retries": 0,
+                "route_probe_attempts": 2,
+                "route_probe_routed": 1,
             },
             "cases": [
                 {

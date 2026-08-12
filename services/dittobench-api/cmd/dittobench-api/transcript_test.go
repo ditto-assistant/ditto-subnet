@@ -39,7 +39,7 @@ func sampleTranscript(order []int) transcriptArtifact {
 	}
 	return transcriptArtifact{
 		RunID: "run-t", Seed: 7, BenchVersion: protocol.BenchVersion, DatasetSHA256: "abc", Cases: ordered,
-		ModelRelay: relayExecutionSummary{Requests: 3, Successes: 2, CallerCancellations: 1, UpstreamAttempts: 4, Retries: 1},
+		ModelRelay: relayExecutionSummary{Requests: 3, Successes: 2, CallerCancellations: 1, UpstreamAttempts: 4, Retries: 1, RouteProbeAttempts: 2, RouteProbeRouted: 1},
 	}
 }
 
@@ -423,7 +423,7 @@ func TestHandleGetTranscript(t *testing.T) {
 	if round.Execution.MedianDurationMs != 320 || round.Execution.P95DurationMs != 120000 || round.Execution.MaxDurationMs != 120000 {
 		t.Fatalf("execution duration summary mismatch: %+v", round.Execution)
 	}
-	if round.ModelRelay.Requests != 3 || round.ModelRelay.Successes != 2 || round.ModelRelay.CallerCancellations != 1 || round.ModelRelay.Retries != 1 {
+	if round.ModelRelay.Requests != 3 || round.ModelRelay.Successes != 2 || round.ModelRelay.CallerCancellations != 1 || round.ModelRelay.Retries != 1 || round.ModelRelay.RouteProbeAttempts != 2 || round.ModelRelay.RouteProbeRouted != 1 {
 		t.Fatalf("model relay summary mismatch: %+v", round.ModelRelay)
 	}
 }

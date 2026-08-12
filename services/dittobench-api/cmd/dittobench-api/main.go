@@ -1431,6 +1431,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// low score even when a harness masks that outage behind HTTP 200 + an empty
 	// response.
 	var relayStart relayHealthSnapshot
+	var routeProbeAttempts uint64
+	var routeProbeRouted uint64
 	if scope == scorer.ScopeScored {
 		var ok bool
 		relayStart, ok = s.relayRunStart(ctx, runID, req.BenchVersion, req.RunSize, harnessGateway(inferenceSessionID), inferenceSessionID)
@@ -1439,15 +1441,19 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 	}
 
-	// v0.44 originally selected only the new `platform` adapter. Older v8
-	// images passed admission under the generic OpenAI-compatible adapter, so
+	// v0.44 originally selected only the new `platform` adapter. Older images
+	// passed admission under the generic OpenAI-compatible adapter, so
 	// they stayed healthy and answered all 351 cases without ever reaching the
 	// broker. Detect that incompatibility with one discarded, isolated probe
 	// before seeding or scoring, then restart the same screened image once with
 	// the compatibility selector. The CAS source move keeps the ticket bound to
 	// one stopped-or-live container throughout.
-	if image != "" && scope == scorer.ScopeScored && req.BenchVersion == protocol.BenchVersionV8 {
+	if image != "" && scope == scorer.ScopeScored && req.BenchVersion >= protocol.BenchVersionV8 {
 		afterProbe, routed, probeErr := s.probeHarnessModelRoute(ctx, harnessURL, inferenceSessionID, relayStart, tools, req.BenchVersion)
+		routeProbeAttempts++
+		if routed {
+			routeProbeRouted++
+		}
 		if probeErr != nil {
 			s.failRelayUnavailableForContext(ctx, runID, probeErr)
 			return
@@ -1473,11 +1479,15 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				return
 			}
 			afterProbe, routed, probeErr = s.probeHarnessModelRoute(ctx, harnessURL, inferenceSessionID, relayStart, tools, req.BenchVersion)
+			routeProbeAttempts++
+			if routed {
+				routeProbeRouted++
+			}
 			if probeErr != nil {
 				s.failRelayUnavailableForContext(ctx, runID, probeErr)
 				return
 			}
-			if !routed {
+			if !routed && req.BenchVersion == protocol.BenchVersionV8 {
 				s.store.FailWith(
 					runID,
 					"benchmark v8 requires the harness response path to use the locked model",
@@ -1485,7 +1495,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				)
 				return
 			}
-			log.Printf("run %s selected v8 compatibility inference adapter after zero-call platform probe", runID)
+			if routed {
+				log.Printf("run %s selected compatibility inference adapter after zero-call platform probe", runID)
+			} else {
+				log.Printf("run %s exhausted both supported v9 inference selectors without a broker call", runID)
+			}
 		}
 		relayStart = afterProbe // route probes are not benchmark usage
 	}
@@ -1844,6 +1858,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		if !ok {
 			return
 		}
+		relayExecution.RouteProbeAttempts = routeProbeAttempts
+		relayExecution.RouteProbeRouted = routeProbeRouted
 		if err := s.requireCompleteModelUsageAfterRun(
 			ctx,
 			harnessURL,

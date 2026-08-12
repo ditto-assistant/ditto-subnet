@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -74,20 +75,27 @@ func TestV8HarnessEnvironmentCannotBeOverridden(t *testing.T) {
 	}
 }
 
-func TestV8CompatibilityEnvironmentRoutesEveryAliasToBroker(t *testing.T) {
-	env := harnessSandboxEnvForProvider(nil, protocol.BenchVersionV8, v8CompatLockedProvider, "session-route")
-	if env["DITTOBENCH_PROVIDER"] != v8CompatLockedProvider {
-		t.Fatalf("provider = %q, want %q", env["DITTOBENCH_PROVIDER"], v8CompatLockedProvider)
-	}
-	for _, baseURLKey := range append([]string{"CHUTES_BASE_URL"}, v8CompatBaseURLKeys...) {
-		if got := env[baseURLKey]; got != "http://host.docker.internal:11436/v1/inference" {
-			t.Fatalf("%s = %q, want ticket broker", baseURLKey, got)
-		}
-	}
-	for _, key := range []string{"CHUTES_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"} {
-		if got := env[key]; got != brokerPlaceholderKey {
-			t.Fatalf("%s = %q, want non-secret broker placeholder", key, got)
-		}
+func TestCompatibilityEnvironmentRoutesEveryAliasToBroker(t *testing.T) {
+	for _, benchVersion := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9} {
+		t.Run(fmt.Sprintf("v%d", benchVersion), func(t *testing.T) {
+			env := harnessSandboxEnvForProvider(nil, benchVersion, v8CompatLockedProvider, "session-route")
+			if env["DITTOBENCH_PROVIDER"] != v8CompatLockedProvider {
+				t.Fatalf("provider = %q, want %q", env["DITTOBENCH_PROVIDER"], v8CompatLockedProvider)
+			}
+			for _, baseURLKey := range append([]string{"CHUTES_BASE_URL"}, v8CompatBaseURLKeys...) {
+				if got := env[baseURLKey]; got != "http://host.docker.internal:11436/v1/inference" {
+					t.Fatalf("%s = %q, want ticket broker", baseURLKey, got)
+				}
+			}
+			for _, key := range []string{"CHUTES_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"} {
+				if got := env[key]; got != brokerPlaceholderKey {
+					t.Fatalf("%s = %q, want non-secret broker placeholder", key, got)
+				}
+			}
+			if benchVersion == protocol.BenchVersionV9 {
+				assertExactV9HarnessEnv(t, env)
+			}
+		})
 	}
 }
 
@@ -104,6 +112,11 @@ func TestV9HarnessEnvironmentIsAnExactAllowlist(t *testing.T) {
 		"GOOGLE_APPLICATION_CREDENTIALS": "/attacker/key.json",
 	}
 	env := harnessSandboxEnv(hostile, protocol.BenchVersionV9, "session-route")
+	assertExactV9HarnessEnv(t, env)
+}
+
+func assertExactV9HarnessEnv(t *testing.T, env map[string]string) {
+	t.Helper()
 	wantKeys := map[string]bool{
 		"DITTOBENCH_PROVIDER": true, "DITTOBENCH_INFERENCE_BASE_URL": true,
 		"CHUTES_BASE_URL": true, "CHUTES_API_KEY": true,

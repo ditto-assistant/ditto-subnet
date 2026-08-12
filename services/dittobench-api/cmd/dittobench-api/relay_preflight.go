@@ -97,6 +97,20 @@ type relayExecutionSummary struct {
 	UpstreamAttempts       uint64 `json:"upstream_attempts"`
 	Retries                uint64 `json:"retries"`
 	EmbeddingRetries       uint64 `json:"embedding_retries,omitempty"`
+	RouteProbeAttempts     uint64 `json:"route_probe_attempts,omitempty"`
+	RouteProbeRouted       uint64 `json:"route_probe_routed,omitempty"`
+}
+
+// provesV9RouteDisposition distinguishes a genuine zero-request scored
+// interval from a compatibility miss. One routed challenge proves the agent
+// can reach the ticket broker but chose not to during the scored cases. If the
+// preferred selector misses, both supported selectors must be challenged
+// before a zero can be signed.
+func (s relayExecutionSummary) provesV9RouteDisposition() bool {
+	return (s.RouteProbeAttempts > 0 &&
+		s.RouteProbeRouted > 0 &&
+		s.RouteProbeRouted <= s.RouteProbeAttempts) ||
+		(s.RouteProbeAttempts >= 2 && s.RouteProbeRouted == 0)
 }
 
 // lockScoredRelayRun serializes the portion of scored jobs that can call the
@@ -266,8 +280,8 @@ func requireTokenAccounting(snapshot relayHealthSnapshot, benchVersion int, runS
 	return nil
 }
 
-// requireCompleteV7Usage is unchanged in WHICH runs it fails -- the predicate
-// is still exactly efficiency.ValidUsage -- and changed only in whom it names.
+// requireCompleteV7Usage accepts efficiency.ValidUsage and the one explicitly
+// proven v9 zero-use shape. Every other incomplete interval fails closed.
 //
 // UsageUnavailable has always had two unrelated causes sharing one counter. One
 // is provider-side: a call succeeded but the provider's response carried no
@@ -287,10 +301,17 @@ func requireCompleteV7Usage(benchVersion int, usage protocol.TokenUsage, executi
 	}
 	if unusedV8ChatLane(benchVersion, usage, execution) {
 		if benchVersion == protocol.BenchVersionV9 {
-			// A complete, healthy zero-request interval is a provable agent
-			// outcome in v9. The signed model-use gate publishes zero_inference
-			// with factor zero; retrying would let the agent fish for a free run.
-			return nil
+			if execution.provesV9RouteDisposition() {
+				// The transcript commits both the discarded route challenges and
+				// the complete zero-request scored interval. The signed model-use
+				// gate can therefore publish zero_inference without confusing an
+				// adapter mismatch for an agent strategy.
+				return nil
+			}
+			return fmt.Errorf(
+				"%w: benchmark v9 zero use lacks a signed model-route proof",
+				errAgentModelUseMissing,
+			)
 		}
 		return fmt.Errorf(
 			"%w: benchmark v8 requires at least one authoritative model call",

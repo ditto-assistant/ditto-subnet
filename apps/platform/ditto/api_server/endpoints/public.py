@@ -5749,6 +5749,8 @@ def _public_transcript_telemetry(transcript: Any, *, sha256_hex: str) -> dict[st
             "caller_cancellations",
             "upstream_attempts",
             "retries",
+            "route_probe_attempts",
+            "route_probe_routed",
         )
     }
     cases: list[dict[str, Any]] = []

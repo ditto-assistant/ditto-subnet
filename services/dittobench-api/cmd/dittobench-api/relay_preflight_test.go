@@ -513,7 +513,7 @@ func TestV8RejectsACompleteUnusedChatLaneAsAgentFailure(t *testing.T) {
 	}
 }
 
-func TestV9AllowsACompleteUnusedChatLaneToReachSignedGate(t *testing.T) {
+func TestV9RequiresSignedRouteProofForACompleteUnusedChatLane(t *testing.T) {
 	unused := protocol.TokenUsage{
 		Status:            "complete",
 		AccountingVersion: 2,
@@ -521,11 +521,55 @@ func TestV9AllowsACompleteUnusedChatLaneToReachSignedGate(t *testing.T) {
 		ProfileRevision:   "openrouter-route-0123456789abcdef-v1",
 		Model:             llm.V7HarnessModel,
 	}
-	if err := requireCompleteV7Usage(protocol.BenchVersionV9, unused, relayExecutionSummary{}); err != nil {
-		t.Fatalf("v9 healthy zero use must reach signed zero-factor gate: %v", err)
+	if err := requireCompleteV7Usage(protocol.BenchVersionV9, unused, relayExecutionSummary{}); !errors.Is(err, errAgentModelUseMissing) {
+		t.Fatalf("v9 unproven zero use error = %v, want model-use sentinel", err)
 	}
 	if err := requireCompleteV7Usage(protocol.BenchVersionV8, unused, relayExecutionSummary{}); !errors.Is(err, errAgentModelUseMissing) {
 		t.Fatalf("v8 behavior changed: %v", err)
+	}
+}
+
+func TestV9SignedRouteProofDistinguishesGenuineZeroUse(t *testing.T) {
+	unused := protocol.TokenUsage{
+		Status:            "complete",
+		AccountingVersion: 2,
+		Provider:          "openrouter",
+		ProfileRevision:   "openrouter-route-0123456789abcdef-v1",
+		Model:             llm.V7HarnessModel,
+	}
+	tests := []struct {
+		name      string
+		execution relayExecutionSummary
+		wantProof bool
+	}{
+		{name: "one selector missed", execution: relayExecutionSummary{RouteProbeAttempts: 1}},
+		{name: "preferred selector routed", execution: relayExecutionSummary{RouteProbeAttempts: 1, RouteProbeRouted: 1}, wantProof: true},
+		{name: "both selectors missed", execution: relayExecutionSummary{RouteProbeAttempts: 2}, wantProof: true},
+		{name: "compatibility selector routed", execution: relayExecutionSummary{RouteProbeAttempts: 2, RouteProbeRouted: 1}, wantProof: true},
+		{name: "impossible routed count", execution: relayExecutionSummary{RouteProbeRouted: 1}},
+		{name: "routed exceeds attempts", execution: relayExecutionSummary{RouteProbeAttempts: 1, RouteProbeRouted: 2}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.execution.provesV9RouteDisposition(); got != test.wantProof {
+				t.Fatalf("provesV9RouteDisposition() = %t, want %t", got, test.wantProof)
+			}
+			err := requireCompleteV7Usage(protocol.BenchVersionV9, unused, test.execution)
+			if test.wantProof && err != nil {
+				t.Fatalf("proved v9 zero rejected: %v", err)
+			}
+			if !test.wantProof && !errors.Is(err, errAgentModelUseMissing) {
+				t.Fatalf("unproved v9 zero error = %v, want model-use sentinel", err)
+			}
+		})
+	}
+
+	if err := requireCompleteV7Usage(
+		protocol.BenchVersionV8,
+		unused,
+		relayExecutionSummary{RouteProbeAttempts: 2},
+	); !errors.Is(err, errAgentModelUseMissing) {
+		t.Fatalf("v8 zero unexpectedly accepted by v9 proof: %v", err)
 	}
 }
 
