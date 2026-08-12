@@ -5123,6 +5123,86 @@ class TestRequestJob:
             assert grant is not None
             assert grant.route_profile == profile
 
+    async def test_open_v9_rollout_never_resumes_a_live_v8_ticket(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The source era cannot bypass rollout policy through resumption.
+
+        Production had carryover disabled but a source-mode validator still
+        received v8 because this live-ticket lookup sat below every v9 lane and
+        re-issued the active-era row whenever the heartbeat called the slot
+        busy. During rollout that is never useful work: the transition requires
+        v9 quorum, while a v8 score cannot move activation forward.
+        """
+        await _seed_activated_era(session_maker, version=8)
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            dataset_version=8,
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=uuid4(),
+                    from_version=8,
+                    desired_version=9,
+                    status="collecting",
+                    cohort_size=5,
+                    rescore_cohort_target=5,
+                    priority_cohort_target=5,
+                    created_at=now,
+                )
+            )
+        await _seed_ticket(
+            session_maker,
+            agent_id,
+            bench_version=8,
+            slot_id=_SLOT_ID,
+            deadline=now + timedelta(minutes=90),
+        )
+        capabilities = _scorer_capable_capabilities(now=now, versions=(8, 9))
+        scorer = capabilities["scorer_benchmarks"]
+        assert isinstance(scorer, dict)
+        scorer.pop("v7_calibration")
+        capacity = {
+            **_ACCEPTING_CAPACITY,
+            "active": [
+                {
+                    "slot_id": _SLOT_ID,
+                    "agent_id": str(agent_id),
+                    "bench_version": 8,
+                    "progress": None,
+                }
+            ],
+        }
+        await _seed_validator_heartbeat(
+            session_maker,
+            protocol_version=18,
+            capabilities=capabilities,
+            stack=_V7_STACK,
+            benchmark_capacity=capacity,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.post(
+            "/api/v1/validator/job",
+            headers=_AUTH_HEADER,
+            json=_job_payload(slot_id=_SLOT_ID),
+        )
+
+        assert response.status_code == 204, response.text
+        async with session_maker() as session:
+            ticket = await session.get(
+                ValidatorTicket, (agent_id, 8, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.status == TicketStatus.ISSUED
+
     async def test_v9_rollout_fallback_rejects_pre_contract_scorer(
         self,
         app: FastAPI,

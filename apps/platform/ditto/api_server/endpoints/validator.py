@@ -2865,11 +2865,14 @@ async def request_job(
                 )
         else:
             ticket = None
-        if ticket is None:
-            # During an open rollout, a source-version validator may resume a
-            # source-version lease. Once activation completes, only the active
-            # benchmark era is resumable; retired tickets must never leak back
-            # into the queue ahead of the capability gate below.
+        if ticket is None and rollout is None:
+            # Resume only the active benchmark when there is no open rollout.
+            # An open rollout is an exclusive desired-era transition: the v9
+            # lanes above either issue v9 or intentionally return no work.
+            # Resuming the still-active source era here bypassed every
+            # carryover/drain control and let old v8 repairs consume slots while
+            # v9 was collecting. Existing source tickets remain in the ledger
+            # and age out naturally; they are never re-leased during rollout.
             live_ticket_statement = (
                 select(ValidatorTicket)
                 .join(Agent, Agent.agent_id == ValidatorTicket.agent_id)
@@ -2895,7 +2898,7 @@ async def request_job(
                     Agent.screened_image_upload_id.is_not(None),
                     Agent.screened_image_verified_at.is_not(None),
                 )
-            if rollout is not None and slot_running_benchmark:
+            if slot_running_benchmark:
                 ticket = await session.scalar(live_ticket_statement)
         if ticket is None:
             if rollout is None and source_backfill_rollout is not None:
