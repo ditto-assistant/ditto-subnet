@@ -743,8 +743,38 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
             ttl=timedelta(minutes=90),
         )
         assert sixth_ticket is not None and sixth_ticket.agent_id == sixth_id
-        assert await active_bench_version(session) == CANARY_BENCH_VERSION
+        assert await active_bench_version(session) == 2
         assert not await maybe_activate_rollout(session, rollout, now=now)
+
+        for validator in range(3):
+            session.add(
+                Score(
+                    agent_id=sixth_id,
+                    bench_version=CANARY_BENCH_VERSION,
+                    validator_hotkey=f"tail-validator-{validator}",
+                    run_id=f"tail-{validator}",
+                    signature="dd",
+                    seed=6,
+                    composite=0,
+                    tool_mean=0,
+                    memory_mean=0,
+                    median_ms=1,
+                    n=114,
+                    details={
+                        "bench_version": CANARY_BENCH_VERSION,
+                        "v9_base": {"semantic_gate_factor_bps": 0},
+                    },
+                    generated_at=now,
+                )
+            )
+        await session.flush()
+        assert await active_bench_version(session) == CANARY_BENCH_VERSION
+        assert await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
 
 
 async def test_source_backfill_gate_waits_for_full_inherited_top_ten(
@@ -3400,6 +3430,176 @@ async def test_v9_activation_rejects_missing_semantic_evidence(
             inference_requirements=_activation_requirements(),
         )
         assert await active_bench_version(session) == 2
+
+
+async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A completed v9 rejection cannot veto a five-agent valid emission set."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (agent_ids, rollout)):
+        failed_id = agent_ids[0]
+        failed_rows = list(
+            await session.scalars(
+                select(Score).where(
+                    Score.agent_id == failed_id,
+                    Score.bench_version == CANARY_BENCH_VERSION,
+                )
+            )
+        )
+        assert len(failed_rows) == 3
+        for score in failed_rows:
+            score.composite = 0
+            score.details = {
+                **(score.details or {}),
+                "v9_base": {"semantic_gate_factor_bps": 0},
+            }
+
+        tail_id = uuid4()
+        session.add(
+            Agent(
+                agent_id=tail_id,
+                miner_hotkey="miner-tail",
+                name="agent-tail",
+                sha256="f" * 64,
+                status=AgentStatus.SCORED,
+                screening_policy_version=9,
+                screened_image_sha256="f" * 64,
+                screened_image_size_bytes=1024,
+                screened_image_id="sha256:" + "f" * 64,
+                screened_image_ref=f"ditto-screen/{tail_id}:latest",
+                screened_image_upload_id=uuid4(),
+                screened_image_verified_at=now,
+                created_at=now + timedelta(minutes=1),
+            )
+        )
+        rollout.cohort_size = 6
+        assert await append_rollout_member(
+            session,
+            rollout=rollout,
+            member=RolloutSnapshotMember(tail_id, "miner-tail", 0.4),
+            dataset=DatasetPin(seed=6, sha256="f" * 64, run_size="full"),
+            now=now,
+        )
+        unfinished_id = uuid4()
+        session.add(
+            Agent(
+                agent_id=unfinished_id,
+                miner_hotkey="miner-unfinished",
+                name="agent-unfinished",
+                sha256="e" * 64,
+                status=AgentStatus.SCORED,
+                screening_policy_version=9,
+                screened_image_sha256="e" * 64,
+                screened_image_size_bytes=1024,
+                screened_image_id="sha256:" + "e" * 64,
+                screened_image_ref=f"ditto-screen/{unfinished_id}:latest",
+                screened_image_upload_id=uuid4(),
+                screened_image_verified_at=now,
+                created_at=now + timedelta(minutes=2),
+            )
+        )
+        rollout.cohort_size = 7
+        assert await append_rollout_member(
+            session,
+            rollout=rollout,
+            member=RolloutSnapshotMember(unfinished_id, "miner-unfinished", 0.3),
+            dataset=DatasetPin(seed=7, sha256="e" * 64, run_size="full"),
+            now=now,
+        )
+        for validator in range(3):
+            session.add(
+                Score(
+                    agent_id=tail_id,
+                    bench_version=CANARY_BENCH_VERSION,
+                    validator_hotkey=f"validator-{validator}",
+                    run_id=f"v4-tail-{validator}",
+                    signature="bb",
+                    seed=6,
+                    composite=0.6,
+                    tool_mean=0.6,
+                    memory_mean=0.6,
+                    median_ms=1,
+                    n=114,
+                    details={
+                        "bench_version": CANARY_BENCH_VERSION,
+                        "v9_base": {"semantic_gate_factor_bps": 10_000},
+                    },
+                    generated_at=now,
+                )
+            )
+        await session.flush()
+
+        assert (
+            await count_ranked_quorum_agents(
+                session,
+                bench_version=CANARY_BENCH_VERSION,
+                agent_ids={*agent_ids, tail_id},
+                require_v9_semantic_pass=True,
+            )
+            == MIN_DESIRED_AUTHORITY_AGENTS
+        )
+        # Five valid v9 agents are not enough to change the public authority
+        # while even one frozen top-15 member is unfinished.
+        assert await active_bench_version(session) == 2
+        collecting_ledger = await list_eligible_ledger(session)
+        assert collecting_ledger
+        assert {row.bench_version for row in collecting_ledger if row.eligible} == {2}
+        assert not await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+
+        # Completing the last member with a legitimate semantic failure closes
+        # the frozen-cohort boundary without requiring that failure to rank.
+        for validator in range(3):
+            session.add(
+                Score(
+                    agent_id=unfinished_id,
+                    bench_version=CANARY_BENCH_VERSION,
+                    validator_hotkey=f"validator-{validator}",
+                    run_id=f"v4-unfinished-{validator}",
+                    signature="cc",
+                    seed=7,
+                    composite=0,
+                    tool_mean=0,
+                    memory_mean=0,
+                    median_ms=1,
+                    n=114,
+                    details={
+                        "bench_version": CANARY_BENCH_VERSION,
+                        "v9_base": {"semantic_gate_factor_bps": 0},
+                    },
+                    generated_at=now,
+                )
+            )
+        await session.flush()
+
+        assert await active_bench_version(session) == CANARY_BENCH_VERSION
+
+        ledger = await list_eligible_ledger(session)
+        assert {row.agent_id for row in ledger} == {
+            *agent_ids,
+            tail_id,
+            unfinished_id,
+        }
+        assert {row.bench_version for row in ledger} == {CANARY_BENCH_VERSION}
+        by_agent = {row.agent_id: row for row in ledger}
+        assert not by_agent[failed_id].eligible
+        assert not by_agent[unfinished_id].eligible
+        assert sum(row.eligible for row in ledger) == MIN_DESIRED_AUTHORITY_AGENTS
+
+        assert await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert rollout.status == "activated"
 
 
 async def test_activation_recovers_legacy_cohort_with_linked_priority_family(

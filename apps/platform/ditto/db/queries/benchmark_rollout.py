@@ -637,23 +637,11 @@ async def append_rollout_member(
 async def active_bench_version(session: AsyncSession) -> int:
     open_transition = await open_rollout(session)
     if open_transition is not None:
-        from ditto.db.queries.scores import (
-            count_ranked_quorum_agents,
-            ranked_quorum_agent_ids,
-        )
+        from ditto.db.queries.scores import count_ranked_quorum_agents
 
         # The gate width is the target this rollout FROZE at start, not the live
         # operator setting: re-gating a transition already in flight would move
         # its finish line underneath the validators scoring it.
-        priority_target = open_transition.priority_cohort_target
-        priority_ids = set(
-            await session.scalars(
-                select(BenchmarkRolloutMember.agent_id).where(
-                    BenchmarkRolloutMember.rollout_id == open_transition.rollout_id,
-                    BenchmarkRolloutMember.position <= priority_target,
-                )
-            )
-        )
         member_ids = set(
             await session.scalars(
                 select(BenchmarkRolloutMember.agent_id).where(
@@ -661,11 +649,10 @@ async def active_bench_version(session: AsyncSession) -> int:
                 )
             )
         )
-        ranked_priority_ids = await ranked_quorum_agent_ids(
+        cohort_complete = await rollout_cohort_score_complete(
             session,
-            bench_version=open_transition.desired_version,
-            agent_ids=priority_ids,
-            require_v9_semantic_pass=open_transition.desired_version == 9,
+            rollout=open_transition,
+            cohort_size=open_transition.cohort_size,
         )
         ready = await count_ranked_quorum_agents(
             session,
@@ -676,10 +663,11 @@ async def active_bench_version(session: AsyncSession) -> int:
         # MIN_DESIRED_AUTHORITY_AGENTS stays a constant on purpose. It is the
         # KOTH emission-set size, so it is a consensus quantity, not queue
         # policy: below it the ledger flip would have fewer recipients than the
-        # emission split expects. The priority target above is the tunable half.
+        # emission split expects. The full frozen cohort must also finish so the
+        # public leaderboard and durable rollout status share one finish line.
         if (
-            len(priority_ids) == priority_target
-            and ranked_priority_ids == priority_ids
+            len(member_ids) == open_transition.cohort_size
+            and cohort_complete
             and ready >= MIN_DESIRED_AUTHORITY_AGENTS
         ):
             if (
@@ -1866,28 +1854,19 @@ async def maybe_activate_rollout(
     # version unconditionally, and that threshold is bypassed entirely — an agent
     # without desired-version scores simply drops out.
     #
-    # The raw counts above do not imply rankability: a smoke-profile 3/3 can
-    # satisfy them without ever being eligible for weights. Require every
-    # frozen cohort member to hold a ranked quorum before closing the rollout.
-    from ditto.db.queries.scores import (
-        count_ranked_quorum_agents,
-        ranked_quorum_agent_ids,
-    )
+    # A completed member may legitimately score zero under the new contract;
+    # that result must not deadlock the transition. The raw counts above prove
+    # that every frozen member finished, while this independent threshold
+    # proves that the desired ledger still has a full semantic-pass emission
+    # set before authority becomes durable.
+    from ditto.db.queries.scores import count_ranked_quorum_agents
 
-    ranked_member_ids = await ranked_quorum_agent_ids(
-        session,
-        bench_version=rollout.desired_version,
-        agent_ids=member_ids,
-        require_v9_semantic_pass=rollout.desired_version == 9,
-    )
     ranked_cohort_agents = await count_ranked_quorum_agents(
         session,
         bench_version=rollout.desired_version,
         agent_ids=member_ids,
         require_v9_semantic_pass=rollout.desired_version == 9,
     )
-    if ranked_member_ids != member_ids:
-        return False
     if ranked_cohort_agents < MIN_DESIRED_AUTHORITY_AGENTS:
         return False
     if not await inference_activation_ready(

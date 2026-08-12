@@ -903,21 +903,14 @@ class TestCrownFirstSeen:
         assert row.eligible is True
         assert row.crown_first_seen == later
 
-    async def test_an_ancestor_on_another_benchmark_version_confers_no_seniority(
+    async def test_target_only_agent_waits_for_frozen_rollout_completion(
         self, session: AsyncSession
     ) -> None:
-        """Two eras are two scales, and a lineage cannot cross between them.
-
-        Mid-rollout the pool really can hold both: an agent with a source-era
-        quorum stays authoritative there while one that has only ever been scored
-        on the target era resolves to the target era. A 0.898 that meant
-        "runner-up" under the old benchmark must not backdate a 0.90 earned under
-        gates the old benchmark never applied.
-        """
+        """Desired-only scores remain progress until the frozen cohort finishes."""
         first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
         later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
         await _open_rollout(session)
-        await _seed_scored(
+        ancestor = await _seed_scored(
             session,
             miner=_MINER,
             composite=_WITHIN_BAND,
@@ -954,9 +947,9 @@ class TestCrownFirstSeen:
 
         (row,) = await list_eligible_ledger(session)
 
-        assert row.agent_id == winner.agent_id
-        assert row.bench_version == _ROLLOUT_DESIRED
-        assert row.crown_first_seen == later
+        assert row.agent_id == ancestor.agent_id
+        assert row.bench_version == _BENCH_VERSION
+        assert row.crown_first_seen == first
 
     async def test_a_lone_submission_anchors_on_itself(
         self, session: AsyncSession
