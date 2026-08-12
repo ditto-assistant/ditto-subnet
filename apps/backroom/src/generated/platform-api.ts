@@ -8319,6 +8319,23 @@ export interface components {
         /**
          * DeferredSourceReviewSettings
          * @description Hot-swappable post-score deep-review admission and anomaly policy.
+         *
+         *     This board decides *when* the expensive source review runs, not whether
+         *     source integrity is checked at all. Every mode reviews every submission; they
+         *     differ in whether the review happens before scoring (automatic, by a
+         *     screener) or after it (as an operator-adjudicated hold).
+         *
+         *     SCOPE -- source integrity only
+         *     ==============================
+         *
+         *     Nothing on this board touches **copy/plagiarism** enforcement. Copy holds
+         *     (``review_kind: "copy"``) are opened from the duplicate-signal decision at
+         *     score finalization, which never reads this board, runs *before* the deferred
+         *     path, and wins outright: a copy hold moves the agent to
+         *     ``ATH_PENDING_REVIEW``, and the deferred path only acts on agents still in
+         *     ``SCORED``/``LIVE``. Setting ``mode="off"`` disables the deferred
+         *     source-integrity branch and **leaves plagiarism detection fully armed**.
+         *     The same is true of the transform/overfit audit, which has its own switch.
          */
         DeferredSourceReviewSettings: {
             /**
