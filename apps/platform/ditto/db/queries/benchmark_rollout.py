@@ -99,15 +99,14 @@ DEFAULT_RESCORE_COHORT_SIZE = 10
 # created by an older deployment still finishes without member deletion.
 MAX_PERSISTED_RESCORE_COHORT_SIZE = 25
 SCORING_QUORUM = 3
-# Bench v9 requires the settled per-case model-attribution boundary shipped in
-# v0.53.2. v0.53.1 can publish the authoritative enforce contract, but a
-# harness response may finish just before the broker records its final upstream
-# bytes. That race produces trusted aggregate usage with zero attributed cases
-# and incorrectly gates the score to zero. Leasing replacement v9 work to one
-# of those scorers would reproduce the incident. This is a semantic capability
-# floor, not the active release version: v8 remains compatible and every later
-# scorer release continues to satisfy it.
-_V9_MINIMUM_SCORER_VERSION = (0, 53, 2)
+# Bench v9 requires the complete per-case model-attribution boundary shipped in
+# v0.53.5. v0.53.2 waits for a short broker tail, but still accepts incomplete
+# attribution as a zero-factor score when a legitimate provider terminal frame
+# takes longer than that bound. Leasing replacement v9 work to v0.53.2-v0.53.4
+# would reproduce the incident. This is a semantic capability floor, not the
+# active release version: v8 remains compatible and every later scorer release
+# continues to satisfy it.
+_V9_MINIMUM_SCORER_VERSION = (0, 53, 5)
 # How many agents must hold a COMPLETE, ranked desired-version quorum before
 # the desired version may take over. Two gates enforce it against the same count
 # (``ditto.db.queries.scores.count_ranked_quorum_agents``): the ledger's
