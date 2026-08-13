@@ -43,6 +43,8 @@ import {
   reinstateValidationInputSchema,
   validatorScoreReplacementLookupInputSchema,
   replaceValidatorScoreInputSchema,
+  queueValidatorScoreRetestsInputSchema,
+  v9ContractRetestFiltersSchema,
   refreshBenchmarkContractInputSchema,
   screenedImageRebuildLookupInputSchema,
   rebuildScreenedImageInputSchema,
@@ -118,6 +120,8 @@ import {
   reinstateValidation,
   fetchValidatorScoreReplacement,
   replaceValidatorScore,
+  fetchV9ContractRetests,
+  queueValidatorScoreRetests,
   fetchAgentScores,
   fetchAgentScoreHistory,
   fetchScoreLeaderboard,
@@ -176,6 +180,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'reinstate_evicted_submission_to_queue',
   'batch_retry_validator_evaluation',
   'replace_validator_score',
+  'queue_validator_score_retests',
   'refresh_benchmark_contract',
   'rebuild_screened_image',
   'migrate_zero_score_benchmark_contract',
@@ -1075,6 +1080,23 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'list_v9_contract_retests',
+    {
+      title: 'List accepted v9 scores needing contract re-tests',
+      description:
+        'List exact v9 contract mismatches, accepted runs, snapshots, ticket states, and queue blockers. Read-only.',
+      inputSchema: v9ContractRetestFiltersSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      result(
+        compacted(await fetchV9ContractRetests(input), {
+          items: { pin: ['agent_id', 'validator_hotkey', 'run_id'] },
+        }),
+      ),
+  )
+
+  registerTool(
     'agent_scoring_readiness',
     {
       title: 'Inspect agent scoring readiness',
@@ -1529,6 +1551,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => replaceValidatorScore(input, props.session.email)),
+  )
+
+  registerTool(
+    'queue_validator_score_retests',
+    {
+      title: 'Queue same-validator score re-tests',
+      description:
+        'Queue guarded same-validator v9 repairs without displacing live work or changing accepted scores.',
+      inputSchema: queueValidatorScoreRetestsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => queueValidatorScoreRetests(input, props.session.email)),
   )
 
   registerTool(

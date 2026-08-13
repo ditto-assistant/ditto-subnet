@@ -499,7 +499,26 @@ async def activate_next_score_retest(
         stale_reason = None
         if not _agent_retestable(agent, entry):
             stale_reason = "submission is no longer scoreable for this re-test"
-        elif ticket is None or ticket.status != TicketStatus.SCORED:
+        elif ticket is None:
+            stale_reason = "accepted score ticket is no longer reusable"
+        elif (
+            ticket.status == TicketStatus.ISSUED
+            and entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
+        ):
+            # Continual evidence reuses the same (agent, version, validator)
+            # ticket row as the accepted canonical score. A contract repair
+            # queued while that work is live must wait for the lease instead
+            # of closing merely because the mutable row no longer says
+            # ``scored``. The accepted score and exact run below remain the
+            # authority for whether this repair is still valid.
+            continue
+        elif (
+            ticket.status != TicketStatus.SCORED
+            and not (
+                ticket.status == TicketStatus.EXPIRED
+                and entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
+            )
+        ):
             stale_reason = "accepted score ticket is no longer reusable"
         elif score is None or score.run_id != entry.payload.get("run_id"):
             stale_reason = "accepted score changed while the request was queued"

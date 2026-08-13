@@ -113,6 +113,7 @@ describe('Backroom MCP tools', () => {
         'get_score_history',
         'get_screened_image_rebuild',
         'get_validator_score_replacement',
+        'list_v9_contract_retests',
         'open_ath_review',
         'preview_screening_quarantine_batch',
         'list_screening_quarantines',
@@ -136,6 +137,7 @@ describe('Backroom MCP tools', () => {
         'retry_failed_screening_now',
         'retry_validator_evaluation',
         'replace_validator_score',
+        'queue_validator_score_retests',
         'set_inference_concurrency_settings',
         'set_source_release_policy',
         'set_submission_cooldown',
@@ -1030,6 +1032,104 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenLastCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/validators/${validatorHotkey}/replace-score`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('previews and queues exact v9 contract repairs through MCP', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const validatorHotkey = '5Validator'
+    const snapshot = 'ab'.repeat(32)
+    const runId = 'run-shadow'
+    const preview = {
+      items: [{
+        agent_id: agentId,
+        agent_name: 'white-bolt',
+        miner_hotkey: '5Miner',
+        agent_status: 'scored',
+        validator_hotkey: validatorHotkey,
+        run_id: runId,
+        composite: 0.99,
+        snapshot,
+        observed_revision: 'v9-base-shadow-calibration-v1',
+        observed_manifest_sha256: 'cd'.repeat(32),
+        observed_rollout_mode: 'shadow',
+        semantic_gate_factor_bps: 0,
+        ticket_status: 'expired',
+        replacement_pending: false,
+        replacement_queued: false,
+        queue_position: null,
+        queue_allowed: true,
+        queue_blocking_reason: null,
+      }],
+      count: 1,
+      limit: 100,
+      offset: 0,
+      required_revision: 'v9-base-enforce-efficiency-v1',
+      required_manifest_sha256: 'ef'.repeat(32),
+      required_rollout_mode: 'enforce',
+    }
+    const queued = {
+      validator_hotkey: validatorHotkey,
+      activated: 0,
+      queued: 1,
+      idempotent: 0,
+      skipped: 0,
+      results: [{
+        agent_id: agentId,
+        request_id: '11111111-1111-4111-8111-111111111111',
+        status: 'queued',
+        detail: null,
+        queue_position: 1,
+      }],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(preview))
+      .mockResolvedValueOnce(Response.json(queued))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const inspection = await client.callTool({
+      name: 'list_v9_contract_retests',
+      arguments: { limit: 100, offset: 0 },
+    })
+    expect(inspection.isError).not.toBe(true)
+
+    const queue = await client.callTool({
+      name: 'queue_validator_score_retests',
+      arguments: {
+        validatorHotkey,
+        basis: 'v9_contract_mismatch',
+        confirmation: 'QUEUE V9 CONTRACT RETESTS',
+        reason: 'Restore authoritative v9 evidence after continual ticket reuse',
+        items: [{
+          agentId,
+          expectedSnapshot: snapshot,
+          expectedRunId: runId,
+        }],
+      },
+    })
+    expect(queue.isError).not.toBe(true)
+    expect(readJsonResult(queue)).toMatchObject({ queued: 1, skipped: 0 })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/v9-contract-retests?limit=100&offset=0',
+      expect.any(Object),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/validators/${validatorHotkey}/queue-score-retests`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),

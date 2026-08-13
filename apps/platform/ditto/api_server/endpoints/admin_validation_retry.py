@@ -1396,8 +1396,8 @@ def _contract_retest_queue_gate(
         return "accepted score already uses the authoritative v9 contract"
     if replacement_open:
         return "replacement score is already queued or pending"
-    if ticket is None or ticket.status != TicketStatus.SCORED:
-        return "accepted score is not backed by a consumed validator ticket"
+    if ticket is None:
+        return "accepted score has no validator ticket to reuse"
     return None
 
 
@@ -1924,6 +1924,7 @@ async def queue_validator_score_retests(
                 preliminary[item.agent_id] = ("skipped", reason)
                 continue
             assert target is not None
+            assert ticket is not None
             audit_payload: dict[str, object] = {
                 "request_id": str(item.request_id),
                 "actor": actor,
@@ -1939,6 +1940,7 @@ async def queue_validator_score_retests(
                 audit_payload.update(
                     {
                         "basis": payload.basis,
+                        "queued_ticket_status": ticket.status.value,
                         "required_v9_contract": {
                             "revision": V9_SCORE_CONTRACT_REVISION,
                             "manifest_sha256": V9_SCORE_CONTRACT_MANIFEST_SHA256,

@@ -2163,6 +2163,98 @@ async def test_v9_contract_retest_requires_typed_confirmation_and_current_snapsh
     assert "state changed" in stale.json()["results"][0]["detail"]
 
 
+async def test_v9_contract_retest_waits_for_reused_continual_ticket_then_reclaims_it(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A mutable continual ticket must not erase accepted-score repair intent."""
+    agent_id = await _seed(
+        retry_maker,
+        score_count=1,
+        bench_version=9,
+        ticket_count=1,
+    )
+    await _set_v9_score_contract(
+        retry_maker,
+        agent_id=agent_id,
+        revision="v9-base-shadow-calibration-v1",
+        manifest_sha256="5" * 64,
+        rollout_mode="shadow",
+    )
+    async with retry_maker() as session, session.begin():
+        ticket = await session.get(
+            ValidatorTicket,
+            (agent_id, 9, "validator-0"),
+        )
+        assert ticket is not None
+        ticket.status = TicketStatus.ISSUED
+        ticket.purpose = TicketPurpose.CONTINUAL_RETEST
+        ticket.purpose_revision += 1
+        ticket.issued_at = datetime.now(UTC)
+        ticket.deadline = datetime.now(UTC) + timedelta(minutes=90)
+    _install(app, retry_maker)
+
+    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    [item] = preview.json()["items"]
+    assert item["ticket_status"] == "issued"
+    assert item["queue_allowed"] is True
+
+    queued = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json={
+            "basis": "v9_contract_mismatch",
+            "confirmation": "QUEUE V9 CONTRACT RETESTS",
+            "reason": "Restore authoritative v9 evidence after continual ticket reuse",
+            "items": [
+                {
+                    "agent_id": str(agent_id),
+                    "request_id": str(uuid4()),
+                    "expected_snapshot": item["snapshot"],
+                    "expected_run_id": item["run_id"],
+                }
+            ],
+        },
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["queued"] == 1
+    assert queued.json()["activated"] == 0
+
+    async with retry_maker() as session, session.begin():
+        ticket = await session.get(
+            ValidatorTicket,
+            (agent_id, 9, "validator-0"),
+            with_for_update=True,
+        )
+        assert ticket is not None
+        ticket.status = TicketStatus.EXPIRED
+        ticket.retry_after = ticket.deadline + timedelta(hours=6)
+        promoted = await activate_next_score_retest(
+            session,
+            validator_hotkey="validator-0",
+            now=datetime.now(UTC),
+            supports_version=lambda version: version == 9,
+        )
+        assert promoted is not None
+        assert promoted.agent_id == agent_id
+        assert promoted.status == TicketStatus.ISSUED
+        assert promoted.purpose == TicketPurpose.CANONICAL_QUORUM
+        lifecycle = await session.scalar(
+            select(ScoreAuditEntry)
+            .where(
+                ScoreAuditEntry.agent_id == agent_id,
+                ScoreAuditEntry.validator_hotkey == "validator-0",
+                ScoreAuditEntry.event == EVENT_SCORE_RETEST_REQUESTED,
+            )
+            .order_by(ScoreAuditEntry.seq.desc())
+        )
+        assert lifecycle is not None
+        assert lifecycle.payload["basis"] == "v9_contract_mismatch"
+        assert lifecycle.payload["queued_ticket_status"] == "issued"
+
+
 async def test_v9_contract_retest_ignores_expired_v8_work_history(
     app: FastAPI,
     client: httpx.AsyncClient,
