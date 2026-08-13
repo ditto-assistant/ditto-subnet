@@ -77,6 +77,27 @@ catalog is loaded into model context before any call, and the test bounds both
 the total and the per-description length. Long-form operational notes belong in
 the `description` field, which `get_backroom_tool_help` serves on demand.
 
+## Paging
+
+A paged tool answers with `count` (the upstream total), `returned` (rows in this
+response), `limit`, `offset`, and `has_more`. `has_more` is the only field that
+reports MCP paging. An upstream `truncated` flag is a different fact: the
+platform stopped short of a complete answer — paths it dropped before paging, or
+a scan that hit its own match cap — so no later offset recovers what it covers,
+and any total it accompanies is a lower bound. The two are not interchangeable,
+and neither one substitutes for the other.
+
+Where the window is resolved differs by tool. `search_screening_source` pages on
+the platform, which holds the whole ordered match list, so the Worker must not
+re-slice a window it never had. A collection the platform returns whole is paged
+here by `paginateLocalCollection`, which is what emits `returned` and `has_more`.
+
+Default page sizes are bounded so one call cannot flood model context, but a
+manifest an operator reads to decide *what exists* — today
+`list_screening_source_files` — defaults to the platform's whole listing rather
+than a page, because a row silently missing from page one is evidence the
+reviewer never learns to ask for. `mcp.server.test.ts` pins each tool's bound.
+
 ## The review queue
 
 `get_screening_review_queue` is the operator queue: unresolved `ath_reviews`
@@ -110,9 +131,8 @@ mistake:
    400-line windows: six to eight reads per agent, repeatedly.
 3. `read_screening_source_file` — the excerpt, once you have a line number.
 
-Search paging happens on the platform, which holds the whole ordered match
-list; the Worker must not re-slice a window it never had. `has_more` reports the
-page boundary, while `truncated` reports that the *scan* stopped at its own
-match cap, so the totals are lower bounds. `opaque_skipped` counts the members
-no search can reach — a `.onnx` or `.bin` weights file is never searched, and a
-search that never opened one cannot clear it.
+Both reads page under the rules above: the search `truncated` is the scan
+hitting its own match cap, and the manifest returns whole by default so no path
+hides behind an offset. `opaque_skipped` counts the members no search can
+reach — a `.onnx` or `.bin` weights file is never searched, and a search that
+never opened one cannot clear it.

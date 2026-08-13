@@ -605,19 +605,27 @@ describe('Backroom MCP tools', () => {
   it('publishes bounded pagination inputs for every MCP collection page', async () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     const response = await client.listTools()
-    const paginatedTools = [
-      'get_screening_review_queue',
-      'list_screening_quarantines',
-      'list_screening_disputes',
-      'list_screening_source_files',
-      'list_screening_submissions',
-      'search_screening_source',
-      'list_stuck_submissions',
-      'list_lease_revocations',
-      'get_leaderboard',
-    ]
+    // Page sizes are bounded so one call cannot flood model context. The
+    // source manifest is the deliberate exception: its rows are a path and a
+    // byte count, and a row silently left off page one is a file the operator
+    // never learns exists, which is a worse failure than the context a whole
+    // 512-row manifest costs. Its bound is the platform's own listing cap.
+    const paginatedTools: Record<
+      string,
+      { maxLimit: number; maxDefault: number }
+    > = {
+      get_screening_review_queue: { maxLimit: 200, maxDefault: 50 },
+      list_screening_quarantines: { maxLimit: 200, maxDefault: 50 },
+      list_screening_disputes: { maxLimit: 200, maxDefault: 50 },
+      list_screening_source_files: { maxLimit: 512, maxDefault: 512 },
+      list_screening_submissions: { maxLimit: 200, maxDefault: 50 },
+      search_screening_source: { maxLimit: 200, maxDefault: 50 },
+      list_stuck_submissions: { maxLimit: 200, maxDefault: 50 },
+      list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
+      get_leaderboard: { maxLimit: 200, maxDefault: 50 },
+    }
 
-    for (const name of paginatedTools) {
+    for (const [name, bounds] of Object.entries(paginatedTools)) {
       const tool = response.tools.find((candidate) => candidate.name === name)
       const properties = tool?.inputSchema?.properties as
         | Record<
@@ -634,8 +642,13 @@ describe('Backroom MCP tools', () => {
       expect(properties?.limit, `${name} must publish a limit`).toMatchObject({
         minimum: 1,
       })
-      expect(properties?.limit?.maximum, `${name} must cap its page size`).toBeLessThanOrEqual(200)
-      expect(properties?.limit?.default, `${name} must default to a context-safe page`).toBeLessThanOrEqual(50)
+      expect(properties?.limit?.maximum, `${name} must cap its page size`).toBeLessThanOrEqual(
+        bounds.maxLimit,
+      )
+      expect(
+        properties?.limit?.default,
+        `${name} must default to a context-safe page`,
+      ).toBeLessThanOrEqual(bounds.maxDefault)
       expect(properties?.offset, `${name} must publish an offset`).toMatchObject({
         minimum: 0,
         default: 0,
@@ -3511,8 +3524,10 @@ describe('Backroom MCP tools', () => {
       files: [{ path: 'src/b.rs', bytes: 20 }],
       opaque_blobs: [{ path: 'assets/model.bin' }],
       count: 3,
+      returned: 1,
       limit: 1,
       offset: 1,
+      has_more: true,
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/source-files`,
@@ -3655,6 +3670,94 @@ describe('Backroom MCP tools', () => {
       expect.stringContaining('mode=literal&ignore_case=false&context=0&limit=1&offset=3'),
       expect.anything(),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  // Regression: the manifest is the reviewer's map of what exists inside a
+  // submission, and it used to default to 50 rows. A 51-file agent answered
+  // with count=51, truncated=false and 50 rows, so the one hidden module was
+  // invisible to an operator who never guessed to pass an offset — an
+  // adjudication could be made without knowing the file existed at all.
+  it('returns whole source-file manifests past the old 50-row page by default', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '98d56bdf-3ef9-4fa1-8d1a-6c07234ecaf1'
+    const files = Array.from({ length: 51 }, (_, index) => ({
+      path: `src/module_${String(index).padStart(2, '0')}.rs`,
+      bytes: 100 + index,
+    }))
+    files[files.length - 1] = { path: 'src/world_bind.rs', bytes: 55_529 }
+    // A fresh Response per call: the body of one is consumed by the first read.
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      Response.json({
+        agent_id: agentId,
+        artifact_sha256: 'cd'.repeat(32),
+        file_count: 51,
+        files,
+        opaque_blobs: [],
+        opaque_total: 0,
+        truncated: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_ARTIFACT_SCOPE,
+    ])
+
+    const whole = await client.callTool({
+      name: 'list_screening_source_files',
+      arguments: { agentId },
+    })
+    expect(whole.isError).not.toBe(true)
+    const manifest = readJsonResult(whole) as {
+      count: number
+      returned: number
+      has_more: boolean
+      files: { path: string }[]
+    }
+    expect(manifest).toMatchObject({
+      file_count: 51,
+      count: 51,
+      returned: 51,
+      offset: 0,
+      has_more: false,
+    })
+    expect(manifest.files).toHaveLength(51)
+    expect(manifest.files.map((file) => file.path)).toContain('src/world_bind.rs')
+
+    // Paging still works, and a window that drops rows says so on its face:
+    // has_more, not count, is what tells a reviewer to keep reading.
+    const page = await client.callTool({
+      name: 'list_screening_source_files',
+      arguments: { agentId, limit: 50 },
+    })
+    expect(page.isError).not.toBe(true)
+    const firstPage = readJsonResult(page) as { files: { path: string }[] }
+    expect(firstPage).toMatchObject({
+      file_count: 51,
+      count: 51,
+      returned: 50,
+      limit: 50,
+      offset: 0,
+      has_more: true,
+      truncated: false,
+    })
+    expect(firstPage.files).toHaveLength(50)
+
+    const tail = await client.callTool({
+      name: 'list_screening_source_files',
+      arguments: { agentId, limit: 50, offset: 50 },
+    })
+    expect(tail.isError).not.toBe(true)
+    expect(readJsonResult(tail)).toMatchObject({
+      count: 51,
+      returned: 1,
+      offset: 50,
+      has_more: false,
+      files: [{ path: 'src/world_bind.rs', bytes: 55_529 }],
+    })
 
     await client.close()
     await server.close()

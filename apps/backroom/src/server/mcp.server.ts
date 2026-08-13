@@ -243,6 +243,17 @@ const MCP_PAGINATION_INPUT = {
   offset: z.number().int().min(0).default(0),
 }
 
+// The platform caps a source listing at 512 rows (MAX_LISTING_FILES), so a
+// default of that size returns every path the platform was willing to hand
+// over. A source manifest is the reviewer's map of what exists inside a
+// submission: paging it by default hid whole modules behind an offset nobody
+// had a reason to pass, so the manifest defaults to whole and pages only when
+// the caller explicitly asks for a window.
+const MCP_SOURCE_MANIFEST_PAGINATION_INPUT = {
+  limit: z.number().int().min(1).max(512).default(512),
+  offset: z.number().int().min(0).default(0),
+}
+
 // The current control state is what operators need for nearly every settings
 // read. Revision history is audit context, so keep it opt-in and bounded rather
 // than charging every call for an append-only log.
@@ -302,18 +313,27 @@ function withPagination<T extends Record<string, unknown>>(
 // Some upstream admin reads still return one complete (or server-capped)
 // collection. Keep those transport contracts intact while ensuring the MCP
 // result only places one deterministic window into model context.
+//
+// `count` stays the upstream total, matching every other paged tool here, so
+// `returned` and `has_more` describe THIS window. Without them a window that
+// drops rows reads as a complete answer: an operator reviewing a source
+// manifest cannot audit a file it never learned exists, and an upstream
+// `truncated` flag reports platform-side omission, never MCP paging.
 function paginateLocalCollection<
   T extends Record<string, unknown>,
   K extends keyof T,
 >(value: T, key: K, limit: number, offset: number) {
   const collection = value[key]
   if (!Array.isArray(collection)) return withPagination(value, limit, offset)
+  const page = collection.slice(offset, offset + limit)
   return {
     ...value,
     count: collection.length,
+    returned: page.length,
     limit,
     offset,
-    [key]: collection.slice(offset, offset + limit),
+    has_more: offset + page.length < collection.length,
+    [key]: page,
   }
 }
 
@@ -396,6 +416,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Retry a bounded set of exhausted validator evaluations after verified infrastructure failure. Requires exact decisions and concurrency snapshots; preserves scores, artifacts, payments, and history. Returns independent per-item outcomes for safe retry.',
   get_screening_baseline_diff:
     'Compare miner-authored residual source against the platform starter-kit baseline. Stock detection is platform-owned; use the file reader for full sanitized bodies. Requires artifact scope.',
+  list_screening_source_files:
+    'Read the readable file manifest for one quarantined submission tarball in archive order. The default limit is the platform listing cap, so a default call returns the WHOLE manifest and pages only when you pass a smaller limit. count is the pageable total and returned is this response; has_more is the only field reporting MCP paging, while truncated reports paths the platform dropped before paging, which no offset recovers. NEVER treat a manifest with has_more or truncated set as the complete inventory of a submission. Requires artifact scope.',
   get_efficiency_bonus_settings:
     'Read effective efficiency-bonus scoring policy, fold state, seed default, and optional newest-first revision history. This is subnet scoring policy; Ditto app entitlement flags are not served by this server. historyLimit defaults to 0.',
   get_leaderboard:
@@ -602,8 +624,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List screening source files',
       description:
-        'Page through the readable file manifest for one quarantined submission tarball in deterministic archive order. `count` is the number of readable file rows the platform made available to page, while `file_count` remains the platform\'s total archive-file count. `truncated` means the platform omitted paths before MCP paging, so no later offset can recover them. Unreadable binary or oversized `opaque_blobs` metadata remains whole on every page because it is separate review evidence. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
-      inputSchema: { agentId: z.string().uuid(), ...MCP_PAGINATION_INPUT },
+        'Read the readable file manifest for one quarantined submission tarball in deterministic archive order. The default limit is the platform\'s own listing cap, so the default call returns the WHOLE manifest and pages only when you pass a smaller limit. ' +
+        '`count` is the number of readable file rows the platform made available to page and `file_count` remains the platform\'s total archive-file count, so read `returned` for the rows in this response and `has_more` for whether a later offset holds paths this response does not. `has_more` is the only field that reports MCP paging: `truncated` means the platform omitted paths before MCP paging, so no later offset can recover them. Never treat a manifest with `has_more` or `truncated` set as the complete inventory of a submission. ' +
+        'Unreadable binary or oversized `opaque_blobs` metadata remains whole on every page because it is separate review evidence. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+      inputSchema: {
+        agentId: z.string().uuid(),
+        ...MCP_SOURCE_MANIFEST_PAGINATION_INPUT,
+      },
       annotations: toolAnnotations('read'),
     },
     async ({ limit, offset, ...input }) =>
@@ -970,7 +997,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List stuck SN118 submissions',
       description:
-        'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. Returns count, limit, offset, per-state counts across the full filtered platform response, and one page of submissions with accepted-score count, retry state, cooldown/budget flags, blocking reason, exhausted-validator count, and the opaque concurrency snapshot a retry needs. detail=summary (the default) reports the tickets of each returned submission as per-status counts; detail=full returns its complete per-validator ticket history — including failure_reason and failure_detail on expired tickets. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
+        'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. Returns count (the full filtered total), returned (rows in this response), limit, offset, has_more, per-state counts across the full filtered platform response, and one page of submissions with accepted-score count, retry state, cooldown/budget flags, blocking reason, exhausted-validator count, and the opaque concurrency snapshot a retry needs. detail=summary (the default) reports the tickets of each returned submission as per-status counts; detail=full returns its complete per-validator ticket history — including failure_reason and failure_detail on expired tickets. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
         'Rows stay in platform triage priority order (retry state, earliest retry time, then agent ID), not newest-first. Each row is already scoped by the platform to that submission\'s current applicable work era: live or expired ticket version first, then latest score version, then the active benchmark fallback. A global active-bench filter would hide valid desired-version rollout work. ' +
         'Read silent_expiry_count first: it counts tickets that ran their whole lease and reported nothing about that attempt. A submission whose silent_expiry_count climbs while score_count stays at zero is hanging, not merely slow — and because a reported failure and a silent expiry both land as an expired ticket with a rewritten deadline, that count is the only thing in this feed that tells them apart. In detail=full, each ticket carries silently_expired, failure_reason, failed_at, slot_id, and infra_retry_grants. infra_retry_grants above zero means the platform has been minting no-fault grants for this ticket and re-leasing it: a validator reporting fail_job(reason="infrastructure") every attempt raises the cap forever, which looks identical to a validator that has gone silent unless you read this field. ' +
         'silent_expiry_count and silently_expired read null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "zero". Requires backroom:read and exposes no miner source.',
