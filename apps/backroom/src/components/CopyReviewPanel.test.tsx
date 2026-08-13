@@ -31,6 +31,7 @@ function item(overrides: Partial<CopyReviewConsoleItem> = {}): CopyReviewConsole
     agent_version: 2,
     submitted_at: '2026-07-15T12:00:00Z',
     status: 'pending',
+    agent_status: 'ath_pending_review',
     opened_at: '2026-07-15T13:00:00Z',
     resolved_at: null,
     resolved_by: null,

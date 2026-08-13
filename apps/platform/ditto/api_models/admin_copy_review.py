@@ -118,6 +118,18 @@ class AdminCopyReviewItem(BaseModel):
     agent_version: int | None = None
     submitted_at: datetime
     status: Literal["pending", "resolved"]
+    agent_status: str | None = None
+    """Live ``agents.status`` for the held agent, carried on every row.
+
+    A review's ``status`` and its agent's status are separate columns kept in
+    step only by code discipline, and several paths can move the agent while
+    leaving the review ``pending`` -- so a pending row reading ``scored`` here
+    is a stranded hold, not a queue entry, and the difference decides whether
+    ``resolve`` will even be accepted. Carrying it means an operator never has
+    to reconcile a queue listing against a second per-agent lookup. Nullable
+    only for wire compatibility with consumers that predate the field.
+    """
+
     opened_at: datetime
     resolved_at: datetime | None = None
     resolved_by: str | None = None
@@ -137,6 +149,11 @@ class AdminCopyReviewList(BaseModel):
     count: int
     limit: int
     offset: int
+    review_kind: (
+        Literal["copy", "benchmark_overfit", "deferred_source_review"] | None
+    ) = None
+    """Echo of the applied ``review_kind`` filter; ``None`` means every kind."""
+
     generation: Literal["active", "rollout", "history", "all"]
     active_bench_version: int = Field(ge=1)
     rollout_bench_version: int | None = Field(default=None, ge=1)

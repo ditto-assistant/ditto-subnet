@@ -4,6 +4,7 @@ import type { operations as PlatformOperations } from '../generated/platform-api
 
 import {
   athReviewAuditSchema,
+  athReviewQueueInputSchema,
   copyReviewConsoleListSchema,
   copyReviewCurrentComparisonSchema,
   copyReviewListSchema,
@@ -997,6 +998,36 @@ async function buildCopyReviews(generation: CopyReviewGeneration) {
     items,
     bulk_eligible_count: items.filter((item) => item.current_comparison.bulk_eligible).length,
   })
+}
+
+/**
+ * The real operator review queue: every unresolved ATH hold, oldest first.
+ *
+ * Deliberately NOT `fetchCopyReviews`. That one is the console's view: it
+ * caches for 60s, forces `include=current_comparison`, and fans out a
+ * per-row comparison for any row the platform did not embed. None of that is
+ * what enumerating a queue needs, and the cache would let a hold opened or
+ * resolved seconds ago read as the opposite for a minute.
+ */
+export async function fetchAthReviewQueue(
+  rawInput: unknown,
+  limit: number,
+  offset: number,
+) {
+  const input = athReviewQueueInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    // Both pinned, not defaulted: see athReviewQueueInputSchema for why a
+    // queue must not be filterable by review status or scoring generation.
+    status: 'pending',
+    generation: 'all',
+    limit: String(limit),
+    offset: String(offset),
+  })
+  if (input.reviewKind) query.set('review_kind', input.reviewKind)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/copy-reviews?${query.toString()}`,
+  )
+  return copyReviewListSchema.parse(payload)
 }
 
 export async function resolveCopyReview(rawInput: unknown, actor: string) {

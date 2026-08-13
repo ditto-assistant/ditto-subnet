@@ -9,9 +9,10 @@ from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from sqlalchemy import exists, false, func, select
+from sqlalchemy import exists, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Load, undefer_group
+from sqlalchemy.sql.elements import ColumnElement
 
 from ditto.api_models.admin_copy_review import (
     AdminCopyReviewAction,
@@ -131,6 +132,7 @@ def _item(
         agent_version=agent.version,
         submitted_at=agent.created_at,
         status=cast(Literal["pending", "resolved"], review.status),
+        agent_status=agent.status.value,
         opened_at=review.reopened_at or review.opened_at,
         resolved_at=review.resolved_at,
         resolved_by=review.resolved_by,
@@ -397,6 +399,26 @@ def _canonical_ledger_row(
     )
 
 
+_KNOWN_REVIEW_KINDS = ("copy", "benchmark_overfit", "deferred_source_review")
+
+
+def _review_kind_filter(review_kind: str) -> ColumnElement[bool]:
+    """SQL for ``review_kind``, matching :func:`_item`'s fallback exactly.
+
+    ``review_kind`` lives in ``algorithm_provenance`` and predates the column
+    it describes, so older rows carry no key at all and :func:`_item` renders
+    them as ``copy``. The filter has to agree: if it matched only rows that
+    literally say ``copy``, a ``review_kind=copy`` query would silently drop
+    every hold opened before the key existed while the rows it *did* return
+    all claimed the kind the caller asked for -- an omission with nothing on
+    its face to reveal it.
+    """
+    stored = AthReview.algorithm_provenance["review_kind"].as_string()
+    if review_kind != "copy":
+        return stored == review_kind
+    return or_(stored.is_(None), stored.not_in(_KNOWN_REVIEW_KINDS), stored == "copy")
+
+
 @router.get("/copy-reviews", response_model=AdminCopyReviewList)
 async def list_copy_reviews(
     _admin: AdminDep,
@@ -406,6 +428,8 @@ async def list_copy_reviews(
     offset: Annotated[int, Query(ge=0)] = 0,
     include: Literal["current_comparison"] | None = None,
     generation: Literal["active", "rollout", "history", "all"] = "active",
+    review_kind: Literal["copy", "benchmark_overfit", "deferred_source_review"]
+    | None = None,
 ) -> AdminCopyReviewList:
     active_version = await active_bench_version(session)
     rollout = await open_rollout(session)
@@ -420,7 +444,11 @@ async def list_copy_reviews(
             Score.bench_version == active_version,
         )
     )
-    where = [] if status == "all" else [AthReview.status == status]
+    where: list[ColumnElement[bool]] = (
+        [] if status == "all" else [AthReview.status == status]
+    )
+    if review_kind is not None:
+        where.append(_review_kind_filter(review_kind))
     if generation == "active":
         where.append(has_active_score)
     elif generation == "rollout":
@@ -500,6 +528,7 @@ async def list_copy_reviews(
         count=count or 0,
         limit=limit,
         offset=offset,
+        review_kind=review_kind,
         generation=generation,
         active_bench_version=active_version,
         rollout_bench_version=rollout_version,

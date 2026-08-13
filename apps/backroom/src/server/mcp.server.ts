@@ -13,6 +13,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import type { BackroomSession } from '../lib/auth.types'
 import {
+  compactAthReviewQueue,
   compactBatchRetryResponse,
   compactScreeningQuarantines,
   compactScreeningSubmissions,
@@ -20,6 +21,7 @@ import {
 } from '../lib/mcp-payloads'
 import { compactListFields, type HoistOptions } from '../lib/mcp-response'
 import {
+  athReviewQueueInputSchema,
   auditReasonSchema,
   benchmarkContractMigrationLookupInputSchema,
   benchmarkContractRefreshLookupInputSchema,
@@ -76,6 +78,7 @@ import {
   fetchAthReview,
   fetchQuarantineBaselineDiff,
   fetchQuarantineBaselineDiffFile,
+  fetchAthReviewQueue,
   fetchQuarantineSourceExcerpt,
   fetchQuarantineSourceFiles,
   searchQuarantineSource,
@@ -419,6 +422,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Withdraw an exhausted submission using a fresh snapshot and "REMOVE FROM VALIDATOR QUEUE". Preserves the record, scores, artifact, payment, and history. Use evict_live_validator_leases instead when live leases still consume capacity.',
   get_score_history:
     'Read authoritative accepted-score aggregates across benchmark versions for one agent. Seeds remain exact decimal strings; omitted versions were never scored. Versions are returned newest-first.',
+  get_screening_review_queue:
+    'THE operator queue: every agent held in ath_pending_review with an unresolved ATH review, oldest hold first, carrying agent and miner identity, submitted_at/opened_at, agent_status, and a `hold` object naming review_kind and any matched agent. Filter with reviewKind. generation defaults to `all` so upload-time and prior-generation holds stay visible. Read agent_status first: pending + not ath_pending_review is a stranded hold and resolve 409s. NOT list_screening_quarantines, a separate screener surface whose active rows auto-resolve.',
+  // The two quarantine reads below get catalog summaries in the same change
+  // that fixes the queue. They describe the screener-owned surface an operator
+  // reaches after picking a row, not the queue itself, so their long-form
+  // notes belong in get_backroom_tool_help rather than in every session's
+  // context — which is also what buys the budget the queue's own entry needs.
+  list_screening_quarantines:
+    'Page screener quarantines (active | resolved | all), newest first; sort=oldest for chronology, detail=full for every evidence row. Active rows are auto-resolved by the platform within milliseconds, so this is not the operator queue — use get_screening_review_queue.',
+  get_screening_quarantine_context:
+    'Full review context for one quarantine: the screener evidence trail, the digest-verified source-review finding with its flagged path:line locations, every screening attempt, the miner track record, identical-artifact duplicates, and the advisory `shadow_review` (often null, never authoritative — a divergence from the L1 finding is a prompt to read the source, not a decision). Read this before deciding a quarantine.',
   search_screening_source:
     'Grep one screened submission\'s readable source (regex, or mode=literal) for {path, line, text} matches with optional context — the "where is X" tool for a 10,000-line baseline.rs. Scope with pathGlob; has_more is the paging signal; opaque_skipped counts binaries never searched. Requires backroom:artifact:read.',
   // Paired with the tool above: an operator now arrives here already holding a
@@ -516,20 +530,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening review queue',
       description:
-        'Page through the active screening quarantine queue, oldest first. Returns count, limit, and offset with compact evidence summaries and immutable submission identities, without artifact URLs. Use get_screening_quarantine_contexts for full context before proposing decisions.',
-      inputSchema: MCP_PAGINATION_INPUT,
+        'Page the SN118 operator review queue: every agent held in ath_pending_review with an unresolved ATH review, oldest hold first. Each row carries the held agent_id/agent_name/agent_version, miner_hotkey and payment-time miner_coldkey, submitted_at, opened_at, agent_status, and a `hold` object with review_kind (copy | benchmark_overfit | deferred_source_review), the operator reason, and for a copy hold the matched agent\'s identity (duplicate_of plus its name, version, hotkey, coldkey and submission time). Filter with reviewKind; page with limit/offset. The queue is unresolved holds across every scoring generation and is not narrowable by either: a review status filter would let a closed hold read as open, and the platform\'s generation filter selects on whether the held agent has a score at a benchmark version, so its `active` default hides an upload-time copy hold (no scores at all) and any hold that survived a rollout (none at the new active version) while both still wait for an operator. `agent_status` is the field to read before acting: a pending review whose agent is NOT ath_pending_review is a hold stranded by some other path, and resolve_ath_review answers 409 for it. This is the queue enumeration; get_ath_review gives one review its full audit trail, and get_copy_review_source_diff the source evidence. This is NOT the quarantine queue — list_screening_quarantines is a different, screener-owned surface whose active rows the platform auto-resolves within milliseconds.',
+      inputSchema: { ...athReviewQueueInputSchema.shape, ...MCP_PAGINATION_INPUT },
       annotations: toolAnnotations('read'),
     },
-    async ({ limit, offset }) =>
+    async ({ limit, offset, ...input }) =>
       result(
-        compactScreeningQuarantines(
-          withPagination(
-            await fetchScreeningQuarantines('active', limit, offset, 'oldest'),
-            limit,
-            offset,
-          ),
-          'summary',
-        ),
+        compactAthReviewQueue(await fetchAthReviewQueue(input, limit, offset)),
       ),
   )
 

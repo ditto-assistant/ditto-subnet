@@ -2542,30 +2542,187 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('pages the oldest-first screening review queue through the platform API', async () => {
+  it('enumerates the ATH hold queue, not the auto-resolved quarantine queue', async () => {
+    // The defect: this tool read /admin/screening-quarantines?status=active,
+    // which the platform actor `platform:deferred-source-review` auto-resolves
+    // to `rescreen` within milliseconds. It therefore answered
+    // `{items: [], count: 0}` while agents sat in ath_pending_review, and the
+    // only working enumeration was an eight-call ~1.5MB sweep of
+    // list_screening_submissions.
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi.fn().mockResolvedValue(Response.json({ items: [], count: 81 }))
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            review_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            agent_id: '11111111-1111-4111-8111-111111111111',
+            miner_hotkey: '5HeldMiner',
+            miner_coldkey: '5HeldColdkey',
+            agent_name: 'gate',
+            agent_version: 2,
+            submitted_at: '2026-08-01T00:00:00Z',
+            status: 'pending',
+            agent_status: 'ath_pending_review',
+            opened_at: '2026-08-02T00:00:00Z',
+            resolved_at: null,
+            resolved_by: null,
+            resolution: null,
+            resolution_reason: null,
+            original: {
+              review_kind: 'deferred_source_review',
+              duplicate_of: null,
+              reason: 'score-qualified source review',
+              policy_version: 9,
+              fingerprint_versions: { lexical: 1, structural: 1, prompt: 'p1' },
+              reference_provenance: 'corpus',
+              backfilled: false,
+            },
+          },
+        ],
+        count: 38,
+        limit: 12,
+        offset: 24,
+        review_kind: 'deferred_source_review',
+        generation: 'all',
+        active_bench_version: 9,
+        rollout_bench_version: null,
+      }),
+    )
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     const response = await client.callTool({
       name: 'get_screening_review_queue',
-      arguments: { limit: 12, offset: 24 },
+      arguments: { reviewKind: 'deferred_source_review', limit: 12, offset: 24 },
     })
 
     expect(response.isError).not.toBe(true)
     expect(readJsonResult(response)).toMatchObject({
-      items: [],
-      count: 81,
+      count: 38,
       limit: 12,
       offset: 24,
+      items: [
+        {
+          agent_id: '11111111-1111-4111-8111-111111111111',
+          agent_name: 'gate',
+          agent_version: 2,
+          miner_hotkey: '5HeldMiner',
+          miner_coldkey: '5HeldColdkey',
+          submitted_at: '2026-08-01T00:00:00Z',
+          opened_at: '2026-08-02T00:00:00Z',
+          agent_status: 'ath_pending_review',
+          hold: { review_kind: 'deferred_source_review', duplicate_of: null },
+        },
+      ],
     })
+    // status and generation are pinned, never taken from the caller: a queue
+    // narrowed by review status or scoring cohort is how it went empty.
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines?status=active&sort=oldest&limit=12&offset=24',
+      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews?status=pending&generation=all&limit=12&offset=24&review_kind=deferred_source_review',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer platform-admin-token',
         }),
       }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('carries the matched agent identity on a copy hold and flags stranded holds', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const row = (overrides: Record<string, unknown>) => ({
+      review_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      agent_id: '11111111-1111-4111-8111-111111111111',
+      miner_hotkey: '5HeldMiner',
+      miner_coldkey: null,
+      agent_name: 'held',
+      agent_version: 1,
+      submitted_at: '2026-08-01T00:00:00Z',
+      status: 'pending',
+      agent_status: 'ath_pending_review',
+      opened_at: '2026-08-02T00:00:00Z',
+      resolved_at: null,
+      resolved_by: null,
+      resolution: null,
+      resolution_reason: null,
+      original: {
+        review_kind: 'copy',
+        duplicate_of: '22222222-2222-4222-8222-222222222222',
+        reason: 'near-copy signal',
+        policy_version: 9,
+        fingerprint_versions: { lexical: 1, structural: 1, prompt: 'p1' },
+        reference_provenance: 'corpus',
+        backfilled: false,
+        duplicate_of_name: 'origin',
+        duplicate_of_version: 4,
+        duplicate_of_hotkey: '5OriginalMiner',
+        duplicate_of_coldkey: '5OriginalColdkey',
+        duplicate_of_submitted_at: '2026-07-01T00:00:00Z',
+      },
+      ...overrides,
+    })
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [
+          row({}),
+          row({
+            review_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            agent_id: '33333333-3333-4333-8333-333333333333',
+            // A pending review whose agent already left the hold. It is not
+            // queue work, and resolve_ath_review 409s on it.
+            agent_status: 'scored',
+          }),
+        ],
+        count: 2,
+        limit: 50,
+        offset: 0,
+        review_kind: null,
+        generation: 'all',
+        active_bench_version: 9,
+        rollout_bench_version: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_review_queue',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    const queue = readJsonResult(response) as {
+      items: Array<Record<string, unknown>>
+      items_shared?: Record<string, unknown>
+    }
+    const holds = queue.items.map((item) => ({
+      agent_id: item.agent_id,
+      agent_status:
+        (item.agent_status as string | undefined) ??
+        (queue.items_shared?.agent_status as string | undefined),
+      hold: {
+        ...(queue.items_shared?.hold as Record<string, unknown> | undefined),
+        ...(item.hold as Record<string, unknown> | undefined),
+      },
+    }))
+    expect(holds[0]).toMatchObject({
+      agent_status: 'ath_pending_review',
+      hold: {
+        review_kind: 'copy',
+        duplicate_of: '22222222-2222-4222-8222-222222222222',
+        duplicate_of_name: 'origin',
+        duplicate_of_hotkey: '5OriginalMiner',
+        duplicate_of_coldkey: '5OriginalColdkey',
+        duplicate_of_submitted_at: '2026-07-01T00:00:00Z',
+      },
+    })
+    expect(holds[1].agent_status).toBe('scored')
+    // Per-row algorithm provenance is not queue triage information; the deep
+    // evidence belongs to get_ath_review.
+    expect(JSON.stringify(queue)).not.toContain('fingerprint_versions')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews?status=pending&generation=all&limit=50&offset=0',
+      expect.anything(),
     )
 
     await client.close()

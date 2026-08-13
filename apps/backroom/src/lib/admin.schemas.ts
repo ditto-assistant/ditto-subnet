@@ -4253,6 +4253,11 @@ export const copyReviewItemSchema = z.object({
   agent_version: z.number().int().nullish().default(null),
   submitted_at: z.string(),
   status: z.enum(['pending', 'resolved']),
+  // Live agents.status for the held agent. A pending review whose agent reads
+  // anything other than ath_pending_review is a stranded hold rather than a
+  // queue entry, and resolve 409s on it. Nullish-tolerant for a platform that
+  // predates the field.
+  agent_status: z.string().nullish().default(null),
   opened_at: z.string(),
   resolved_at: z.string().nullable(),
   resolved_by: z.string().nullable(),
@@ -4264,14 +4269,41 @@ export const copyReviewItemSchema = z.object({
   current_comparison: copyReviewCurrentComparisonSchema.nullish().default(null),
 })
 
+export const athReviewKindSchema = z.enum([
+  'copy',
+  'benchmark_overfit',
+  'deferred_source_review',
+])
+
 export const copyReviewListSchema = z.object({
   items: z.array(copyReviewItemSchema),
   count: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
+  review_kind: athReviewKindSchema.nullish().default(null),
   generation: z.enum(['active', 'rollout', 'history', 'all']),
   active_bench_version: z.number().int().positive(),
   rollout_bench_version: z.number().int().positive().nullable().default(null),
+})
+
+/**
+ * The operator ATH review queue.
+ *
+ * Only `reviewKind` is exposed. The platform list also takes `status` and
+ * `generation`, and neither belongs on a queue:
+ *
+ * - `status` — a queue is unresolved work by definition. A "queue" that can
+ *   return resolved rows just invites reading a closed hold as an open one;
+ *   `get_ath_review` serves a resolved review with its full audit trail.
+ * - `generation` — it selects reviews by whether the held agent has a score at
+ *   a given benchmark version, which is a scoring-cohort question, not a queue
+ *   question. Its `active` default is exactly how the console can show an empty
+ *   list while holds are waiting: a copy hold opened at upload has no scores at
+ *   all, and a hold that survived a benchmark rollout has none at the new
+ *   active version. Both are still waiting for an operator. Pinned to `all`.
+ */
+export const athReviewQueueInputSchema = z.object({
+  reviewKind: athReviewKindSchema.optional(),
 })
 
 export const copyReviewGenerationSchema = z.enum(['active', 'rollout', 'history'])

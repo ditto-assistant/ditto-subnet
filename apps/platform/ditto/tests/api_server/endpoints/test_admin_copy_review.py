@@ -703,6 +703,97 @@ async def test_list_is_bounded_oldest_first_and_private(
     assert "sha256" not in serialized and '"m":' not in serialized
 
 
+async def _set_review_kind(
+    maker: async_sessionmaker[AsyncSession], *, agent_id: UUID, review_kind: str
+) -> None:
+    async with maker() as session, session.begin():
+        review = (
+            await session.scalars(
+                select(AthReview).where(AthReview.agent_id == agent_id)
+            )
+        ).one()
+        review.algorithm_provenance = dict(review.algorithm_provenance) | {
+            "review_kind": review_kind
+        }
+
+
+async def test_list_filters_by_review_kind_without_hiding_legacy_copy_holds(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A kind filter must agree with the kind the rows report.
+
+    ``review_kind`` lives in ``algorithm_provenance`` and postdates the holds it
+    describes, so the oldest rows carry no key and the list renders them as
+    ``copy``. A filter matching only the literal string would drop exactly
+    those rows while every row it returned still said ``copy`` -- an omission
+    with nothing on its face to reveal it.
+    """
+    legacy_copy, _ = await _seed(maker, opened_at=_T0)
+    deferred, _ = await _seed(maker, opened_at=_T0 + timedelta(hours=1))
+    overfit, _ = await _seed(maker, opened_at=_T0 + timedelta(hours=2))
+    explicit_copy, _ = await _seed(maker, opened_at=_T0 + timedelta(hours=3))
+    await _set_review_kind(
+        maker, agent_id=deferred, review_kind="deferred_source_review"
+    )
+    await _set_review_kind(maker, agent_id=overfit, review_kind="benchmark_overfit")
+    await _set_review_kind(maker, agent_id=explicit_copy, review_kind="copy")
+    _install(app, maker)
+
+    async def _agent_ids(query: str) -> list[str]:
+        response = await client.get(
+            f"/api/v1/admin/copy-reviews?generation=all&{query}", headers=_HEADERS
+        )
+        assert response.status_code == 200
+        return [item["agent_id"] for item in response.json()["items"]]
+
+    assert await _agent_ids("review_kind=deferred_source_review") == [str(deferred)]
+    assert await _agent_ids("review_kind=benchmark_overfit") == [str(overfit)]
+    assert await _agent_ids("review_kind=copy") == [
+        str(legacy_copy),
+        str(explicit_copy),
+    ]
+    assert len(await _agent_ids("limit=200")) == 4
+
+    filtered = await client.get(
+        "/api/v1/admin/copy-reviews?generation=all&review_kind=copy", headers=_HEADERS
+    )
+    body = filtered.json()
+    # count must describe the filtered set, not the table.
+    assert body["count"] == 2
+    assert body["review_kind"] == "copy"
+    assert {item["original"]["review_kind"] for item in body["items"]} == {"copy"}
+
+
+async def test_list_rows_carry_the_live_agent_status(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A pending review whose agent moved on is a stranded hold, not a queue row.
+
+    ``ath_reviews.status`` and ``agents.status`` are separate columns; several
+    paths can move the agent and leave the review pending. Without the agent's
+    status on the row, a listing cannot distinguish an agent actually waiting
+    for adjudication from one that already left the hold -- and ``resolve``
+    rejects the second with a 409.
+    """
+    held, _ = await _seed(maker, opened_at=_T0)
+    stranded, _ = await _seed(maker, opened_at=_T0 + timedelta(hours=1))
+    async with maker() as session, session.begin():
+        agent = await session.get(Agent, stranded)
+        assert agent is not None
+        agent.status = AgentStatus.SCORED
+    _install(app, maker)
+
+    response = await client.get(
+        "/api/v1/admin/copy-reviews?generation=all", headers=_HEADERS
+    )
+    assert response.status_code == 200
+    statuses = {
+        item["agent_id"]: item["agent_status"] for item in response.json()["items"]
+    }
+    assert statuses[str(held)] == "ath_pending_review"
+    assert statuses[str(stranded)] == "scored"
+
+
 async def test_list_defaults_to_active_generation_and_filters_count_and_pages(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:

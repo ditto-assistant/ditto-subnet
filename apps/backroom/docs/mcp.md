@@ -77,6 +77,25 @@ catalog is loaded into model context before any call, and the test bounds both
 the total and the per-description length. Long-form operational notes belong in
 the `description` field, which `get_backroom_tool_help` serves on demand.
 
+## The review queue
+
+`get_screening_review_queue` is the operator queue: unresolved `ath_reviews`
+rows, oldest hold first. It is **not** `list_screening_quarantines` — active
+quarantines are auto-resolved by the platform within milliseconds and that list
+is effectively always empty, which is what made the queue look empty when this
+tool pointed at it.
+
+Two platform parameters are deliberately not exposed. `status`, because a queue
+is unresolved work by definition. `generation`, because it filters on whether
+the held agent has a score at a benchmark version — its `active` default hides
+an upload-time copy hold and any hold that outlived a rollout, both of which are
+still waiting. Both are pinned in `admin.service.ts`.
+
+Read `agent_status` before acting on a row. A `pending` review whose agent is
+not in `ath_pending_review` is a hold stranded by some other path, and
+`resolve_ath_review` answers 409 for it; `apps/platform/docs/ath-review-queue.md`
+lists the paths that produce it.
+
 ## Reading miner source
 
 Three tools, used in this order. Skipping the middle one is the expensive

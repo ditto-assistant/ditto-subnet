@@ -4439,6 +4439,8 @@ export interface components {
             agent_id: string;
             /** Agent Name */
             agent_name: string;
+            /** Agent Status */
+            agent_status?: string | null;
             /** Agent Version */
             agent_version?: number | null;
             /** Current Comparison */
@@ -4494,6 +4496,8 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            /** Review Kind */
+            review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review") | null;
             /** Rollout Bench Version */
             rollout_bench_version?: number | null;
         };
@@ -17088,6 +17092,7 @@ export interface operations {
                 offset?: number;
                 include?: "current_comparison" | null;
                 generation?: "active" | "rollout" | "history" | "all";
+                review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review") | null;
             };
             header?: {
                 authorization?: string | null;

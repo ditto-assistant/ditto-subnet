@@ -7,6 +7,7 @@
 import type { z } from 'zod'
 import type {
   batchRetryValidationResponseSchema,
+  copyReviewListSchema,
   screeningQuarantineListSchema,
   screeningSubmissionListSchema,
   stuckSubmissionsListSchema,
@@ -18,6 +19,7 @@ import {
 } from './mcp-response'
 
 type BatchRetryResponse = z.infer<typeof batchRetryValidationResponseSchema>
+type CopyReviewList = z.infer<typeof copyReviewListSchema>
 type ScreeningQuarantineList = z.infer<typeof screeningQuarantineListSchema>
 type ScreeningSubmissionList = z.infer<typeof screeningSubmissionListSchema>
 type StuckSubmissionsList = z.infer<typeof stuckSubmissionsListSchema>
@@ -78,6 +80,50 @@ export function compactScreeningQuarantines(
   })
   return compactListField({ ...response, detail, items }, 'items', {
     pin: ['quarantine_id'],
+  })
+}
+
+/**
+ * Compact the ATH review queue into one triage row per held agent.
+ *
+ * The queue's job is to answer "who is waiting, why, and since when" for every
+ * hold at once; the deep evidence belongs to `get_ath_review` and
+ * `get_copy_review_source_diff`, which the operator calls for the one row they
+ * picked. So each row keeps the identities a decision starts from — the held
+ * agent, its miner, when it was submitted and held, the review kind, and for a
+ * copy hold the identity of the agent it was matched against — and drops the
+ * per-row evidence that would make a 200-row page unreadable:
+ * `fingerprint_versions` (algorithm provenance, identical across a generation),
+ * and the deferred hold's `review_audit` transcript, which is the largest
+ * object on the row and is kept as its digest so the audit stays verifiable.
+ *
+ * `agent_status` is deliberately NOT dropped: a `pending` review whose agent
+ * reads anything but `ath_pending_review` is a stranded hold rather than a
+ * queue entry, and `resolve_ath_review` will 409 on it.
+ */
+export function compactAthReviewQueue(response: CopyReviewList) {
+  const items = response.items.map((review) => {
+    const { original, current_comparison: _comparison, ...rest } = review
+    const {
+      fingerprint_versions: _fingerprints,
+      deferred_review: deferred,
+      ...hold
+    } = original
+    return {
+      ...rest,
+      hold: {
+        ...hold,
+        deferred_review: deferred
+          ? (() => {
+              const { review_audit: _audit, ...trigger } = deferred
+              return trigger
+            })()
+          : null,
+      },
+    } as ResponseRow
+  })
+  return compactListField({ ...response, items }, 'items', {
+    pin: ['agent_id', 'review_id'],
   })
 }
 
