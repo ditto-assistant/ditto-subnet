@@ -21,6 +21,20 @@ whole-crate, so they saturate between independent starter-kit derivatives until
 they are reference-aware too. Tarball-size proximity is a fallback for rows with
 no comparable fingerprints only.
 
+The gate's rules answer "did this artifact arrive carrying another owner's
+custom surface". They do not, on their own, answer whether the miner had to
+*copy* to get it — and on SN118 the subnet itself is a lawful source. Kings'
+source is published on an unauthenticated route once the operator-set embargo
+lapses (``disclosure``/``embargo_hours``, see
+:mod:`ditto.db.queries.artifact_release_settings`), the subnet owner has
+confirmed that building on a released agent is permitted, and a published
+codebase spreads across unrelated miners within days. Matching content the
+platform handed out is therefore not evidence of anything, so a fired signal is
+*withdrawn* — recorded, not held — when the candidate had no opportunity to copy
+the reference. See :class:`NoCopyOpportunity` and the withdrawal section of
+:func:`evaluate_duplicate_signals`. Copying an artifact still inside its embargo
+window is untouched: that is precisely what this gate is for.
+
 This is **moderation, not weight logic** — it decides only whether a suspicious
 high-scorer is held in ``ath_pending_review`` for human review (see
 :func:`ditto.db.queries.agents.resolve_review`), never who the champion is. The
@@ -30,7 +44,7 @@ so re-scoring the same agent yields the same verdict.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -98,6 +112,57 @@ _PROMPT_ADVISORY_TOL = 0.5
 
 
 @dataclass(frozen=True)
+class PublicSourceRelease:
+    """One earlier artifact whose source the subnet itself published.
+
+    ``available_at`` is the instant the platform began serving that artifact's
+    tarball on the unauthenticated public route — i.e. the moment its content
+    stopped being anyone's secret. The caller derives it (see
+    :func:`ditto.db.queries.artifact_release.list_public_source_releases`); the
+    gate only compares it against the candidate's upload time, so this module
+    stays pure and has no opinion about how release is earned.
+    """
+
+    agent_id: UUID
+    available_at: datetime
+
+
+@dataclass(frozen=True)
+class NoCopyOpportunity:
+    """Why a fired copy signal was withdrawn instead of opening a hold.
+
+    Recorded rather than discarded: the *match* is still real telemetry for
+    leaderboard-integrity questions, and an operator asking "did anyone
+    reproduce this artifact" must still be able to find the answer. What the
+    match is not, in these two cases, is evidence that this miner took anything
+    from the named reference.
+    """
+
+    kind: str
+    """``public_release`` (the content was already published by the subnet) or
+    ``self_lineage`` (the shared surface predates the reference in this owner's
+    own history)."""
+
+    matched_agent_id: UUID
+    """The earlier submission the hold would have named as ``duplicate_of``."""
+
+    source_agent_id: UUID
+    """The artifact that accounts for the shared content lawfully: the published
+    one, or this owner's own earlier generation."""
+
+    source_available_at: datetime | None
+    """When ``source_agent_id`` became publicly downloadable (``public_release``
+    only; ``None`` for ``self_lineage``)."""
+
+    signal: str
+    """Which copy rule fired: ``exact_byte``, ``normalized_source``, ``lexical``
+    or ``size_fallback``."""
+
+    detail: str
+    """Operator-readable one-line explanation, safe for the public audit feed."""
+
+
+@dataclass(frozen=True)
 class ReviewDecision:
     """Outcome of the anti-copy gate for one just-scored agent.
 
@@ -105,11 +170,20 @@ class ReviewDecision:
     (the earlier submission it appears to copy) and ``reason`` recorded as the
     moderation audit trail. ``held=False`` lets the normal ``evaluating ->
     scored`` transition proceed.
+
+    ``no_copy_opportunity`` is populated when a copy signal fired but was
+    withdrawn because the candidate could not have taken the shared content from
+    the named reference. It never accompanies ``held=True``, and it deliberately
+    leaves ``duplicate_of`` / ``reason`` unset: those two columns are the *hold*
+    record and render on the public board as an accusation, which is exactly
+    what a withdrawn signal must not produce. The caller appends the annotation
+    to the immutable audit chain instead.
     """
 
     held: bool
     duplicate_of: UUID | None = None
     reason: str | None = None
+    no_copy_opportunity: NoCopyOpportunity | None = None
 
 
 _NOT_HELD = ReviewDecision(held=False)
@@ -188,6 +262,78 @@ def _prompt_note(prompt_fingerprint: dict | None, e: LedgerRow) -> str:
     return ""
 
 
+def _lexical_strength(
+    a: dict | None,
+    b: dict | None,
+    *,
+    jaccard_tol: float,
+    containment_tol: float,
+) -> float:
+    """Threshold-normalized closeness of the lexical channel for one pair.
+
+    Rule 2 fires on ``jaccard >= jaccard_tol OR containment >= containment_tol``,
+    two measures on different scales. Dividing each by its own bar and taking
+    the larger collapses that disjunction into one comparable scalar: ``>= 1.0``
+    is exactly "this pair would trigger", and between two pairs the larger value
+    is the closer match *in the terms the rule itself uses*. Comparing raw
+    Jaccard against raw containment would not be meaningful; comparing the two
+    normalized margins is.
+
+    Returns ``0.0`` for an uncomparable pair (missing / cross-version /
+    cross-corpus sketch), which is what :func:`content_similarity` already
+    reports and what "no evidence" should score.
+    """
+    j, c = content_similarity(a, b)
+    return max(j / jaccard_tol, c / containment_tol)
+
+
+def _size_proximity(a: int | None, b: int | None, *, size_tol: int) -> float:
+    """Threshold-normalized closeness of the legacy size fallback for one pair.
+
+    Same convention as :func:`_lexical_strength` — ``>= 1.0`` is exactly "this
+    pair would trigger rule 3's size test", and larger is closer — expressed as
+    ``size_tol / delta`` because for size the *smaller* delta is the closer
+    match. A zero delta is clamped to one byte rather than dividing by zero; the
+    resulting large finite number orders correctly against every other pair,
+    which is all the comparison needs.
+    """
+    if a is None or b is None:
+        return 0.0
+    return size_tol / max(abs(a - b), 1)
+
+
+def _lexical_scorer(
+    sketch: dict | None, *, jaccard_tol: float, containment_tol: float
+) -> Callable[[LedgerRow], float]:
+    """Bind one lexical sketch, scoring any ledger row against it.
+
+    A factory rather than an inline closure because the bound sketch changes per
+    reference inside the rule loop, and a lambda over a loop variable is a bug
+    waiting for a refactor to reorder the calls.
+    """
+
+    def score(row: LedgerRow) -> float:
+        return _lexical_strength(
+            sketch,
+            row.content_fingerprint,
+            jaccard_tol=jaccard_tol,
+            containment_tol=containment_tol,
+        )
+
+    return score
+
+
+def _size_scorer(
+    size_bytes: int | None, *, size_tol: int
+) -> Callable[[LedgerRow], float]:
+    """Bind one tarball size, scoring any ledger row's size against it."""
+
+    def score(row: LedgerRow) -> float:
+        return _size_proximity(size_bytes, row.size_bytes, size_tol=size_tol)
+
+    return score
+
+
 def evaluate_duplicate_signals(
     *,
     agent_id: UUID,
@@ -203,6 +349,7 @@ def evaluate_duplicate_signals(
     prompt_fingerprint: dict | None = None,
     miner_coldkey: str | None = None,
     linked_owner_hotkeys: frozenset[str] = frozenset(),
+    public_source_releases: Sequence[PublicSourceRelease] = (),
     score_tol: float = _DEFAULT_SCORE_TOL,
     size_tol: int = _DEFAULT_SIZE_TOL,
     jaccard_tol: float = _DEFAULT_JACCARD_TOL,
@@ -280,6 +427,43 @@ def evaluate_duplicate_signals(
     the same reference harness share scaffolding prompts. The active prompt-fusion
     hold is deferred until an orthogonal-to-convergence signal (behavioral /
     code-embedding) exists to corroborate it.
+
+    **No-copy-opportunity withdrawal.** Every rule above answers "did this
+    submission arrive carrying another owner's custom surface". None of them
+    answers the prior question: *could this miner have obtained that surface
+    without copying the named reference*. Two ways it can, both of which the
+    subnet creates itself, and in both the hold names a miner who did nothing
+    wrong:
+
+    * ``public_source_releases`` — SN118 publishes the source of chain-confirmed
+      kings once the operator-set embargo lapses (see
+      :mod:`ditto.db.queries.artifact_release_settings`). Content the subnet
+      itself put on an unauthenticated download route before this artifact was
+      uploaded is not a secret this miner stole, and the subnet owner has
+      confirmed building on a released agent is permitted. A published artifact
+      withdraws the hold only when it accounts for the match **at least as
+      well** as the reference does, in both directions (see
+      :func:`_withdraw_ranked`). A copy that resembles a still-embargoed
+      artifact more closely than any published one, or that shares with the
+      reference something no published artifact contains, took something that
+      was never published, and is still held.
+    * the candidate's own earlier eligible generation — when a published
+      codebase spreads, the *nearest* earlier match is frequently the newest
+      recipient rather than the originator, so the originator's next
+      generation gets held against its own downstream copy. An owner row that
+      predates the reference and matches at least as strongly is proof the
+      shared surface was in this owner's hands before the reference existed,
+      which no copy of the reference could produce. Only the owner's
+      representative ledger row is visible here, so this catches the common
+      case, not every case (see the PR for the full-history variant).
+
+    A withdrawal never suppresses evidence: the decision carries
+    :class:`NoCopyOpportunity` so the caller records the match on the immutable
+    audit chain. Withdrawal is per-pair — a candidate can be exempt against one
+    reference and still held against another it matches more closely — and every
+    remaining reference is checked before the withdrawal is returned. Rule 2's
+    *inconclusive* branch is deliberately untouched: it fires on the absence of a
+    comparison, so there is no match for a published artifact to account for.
     """
     other_miners = [
         e
@@ -306,17 +490,184 @@ def evaluate_duplicate_signals(
         else [e for e in earlier_others if e.miner_hotkey not in linked_owner_hotkeys]
     )
 
+    # Artifacts the subnet itself had already published when this one was
+    # uploaded. Ordered oldest-first so the withdrawal names the earliest
+    # publication that accounts for the match, which is the one a miner would
+    # have found first and the one that makes the record easiest to audit.
+    #
+    # Deliberately NOT restricted to other owners: the question is whether the
+    # content was public, and public is public whoever published it.
+    released_at: dict[UUID, datetime] = {
+        release.agent_id: _utc(release.available_at)
+        for release in public_source_releases
+    }
+    published_before = sorted(
+        (
+            e
+            for e in eligible
+            if e.agent_id != agent_id
+            and (available := released_at.get(e.agent_id)) is not None
+            and available <= _utc(submitted_at)
+        ),
+        key=lambda e: (released_at[e.agent_id], e.agent_id.int),
+    )
+    # This owner's earlier eligible generations. These are the rows the copy
+    # rules exclude from `other_miners` — same hotkey, same payment coldkey, or a
+    # cryptographically attested key rotation. Excluded as *suspects*, they are
+    # still admissible as *alibis*: content this owner already shipped cannot
+    # have been taken from a submission that did not exist yet.
+    own_earlier = sorted(
+        (
+            e
+            for e in eligible
+            if e.agent_id != agent_id
+            and (_utc(e.first_seen), e.agent_id.int) < submitted_key
+            and (
+                e.miner_hotkey == miner_hotkey
+                or (miner_coldkey is not None and e.miner_coldkey == miner_coldkey)
+                or e.miner_hotkey in linked_owner_hotkeys
+            )
+        ),
+        key=lambda e: (_utc(e.first_seen), e.agent_id.int),
+    )
+    # The first withdrawn signal, returned only if no other reference holds.
+    withdrawn: NoCopyOpportunity | None = None
+
+    def _withdraw_equality(
+        e: LedgerRow, *, signal: str, matches: str
+    ) -> NoCopyOpportunity | None:
+        """Withdraw an equality match (rule 1 / 1b) that the subnet published.
+
+        Equality admits no "at least as close" ordering — identical is
+        identical — so a published artifact carrying the same hash is a complete
+        account of how the candidate came by it. Only the published artifact's
+        own hash is consulted; a same-owner alibi is not offered here, because an
+        exact-hash match with another owner is the one signal that survives every
+        innocent explanation this gate knows how to check.
+        """
+        for published in published_before:
+            same = (
+                published.sha256 == sha256
+                if signal == "exact_byte"
+                else published.normalized_source_hash == normalized_source_hash
+            )
+            if not same:
+                continue
+            available = released_at[published.agent_id]
+            return NoCopyOpportunity(
+                kind="public_release",
+                matched_agent_id=e.agent_id,
+                source_agent_id=published.agent_id,
+                source_available_at=available,
+                signal=signal,
+                detail=(
+                    f"{matches} of agent {e.agent_id}, but agent "
+                    f"{published.agent_id} carries the same artifact and was "
+                    f"published by the subnet at {available.isoformat()}, "
+                    "before this submission was uploaded"
+                ),
+            )
+        return None
+
+    def _withdraw_ranked(
+        e: LedgerRow,
+        *,
+        signal: str,
+        strength_to_candidate: Callable[[LedgerRow], float],
+        strength_to_reference: Callable[[LedgerRow], float],
+        reference_strength: float,
+    ) -> NoCopyOpportunity | None:
+        """Withdraw a graded match some other row accounts for at least as well.
+
+        Both callables score a row on the same threshold-normalized scale the
+        rule triggered on, so every comparison here is against
+        ``reference_strength`` — how well the reference itself explains the
+        candidate. A candidate row ``s`` withdraws the hold only when *both* hold:
+
+        ``strength_to_candidate(s) >= reference_strength``
+            the candidate resembles ``s`` at least as much as it resembles the
+            reference, so ``s`` is a plausible place it got the content;
+        ``strength_to_reference(s) >= reference_strength``
+            ``s`` covers the reference's own surface at least as well as the
+            candidate does, so what the candidate shares with the reference was
+            already in ``s``.
+
+        The second condition is what the first cannot express. A candidate that
+        absorbed *two* codebases — one published, one still private — resembles
+        each of them completely, so the first test ties and the published one
+        would wrongly excuse the private one. It does not survive the second
+        test: a published artifact that shares nothing with the embargoed
+        reference explains nothing about why the candidate matches it.
+
+        A published row must additionally trigger against the candidate in its
+        own right (``>= 1.0``); an own-lineage row must additionally predate the
+        reference, which is the whole of its argument — content shipped before
+        the reference existed cannot have come from it.
+        """
+        for published in published_before:
+            to_candidate = strength_to_candidate(published)
+            if to_candidate < 1.0 or to_candidate < reference_strength:
+                continue
+            if strength_to_reference(published) < reference_strength:
+                continue
+            available = released_at[published.agent_id]
+            return NoCopyOpportunity(
+                kind="public_release",
+                matched_agent_id=e.agent_id,
+                source_agent_id=published.agent_id,
+                source_available_at=available,
+                signal=signal,
+                detail=(
+                    f"matched agent {e.agent_id}, but subnet-published agent "
+                    f"{published.agent_id} (public from {available.isoformat()}) "
+                    f"accounts for the shared content at least as well "
+                    f"({to_candidate:.3f} vs {reference_strength:.3f} of the "
+                    "trigger threshold)"
+                ),
+            )
+        for own in own_earlier:
+            if (_utc(own.first_seen), own.agent_id.int) >= (
+                _utc(e.first_seen),
+                e.agent_id.int,
+            ):
+                continue
+            to_candidate = strength_to_candidate(own)
+            if to_candidate < reference_strength:
+                continue
+            if strength_to_reference(own) < reference_strength:
+                continue
+            return NoCopyOpportunity(
+                kind="self_lineage",
+                matched_agent_id=e.agent_id,
+                source_agent_id=own.agent_id,
+                source_available_at=None,
+                signal=signal,
+                detail=(
+                    f"matched agent {e.agent_id}, but this owner's own earlier "
+                    f"agent {own.agent_id} already carried the shared content "
+                    f"({to_candidate:.3f} vs {reference_strength:.3f} of the "
+                    "trigger threshold) and predates the match, so the shared "
+                    "surface originates here"
+                ),
+            )
+        return None
+
     # 1. Exact byte-identical copy of another miner's eligible artifact.
     # This is a defense-in-depth mirror of the separate admission-time exact-byte
     # guard. It uses the same upload chronology so a later-finalized row can never
     # become the retroactive original of an earlier submission.
     for e in earlier_unattested:
         if e.sha256 == sha256:
-            return ReviewDecision(
-                held=True,
-                duplicate_of=e.agent_id,
-                reason=f"exact sha256 match of agent {e.agent_id}",
+            released = _withdraw_equality(
+                e, signal="exact_byte", matches="exact sha256 match"
             )
+            if released is None:
+                return ReviewDecision(
+                    held=True,
+                    duplicate_of=e.agent_id,
+                    reason=f"exact sha256 match of agent {e.agent_id}",
+                )
+            withdrawn = withdrawn or released
 
     # 1b. Exact-repack copy: same canonicalized source (comments/whitespace
     #     stripped, files sorted) even when the tarball bytes differ. An equality
@@ -325,11 +676,20 @@ def evaluate_duplicate_signals(
     if normalized_source_hash is not None:
         for e in earlier_unattested:
             if e.normalized_source_hash == normalized_source_hash:
-                return ReviewDecision(
-                    held=True,
-                    duplicate_of=e.agent_id,
-                    reason=f"normalized-source (repack) match of agent {e.agent_id}",
+                released = _withdraw_equality(
+                    e,
+                    signal="normalized_source",
+                    matches="normalized-source (repack) match",
                 )
+                if released is None:
+                    return ReviewDecision(
+                        held=True,
+                        duplicate_of=e.agent_id,
+                        reason=(
+                            f"normalized-source (repack) match of agent {e.agent_id}"
+                        ),
+                    )
+                withdrawn = withdrawn or released
 
     # 2. Near-dup fingerprint: a matching lexical sketch, on its own.
     #    Checked before the size rule because a fingerprint is the stronger,
@@ -376,6 +736,24 @@ def evaluate_duplicate_signals(
             )
         lex_j, lex_c = content_similarity(content_fingerprint, e.content_fingerprint)
         if lex_j >= jaccard_tol or lex_c >= containment_tol:
+            released = _withdraw_ranked(
+                e,
+                signal="lexical",
+                strength_to_candidate=_lexical_scorer(
+                    content_fingerprint,
+                    jaccard_tol=jaccard_tol,
+                    containment_tol=containment_tol,
+                ),
+                strength_to_reference=_lexical_scorer(
+                    e.content_fingerprint,
+                    jaccard_tol=jaccard_tol,
+                    containment_tol=containment_tol,
+                ),
+                reference_strength=max(lex_j / jaccard_tol, lex_c / containment_tol),
+            )
+            if released is not None:
+                withdrawn = withdrawn or released
+                continue
             return ReviewDecision(
                 held=True,
                 duplicate_of=e.agent_id,
@@ -408,6 +786,18 @@ def evaluate_duplicate_signals(
                 and structural_fingerprint is None
                 and e.structural_fingerprint is None
             ):
+                released = _withdraw_ranked(
+                    e,
+                    signal="size_fallback",
+                    strength_to_candidate=_size_scorer(size_bytes, size_tol=size_tol),
+                    strength_to_reference=_size_scorer(e.size_bytes, size_tol=size_tol),
+                    reference_strength=_size_proximity(
+                        size_bytes, e.size_bytes, size_tol=size_tol
+                    ),
+                )
+                if released is not None:
+                    withdrawn = withdrawn or released
+                    continue
                 return ReviewDecision(
                     held=True,
                     duplicate_of=e.agent_id,
@@ -419,4 +809,6 @@ def evaluate_duplicate_signals(
                     ),
                 )
 
+    if withdrawn is not None:
+        return ReviewDecision(held=False, no_copy_opportunity=withdrawn)
     return _NOT_HELD

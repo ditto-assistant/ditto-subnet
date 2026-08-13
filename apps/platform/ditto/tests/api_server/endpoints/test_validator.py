@@ -103,6 +103,7 @@ from ditto.db.models import (
     InferenceProviderRoute,
     InferenceRoutingPolicy,
     Score,
+    ScoreAuditEntry,
     ScreenerHeartbeat,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
@@ -112,11 +113,19 @@ from ditto.db.queries.artifact_fetch_audit import (
     AUDIT_WRITE_FAILED,
     record_artifact_fetch,
 )
-from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED, append_audit_entry
+from ditto.db.queries.audit import (
+    EVENT_COPY_NO_OPPORTUNITY,
+    EVENT_SCORE_RETEST_QUEUED,
+    append_audit_entry,
+)
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
     append_confirmation_scores,
+)
+from ditto.db.queries.king_reign import (
+    record_first_crowned,
+    record_weight_confirmed,
 )
 from ditto.db.queries.queue_policy_settings import (
     insert_queue_policy_settings_revision,
@@ -8104,6 +8113,71 @@ class TestAntiCopyGate:
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == AgentStatus.ATH_PENDING_REVIEW
+
+    async def test_copy_of_a_subnet_published_artifact_is_not_held(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The white-bolt / red-dragon shape, end to end through the score path.
+
+        Identical setup to ``test_exact_copy_is_held`` with one fact added: the
+        incumbent reigned, its weights were confirmed on-chain, and the embargo
+        lapsed before the second submission was uploaded -- so the subnet itself
+        had already published that source. The submission scores normally, and
+        the match is recorded on the audit chain rather than on the agent.
+        """
+        _install_db(app, session_maker)
+        _install_chain(app)
+        incumbent = await _seed_agent(
+            session_maker, status=AgentStatus.EVALUATING, sha256="cc" * 32
+        )
+        await self._score(
+            client, incumbent, maker=session_maker, run_id="run_inc", composite=0.80
+        )
+        confirmed_at = datetime.now(UTC) - timedelta(hours=200)
+        async with session_maker() as s, s.begin():
+            await record_first_crowned(
+                s, agent_id=incumbent, now=confirmed_at - timedelta(hours=1)
+            )
+            await record_weight_confirmed(s, agent_id=incumbent, now=confirmed_at)
+        # Uploaded after the 120-hour window elapsed: the source was public.
+        derived = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            miner_hotkey=_MINER_B,
+            sha256="cc" * 32,
+        )
+
+        resp = await self._score(
+            client, derived, maker=session_maker, run_id="run_derived", composite=0.80
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == AgentStatus.SCORED
+        async with session_maker() as s:
+            cleared = await s.get(Agent, derived)
+            review = await s.scalar(
+                select(AthReview).where(AthReview.agent_id == derived)
+            )
+            assert cleared is not None
+            assert cleared.status == AgentStatus.SCORED
+            # Not branded: `duplicate_of` and `review_reason` are the hold record.
+            assert cleared.duplicate_of is None
+            assert cleared.review_reason is None
+            assert review is None
+            entry = await s.scalar(
+                select(ScoreAuditEntry).where(
+                    ScoreAuditEntry.agent_id == derived,
+                    ScoreAuditEntry.event == EVENT_COPY_NO_OPPORTUNITY,
+                )
+            )
+            assert entry is not None
+            assert entry.payload["kind"] == "public_release"
+            assert entry.payload["signal"] == "exact_byte"
+            assert entry.payload["source_agent_id"] == str(incumbent)
+            assert entry.payload["disclosure"] == "public"
 
 
 class TestPublicMirror:

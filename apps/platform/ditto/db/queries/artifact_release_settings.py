@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,4 +72,35 @@ async def artifact_release_policy(session: AsyncSession) -> ArtifactReleasePolic
     return ArtifactReleasePolicy(
         disclosure=SourceDisclosure(latest.disclosure),
         embargo_hours=latest.embargo_hours,
+    )
+
+
+async def artifact_release_policy_as_of(
+    session: AsyncSession, *, at: datetime
+) -> ArtifactReleasePolicy:
+    """The policy that governed public release at ``at``.
+
+    The revision table is append-only, so "what did the subnet publish under,
+    back then" is answerable rather than guessable. Every read that serves a
+    live decision wants :func:`artifact_release_policy`; this exists for the one
+    caller that must judge a *past* event — the anti-copy gate, deciding whether
+    an artifact was already public when some other submission was uploaded.
+    Answering that with today's window would retroactively rewrite what miners
+    could see, in whichever direction the operator last moved the number.
+
+    Before the first revision the subnet ran on
+    :data:`DEFAULT_ARTIFACT_RELEASE_POLICY`, which is what a timestamp older
+    than every revision returns.
+    """
+    revision = await session.scalar(
+        select(ArtifactReleaseSettingsRevision)
+        .where(ArtifactReleaseSettingsRevision.created_at <= at)
+        .order_by(ArtifactReleaseSettingsRevision.revision.desc())
+        .limit(1)
+    )
+    if revision is None:
+        return DEFAULT_ARTIFACT_RELEASE_POLICY
+    return ArtifactReleasePolicy(
+        disclosure=SourceDisclosure(revision.disclosure),
+        embargo_hours=revision.embargo_hours,
     )

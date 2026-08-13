@@ -158,7 +158,10 @@ from ditto.api_server.queue_policy_settings import (
 from ditto.api_server.queue_policy_settings import (
     QueuePolicySettingsResolver,
 )
-from ditto.api_server.scoring_gate import evaluate_duplicate_signals
+from ditto.api_server.scoring_gate import (
+    PublicSourceRelease,
+    evaluate_duplicate_signals,
+)
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.validator_slot_settings import (
     DEFAULT_SETTINGS as SLOT_SETTINGS_DEFAULT,
@@ -188,9 +191,12 @@ from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_VALIDATOR_ARTIFACT,
     record_artifact_fetch,
 )
+from ditto.db.queries.artifact_release import list_public_source_releases
+from ditto.db.queries.artifact_release_settings import artifact_release_policy_as_of
 from ditto.db.queries.attestation import list_linked_hotkeys
 from ditto.db.queries.audit import (
     EVENT_AUDIT,
+    EVENT_COPY_NO_OPPORTUNITY,
     EVENT_FINALIZED,
     EVENT_SCORE,
     EVENT_SCORE_INVALIDATED,
@@ -5405,11 +5411,37 @@ async def submit_score(
                         netuid=expected_netuid(),
                     )
                 )
+                # Which earlier artifacts the subnet had itself published by the
+                # time this one was uploaded. Read against the release policy as
+                # it stood *then*, not as it stands now: judging a past upload
+                # by today's embargo would retroactively change what the miner
+                # could have downloaded. Under `disclosure = never` this is
+                # empty and every copy rule fires exactly as before.
+                submitted_at_utc = (
+                    agent.created_at.replace(tzinfo=UTC)
+                    if agent.created_at.tzinfo is None
+                    else agent.created_at
+                )
+                release_policy = await artifact_release_policy_as_of(
+                    session, at=submitted_at_utc
+                )
+                published_before = await list_public_source_releases(
+                    session,
+                    agent_ids=[e.agent_id for e in eligible],
+                    quorum=SCORING_QUORUM,
+                    policy=release_policy,
+                )
                 decision = evaluate_duplicate_signals(
                     agent_id=agent_id,
                     miner_hotkey=agent.miner_hotkey,
                     miner_coldkey=miner_coldkey,
                     linked_owner_hotkeys=linked_hotkeys,
+                    public_source_releases=[
+                        PublicSourceRelease(
+                            agent_id=released_id, available_at=available_at
+                        )
+                        for released_id, available_at in published_before.items()
+                    ],
                     submitted_at=agent.created_at,
                     sha256=agent.sha256,
                     composite=median_composite,
@@ -5467,6 +5499,43 @@ async def submit_score(
                     )
                 else:
                     agent.status = AgentStatus.SCORED
+                    if decision.no_copy_opportunity is not None:
+                        # A copy signal fired and was withdrawn. Record the match
+                        # on the immutable public chain -- an operator asking
+                        # "did anything reproduce this artifact" must still find
+                        # the answer -- while leaving `duplicate_of` and
+                        # `review_reason` unset, because those two columns are
+                        # the hold record and the board renders them as an
+                        # accusation this miner has not earned.
+                        withdrawal = decision.no_copy_opportunity
+                        await append_audit_entry(
+                            session,
+                            agent_id=agent_id,
+                            validator_hotkey=None,
+                            event=EVENT_COPY_NO_OPPORTUNITY,
+                            payload={
+                                "kind": withdrawal.kind,
+                                "signal": withdrawal.signal,
+                                "matched_agent_id": str(withdrawal.matched_agent_id),
+                                "source_agent_id": str(withdrawal.source_agent_id),
+                                "source_available_at": (
+                                    withdrawal.source_available_at.isoformat()
+                                    if withdrawal.source_available_at is not None
+                                    else None
+                                ),
+                                "disclosure": release_policy.disclosure.value,
+                                "embargo_hours": release_policy.embargo_hours,
+                                "algorithm_version": ANTI_COPY_ALGORITHM_VERSION,
+                                "detail": withdrawal.detail,
+                            },
+                            recorded_at=audit_now,
+                        )
+                        logger.info(
+                            "agent %s copy signal withdrawn (%s): %s",
+                            agent_id,
+                            withdrawal.kind,
+                            withdrawal.detail,
+                        )
                 # Reproduce-under-transform audit (v3 Part A). A share of every
                 # run's cases is re-asked under a transform derived from the
                 # block-hash-seeded dataset seed, which postdates the commit; the

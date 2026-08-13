@@ -167,6 +167,19 @@ def compare_anti_copy_pair(
     eligible row to :func:`evaluate_duplicate_signals`, so decision precedence,
     chronology, same-miner exclusion, thresholds, and fallback behavior remain
     identical to the score-write path.
+
+    **One deliberate scope difference.** The score path also withdraws a fired
+    signal when the candidate had no opportunity to copy the reference — the
+    content was already published by the subnet, or it predates the reference in
+    the candidate's own lineage (see
+    :class:`~ditto.api_server.scoring_gate.NoCopyOpportunity`). That test is not
+    a property of the pair: it needs the published-release set and the owner's
+    other generations, neither of which a two-row comparison can see without the
+    database dependency this adapter exists to avoid. So a pair the score path
+    would withdraw still reports ``triggered=True`` here, and consequently is
+    never ``bulk_eligible`` — it waits for a person instead of being cleared in
+    bulk. That is the safe direction: the adapter answers "do these two
+    artifacts match", and matching is exactly what it still says.
     """
     direction, chronology_eligible = _chronology(candidate, reference)
     same_miner = candidate.miner_hotkey == reference.miner_hotkey or bool(

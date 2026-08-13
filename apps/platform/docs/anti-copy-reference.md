@@ -77,6 +77,59 @@ baseline bundle is review-only and safe to refresh whenever the kit moves.
   is not overridden by similar size.
 - Existing holds and their original attribution are never changed by this policy.
 
+## No-copy-opportunity withdrawal
+
+Every rule above answers whether a submission arrived carrying another owner's
+custom surface. None answers whether the miner had to copy to get it, and on
+SN118 the subnet itself is a lawful source: `disclosure = public` with a
+`120`-hour embargo (revision 3, 2026-07-28), and the subnet owner has confirmed
+that building on a released miner agent is permitted. A fired signal is
+therefore *withdrawn* — recorded, not held — in two cases.
+
+**Already published.** Release is **king-only** and the window runs from
+on-chain weight confirmation, not from upload: an artifact is downloadable only
+once it has held the crown, had validators' revealed weights confirmed, reached
+the score quorum, and waited out the embargo from `weight_confirmed_at`. Of
+roughly 1600 submissions, 30 have ever been served. `list_public_source_releases`
+computes that set and is pinned to the public route's own projection by test.
+The policy applied is the revision in force at the *candidate's* upload time, so
+a later change to the window cannot retroactively rewrite what a miner could
+have downloaded.
+
+**Own lineage.** When a published codebase spreads, the nearest earlier match is
+often the newest recipient rather than the originator. An owner row that
+predates the reference and accounts for the shared content is proof the surface
+was already in that owner's hands, which no copy of the reference could produce.
+Only the owner's representative row appears in the eligible ledger, so this
+covers the common case rather than every case.
+
+Both are gated on a threshold-normalized strength scalar (`max(jaccard/0.75,
+containment/0.95)`, so `>= 1.0` means "would trigger"), and a candidate row
+withdraws a hold only when it beats the reference in *both* directions: it must
+account for the candidate at least as well as the reference does, and cover the
+reference's own surface at least as well as the candidate does. The second test
+is what stops a published near-relative from laundering a closer private match —
+a candidate that absorbed two codebases resembles each of them completely, so
+the first test alone would tie.
+
+What still fires, unchanged: a copy of an artifact still inside its embargo
+window; any copy at all under `disclosure = never`, where the published set is
+empty; a match closer to an embargoed artifact than to any published one; and
+the rule-2 inconclusive branch, which fires on the *absence* of a comparison and
+so has no match for a published artifact to account for.
+
+Withdrawal never writes `duplicate_of` or `review_reason` — those are the hold
+record and the public board renders them as an accusation. The match is appended
+to the hash-chained public audit log as `anti_copy_no_opportunity`, carrying the
+matched agent, the accounting artifact, its publication time, the disclosure
+policy and the same aggregate similarity scalars a hold reason already
+publishes.
+
+The read-only pair adapter does not apply the withdrawal: it needs the published
+set and the owner's other generations, which a two-row comparison cannot see
+without a database dependency. A withdrawn pair therefore still reports
+`triggered` there and stays bulk-ineligible, which is the safe direction.
+
 ## Read-only comparison adapter
 
 `compare_anti_copy_pair(candidate=..., reference=...)` delegates its decision to

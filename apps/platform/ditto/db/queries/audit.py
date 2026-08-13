@@ -50,6 +50,15 @@ EVENT_FINALIZED = "agent_finalized"
 # entry follows: the verdict must be independently checkable from published data
 # without the chain itself leaking the dataset's answers.
 EVENT_AUDIT = "transform_audit"
+# A copy signal that fired and was then withdrawn because the candidate had no
+# opportunity to copy the reference -- the content was already published by the
+# subnet, or it predates the reference in the candidate's own lineage. Recorded
+# here rather than on the agent because ``duplicate_of`` / ``review_reason`` are
+# the *hold* record and render publicly as an accusation; a withdrawn signal
+# must leave a trail for leaderboard-integrity questions without branding a
+# miner who did nothing wrong. Payload carries the same aggregate similarity
+# scalars a hold reason already publishes, never a sketch, hash or path.
+EVENT_COPY_NO_OPPORTUNITY = "anti_copy_no_opportunity"
 EVENT_SCORE_INVALIDATED = "score_invalidated"
 EVENT_SCORE_RETEST_QUEUED = "score_retest_queued"
 EVENT_SCORE_RETEST_REQUESTED = "score_retest_requested"

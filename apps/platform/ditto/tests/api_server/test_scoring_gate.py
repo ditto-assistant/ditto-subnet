@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.fingerprint import _FP_VERSION, _MINHASH_K, _PROMPT_VERSION
+from ditto.api_server.scoring_gate import PublicSourceRelease
 from ditto.api_server.scoring_gate import (
     evaluate_duplicate_signals as _evaluate_duplicate_signals,
 )
@@ -1083,3 +1084,469 @@ class TestAttestedOwnerLink:
                 **kwargs, linked_owner_hotkeys=frozenset()
             ).held
         )
+
+
+_EMBARGO = timedelta(hours=120)
+"""Revision 3 of the subnet source-release policy (2026-07-28): five days."""
+
+
+def _released(entry: LedgerRow, *, available_at: datetime) -> PublicSourceRelease:
+    """Declare that the subnet published ``entry``'s source at ``available_at``."""
+    return PublicSourceRelease(agent_id=entry.agent_id, available_at=available_at)
+
+
+class TestPublicReleaseNoCopyOpportunity:
+    """Content the subnet itself published is not content this miner stole.
+
+    SN118 serves chain-confirmed kings' tarballs on an unauthenticated route
+    once the embargo lapses, and the subnet owner has confirmed that building on
+    a released agent is permitted. The gate must stop treating the consequence
+    of its own publication policy as plagiarism -- without going quiet on the
+    thing it exists to catch, which is a copy of an artifact that is still
+    private.
+    """
+
+    def test_reference_public_before_candidate_is_not_held(self) -> None:
+        shared = {f"{i:016x}" for i in range(20)}
+        published = _entry(
+            composite=0.80,
+            miner="5Original",
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(shared),
+            first_seen=_FIRST_SEEN,
+        )
+        # Published two hours before this candidate was uploaded.
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Builder",
+            sha256="bb" * 32,
+            composite=0.81,
+            size_bytes=520000,
+            content_fingerprint=_sk(shared | {"ff" * 8}),
+            eligible=[published],
+            submitted_at=_FIRST_SEEN + _EMBARGO + timedelta(hours=2),
+            public_source_releases=[
+                _released(published, available_at=_FIRST_SEEN + _EMBARGO)
+            ],
+        )
+        assert decision.held is False
+        assert decision.duplicate_of is None
+        assert decision.reason is None
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.kind == "public_release"
+        assert withdrawal.signal == "lexical"
+        assert withdrawal.matched_agent_id == published.agent_id
+        assert withdrawal.source_agent_id == published.agent_id
+
+    def test_reference_still_inside_its_embargo_is_still_held(self) -> None:
+        """The core case the screen exists for must keep firing."""
+        shared = {f"{i:016x}" for i in range(20)}
+        incumbent = _entry(
+            composite=0.80,
+            miner="5Original",
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(shared),
+            first_seen=_FIRST_SEEN,
+        )
+        # Uploaded one hour before that artifact's source would have been served.
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            sha256="bb" * 32,
+            composite=0.81,
+            size_bytes=520000,
+            content_fingerprint=_sk(shared | {"ff" * 8}),
+            eligible=[incumbent],
+            submitted_at=_FIRST_SEEN + _EMBARGO - timedelta(hours=1),
+            public_source_releases=[
+                _released(incumbent, available_at=_FIRST_SEEN + _EMBARGO)
+            ],
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == incumbent.agent_id
+        assert decision.no_copy_opportunity is None
+
+    def test_disclosure_not_public_still_holds(self) -> None:
+        """Under ``disclosure = never`` nothing is published, so nothing is exempt.
+
+        The caller expresses that by passing no releases at all -- see
+        :func:`ditto.db.queries.artifact_release.list_public_source_releases`,
+        which returns ``{}`` whenever the policy in force does not release
+        publicly.
+        """
+        shared = {f"{i:016x}" for i in range(20)}
+        incumbent = _entry(
+            composite=0.80,
+            miner="5Original",
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(shared),
+            first_seen=_FIRST_SEEN,
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            sha256="bb" * 32,
+            composite=0.81,
+            size_bytes=520000,
+            content_fingerprint=_sk(shared | {"ff" * 8}),
+            eligible=[incumbent],
+            # Long after upload: under a public policy this would be well past
+            # the window. The empty release set is the whole difference.
+            submitted_at=_FIRST_SEEN + timedelta(days=400),
+            public_source_releases=[],
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == incumbent.agent_id
+
+    def test_exact_byte_copy_of_a_published_artifact_is_not_held(self) -> None:
+        """Equality admits no ordering: a published twin is a complete account."""
+        published = _entry(
+            composite=0.80,
+            miner="5Original",
+            sha256="cc" * 32,
+            size_bytes=500000,
+            first_seen=_FIRST_SEEN,
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Redeployer",
+            sha256="cc" * 32,
+            composite=0.80,
+            size_bytes=500000,
+            eligible=[published],
+            submitted_at=_FIRST_SEEN + _EMBARGO + timedelta(hours=1),
+            public_source_releases=[
+                _released(published, available_at=_FIRST_SEEN + _EMBARGO)
+            ],
+        )
+        assert decision.held is False
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.signal == "exact_byte"
+
+    def test_exact_byte_copy_of_a_private_artifact_is_still_held(self) -> None:
+        private = _entry(
+            composite=0.80,
+            miner="5Original",
+            sha256="cc" * 32,
+            size_bytes=500000,
+            first_seen=_FIRST_SEEN,
+        )
+        unrelated_public = _entry(
+            composite=0.60,
+            miner="5Someone",
+            sha256="dd" * 32,
+            size_bytes=400000,
+            first_seen=_FIRST_SEEN,
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            sha256="cc" * 32,
+            composite=0.80,
+            size_bytes=500000,
+            eligible=[private, unrelated_public],
+            submitted_at=_FIRST_SEEN + _EMBARGO + timedelta(hours=1),
+            public_source_releases=[
+                _released(unrelated_public, available_at=_FIRST_SEEN + _EMBARGO)
+            ],
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == private.agent_id
+
+    def test_closer_match_to_an_embargoed_artifact_still_holds(self) -> None:
+        """A published near-relative does not launder a closer private match.
+
+        Both artifacts descend from one codebase, so both clear the threshold.
+        The candidate carries the still-private one's custom surface verbatim and
+        only partly overlaps the published one, so it took something that was
+        never published -- and the strength ordering says so.
+        """
+        base = {f"{i:016x}" for i in range(20)}
+        published = _entry(
+            composite=0.78,
+            miner="5Publisher",
+            sha256="aa" * 32,
+            size_bytes=480000,
+            content_fingerprint=_sk(base | {f"pub{i:013x}" for i in range(20)}),
+            first_seen=_FIRST_SEEN,
+        )
+        embargoed = _entry(
+            composite=0.80,
+            miner="5Original",
+            sha256="bb" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(base | {f"new{i:013x}" for i in range(20)}),
+            first_seen=_FIRST_SEEN + timedelta(hours=1),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            sha256="cc" * 32,
+            composite=0.805,
+            size_bytes=500100,
+            content_fingerprint=_sk(base | {f"new{i:013x}" for i in range(20)}),
+            eligible=[published, embargoed],
+            submitted_at=_FIRST_SEEN + _EMBARGO + timedelta(hours=2),
+            public_source_releases=[
+                _released(published, available_at=_FIRST_SEEN + _EMBARGO)
+            ],
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == embargoed.agent_id
+
+    def test_withdrawal_for_one_reference_does_not_excuse_another(self) -> None:
+        """Withdrawal is per-pair; the loop must keep checking."""
+        public_shared = {f"{i:016x}" for i in range(20)}
+        private_shared = {f"secret{i:010x}" for i in range(20)}
+        published = _entry(
+            composite=0.70,
+            miner="5Publisher",
+            sha256="aa" * 32,
+            size_bytes=400000,
+            content_fingerprint=_sk(public_shared),
+            first_seen=_FIRST_SEEN,
+        )
+        embargoed = _entry(
+            composite=0.80,
+            miner="5Original",
+            sha256="bb" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(private_shared),
+            first_seen=_FIRST_SEEN + timedelta(hours=1),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            sha256="cc" * 32,
+            composite=0.81,
+            size_bytes=520000,
+            # Carries both codebases: the published one lawfully, the other not.
+            content_fingerprint=_sk(public_shared | private_shared),
+            eligible=[published, embargoed],
+            submitted_at=_FIRST_SEEN + _EMBARGO + timedelta(hours=2),
+            public_source_releases=[
+                _released(published, available_at=_FIRST_SEEN + _EMBARGO)
+            ],
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == embargoed.agent_id
+
+    def test_publication_after_the_candidate_upload_does_not_exempt(self) -> None:
+        """Release is judged at the candidate's upload time, not at score time."""
+        shared = {f"{i:016x}" for i in range(20)}
+        incumbent = _entry(
+            composite=0.80,
+            miner="5Original",
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(shared),
+            first_seen=_FIRST_SEEN,
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            sha256="bb" * 32,
+            composite=0.81,
+            size_bytes=520000,
+            content_fingerprint=_sk(shared | {"ff" * 8}),
+            eligible=[incumbent],
+            submitted_at=_FIRST_SEEN + timedelta(hours=6),
+            public_source_releases=[
+                _released(incumbent, available_at=_FIRST_SEEN + timedelta(hours=7))
+            ],
+        )
+        assert decision.held is True
+
+    def test_white_bolt_reproducing_published_red_dragon(self) -> None:
+        """The concrete production case (both bans since reversed by hand).
+
+        red-dragon v12 (``dc4b4c0d``) was uploaded 2026-08-04, crowned, weight-
+        confirmed 11:46Z the same day, and its source went public 2026-08-09
+        11:46Z under the 120-hour policy. white-bolt v1 was uploaded 2026-08-10
+        and v2 on 2026-08-11 -- both after publication -- and both were held and
+        then banned for reproducing red-dragon's engine.
+
+        The detail production got wrong twice over: the hold on white-bolt v1
+        named red-dragon **v16** (``e86e42f1``, uploaded 2026-08-07), the
+        *nearest* earlier match, which was never published. The reference in the
+        hold record was private while the content was not, so the withdrawal has
+        to be driven by whichever artifact accounts for the shared content, not
+        by whichever one the ledger happened to name.
+        """
+        engine = {f"engine{i:010x}" for i in range(30)}
+        v12 = _entry(
+            composite=0.90,
+            miner="5DcpbvmTro",
+            sha256="12" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(engine),
+            first_seen=datetime(2026, 8, 4, 6, 21, 53, tzinfo=UTC),
+        )
+        v16 = _entry(
+            composite=0.93,
+            miner="5DcpbvmTro",
+            sha256="16" * 32,
+            size_bytes=505000,
+            content_fingerprint=_sk(engine | {f"v16{i:013x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 7, 14, 12, 32, tzinfo=UTC),
+        )
+        v12_public_at = datetime(2026, 8, 9, 11, 46, 31, tzinfo=UTC)
+        white_bolt_v1 = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5HTUbRK5bN",
+            sha256="wb" * 32,
+            composite=0.91,
+            size_bytes=510000,
+            content_fingerprint=_sk(engine | {f"wb{i:014x}" for i in range(2)}),
+            eligible=[v12, v16],
+            submitted_at=datetime(2026, 8, 10, 18, 19, 33, tzinfo=UTC),
+            public_source_releases=[_released(v12, available_at=v12_public_at)],
+        )
+        assert white_bolt_v1.held is False
+        assert white_bolt_v1.duplicate_of is None
+        withdrawal = white_bolt_v1.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.kind == "public_release"
+        assert withdrawal.source_agent_id == v12.agent_id
+
+        white_bolt_v2 = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5HTUbRK5bN",
+            sha256="w2" * 32,
+            composite=0.92,
+            size_bytes=512000,
+            content_fingerprint=_sk(engine | {f"w2{i:014x}" for i in range(3)}),
+            eligible=[v12, v16],
+            submitted_at=datetime(2026, 8, 11, 14, 39, 45, tzinfo=UTC),
+            public_source_releases=[_released(v12, available_at=v12_public_at)],
+        )
+        assert white_bolt_v2.held is False
+
+
+class TestSelfLineagePrecedence:
+    """An originator must not be held against its own downstream copy.
+
+    When a published codebase spreads, the nearest earlier match is often the
+    newest recipient rather than the source. red-dragon v18 was held against
+    astrion-v9 -- whose entire history is two submissions -- while red-dragon had
+    nineteen. Content this owner already shipped cannot have come from a
+    submission that did not yet exist.
+    """
+
+    def test_owner_row_predating_the_match_withdraws_the_hold(self) -> None:
+        engine = {f"engine{i:010x}" for i in range(30)}
+        own_prior = _entry(
+            composite=0.93,
+            miner="5DcpbvmTro",
+            coldkey="5RedDragonCold",
+            sha256="17" * 32,
+            size_bytes=505000,
+            content_fingerprint=_sk(engine),
+            first_seen=datetime(2026, 8, 9, 15, 49, 16, tzinfo=UTC),
+        )
+        recipient = _entry(
+            composite=0.94,
+            miner="5CkuRmNC5R",
+            coldkey="5AstrionCold",
+            sha256="a9" * 32,
+            size_bytes=507000,
+            content_fingerprint=_sk(engine | {f"as{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 17, 37, 48, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5DcpbvmTro",
+            miner_coldkey="5RedDragonCold",
+            sha256="18" * 32,
+            composite=0.95,
+            size_bytes=509000,
+            content_fingerprint=_sk(engine | {f"v18{i:013x}" for i in range(2)}),
+            eligible=[own_prior, recipient],
+            submitted_at=datetime(2026, 8, 12, 10, 40, 3, tzinfo=UTC),
+        )
+        assert decision.held is False
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.kind == "self_lineage"
+        assert withdrawal.matched_agent_id == recipient.agent_id
+        assert withdrawal.source_agent_id == own_prior.agent_id
+
+    def test_owner_row_postdating_the_match_is_no_alibi(self) -> None:
+        """Order is the whole argument: a later own row proves nothing.
+
+        If this owner only acquired the shared surface *after* the reference
+        existed, its own earlier generation cannot explain where the surface
+        came from, and the hold stands.
+        """
+        engine = {f"engine{i:010x}" for i in range(30)}
+        stranger = _entry(
+            composite=0.90,
+            miner="5Stranger",
+            coldkey="5StrangerCold",
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(engine),
+            first_seen=_FIRST_SEEN,
+        )
+        own_prior = _entry(
+            composite=0.91,
+            miner="5Copier",
+            coldkey="5CopierCold",
+            sha256="bb" * 32,
+            size_bytes=502000,
+            content_fingerprint=_sk(engine),
+            first_seen=_FIRST_SEEN + timedelta(hours=1),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            miner_coldkey="5CopierCold",
+            sha256="cc" * 32,
+            composite=0.92,
+            size_bytes=503000,
+            content_fingerprint=_sk(engine),
+            eligible=[stranger, own_prior],
+            submitted_at=_FIRST_SEEN + timedelta(hours=2),
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == stranger.agent_id
+
+    def test_weaker_own_row_is_no_alibi(self) -> None:
+        """The owner's own history must actually account for the shared surface."""
+        engine = {f"engine{i:010x}" for i in range(30)}
+        stranger = _entry(
+            composite=0.90,
+            miner="5Stranger",
+            coldkey="5StrangerCold",
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(engine),
+            first_seen=_FIRST_SEEN + timedelta(hours=1),
+        )
+        unrelated_own = _entry(
+            composite=0.50,
+            miner="5Copier",
+            coldkey="5CopierCold",
+            sha256="bb" * 32,
+            size_bytes=300000,
+            content_fingerprint=_sk({f"mine{i:012x}" for i in range(30)}),
+            first_seen=_FIRST_SEEN,
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            miner_coldkey="5CopierCold",
+            sha256="cc" * 32,
+            composite=0.905,
+            size_bytes=501000,
+            content_fingerprint=_sk(engine),
+            eligible=[stranger, unrelated_own],
+            submitted_at=_FIRST_SEEN + timedelta(hours=2),
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == stranger.agent_id

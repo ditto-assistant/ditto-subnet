@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.db.models import Score
+from ditto.api_models.agent_status import AgentStatus
+from ditto.db.models import Agent, Score
+from ditto.db.queries.artifact_release_settings import ArtifactReleasePolicy
+from ditto.db.queries.king_reign import get_king_reveal
 
 
 @dataclass(frozen=True)
@@ -90,3 +93,70 @@ async def list_first_score_quorums(
             ),
         )
     return result
+
+
+async def list_public_source_releases(
+    session: AsyncSession,
+    *,
+    agent_ids: list[UUID] | set[UUID] | tuple[UUID, ...],
+    quorum: int,
+    policy: ArtifactReleasePolicy,
+) -> dict[UUID, datetime]:
+    """Return ``agent_id -> when its source became publicly downloadable``.
+
+    The same predicate the public routes serve, expressed for consumers that
+    need the *fact* of publication rather than a wire projection: source release
+    is **king-only** and its clock starts at on-chain weight confirmation, not at
+    upload and not at score quorum. An agent is present here only when it (1)
+    completed a same-version score quorum, (2) held the crown and had validator
+    weights confirmed on-chain, and (3) is currently ``scored`` or ``live``;
+    ``available_at`` is ``weight_confirmed_at + policy.embargo_hours``. Agents
+    that never reigned — the overwhelming majority — are simply absent.
+
+    ``policy`` is passed in rather than read here so the caller controls *which*
+    revision applies. The anti-copy gate passes the revision that was in force
+    when the candidate was uploaded; a live read passes the current one.
+
+    Two deliberate conservatisms, both of which can only *omit* a release and so
+    can only preserve a copy hold, never create a false exemption:
+
+    * status is read as it stands now, so an artifact that was downloadable and
+      has since been banned or reopened for review does not count;
+    * one policy revision is applied to the whole window, so a release that
+      opened under a shorter embargo and was re-closed by a later, longer one is
+      not credited to the shorter revision.
+    """
+    if not agent_ids or not policy.releases_publicly:
+        return {}
+
+    quorums = await list_first_score_quorums(
+        session, agent_ids=agent_ids, quorum=quorum
+    )
+    if not quorums:
+        return {}
+    reveals = await get_king_reveal(session, agent_ids=list(quorums))
+    confirmed = {
+        agent_id: reveal.weight_confirmed_at
+        for agent_id, reveal in reveals.items()
+        if reveal.weight_confirmed_at is not None
+    }
+    if not confirmed:
+        return {}
+    releasable = set(
+        (
+            await session.execute(
+                select(Agent.agent_id).where(
+                    Agent.agent_id.in_(confirmed),
+                    Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    window = timedelta(hours=policy.embargo_hours)
+    return {
+        agent_id: _as_utc(weight_confirmed_at) + window
+        for agent_id, weight_confirmed_at in confirmed.items()
+        if agent_id in releasable
+    }
