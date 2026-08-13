@@ -42,6 +42,7 @@ validator_hotkey: "" # public SS58 — set in host_vars; empty = don't start the
 validator_epoch_seconds: 3600
 validator_queue_limit: 50
 validator_benchmark_capacity: 1
+validator_longmem_capacity: "{{ ((validator_benchmark_capacity | int) + 1) // 2 }}"
 validator_platform_inference_enforced: false
 
 # --- Secrets (Secret Manager ids; values populated out-of-band; see runbook) ---

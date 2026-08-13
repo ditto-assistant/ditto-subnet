@@ -179,6 +179,13 @@ class ValidatorConfig:
     contract. This must not exceed dittobench-api's full-run capacity.
     """
 
+    longmem_capacity: int
+    """Independent LongMemEval slots, bounded to half ordinary capacity.
+
+    These slots never claim canonical benchmark tickets. Zero disables the
+    optional lane; the shipped default is half ordinary capacity rounded up.
+    """
+
     resource_ceilings: ResourceCeilings
     """Host-resource percentages at or above which this worker stops claiming.
 
@@ -488,6 +495,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         "VALIDATOR_PLATFORM_API_URL",
         os.environ.get("VALIDATOR_PLATFORM_API_URL", "http://localhost:8000"),
     )
+    benchmark_capacity = int(os.environ.get("VALIDATOR_BENCHMARK_CAPACITY", "1"))
+    longmem_capacity = int(
+        os.environ.get("VALIDATOR_LONGMEM_CAPACITY", str((benchmark_capacity + 1) // 2))
+    )
     config = ValidatorConfig(
         platform_api_url=platform_api_url,
         platform_inference_base_url=(
@@ -501,7 +512,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         ).strip(),
         run_size=run_size,
         dittobench_mock=dittobench_mock,
-        benchmark_capacity=int(os.environ.get("VALIDATOR_BENCHMARK_CAPACITY", "1")),
+        benchmark_capacity=benchmark_capacity,
+        longmem_capacity=longmem_capacity,
         resource_ceilings=parse_resource_ceilings_from_env(),
         inference_proxy_required=(
             os.environ.get("VALIDATOR_INFERENCE_PROXY_REQUIRED", "false").lower()
@@ -552,4 +564,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         )
     if not 1 <= config.benchmark_capacity <= 8:
         raise ValidatorConfigError("VALIDATOR_BENCHMARK_CAPACITY must be in [1, 8]")
+    if not 0 <= config.longmem_capacity <= 4:
+        raise ValidatorConfigError("VALIDATOR_LONGMEM_CAPACITY must be in [0, 4]")
+    if config.longmem_capacity > (config.benchmark_capacity + 1) // 2:
+        raise ValidatorConfigError(
+            "VALIDATOR_LONGMEM_CAPACITY cannot exceed half rounded up of "
+            "VALIDATOR_BENCHMARK_CAPACITY"
+        )
     return config

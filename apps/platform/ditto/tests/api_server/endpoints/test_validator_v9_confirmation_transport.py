@@ -444,7 +444,7 @@ async def _append_enforce_revision(
 
 def _claim_payload(
     *,
-    slot_id: str = "slot-0",
+    slot_id: str = "longmem-0",
     nonce: UUID | None = None,
     requested_at: datetime | None = None,
     keypair: bittensor.Keypair = VALIDATOR_KEYPAIR,
@@ -1031,7 +1031,7 @@ class TestV9ConfirmationClaimAdmission:
         assert body["bundle_id"] == str(seeded.bundle_id)
         assert body["agent_id"] == str(seeded.agent_id)
         assert body["bench_version"] == 9
-        assert body["slot_id"] == "slot-0"
+        assert body["slot_id"] == "longmem-0"
         assert body["per_bundle_request_cap"] == 100
         assert body["per_bundle_token_cap"] == 10_000
         assert body["mode"] == "shadow"
@@ -1828,8 +1828,8 @@ class TestV9ConfirmationReportAdmission:
         )
 
 
-class TestOrdinarySlotBlocksConfirmation:
-    async def test_live_legacy_table_slot_returns_204_without_reserving_budget(
+class TestOrdinarySlotsAreDisjointFromConfirmation:
+    async def test_live_ordinary_slot_does_not_block_dedicated_longmem_slot(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -1856,21 +1856,21 @@ class TestOrdinarySlotBlocksConfirmation:
 
         response = await _claim(client)
 
-        assert response.status_code == 204, response.text
+        assert response.status_code == 200, response.text
         async with session_maker() as session:
             bundle = await session.get(ConfirmationBundle, seeded.bundle_id)
-            assert bundle is not None and bundle.state == "pending"
+            assert bundle is not None and bundle.state == "leased"
             assert (
                 await session.scalar(
                     select(func.count()).select_from(ConfirmationBundleTicket)
                 )
-                == 0
+                == 1
             )
             assert (
                 await session.scalar(
                     select(func.count()).select_from(ConfirmationBudgetReservation)
                 )
-                == 0
+                == 1
             )
         assert await _canonical_counts(session_maker, agent_id=seeded.agent_id) == (
             AgentStatus.SCORED,
@@ -2114,11 +2114,11 @@ class TestV9ConfirmationFailureRecovery:
         )
         assert failed.status_code == 200, failed.text
 
-        reclaimed = await _claim(client, payload=_claim_payload(slot_id="slot-0"))
+        reclaimed = await _claim(client, payload=_claim_payload(slot_id="longmem-0"))
 
         assert reclaimed.status_code == 200, reclaimed.text
         assert reclaimed.json()["ticket_id"] != str(first_ticket.ticket_id)
-        assert reclaimed.json()["slot_id"] == "slot-0"
+        assert reclaimed.json()["slot_id"] == "longmem-0"
         async with session_maker() as session:
             tickets = list(
                 await session.scalars(
@@ -2271,7 +2271,7 @@ class TestV9ConfirmationFailureRecovery:
             prepared=prepared.json(), bundle=bundle, ticket=ticket
         )
         claim_payload = _claim_payload(
-            slot_id="slot-1",
+            slot_id="longmem-1",
             profile_revision=profile.revision,
             profile_checksum=profile.checksum(),
         )

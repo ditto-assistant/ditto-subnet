@@ -203,7 +203,7 @@ def _job_payload() -> dict[str, Any]:
         "ticket_id": str(_TICKET_ID),
         "reservation_id": str(_RESERVATION_ID),
         "agent_id": str(_AGENT_ID),
-        "slot_id": "slot-3",
+        "slot_id": "longmem-3",
         "deadline": _DEADLINE.isoformat(),
         "artifact_sha256": _ARTIFACT_SHA,
         "bench_version": 9,
@@ -391,7 +391,7 @@ def _submit_response(*, replayed: bool = False) -> dict[str, Any]:
 def test_claim_signing_domain_is_byte_exact_and_normalizes_to_utc() -> None:
     message = v9_confirmation_claim_signing_message(
         validator_hotkey=_HOTKEY,
-        slot_id="slot-3",
+        slot_id="longmem-3",
         profile_revision=_PROFILE_REVISION,
         profile_checksum=_PROFILE_CHECKSUM,
         broker_public_key=_BROKER_PUBLIC_KEY,
@@ -403,7 +403,7 @@ def test_claim_signing_domain_is_byte_exact_and_normalizes_to_utc() -> None:
         message
         == (
             "validator-v9-confirmation-claim:v1:"
-            f"{_HOTKEY}:slot-3:{_PROFILE_REVISION}:{_PROFILE_CHECKSUM}:"
+            f"{_HOTKEY}:longmem-3:{_PROFILE_REVISION}:{_PROFILE_CHECKSUM}:"
             f"{_BROKER_PUBLIC_KEY}:{_NONCE}:2026-08-08T17:14:15.123456Z"
         ).encode()
     )
@@ -691,7 +691,7 @@ def test_claim_signature_rejects_each_field_tamper(field: str, tampered: Any) ->
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     values: dict[str, object] = {
         "validator_hotkey": keypair.ss58_address,
-        "slot_id": "slot-3",
+        "slot_id": "longmem-3",
         "profile_revision": _PROFILE_REVISION,
         "profile_checksum": _PROFILE_CHECKSUM,
         "broker_public_key": _BROKER_PUBLIC_KEY,
@@ -701,7 +701,7 @@ def test_claim_signature_rejects_each_field_tamper(field: str, tampered: Any) ->
     signature = sign_v9_confirmation_claim(
         keypair,
         validator_hotkey=keypair.ss58_address,
-        slot_id="slot-3",
+        slot_id="longmem-3",
         profile_revision=_PROFILE_REVISION,
         profile_checksum=_PROFILE_CHECKSUM,
         broker_public_key=_BROKER_PUBLIC_KEY,
@@ -839,7 +839,7 @@ def test_bundle_signature_rejects_each_field_tamper(field: str, tampered: Any) -
             v9_confirmation_claim_signing_message,
             {
                 "validator_hotkey": _HOTKEY,
-                "slot_id": "slot-3",
+                "slot_id": "longmem-3",
                 "profile_revision": _PROFILE_REVISION,
                 "profile_checksum": _PROFILE_CHECKSUM,
                 "broker_public_key": _BROKER_PUBLIC_KEY,
@@ -941,7 +941,7 @@ def test_claim_contract_is_strict_and_fail_closed(
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     payload: dict[str, Any] = {
         "validator_hotkey": keypair.ss58_address,
-        "slot_id": "slot-3",
+        "slot_id": "longmem-3",
         "profile_revision": _PROFILE_REVISION,
         "profile_checksum": _PROFILE_CHECKSUM,
         "nonce": _NONCE,
@@ -1001,7 +1001,7 @@ async def test_claim_uses_exact_private_route_headers_and_signed_profile() -> No
         assert request.headers["X-Validator-Hotkey"] == keypair.ss58_address
         claim = V9ConfirmationClaimRequest.model_validate_json(request.content)
         assert claim.validator_hotkey == keypair.ss58_address
-        assert claim.slot_id == "slot-3"
+        assert claim.slot_id == "longmem-3"
         assert claim.profile_revision == _PROFILE_REVISION
         assert claim.profile_checksum == _PROFILE_CHECKSUM
         assert claim.broker_public_key == _BROKER_PUBLIC_KEY
@@ -1020,7 +1020,7 @@ async def test_claim_uses_exact_private_route_headers_and_signed_profile() -> No
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = PlatformClient(_config(keypair.ss58_address), http, keypair)
         job = await client.request_v9_confirmation_job(
-            slot_id="slot-3",
+            slot_id="longmem-3",
             profile_revision=_PROFILE_REVISION,
             profile_checksum=_PROFILE_CHECKSUM,
             broker_public_key=_BROKER_PUBLIC_KEY,
@@ -1043,7 +1043,7 @@ async def test_claim_returns_none_on_204_without_parsing_a_body() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = PlatformClient(_config(keypair.ss58_address), http, keypair)
         result = await client.request_v9_confirmation_job(
-            slot_id="slot-0",
+            slot_id="longmem-0",
             profile_revision=_PROFILE_REVISION,
             profile_checksum=_PROFILE_CHECKSUM,
             broker_public_key=_BROKER_PUBLIC_KEY,
@@ -1057,7 +1057,7 @@ async def test_claim_returns_none_on_204_without_parsing_a_body() -> None:
     [
         (lambda body: body.update(purpose="canonical_quorum"), "response was invalid"),
         (lambda body: body.update(bench_version=8), "response was invalid"),
-        (lambda body: body.update(slot_id="slot-4"), "signed claim"),
+        (lambda body: body.update(slot_id="longmem-2"), "signed claim"),
         (
             lambda body: body["execution_profile"].update(revision="wrong-profile"),
             "signed claim",
@@ -1100,7 +1100,7 @@ async def test_claim_rejects_malformed_or_requested_identity_mismatched_job(
         with pytest.raises(PlatformError, match=error):
             client = PlatformClient(_config(keypair.ss58_address), http, keypair)
             await client.request_v9_confirmation_job(
-                slot_id="slot-3",
+                slot_id="longmem-3",
                 profile_revision=_PROFILE_REVISION,
                 profile_checksum=_PROFILE_CHECKSUM,
                 broker_public_key=_BROKER_PUBLIC_KEY,
@@ -1123,14 +1123,14 @@ async def test_claim_rejects_invalid_json_and_http_rejection() -> None:
         client = PlatformClient(_config(keypair.ss58_address), http, keypair)
         with pytest.raises(PlatformError, match="job response was invalid"):
             await client.request_v9_confirmation_job(
-                slot_id="slot-3",
+                slot_id="longmem-3",
                 profile_revision=_PROFILE_REVISION,
                 profile_checksum=_PROFILE_CHECKSUM,
                 broker_public_key=_BROKER_PUBLIC_KEY,
             )
         with pytest.raises(PlatformError, match=r"claim rejected \(409\)"):
             await client.request_v9_confirmation_job(
-                slot_id="slot-3",
+                slot_id="longmem-3",
                 profile_revision=_PROFILE_REVISION,
                 profile_checksum=_PROFILE_CHECKSUM,
                 broker_public_key=_BROKER_PUBLIC_KEY,
@@ -1537,7 +1537,7 @@ async def test_v9_flow_never_invokes_legacy_top5_or_canonical_artifact_methods()
             ),
         ):
             job = await client.request_v9_confirmation_job(
-                slot_id="slot-3",
+                slot_id="longmem-3",
                 profile_revision=_PROFILE_REVISION,
                 profile_checksum=_PROFILE_CHECKSUM,
                 broker_public_key=_BROKER_PUBLIC_KEY,
@@ -1557,7 +1557,7 @@ async def test_worker_independently_rebuilds_every_signed_root_field(
 ) -> None:
     job = _job().model_copy(
         update={
-            "slot_id": "slot-0",
+            "slot_id": "longmem-0",
             "deadline": datetime.now(UTC) + timedelta(hours=1),
         }
     )
@@ -1622,7 +1622,7 @@ async def test_worker_independently_rebuilds_every_signed_root_field(
         keypair=MagicMock(),
     )
 
-    await worker._run_v9_confirmation_lane(slot_ids=["slot-0"])
+    await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
 
     platform.prepare_v9_confirmation_report.assert_awaited_once_with(job, scorer_result)
     assert len(rebuilt) == 1
@@ -1777,7 +1777,7 @@ async def test_worker_rejects_platform_root_tampering_before_sign_or_submit(
 ) -> None:
     job = _job().model_copy(
         update={
-            "slot_id": "slot-0",
+            "slot_id": "longmem-0",
             "deadline": datetime.now(UTC) + timedelta(hours=1),
         }
     )
@@ -1837,7 +1837,7 @@ async def test_worker_rejects_platform_root_tampering_before_sign_or_submit(
         keypair=MagicMock(),
     )
 
-    await worker._run_v9_confirmation_lane(slot_ids=["slot-0"])
+    await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
 
     signing_spy.assert_not_called()
     platform.submit_v9_confirmation_report.assert_not_awaited()
@@ -1859,7 +1859,7 @@ async def test_worker_hands_private_failure_back_with_typed_reason(
 ) -> None:
     job = _job().model_copy(
         update={
-            "slot_id": "slot-0",
+            "slot_id": "longmem-0",
             "deadline": datetime.now(UTC) + timedelta(hours=1),
         }
     )
@@ -1895,7 +1895,7 @@ async def test_worker_hands_private_failure_back_with_typed_reason(
         keypair=MagicMock(),
     )
 
-    await worker._run_v9_confirmation_lane(slot_ids=["slot-0"])
+    await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
 
     platform.fail_v9_confirmation_job.assert_awaited_once_with(job, reason=reason)
     platform.submit_v9_confirmation_report.assert_not_awaited()
@@ -1904,7 +1904,7 @@ async def test_worker_hands_private_failure_back_with_typed_reason(
 async def test_worker_cancellation_hands_back_then_reraises() -> None:
     job = _job().model_copy(
         update={
-            "slot_id": "slot-0",
+            "slot_id": "longmem-0",
             "deadline": datetime.now(UTC) + timedelta(hours=1),
         }
     )
@@ -1946,7 +1946,7 @@ async def test_worker_cancellation_hands_back_then_reraises() -> None:
         keypair=MagicMock(),
     )
     task = worker_module.asyncio.create_task(
-        worker._run_v9_confirmation_lane(slot_ids=["slot-0"])
+        worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
     )
     await execution_started.wait()
     task.cancel()

@@ -81,7 +81,7 @@ func validConfirmationRequest() confirmationExecutionRequest {
 		BundleID:               "bundle-00000001",
 		TicketID:               "ticket-00000001",
 		AgentID:                "agent-00000001",
-		SlotID:                 "slot-0",
+		SlotID:                 "longmem-0",
 		InferenceSessionID:     "confirmation-session-00000001",
 		Mode:                   "shadow",
 		ArtifactURL:            "https://artifacts.invalid/v9/agent.tar.gz",
@@ -274,6 +274,54 @@ func TestConfirmationExecuteFailsClosedWithoutExecutor(t *testing.T) {
 	)
 }
 
+func TestConfirmationExecuteUsesIndependentBoundedCapacity(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	executor := readyConfirmationExecutor()
+	executor.execute = func(context.Context, confirmationExecutionRequest) (confirmationExecutionResult, error) {
+		close(started)
+		<-release
+		return validConfirmationResult(), nil
+	}
+	server := &server{
+		confirmation:      executor,
+		confirmationSlots: make(chan struct{}, 1),
+		// Filling ordinary capacity must not affect the dedicated lane.
+		runSlots: make(chan struct{}, 1),
+	}
+	server.runSlots <- struct{}{}
+	body := confirmationRequestBody(t, validConfirmationRequest())
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		firstDone <- executeConfirmationRequest(t, server, nil, body)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first confirmation did not enter the executor")
+	}
+
+	second := executeConfirmationRequest(t, server, nil, body)
+	assertConfirmationError(
+		t,
+		second,
+		http.StatusTooManyRequests,
+		"confirmation capacity is full",
+	)
+	close(release)
+	select {
+	case first := <-firstDone:
+		if first.Code != http.StatusOK {
+			t.Fatalf("first status = %d, want 200; body=%s", first.Code, first.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first confirmation did not finish")
+	}
+	if executor.callCount() != 1 {
+		t.Fatalf("executor calls = %d, want 1", executor.callCount())
+	}
+}
+
 func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -382,6 +430,20 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 			name: "invalid slot identity",
 			mutate: func(request *confirmationExecutionRequest) {
 				request.SlotID = "worker-0"
+			},
+			message: "confirmation bundle, ticket, agent, and slot identities are required",
+		},
+		{
+			name: "ordinary slot identity",
+			mutate: func(request *confirmationExecutionRequest) {
+				request.SlotID = "slot-0"
+			},
+			message: "confirmation bundle, ticket, agent, and slot identities are required",
+		},
+		{
+			name: "longmem slot above supported capacity",
+			mutate: func(request *confirmationExecutionRequest) {
+				request.SlotID = "longmem-4"
 			},
 			message: "confirmation bundle, ticket, agent, and slot identities are required",
 		},

@@ -66,6 +66,9 @@ var (
 	// overcommit the documented 16 GiB host (#31). Raise it only on a host with
 	// headroom to spare.
 	maxConcurrentRuns = envIntDefault("DITTOBENCH_MAX_CONCURRENT_RUNS", 1)
+	// LongMemEval is a separate, slower execution lane. Its semaphore never
+	// consumes ordinary run slots and defaults to half the ordinary pool.
+	maxConcurrentConfirmations = envIntDefault("DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS", max(1, (maxConcurrentRuns+1)/2))
 	// Local embeddings are a separate finite resource from hosted chat
 	// inference. Default to one memory phase so raising run capacity cannot turn
 	// concurrent seed waves into deterministic Ollama timeouts; capable hosts may
@@ -168,9 +171,10 @@ type server struct {
 	// relayRunMu isolates scored runs that share this server's model relay.
 	// The relay exposes process-wide monotonic failure counters, so overlapping
 	// scored runs could otherwise attribute one run's provider failure to another.
-	relayRunMu sync.Mutex
-	cancelMu   sync.Mutex
-	runCancels map[string]context.CancelFunc
+	relayRunMu        sync.Mutex
+	cancelMu          sync.Mutex
+	runCancels        map[string]context.CancelFunc
+	confirmationSlots chan struct{}
 	// confirmation is nil until an exact server-owned v9 profile and every
 	// trusted LongMem/ablation dependency have been installed. Nil is the
 	// production-safe default and is independent of public v8 capabilities.
@@ -196,6 +200,9 @@ func main() {
 
 	if maxConcurrentRuns > 8 {
 		log.Fatalf("DITTOBENCH_MAX_CONCURRENT_RUNS exceeds the supported safety bound of 8")
+	}
+	if maxConcurrentConfirmations > 4 {
+		log.Fatalf("DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS exceeds the supported safety bound of 4")
 	}
 	if maxConcurrentMemoryPhases > maxConcurrentRuns {
 		maxConcurrentMemoryPhases = maxConcurrentRuns
@@ -248,6 +255,7 @@ func main() {
 		memorySlots:            memorySlots,
 		broker:                 newInferenceBroker(maxConcurrentRuns, cap(memorySlots)),
 		runCancels:             make(map[string]context.CancelFunc),
+		confirmationSlots:      make(chan struct{}, maxConcurrentConfirmations),
 	}
 	s.broker.relayWait = s.store.SetRelayWaiting
 	s.broker.terminalAgentFailure = s.failAgentInferenceRun

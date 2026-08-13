@@ -96,7 +96,6 @@ from ditto.db.queries.validator_auth import (
     consume_validator_nonce,
 )
 from ditto.db.queries.validator_slot_occupancy import (
-    live_ordinary_slot_ticket,
     live_v9_confirmation_slot_ticket,
     lock_validator_slot,
 )
@@ -454,18 +453,6 @@ async def request_v9_confirmation_job(
                 slot_id=payload.slot_id,
             )
             await expire_overdue_confirmation_bundle_tickets(session, now=now)
-            if (
-                await live_ordinary_slot_ticket(
-                    session,
-                    validator_hotkey=payload.validator_hotkey,
-                    slot_id=payload.slot_id,
-                    now=now,
-                )
-                is not None
-            ):
-                response.status_code = 204
-                return response
-
             live_ticket = await live_v9_confirmation_slot_ticket(
                 session,
                 validator_hotkey=payload.validator_hotkey,

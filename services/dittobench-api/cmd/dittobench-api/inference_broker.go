@@ -1515,9 +1515,7 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 func validBrokerTicketIdentity(identity brokerTicketIdentity, now time.Time) bool {
 	_, grantErr := uuid.Parse(identity.GrantID)
 	_, agentErr := uuid.Parse(identity.AgentID)
-	validSlot := len(identity.SlotID) == len("slot-0") && strings.HasPrefix(identity.SlotID, "slot-") &&
-		identity.SlotID[len(identity.SlotID)-1] >= '0' && identity.SlotID[len(identity.SlotID)-1] <= '7'
-	return grantErr == nil && agentErr == nil && validSlot && identity.TicketDeadline.After(now)
+	return grantErr == nil && agentErr == nil && validBrokerSlot(identity.SlotID) && identity.TicketDeadline.After(now)
 }
 
 func (b *inferenceBroker) claimRun(id, runID string, identity brokerTicketIdentity, benchVersion int) bool {

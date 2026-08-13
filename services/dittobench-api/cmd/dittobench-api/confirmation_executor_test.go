@@ -225,7 +225,7 @@ func validTrustedConfirmationRequest(t *testing.T, profileRaw json.RawMessage, p
 	t.Helper()
 	request := validConfirmationRequest()
 	request.AgentID = "agent-00000001"
-	request.SlotID = "slot-3"
+	request.SlotID = "longmem-3"
 	request.Mode = "shadow"
 	request.ProfileRevision = profile.Revision
 	request.ProfileChecksum = profile.Checksum

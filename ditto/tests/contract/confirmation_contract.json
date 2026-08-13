@@ -450,7 +450,7 @@
         "type": "string"
       },
       "slot_id": {
-        "pattern": "^slot-[0-7]$",
+        "pattern": "^longmem-[0-3]$",
         "type": "string"
       },
       "validator_hotkey": {
@@ -1138,7 +1138,7 @@
         "type": "integer"
       },
       "slot_id": {
-        "pattern": "^slot-[0-7]$",
+        "pattern": "^longmem-[0-3]$",
         "type": "string"
       },
       "ticket_id": {

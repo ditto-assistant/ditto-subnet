@@ -56,6 +56,7 @@ from ditto_screening_protocol.confirmation_transport import (
     ConfirmationExecutionProfile,
     ConfirmationInferenceGrantOffer,
     ConfirmationProviderLaneProfile,
+    LongMemSlotId,
     V9ConfirmationClaimRequest,
     V9ConfirmationCompletionReport,
     V9ConfirmationFailRequest,
@@ -84,7 +85,7 @@ class V9ConfirmationScorerRequest(BaseModel):
     bundle_id: UUID
     ticket_id: UUID
     agent_id: UUID
-    slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")]
+    slot_id: LongMemSlotId
     inference_session_id: Annotated[str, Field(min_length=16, max_length=128)]
     artifact_url: Annotated[str, Field(min_length=1)]
     artifact_sha256: Sha256

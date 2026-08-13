@@ -450,7 +450,7 @@ async def test_settings_change_recovers_failed_spent_generation(
             bundle_id=source.bundle_id,
             reservation_id=decision.reservation.reservation_id,
             validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
-            slot_id="slot-failed-settings-recovery",
+            slot_id="longmem-0",
             now=_NOW,
         )
         await settle_confirmation_bundle_budget(
@@ -517,7 +517,7 @@ async def test_settings_change_recovers_budget_blocked_spent_generation(
             bundle_id=source.bundle_id,
             reservation_id=first.reservation.reservation_id,
             validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
-            slot_id="slot-blocked-settings-recovery",
+            slot_id="longmem-1",
             now=_NOW,
         )
         await settle_confirmation_bundle_budget(
@@ -642,7 +642,7 @@ async def test_shadow_evidence_reprojects_under_enforce_without_new_spend(
             bundle_id=bundle.bundle_id,
             reservation_id=reservation.reservation.reservation_id,
             validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
-            slot_id="slot-0",
+            slot_id="longmem-0",
             now=_NOW,
         )
         await settle_confirmation_bundle_budget(

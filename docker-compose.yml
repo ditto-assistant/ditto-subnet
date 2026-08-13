@@ -145,6 +145,9 @@ services:
       # production value; the platform's operator cap decides how many of these
       # slots actually receive tickets.
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
+      # LongMemEval runs in a disjoint pool. It defaults to half the ordinary
+      # capacity and never consumes the canonical full-run semaphore.
+      DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS: ${VALIDATOR_LONGMEM_CAPACITY:-4}
       # Hosted v7 parallelism. Both default inside the scorer image to the
       # values dittobench-api#104 ships (4 cases, 8 concurrent embeddings per
       # run); these anchors exist so a host with unusual headroom, or one being
@@ -279,6 +282,7 @@ services:
       # here gives the operator room to ramp without shipping a new stack; idle
       # slots only add lightweight polls to each sweep.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
+      VALIDATOR_LONGMEM_CAPACITY: ${VALIDATOR_LONGMEM_CAPACITY:-4}
       # Self-imposed resource ceilings. At or above these the worker stops
       # claiming tickets and reports admission=resource_constrained, while
       # still heartbeating and still finishing what it holds. High on purpose:

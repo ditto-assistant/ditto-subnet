@@ -36,6 +36,9 @@ from ditto_screening_protocol.confirmation import (
 SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 MAX_BUNDLE_REQUEST_CAP = 100_000
 MAX_BUNDLE_TOKEN_CAP = 100_000_000
+LONGMEM_SLOT_PATTERN = r"^longmem-[0-3]$"
+
+LongMemSlotId = Annotated[str, Field(pattern=LONGMEM_SLOT_PATTERN)]
 
 SignatureHex = Annotated[
     str,
@@ -191,7 +194,7 @@ class V9ConfirmationClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     validator_hotkey: Annotated[str, Field(pattern=SS58_PATTERN)]
-    slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")]
+    slot_id: LongMemSlotId
     profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
     profile_checksum: Sha256
     broker_public_key: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}=?$")]
@@ -259,7 +262,7 @@ class V9ConfirmationJobResponse(BaseModel):
     ticket_id: UUID
     reservation_id: UUID
     agent_id: UUID
-    slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")]
+    slot_id: LongMemSlotId
     deadline: datetime
     artifact_sha256: Sha256
     bench_version: Literal[9]

@@ -11,6 +11,9 @@
     that:
       - validator_benchmark_capacity | int >= 1
       - validator_benchmark_capacity | int <= 8
+      - validator_longmem_capacity | int >= 0
+      - validator_longmem_capacity | int <= 4
+      - validator_longmem_capacity | int <= ((validator_benchmark_capacity | int) + 1) // 2
       - validator_benchmark_capacity | int == dittobench_max_concurrent_runs | default(validator_benchmark_capacity) | int
     fail_msg: Validator and DittoBench capacities must match within 1..8
 

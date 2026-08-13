@@ -85,7 +85,7 @@ def _permitted_chain() -> MagicMock:
     return chain
 
 
-def _claim_payload(*, slot_id: str = "slot-0") -> V9ConfirmationClaimRequest:
+def _claim_payload(*, slot_id: str = "longmem-0") -> V9ConfirmationClaimRequest:
     profile = verification_profile()
     nonce = uuid4()
     requested_at = datetime.now(UTC)
@@ -185,7 +185,7 @@ async def _claim_direct(
     app: FastAPI,
     session: AsyncSession,
     *,
-    slot_id: str = "slot-0",
+    slot_id: str = "longmem-0",
 ) -> V9ConfirmationJobResponse | Response:
     return await request_v9_confirmation_job(
         _claim_payload(slot_id=slot_id),
@@ -197,8 +197,8 @@ async def _claim_direct(
     )
 
 
-class TestCrossTableSlotOccupancy:
-    async def test_live_confirmation_slot_blocks_ordinary_but_not_another_slot(
+class TestDisjointSlotOccupancy:
+    async def test_live_confirmation_and_ordinary_slots_can_both_be_occupied(
         self,
         app: FastAPI,
         session_maker: async_sessionmaker[AsyncSession],
@@ -208,7 +208,7 @@ class TestCrossTableSlotOccupancy:
         )
         _install(app)
         async with session_maker() as session:
-            claimed = await _claim_direct(app, session, slot_id="slot-0")
+            claimed = await _claim_direct(app, session, slot_id="longmem-0")
         assert isinstance(claimed, V9ConfirmationJobResponse)
 
         async with session_maker() as session, session.begin():
@@ -220,7 +220,7 @@ class TestCrossTableSlotOccupancy:
                 ttl=_TTL,
                 bench_version=8,
             )
-            blocked = await issue_ticket(
+            same_index = await issue_ticket(
                 session,
                 validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
                 slot_id="slot-0",
@@ -231,7 +231,7 @@ class TestCrossTableSlotOccupancy:
 
         assert other_slot is not None
         assert other_slot.agent_id in ordinary_ids
-        assert blocked is None
+        assert same_index is not None
         async with session_maker() as session:
             confirmation_live = int(
                 await session.scalar(
@@ -240,7 +240,7 @@ class TestCrossTableSlotOccupancy:
                     .where(
                         ConfirmationBundleTicket.validator_hotkey
                         == VALIDATOR_KEYPAIR.ss58_address,
-                        ConfirmationBundleTicket.slot_id == "slot-0",
+                        ConfirmationBundleTicket.slot_id == "longmem-0",
                         ConfirmationBundleTicket.status == "issued",
                     )
                 )
@@ -260,9 +260,9 @@ class TestCrossTableSlotOccupancy:
                 or 0
             )
         assert confirmation_live == 1
-        assert ordinary_same_slot == 0
+        assert ordinary_same_slot == 1
 
-    async def test_concurrent_cross_table_allocators_cannot_both_win(
+    async def test_concurrent_disjoint_allocators_both_win(
         self,
         app: FastAPI,
         session_maker: async_sessionmaker[AsyncSession],
@@ -276,7 +276,7 @@ class TestCrossTableSlotOccupancy:
         async def claim_confirmation() -> V9ConfirmationJobResponse | Response:
             await ready.wait()
             async with session_maker() as session:
-                return await _claim_direct(app, session, slot_id="slot-0")
+                return await _claim_direct(app, session, slot_id="longmem-0")
 
         async def claim_ordinary() -> ValidatorTicket | None:
             await ready.wait()
@@ -295,8 +295,8 @@ class TestCrossTableSlotOccupancy:
         ready.set()
         confirmation, ordinary = await asyncio.gather(confirmation_task, ordinary_task)
 
-        confirmation_won = isinstance(confirmation, V9ConfirmationJobResponse)
-        assert confirmation_won is (ordinary is None)
+        assert isinstance(confirmation, V9ConfirmationJobResponse)
+        assert ordinary is not None
         async with session_maker() as session:
             ordinary_live = int(
                 await session.scalar(
@@ -319,12 +319,11 @@ class TestCrossTableSlotOccupancy:
                     .where(
                         ConfirmationBundleTicket.validator_hotkey
                         == VALIDATOR_KEYPAIR.ss58_address,
-                        ConfirmationBundleTicket.slot_id == "slot-0",
+                        ConfirmationBundleTicket.slot_id == "longmem-0",
                         ConfirmationBundleTicket.status == "issued",
                         ConfirmationBundleTicket.deadline > datetime.now(UTC),
                     )
                 )
                 or 0
             )
-        assert ordinary_live + confirmation_live == 1
-        assert (ordinary_live, confirmation_live) in {(1, 0), (0, 1)}
+        assert (ordinary_live, confirmation_live) == (1, 1)

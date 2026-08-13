@@ -58,6 +58,8 @@ def _config(*, capacity: int = 2) -> Any:
             validator_hotkey=_HOTKEY,
             netuid=118,
             benchmark_capacity=capacity,
+            longmem_capacity=(capacity + 1) // 2,
+            sweep_seconds=30,
             queue_limit=16,
             burn_hotkey="5Burn" + "x" * 43,
         ),
@@ -371,12 +373,11 @@ class TestV9ConfirmationReadiness:
 
 class TestV9ConfirmationClaims:
     async def test_claims_once_per_healthy_idle_slot_with_exact_profile(self) -> None:
-        worker, platform, _, _ = _worker(capacity=3)
-        worker._healthy_slots.remove("slot-1")
+        worker, platform, _, _ = _worker(capacity=8)
 
         await worker._run_v9_confirmation_lane()
 
-        assert platform.request_v9_confirmation_job.await_count == 2
+        assert platform.request_v9_confirmation_job.await_count == 4
         assert {
             tuple(sorted(call.kwargs.items()))
             for call in platform.request_v9_confirmation_job.await_args_list
@@ -391,46 +392,55 @@ class TestV9ConfirmationClaims:
                     }.items()
                 )
             )
-            for slot_id in ("slot-0", "slot-2")
+            for slot_id in ("longmem-0", "longmem-1", "longmem-2", "longmem-3")
         }
 
     async def test_explicit_idle_slot_scope_does_not_fan_out(self) -> None:
-        worker, platform, _, _ = _worker(capacity=3)
+        worker, platform, _, _ = _worker(capacity=8)
 
-        await worker._run_v9_confirmation_lane(slot_ids=("slot-2",))
+        await worker._run_v9_confirmation_lane(slot_ids=("longmem-2",))
 
         platform.request_v9_confirmation_job.assert_awaited_once_with(
-            slot_id="slot-2",
+            slot_id="longmem-2",
             profile_revision=_PROFILE_REVISION,
             profile_checksum=_PROFILE_CHECKSUM,
             broker_public_key=_BROKER_PUBLIC_KEY,
         )
 
     async def test_duplicate_slot_scope_never_multiplies_a_claim(self) -> None:
-        worker, platform, _, _ = _worker(capacity=2)
+        worker, platform, _, _ = _worker(capacity=4)
 
-        await worker._run_v9_confirmation_lane(slot_ids=("slot-1", "slot-1", "slot-1"))
+        await worker._run_v9_confirmation_lane(
+            slot_ids=("longmem-1", "longmem-1", "longmem-1")
+        )
 
         platform.request_v9_confirmation_job.assert_awaited_once_with(
-            slot_id="slot-1",
+            slot_id="longmem-1",
             profile_revision=_PROFILE_REVISION,
             profile_checksum=_PROFILE_CHECKSUM,
             broker_public_key=_BROKER_PUBLIC_KEY,
         )
 
-    async def test_slot_with_canonical_agent_is_not_claimed(self) -> None:
-        worker, platform, _, _ = _worker(capacity=2)
+    async def test_canonical_occupancy_does_not_reduce_longmem_capacity(self) -> None:
+        worker, platform, _, _ = _worker(capacity=4)
         worker._slots["slot-0"].active_agent_id = UUID(
             "40000000-0000-0000-0000-000000000099"
         )
 
         await worker._run_v9_confirmation_lane()
 
-        platform.request_v9_confirmation_job.assert_awaited_once()
-        assert (
-            platform.request_v9_confirmation_job.await_args.kwargs["slot_id"]
-            == "slot-1"
-        )
+        assert platform.request_v9_confirmation_job.await_count == 2
+        assert {
+            call.kwargs["slot_id"]
+            for call in platform.request_v9_confirmation_job.await_args_list
+        } == {"longmem-0", "longmem-1"}
+
+    async def test_ordinary_slot_scope_is_rejected_locally(self) -> None:
+        worker, platform, _, _ = _worker(capacity=4)
+
+        await worker._run_v9_confirmation_lane(slot_ids=("slot-0",))
+
+        platform.request_v9_confirmation_job.assert_not_awaited()
 
     async def test_claim_204_is_an_idle_success(self) -> None:
         worker, platform, dittobench, _ = _worker(capacity=1)
@@ -449,7 +459,7 @@ class TestV9ConfirmationExecution:
         self,
     ) -> None:
         worker, platform, dittobench, keypair = _worker(capacity=1)
-        job = _job("slot-0")
+        job = _job("longmem-0")
         artifact = _artifact(job)
         platform.request_v9_confirmation_job.return_value = job
         platform.get_v9_confirmation_artifact.return_value = artifact
@@ -482,7 +492,7 @@ class TestV9ConfirmationExecution:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         worker, platform, dittobench, _ = _worker(capacity=1)
-        job = _job("slot-0")
+        job = _job("longmem-0")
         platform.request_v9_confirmation_job.return_value = job
         platform.get_v9_confirmation_artifact.return_value = _artifact(job)
         release = asyncio.Event()
@@ -512,7 +522,7 @@ class TestV9ConfirmationExecution:
     @pytest.mark.parametrize(
         ("field", "bad_value"),
         [
-            ("slot_id", "slot-1"),
+            ("slot_id", "longmem-1"),
             ("bench_version", 8),
             ("purpose", "canonical_score"),
         ],
@@ -521,9 +531,9 @@ class TestV9ConfirmationExecution:
         self, field: str, bad_value: object
     ) -> None:
         worker, platform, dittobench, _ = _worker(capacity=1)
-        platform.request_v9_confirmation_job.return_value = _job("slot-0").model_copy(
-            update={field: bad_value}
-        )
+        platform.request_v9_confirmation_job.return_value = _job(
+            "longmem-0"
+        ).model_copy(update={field: bad_value})
 
         await worker._run_v9_confirmation_lane()
 
@@ -544,7 +554,7 @@ class TestV9ConfirmationExecution:
     ) -> None:
         worker, platform, dittobench, _ = _worker(capacity=1)
         platform.request_v9_confirmation_job.return_value = _job(
-            "slot-0", profile=_profile(revision=revision, checksum=checksum)
+            "longmem-0", profile=_profile(revision=revision, checksum=checksum)
         )
 
         await worker._run_v9_confirmation_lane()
@@ -556,7 +566,7 @@ class TestV9ConfirmationExecution:
     async def test_expired_lease_never_fetches_or_executes(self) -> None:
         worker, platform, dittobench, _ = _worker(capacity=1)
         platform.request_v9_confirmation_job.return_value = _job(
-            "slot-0", deadline=datetime.now(UTC) - timedelta(seconds=1)
+            "longmem-0", deadline=datetime.now(UTC) - timedelta(seconds=1)
         )
 
         await worker._run_v9_confirmation_lane()
@@ -570,7 +580,7 @@ class TestV9ConfirmationExecution:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         worker, platform, _, _ = _worker(capacity=1)
-        job = _job("slot-0")
+        job = _job("longmem-0")
         platform.request_v9_confirmation_job.return_value = job
         platform.get_v9_confirmation_artifact.return_value = _artifact(job)
 
@@ -593,16 +603,19 @@ class TestV9ConfirmationExecution:
     async def test_one_slot_error_does_not_cancel_a_successful_sibling(
         self, failing_stage: str
     ) -> None:
-        worker, platform, dittobench, _ = _worker(capacity=2)
-        jobs = {"slot-0": _job("slot-0", suffix=1), "slot-1": _job("slot-1", suffix=2)}
+        worker, platform, dittobench, _ = _worker(capacity=4)
+        jobs = {
+            "longmem-0": _job("longmem-0", suffix=1),
+            "longmem-1": _job("longmem-1", suffix=2),
+        }
 
         async def claim(*, slot_id: str, **_: object) -> V9ConfirmationJobResponse:
-            if failing_stage == "claim" and slot_id == "slot-0":
+            if failing_stage == "claim" and slot_id == "longmem-0":
                 raise PlatformError("claim failed")
             return jobs[slot_id]
 
         async def artifact(job: V9ConfirmationJobResponse) -> ArtifactResponse:
-            if failing_stage == "artifact" and job.slot_id == "slot-0":
+            if failing_stage == "artifact" and job.slot_id == "longmem-0":
                 raise PlatformError("artifact failed")
             return _artifact(job)
 
@@ -613,12 +626,12 @@ class TestV9ConfirmationExecution:
             inference_session_id: str,
         ) -> V9ConfirmationScorerResult:
             del artifact, inference_session_id
-            if failing_stage == "execute" and job.slot_id == "slot-0":
+            if failing_stage == "execute" and job.slot_id == "longmem-0":
                 raise DittobenchError("execute failed")
             return _result()
 
         async def submit(job: V9ConfirmationJobResponse, _report: object) -> None:
-            if failing_stage == "submit" and job.slot_id == "slot-0":
+            if failing_stage == "submit" and job.slot_id == "longmem-0":
                 raise PlatformError("submit failed")
 
         platform.request_v9_confirmation_job.side_effect = claim
@@ -631,14 +644,78 @@ class TestV9ConfirmationExecution:
         successful_submissions = [
             call.args[0].slot_id
             for call in platform.submit_v9_confirmation_report.await_args_list
-            if call.args[0].slot_id == "slot-1"
+            if call.args[0].slot_id == "longmem-1"
         ]
-        assert successful_submissions == ["slot-1"]
+        assert successful_submissions == ["longmem-1"]
         _assert_score_lanes_untouched(platform)
 
 
 class TestV9ConfirmationSweepIntegration:
-    async def test_canonical_poll_precedes_v9_readiness_and_claim(self) -> None:
+    async def test_longmem_loop_runs_while_canonical_sweep_is_blocked(self) -> None:
+        worker, _, _, _ = _worker(capacity=2)
+        stop = asyncio.Event()
+        canonical_started = asyncio.Event()
+        release_canonical = asyncio.Event()
+        longmem_started = asyncio.Event()
+
+        async def blocked_canonical(**_: object) -> int:
+            canonical_started.set()
+            await release_canonical.wait()
+            return 0
+
+        async def observed_longmem(**_: object) -> None:
+            longmem_started.set()
+            await stop.wait()
+
+        async def inert_weights(*_: object, **__: object) -> None:
+            await stop.wait()
+
+        worker.run_once = AsyncMock(side_effect=blocked_canonical)  # type: ignore[method-assign]
+        worker._run_v9_confirmation_lane = AsyncMock(  # type: ignore[method-assign]
+            side_effect=observed_longmem
+        )
+        worker._run_weights_forever = inert_weights  # type: ignore[method-assign]
+
+        task = asyncio.create_task(worker.run_forever(stop))
+        await asyncio.wait_for(canonical_started.wait(), timeout=1)
+        await asyncio.wait_for(longmem_started.wait(), timeout=1)
+
+        assert not release_canonical.is_set()
+        worker._run_v9_confirmation_lane.assert_awaited_once()
+        release_canonical.set()
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    async def test_drain_waits_for_active_longmem_execution(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker, _, _, _ = _worker(capacity=2)
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+        states: list[str] = []
+        worker._longmem_active = True
+        worker._report_heartbeat = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **_kwargs: states.append(state),
+        )
+
+        task = asyncio.create_task(worker._acknowledge_drain(stop, drain))
+        await asyncio.sleep(0.01)
+        assert "drained" not in states
+
+        worker._longmem_active = False
+        for _ in range(100):
+            if "drained" in states:
+                break
+            await asyncio.sleep(0.001)
+        assert "drained" in states
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    async def test_canonical_sweep_does_not_inline_longmem_claims(self) -> None:
         worker, platform, dittobench, _ = _worker(capacity=1)
         order: list[str] = []
 
@@ -659,7 +736,8 @@ class TestV9ConfirmationSweepIntegration:
 
         await worker.run_once(set_weights=False)
 
-        assert order == ["canonical", "readiness"]
+        assert order == ["canonical"]
+        dittobench.v9_confirmation_readiness.assert_not_awaited()
         worker._run_top5_confirmation_lane.assert_awaited_once()
         _assert_score_lanes_untouched(platform)
 
@@ -670,7 +748,7 @@ class TestV9ConfirmationSweepIntegration:
 
         await worker._run_v9_confirmation_lane()
 
-        assert platform.request_v9_confirmation_job.await_count == 3
+        assert platform.request_v9_confirmation_job.await_count == 2
         top5.assert_not_awaited()
         platform.submit_top5_confirmation_score.assert_not_awaited()
         platform.submit_score.assert_not_awaited()

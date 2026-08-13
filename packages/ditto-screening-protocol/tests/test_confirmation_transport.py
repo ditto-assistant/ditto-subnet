@@ -54,28 +54,6 @@ def _inference_grant_payload(proxy_url: str) -> dict[str, Any]:
     }
 
 
-def _inference_grants() -> list[dict[str, Any]]:
-    grants = []
-    for lane, suffix, model in (
-        ("reader", 2, "openai/gpt-oss-20b"),
-        ("judge", 3, "openai/gpt-4o"),
-        ("embedding", 4, "perplexity/pplx-embed-v1"),
-    ):
-        grant = _inference_grant_payload(
-            "https://platform.example/api/v1/inference/proxy"
-        )
-        grant.update(
-            {
-                "lane": lane,
-                "grant_id": f"10000000-0000-0000-0000-{suffix:012d}",
-                "model": model,
-                "profile_revision": f"longmem-{lane}-v1",
-            }
-        )
-        grants.append(grant)
-    return grants
-
-
 @pytest.mark.parametrize(
     "proxy_url",
     [
@@ -112,6 +90,28 @@ def _execution_profile_payload() -> dict[str, Any]:
     return {**fixture["profile"], "checksum": fixture["expected_checksum"]}
 
 
+def _inference_grants() -> list[dict[str, Any]]:
+    return [
+        {
+            "lane": lane,
+            "grant_id": _UUID[:-1] + str(index + 2),
+            "bearer": f"grant-{lane}-" + "x" * 32,
+            "generation": 1,
+            "proxy_url": "https://platform.test/confirmation/inference",
+            "model": "pinned-model",
+            "provider": "pinned-provider",
+            "route_provider": "pinned-route",
+            "receipt_provider": "pinned-receipt",
+            "profile_revision": f"{lane}-profile-v1",
+            "request_budget": 1,
+            "token_budget": 1,
+            "cost_budget_microusd": 1,
+            "expires_at": "2026-08-10T10:00:00Z",
+        }
+        for index, lane in enumerate(("reader", "judge", "embedding"))
+    ]
+
+
 def _transport_cases() -> list[tuple[type[BaseModel], dict[str, Any], str]]:
     raw = {"go_evidence_sha256": _SHA, "latency_ms": 1, "evidence": {}}
     return [
@@ -119,7 +119,7 @@ def _transport_cases() -> list[tuple[type[BaseModel], dict[str, Any], str]]:
             V9ConfirmationClaimRequest,
             {
                 "validator_hotkey": _HOTKEY,
-                "slot_id": "slot-0",
+                "slot_id": "longmem-0",
                 "profile_revision": "confirmation-v9",
                 "profile_checksum": _SHA,
                 "broker_public_key": _BROKER_PUBLIC_KEY,
@@ -137,7 +137,7 @@ def _transport_cases() -> list[tuple[type[BaseModel], dict[str, Any], str]]:
                 "ticket_id": _UUID,
                 "reservation_id": _UUID,
                 "agent_id": _UUID,
-                "slot_id": "slot-0",
+                "slot_id": "longmem-0",
                 "deadline": "2026-08-10T10:00:00Z",
                 "artifact_sha256": _SHA,
                 "bench_version": 9,
@@ -276,7 +276,7 @@ def test_claim_json_bytes_preserve_declared_field_order() -> None:
     claim = model.model_validate(payload)
     assert claim.model_dump_json() == (
         '{"validator_hotkey":"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",'
-        '"slot_id":"slot-0","profile_revision":"confirmation-v9",'
+        '"slot_id":"longmem-0","profile_revision":"confirmation-v9",'
         f'"profile_checksum":"{_SHA}",'
         f'"broker_public_key":"{_BROKER_PUBLIC_KEY}",'
         f'"nonce":"{_UUID}","requested_at":"2026-08-10T10:00:00Z",'

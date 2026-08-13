@@ -463,11 +463,18 @@ class ValidatorWorker:
         # so their check/set transitions are atomic within this event loop.
         self._scoring_active = False
         self._weights_active = False
+        self._longmem_active = False
         configured_slots = int(getattr(config, "benchmark_capacity", 1))
         self._slots = {
             f"slot-{index}": _SlotState(slot_id=f"slot-{index}")
             for index in range(configured_slots)
         }
+        configured_longmem_slots = int(
+            getattr(config, "longmem_capacity", (configured_slots + 1) // 2)
+        )
+        self._longmem_slots = tuple(
+            f"longmem-{index}" for index in range(configured_longmem_slots)
+        )
         self._healthy_slots = set(self._slots)
         self._resource_blocked_until: dict[str, float] = {}
         self._admission: BenchmarkAdmission = "accepting"
@@ -692,11 +699,9 @@ class ValidatorWorker:
             # together with ``running`` and ``pending_claims``, which makes the
             # wakeup impossible to miss.
             lease_state_changed = asyncio.Event()
-            # Only one idle slot needs to fan out the host-level continual
-            # retest lane.  Platform claims remain slot-bound, so that one
-            # dispatcher can fill every currently free slot while ordinary
-            # sibling leases continue running.  Other idle slot loops keep
-            # polling the canonical queue instead of lining up behind it.
+            # Only one idle slot needs to fan out the ordinary shared-seed
+            # retest lane. LongMemEval has a physically separate worker pool
+            # and is never dispatched from canonical slots.
             idle_retest_dispatch = asyncio.Lock()
 
             async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
@@ -758,11 +763,6 @@ class ValidatorWorker:
                             # slots without duplicate local fanouts.
                             if siblings_running and not idle_retest_dispatch.locked():
                                 async with idle_retest_dispatch:
-                                    await self._run_v9_confirmation_lane(
-                                        stop_requested=stop_requested,
-                                        drain_requested=drain_requested,
-                                        slot_ids=(slot_id,),
-                                    )
                                     await self._run_top5_confirmation_lane(
                                         stop_requested=stop_requested,
                                         drain_requested=drain_requested,
@@ -930,23 +930,14 @@ class ValidatorWorker:
         # requires the exact live ticket deadline. The only autonomous-looking
         # follow-up below is also platform-leased through the dedicated top-five
         # claim endpoint and appends evidence without replacing canonical scores.
-        # Continual confirmation is strictly spare-capacity work: every healthy
-        # slot above has polled the ordinary queue empty and all sibling leases
-        # have finished before the gather returns. ``queue_depth`` is only the
-        # historical claim count for this sweep. Gating on it made one completed
-        # ordinary job suppress every idle retest slot until a later sweep.
-        # Spare-capacity work is still work: a constrained host must not claim
-        # a confirmation ticket either, so gate the lane on admission directly
-        # rather than relying on the (now empty) healthy-slot set.
+        # The shared-seed top-five lane remains ordinary idle-capacity work.
+        # LongMemEval does not appear here: its independent loop and dedicated
+        # slots run concurrently with this whole scoring sweep.
         if (
             scoring_available
             and self._admission == "accepting"
             and not self._new_work_blocked(stop_requested, drain_requested)
         ):
-            await self._run_v9_confirmation_lane(
-                stop_requested=stop_requested,
-                drain_requested=drain_requested,
-            )
             await self._run_top5_confirmation_lane(
                 stop_requested=stop_requested,
                 drain_requested=drain_requested,
@@ -1721,7 +1712,7 @@ class ValidatorWorker:
         drain_requested: asyncio.Event | None = None,
         slot_ids: Sequence[str] | None = None,
     ) -> None:
-        """Use only proven spare slots for the private Bench v9 confirmation lane.
+        """Run the private Bench v9 confirmation lane on dedicated LongMem slots.
 
         This lane is deliberately independent from both canonical scoring and
         the v8 continual shared-seed lane.  Its scorer readiness document names
@@ -1729,11 +1720,9 @@ class ValidatorWorker:
         is made.  Each candidate slot receives its own signed Platform claim,
         and a failure on one slot cannot cancel a sibling confirmation.
 
-        Callers enter only after the ordinary queue returned empty.  During a
-        partially busy sweep ``slot_ids`` contains that one just-polled slot;
-        after the canonical gather it defaults to every healthy idle slot.
-        Platform's shared slot-occupancy lock remains the final authority if a
-        canonical claim races this best-effort spare-capacity snapshot.
+        The configured pool is disjoint from canonical ``slot-*`` identities.
+        Ordinary queue occupancy therefore cannot suppress LongMem work, and a
+        slow LongMem bundle can never consume a benchmark slot.
         """
         if self._admission != "accepting" or self._new_work_blocked(
             stop_requested, drain_requested
@@ -1741,13 +1730,8 @@ class ValidatorWorker:
             return
 
         candidates = sorted(
-            slot_id
-            for slot_id in set(
-                slot_ids if slot_ids is not None else self._healthy_slots
-            )
-            if slot_id in self._healthy_slots
-            and slot_id in self._slots
-            and self._slots[slot_id].active_agent_id is None
+            set(slot_ids if slot_ids is not None else self._longmem_slots)
+            & set(self._longmem_slots)
         )
         if not candidates:
             return
@@ -3314,6 +3298,10 @@ class ValidatorWorker:
             self._run_weights_forever(stop, drain_requested=drain_requested),
             name="validator-weights",
         )
+        longmem_task = asyncio.create_task(
+            self._run_longmem_forever(stop, drain_requested=drain_requested),
+            name="validator-longmem",
+        )
         bootstrap_resume_pending = bootstrap_resume
         try:
             while not stop.is_set():
@@ -3361,9 +3349,42 @@ class ValidatorWorker:
                 )
         finally:
             weight_task.cancel()
+            longmem_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await weight_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await longmem_task
             write_update_state("stopping")
+
+    async def _run_longmem_forever(
+        self,
+        stop: asyncio.Event,
+        *,
+        drain_requested: asyncio.Event | None = None,
+    ) -> None:
+        """Continuously service dedicated LongMem slots beside ordinary scoring."""
+        while not stop.is_set():
+            if drain_requested is not None and drain_requested.is_set():
+                # The drain event is already set, so the general interruptible
+                # sleep would return immediately and spin. Stay quiescent on a
+                # stop-only sleep until the scoring loop publishes the drain.
+                await self._sleep_or_stop(stop, 0.05)
+                continue
+            try:
+                self._longmem_active = True
+                await self._run_v9_confirmation_lane(
+                    stop_requested=stop,
+                    drain_requested=drain_requested,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - optional lane cannot kill worker
+                logger.exception("LongMem confirmation sweep failed; retrying")
+            finally:
+                self._longmem_active = False
+            await self._sleep_or_stop_or_drain(
+                stop, self._config.sweep_seconds, drain_requested
+            )
 
     async def _run_weights_forever(
         self,
@@ -3530,7 +3551,7 @@ class ValidatorWorker:
         bootstrap_resume: Callable[[], bool] | None = None,
     ) -> None:
         """Publish drained only once scoring and weight work are quiescent."""
-        while self._weights_active and not stop.is_set():
+        while (self._weights_active or self._longmem_active) and not stop.is_set():
             await self._sleep_or_stop(stop, 0.05)
         if stop.is_set():
             return

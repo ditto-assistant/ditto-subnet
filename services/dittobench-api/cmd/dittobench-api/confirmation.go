@@ -76,16 +76,23 @@ func canonicalConfirmationSHA256(value string) bool {
 	return err == nil
 }
 
+func validIndexedSlot(value, prefix string, maxIndex byte) bool {
+	return len(value) == len(prefix)+1 && strings.HasPrefix(value, prefix) &&
+		value[len(value)-1] >= '0' && value[len(value)-1] <= maxIndex
+}
+
+func validLongMemSlot(value string) bool { return validIndexedSlot(value, "longmem-", '3') }
+
+func validBrokerSlot(value string) bool {
+	return validIndexedSlot(value, "slot-", '7') || validLongMemSlot(value)
+}
+
 func (request confirmationExecutionRequest) validate(now time.Time, readiness confirmationReadiness) error {
 	if request.Purpose != confirmationPurpose || request.BenchVersion != confirmationBenchVersion {
 		return errors.New("confirmation execution requires the internal bench v9 purpose")
 	}
-	validSlot := len(request.SlotID) == len("slot-0") &&
-		strings.HasPrefix(request.SlotID, "slot-") &&
-		request.SlotID[len(request.SlotID)-1] >= '0' &&
-		request.SlotID[len(request.SlotID)-1] <= '7'
 	if strings.TrimSpace(request.BundleID) == "" || strings.TrimSpace(request.TicketID) == "" ||
-		strings.TrimSpace(request.AgentID) == "" || !validSlot || len(request.InferenceSessionID) < 16 ||
+		strings.TrimSpace(request.AgentID) == "" || !validLongMemSlot(request.SlotID) || len(request.InferenceSessionID) < 16 ||
 		len(request.InferenceSessionID) > 128 || strings.TrimSpace(request.InferenceSessionID) != request.InferenceSessionID {
 		return errors.New("confirmation bundle, ticket, agent, and slot identities are required")
 	}
@@ -187,6 +194,19 @@ func (s *server) handleConfirmationExecute(w http.ResponseWriter, r *http.Reques
 	readiness := s.confirmation.Readiness()
 	if err := request.validate(time.Now(), readiness); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	slots := s.confirmationSlots
+	if slots == nil {
+		// Unit-test and embedded-server compatibility. Production always installs
+		// the explicitly bounded channel during startup.
+		slots = make(chan struct{}, 1)
+	}
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		writeError(w, http.StatusTooManyRequests, "confirmation capacity is full")
 		return
 	}
 	ctx, cancel := context.WithDeadline(r.Context(), request.Deadline)

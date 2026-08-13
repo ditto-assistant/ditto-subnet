@@ -114,6 +114,50 @@ class TestMinStakeConfig:
             parse_validator_config_from_env()
 
 
+class TestLongMemCapacity:
+    @pytest.mark.parametrize(
+        ("benchmark_capacity", "expected"),
+        [(1, 1), (2, 1), (3, 2), (8, 4)],
+    )
+    def test_defaults_to_half_ordinary_capacity_rounded_up(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        benchmark_capacity: int,
+        expected: int,
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_BENCHMARK_CAPACITY", str(benchmark_capacity))
+        monkeypatch.delenv("VALIDATOR_LONGMEM_CAPACITY", raising=False)
+
+        assert parse_validator_config_from_env().longmem_capacity == expected
+
+    @pytest.mark.parametrize(
+        ("benchmark_capacity", "longmem_capacity"),
+        [(1, 2), (2, 2), (8, 5), (8, -1)],
+    )
+    def test_rejects_unsafe_independent_capacity(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        benchmark_capacity: int,
+        longmem_capacity: int,
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_BENCHMARK_CAPACITY", str(benchmark_capacity))
+        monkeypatch.setenv("VALIDATOR_LONGMEM_CAPACITY", str(longmem_capacity))
+
+        with pytest.raises(ValidatorConfigError, match="VALIDATOR_LONGMEM_CAPACITY"):
+            parse_validator_config_from_env()
+
+    def test_zero_explicitly_disables_lane(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_BENCHMARK_CAPACITY", "8")
+        monkeypatch.setenv("VALIDATOR_LONGMEM_CAPACITY", "0")
+
+        assert parse_validator_config_from_env().longmem_capacity == 0
+
+
 class TestRequiredConfig:
     """Every validator both scores and sets weights, so all of it is required."""
 

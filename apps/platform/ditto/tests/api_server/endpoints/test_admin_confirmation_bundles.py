@@ -175,7 +175,7 @@ async def seed_completed_bundle(
             bundle_id=bundle.bundle_id,
             reservation_id=decision.reservation.reservation_id,
             validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
-            slot_id="slot-0",
+            slot_id="longmem-0",
             now=_NOW,
         )
         await settle_confirmation_bundle_budget(
@@ -290,6 +290,8 @@ class TestSettingsPermissionsAndDefaults:
         assert body["history"] == []
         assert body["default"] == {
             "mode": "off",
+            "eligibility_mode": "rank",
+            "min_base_score_micros": 950_000,
             "top_n": 5,
             "daily_bundle_cap": 0,
             "daily_dollar_cap_microusd": 0,
@@ -298,8 +300,6 @@ class TestSettingsPermissionsAndDefaults:
             "profile_revision": None,
             "profile_checksum": None,
             "challenger_z": 1.64,
-            "eligibility_mode": "rank",
-            "min_base_score_micros": 950_000,
         }
         effective = body["effective"]
         assert effective["revision"] == 0
@@ -356,10 +356,13 @@ class TestSettingsWrites:
         assert body["scope"] == "*"
         assert body["actor"] == "operator@example.com"
         assert body["reason"] == "operator approved bounded confirmation policy"
-        assert body["settings"] == payload["settings"]
-        assert body["checksum"] == canonical_checksum(
-            cast(dict[str, object], payload["settings"])
-        )
+        expected_settings = {
+            "eligibility_mode": "rank",
+            "min_base_score_micros": 950_000,
+            **cast(dict[str, object], payload["settings"]),
+        }
+        assert body["settings"] == expected_settings
+        assert body["checksum"] == canonical_checksum(expected_settings)
 
         read = await client.get(_SETTINGS_URL, headers=_HEADERS)
         assert read.status_code == 200

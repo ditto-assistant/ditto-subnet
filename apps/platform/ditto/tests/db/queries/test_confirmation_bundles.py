@@ -189,7 +189,7 @@ async def reserve_and_issue(
         bundle_id=bundle.bundle_id,
         reservation_id=decision.reservation.reservation_id,
         validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
-        slot_id="slot-0",
+        slot_id="longmem-0",
         now=_NOW,
     )
     return decision.reservation, ticket
@@ -660,7 +660,7 @@ class TestBudgetAndTicketLifecycle:
                     bundle_id=bundle.bundle_id,
                     reservation_id=decision.reservation.reservation_id,
                     validator_hotkey="5Validator",
-                    slot_id="slot-0",
+                    slot_id="longmem-0",
                     now=_NOW,
                     ttl=timedelta(minutes=89),
                 )
