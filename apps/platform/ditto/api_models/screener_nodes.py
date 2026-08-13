@@ -8,6 +8,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ditto.api_models.screener_provider_settings import ScreenerProviderSettingsControl
+from ditto_screening_protocol import SourceReviewObservationPayload
+
 ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
 ScreenerNodeStatus = Literal["active", "draining", "quarantined", "revoked"]
 TrustedImageBuildStatus = Literal[
@@ -129,6 +132,7 @@ class ScreenerCapacitySnapshotRequest(BaseModel):
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
     controller_source_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+    provider_settings_revision: Annotated[int, Field(ge=0)] = 0
     provider_ready: bool
     runnable_backlog: Annotated[int, Field(ge=0)]
     active_leases: Annotated[int, Field(ge=0)]
@@ -327,6 +331,138 @@ class SubmissionImageBuildControllerStatusResponse(BaseModel):
     ]
 
 
+class SubmissionRuntimeArtifactResponse(BaseModel):
+    """Verified build archive made available only to the fenced controller."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    build_id: UUID
+    archive_url_b64: str
+    output_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    output_size_bytes: Annotated[int, Field(gt=0, le=4 * 1024**3)]
+    destination: Annotated[
+        str,
+        Field(pattern=r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+:[a-z0-9._-]+$"),
+    ]
+
+
+class SubmissionRuntimeArtifactClaimResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact: SubmissionRuntimeArtifactResponse | None
+
+
+class SubmissionRuntimeResultRequest(BaseModel):
+    """Terminal direct-image Rental result, fenced to one build/controller."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    status: Literal["running", "succeeded", "fallback_required"]
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)] | None = (
+        None
+    )
+    image_reference: Annotated[str, Field(pattern=_IMAGE_REFERENCE)] | None = None
+    error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_result(self) -> SubmissionRuntimeResultRequest:
+        if self.status == "succeeded" and (
+            self.provider_resource_id is None or self.image_reference is None
+        ):
+            raise ValueError("successful runtime smoke requires provider provenance")
+        if self.status == "fallback_required" and self.error_code is None:
+            raise ValueError("runtime fallback requires an error code")
+        if self.status == "running" and self.provider_resource_id is None:
+            raise ValueError("running runtime smoke requires a provider resource")
+        return self
+
+
+class SubmissionSourceReviewClaimView(BaseModel):
+    """One read-only source review leased to a trusted Targon worker."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review_id: UUID
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    image_reference: Annotated[str, Field(pattern=_IMAGE_REFERENCE)]
+    job_token: Annotated[str, Field(min_length=43, max_length=128)]
+    job_token_expires_at: datetime
+
+
+class SubmissionSourceReviewClaimResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review: SubmissionSourceReviewClaimView | None
+
+
+class SubmissionSourceReviewControllerUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    status: Literal["running", "fallback_required"]
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)] | None = (
+        None
+    )
+    error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_error(self) -> SubmissionSourceReviewControllerUpdateRequest:
+        if self.status == "fallback_required" and self.error_code is None:
+            raise ValueError("fallback source-review update requires an error code")
+        if self.status == "running" and self.error_code is not None:
+            raise ValueError("running source-review update cannot carry an error code")
+        return self
+
+
+class SubmissionSourceReviewControllerStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review_id: UUID
+    status: Literal[
+        "queued",
+        "leased",
+        "running",
+        "succeeded",
+        "fallback_required",
+        "canceled",
+        "consumed",
+    ]
+
+
+class SubmissionSourceReviewCleanupRequest(BaseModel):
+    """Durable notice that a provider Rental still needs deletion."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class SubmissionSourceReviewSourceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_url_b64: str
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class SubmissionSourceReviewCompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    observation: SourceReviewObservationPayload
+
+
+class SubmissionSourceReviewCompleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verified: Literal[True]
+
+
 class SubmissionBuildSourceResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -363,6 +499,22 @@ class SubmissionBuildCompleteResponse(BaseModel):
     verified: Literal[True]
 
 
+class ScreenerProviderJobView(BaseModel):
+    """Redacted recent one-shot provider work for operator visibility."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    job_id: UUID
+    lane: Literal["build", "runtime", "source_review"]
+    status: str
+    provider: Literal["targon"] | None = None
+    provider_resource_id: str | None = None
+    image_reference: str | None = None
+    error_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class ScreenerCapacityView(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -370,3 +522,5 @@ class ScreenerCapacityView(BaseModel):
     nodes: list[ScreenerNodeView]
     events: list[ScreenerCapacityEventView]
     builds: list[TrustedImageBuildView] = Field(default_factory=list)
+    provider_jobs: list[ScreenerProviderJobView] = Field(default_factory=list)
+    provider_control: ScreenerProviderSettingsControl

@@ -32,10 +32,14 @@ from ditto_screening_protocol.models import (
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
+    SourceReviewObservationPayload,
     SourceReviewScorerVisibleEffect,
     SubmissionImageBuildRequest,
     SubmissionImageBuildResponse,
     SubmissionImageBuildStatus,
+    SubmissionSourceReviewRequest,
+    SubmissionSourceReviewResponse,
+    SubmissionSourceReviewStatus,
 )
 from ditto_screening_protocol.signing import verdict_signing_message
 
@@ -71,7 +75,11 @@ __all__ = [
     "SourceReviewEvidenceItem",
     "SourceReviewEvidenceRole",
     "SourceReviewFinding",
+    "SourceReviewObservationPayload",
     "SourceReviewScorerVisibleEffect",
+    "SubmissionSourceReviewRequest",
+    "SubmissionSourceReviewResponse",
+    "SubmissionSourceReviewStatus",
     "confirmation_progress_signing_token",
     "verdict_signing_message",
 ]

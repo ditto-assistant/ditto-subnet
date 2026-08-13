@@ -9,6 +9,7 @@ screener_capacity_gce_mig: ditto-screener-fleet
 screener_capacity_gcp_bootstrap_service_account: ditto-screener-bootstrap@ditto-app-dev.iam.gserviceaccount.com
 screener_capacity_source_review_secret_resource: projects/ditto-app-dev/secrets/validator-openrouter-key
 screener_capacity_builder_registry_service_account: ditto-image-builder@ditto-app-dev.iam.gserviceaccount.com
+screener_capacity_candidate_registry_service_account: ditto-image-builder@ditto-app-dev.iam.gserviceaccount.com
 screener_capacity_builder_kaniko_image: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/kaniko-executor:v1.25.16
 
 # Current live evidence: the nested RootlessKit hostile-runtime probe failed.

@@ -16,7 +16,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.12",
     "psutil>=6",
-    "ditto-screening-protocol==0.14.0",
+    "ditto-screening-protocol==0.15.0",
 ]
 
 [project.scripts]

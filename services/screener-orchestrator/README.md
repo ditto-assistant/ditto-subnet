@@ -6,12 +6,12 @@ capacity first, and resizes the GCE managed instance group only for the residual
 deficit. Both providers may return to zero when the queue and active leases are
 empty.
 
-Current Targon Rentals are approved for credential-minimal Kaniko builds, both
-trusted release images and miner submission images. Hostile screener execution
-still remains fail-closed behind an expiring capability attestation because the
-nested RootlessKit probe failed. GCE imports each miner archive, reruns the
-normal health/source/policy gates, signs the result, and falls back to its local
-Docker build if Targon is unavailable or any byte-level check fails.
+Targon Rentals have three independently controlled jobs: credential-minimal
+Kaniko builds, direct-image runtime health checks, and bounded read-only L1
+source review. Hostile full-worker execution remains fail-closed behind an
+expiring capability attestation because the nested RootlessKit probe failed.
+GCE remains authoritative: it imports each verified miner archive and reruns
+the isolated fake-gateway health/oracle and any elevated L2/L3 source review.
 
 Provider credentials are accepted only through mode-0600 files. The operator
 smoke wrapper streams `TARGON_API_KEY` directly from GCP Secret Manager to the
@@ -37,6 +37,7 @@ uv sync --group dev
 uv run pytest
 scripts/targon-smoke.sh inventory
 scripts/targon-smoke.sh list
+scripts/targon-smoke.sh runtime-probe
 ```
 
 Authenticated workload operations use Targon's organization-scoped v3 API.
@@ -66,3 +67,17 @@ to hash every output byte. The owning GCE screener independently hashes and
 imports the archive, applies the existing gates, then deletes the temporary
 object. Rental deletion failure is recorded after suspension as an operator
 cleanup event; zero replicas is the cost-safety boundary.
+
+After Platform verifies every archive byte, the trusted controller promotes the
+exact archive into the private one-day candidate registry with a short-lived
+OAuth token held only in a mode-0600 auth file. Targon launches that digest as
+the Rental itself and probes its proxied `/health`; no nested Docker is used.
+This result is advisory until provider egress containment is qualified. Failure
+or operator disablement releases the same verified archive to the GCE worker,
+which performs the authoritative isolated runtime gate.
+
+A source-review Rental uses the pinned reviewed screener image, one
+attempt-bound Platform capability, and a short-lived bootstrap token for the
+single model-key Secret Manager resource. Only a certified low-risk L1 result
+may be reused. Suspicious, elevated, inconclusive, invalid, or unavailable
+results always run through the existing local L2/L3 reviewer.

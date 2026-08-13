@@ -59,8 +59,11 @@ from ditto_screening_protocol import (
     ScreenResultResponse,
     ScreenReviewAudit,
     SourceReviewFinding,
+    SourceReviewObservationPayload,
     SubmissionImageBuildRequest,
     SubmissionImageBuildResponse,
+    SubmissionSourceReviewRequest,
+    SubmissionSourceReviewResponse,
 )
 
 if TYPE_CHECKING:
@@ -498,6 +501,91 @@ class PlatformClient:
                 )
         except httpx.HTTPError as error:
             logger.warning("remote build cleanup failed: %s", error)
+
+    async def review_submission_source(
+        self,
+        agent_id: UUID,
+        *,
+        attempt_id: UUID,
+        timeout: float,
+    ) -> SourceReviewObservationPayload | None:
+        """Prefer one bounded Targon review and return None for local fallback."""
+        base_url = f"{self._base}{_PREFIX}/agent/{agent_id}/submission-source-reviews"
+        review: SubmissionSourceReviewResponse | None = None
+        try:
+            response = await self._client.post(
+                base_url,
+                json=SubmissionSourceReviewRequest(attempt_id=attempt_id).model_dump(
+                    mode="json"
+                ),
+                headers=await self._auth_headers(),
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "remote source-review queue unavailable status=%d; "
+                    "using local reviewer",
+                    response.status_code,
+                )
+                return None
+            review = SubmissionSourceReviewResponse.model_validate(response.json())
+            deadline = asyncio.get_running_loop().time() + max(1.0, timeout)
+            while asyncio.get_running_loop().time() < deadline:
+                if review.status == "succeeded":
+                    observation = review.observation
+                    if (
+                        observation is not None
+                        and observation.ok
+                        and observation.risk_level == "low"
+                        and observation.clearance_certified
+                    ):
+                        return observation
+                    logger.info(
+                        "remote source review requires authoritative local follow-up"
+                    )
+                    return None
+                if review.status in {"fallback_required", "canceled", "consumed"}:
+                    logger.warning(
+                        "remote source review unavailable code=%s; "
+                        "using local reviewer",
+                        review.error_code or "TARGON_SOURCE_REVIEW_UNAVAILABLE",
+                    )
+                    return None
+                await asyncio.sleep(
+                    min(
+                        _REMOTE_BUILD_POLL_SECONDS,
+                        max(0.0, deadline - asyncio.get_running_loop().time()),
+                    )
+                )
+                response = await self._client.get(
+                    f"{base_url}/{review.review_id}",
+                    params={"attempt_id": str(attempt_id)},
+                    headers=await self._auth_headers(),
+                )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"remote source-review poll rejected ({response.status_code})"
+                    )
+                review = SubmissionSourceReviewResponse.model_validate(response.json())
+        except (httpx.HTTPError, ValueError, PlatformError) as error:
+            logger.warning(
+                "remote source review failed; using local reviewer: %s", error
+            )
+        finally:
+            if review is not None:
+                try:
+                    response = await self._client.delete(
+                        f"{base_url}/{review.review_id}",
+                        params={"attempt_id": str(attempt_id)},
+                        headers=await self._auth_headers(),
+                    )
+                    if response.status_code not in {204, 404, 409}:
+                        logger.warning(
+                            "remote source-review cleanup rejected status=%d",
+                            response.status_code,
+                        )
+                except httpx.HTTPError as error:
+                    logger.warning("remote source-review cleanup failed: %s", error)
+        return None
 
     async def submit_result(
         self,

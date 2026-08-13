@@ -11,19 +11,57 @@ For each reconciliation, desired slots are bounded by the global cap and include
 every active lease. The controller then:
 
 1. reads the current Platform demand and renews its fenced lease;
-2. uses healthy or pending Targon capacity first, but only with a fresh `go`
-   hostile-runtime capability attestation;
+2. reads the audited Backroom provider revision and uses Targon only when it is
+   first in the relevant provider list; full workers additionally require a
+   fresh `go` hostile-runtime capability attestation;
 3. resizes the GCE regional MIG for the residual demand;
 4. drains nodes before deletion and scales both providers to zero only when
    Platform reports no active screening leases.
 
-The current Targon Rentals attestation is `nogo`: nested RootlessKit did not
-provide the isolation required for hostile miner Docker builds. A missing,
-invalid, expired, or `nogo` attestation routes all demand to GCE. The dedicated
-Kaniko build path is a separate capability: Targon may compile a miner
-submission with an attempt-bound token, but it may not claim or decide screening
-work. GCE still owns static preflight, archive import, health/source/policy
-review, signing, upload, and local-build fallback.
+Backroom controls build, direct-image runtime smoke, and source review as three
+independent ordered provider lists. Each list always retains GCP as the safety
+fallback. Putting GCP first demotes Targon; removing Targon is the explicit off
+switch. A revisioned write requires compare-and-swap, an audit reason, and an
+exact confirmation string covering all three lists. In-progress one-shot jobs
+finish; new and queued jobs follow the new revision.
+
+The current Targon Rentals attestation is `nogo`. Live disposable probes found
+that rootful Docker cannot mount its required kernel filesystems, rootless
+Docker cannot create its user namespace, BuildKit cannot perform the first bind
+mount, and plain Rentals expose neither `/dev/fuse` nor `/dev/kvm`. These are
+provider sandbox limits, not missing worker glue. A missing, invalid, expired,
+or `nogo` attestation routes full-worker demand to GCE. It does not disable the
+three decomposed jobs. Targon may compile a miner submission, launch the exact
+Platform-verified image directly as a Rental, and perform bounded read-only L1
+review. It may not make an elevated source verdict or replace the GCE-owned
+isolated fake-gateway health/oracle gate, signing, and upload.
+
+Targon VMs expose a stronger kernel boundary, but they are not an acceptable
+autoscaling substitute yet: the live inventory is GPU-only, bootstrap is SSH
+and password based, and a disposable VM delete returned a provider error after
+entering termination. Keep the VM probe operator-only until CPU inventory and a
+reliable delete lifecycle exist. Never turn that exploratory path into managed
+capacity merely because its nested-runtime probe passes.
+
+Ordinary agent workloads do work in Rentals. The secret-free `agent-probe`
+installs pinned OpenCode and Pi releases, executes both binaries, and then
+deletes the disposable Rental. This proves the provider can host agentic source
+analysis; it does not authorize either generic agent to make screening
+decisions. The production screener already has a bounded L1/L2/L3 reviewer and
+typed, digest-bound findings. Reusing that reviewer in a credential-minimal
+source-analysis sub-job is safer than giving a general coding agent unrestricted
+tools. The production source-review sub-job accepts only certified low-risk L1
+output; all other observations fall back to the GCE-owned L2/L3 review under the
+same screening attempt.
+
+The direct-image `runtime-probe` is independently reproducible. It launches a
+plain image with a proxied port, checks `/health`, and deletes the Rental. A live
+probe on 2026-08-13 returned `200 ok` while provider state still said
+`provisioning`, then DELETE succeeded. Runtime admission therefore follows the
+actual HTTP contract rather than the provider readiness counter. Candidate
+images are private, digest-pinned, and expire after one day. Until Targon egress
+policy is independently qualified, this remote result is telemetry/advisory and
+the GCE isolated smoke remains authoritative.
 
 Submission builds give Targon Kaniko a dedicated 25-minute window. That timeout
 is independent of the local Docker cap: the 70-minute screening lease can spend
@@ -56,6 +94,11 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
   submission-builder rental receives only one expiring Platform capability
   bound to an attempt, source object, and temporary output object. It cannot
   push registry images or read Secret Manager.
+- The trusted controller promotes a Platform-verified archive to the private
+  `ditto-screening-candidates` repository. Its OAuth token lives in a temporary
+  mode-0600 auth file and is supplied to Targon only as expiring pull auth.
+- Source-review jobs receive one attempt token and one 30-minute bootstrap token
+  for the source-review secret. They read but never execute submitted source.
 - Trusted release builds run in the separate `ditto-image-builder` service.
   It gives a Targon Kaniko rental one 30-minute OAuth token for
   `ditto-image-builder`, which can write only `ditto-public-runtime`. The
@@ -101,8 +144,10 @@ infra stacks merge, use this order:
    ```
 
 5. Verify Platform Backroom reports the controller heartbeat, desired slots,
-   Targon capability/reason, GCE target/health, capacity events, and trusted
-   build state. Queue one release image and prove Targon output by immutable
+   applied provider revision, Targon capability/reason, GCE target/health,
+   capacity events, and trusted build state. Exercise each Backroom lane control
+   in a disposable environment before using it in production. Queue one release
+   image and prove Targon output by immutable
    digest; if Rental inventory is empty, prove the audited GCP fallback instead.
    With the
    current NOGO attestation, real demand must choose GCE and an empty queue must

@@ -139,6 +139,8 @@ import {
   screenerReviewControlSchema,
   screenerReviewRevisionSchema,
   screenerCapacityViewSchema,
+  screenerProviderSettingsControlSchema,
+  setScreenerProviderSettingsInputSchema,
   inferenceRouteCalibrationInputSchema,
   inferenceRoutingInventorySchema,
   inferenceRoutingPolicyInputSchema,
@@ -403,6 +405,24 @@ export async function fetchScreenerReviewControl() {
 export async function fetchScreenerCapacity() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-capacity')
   return screenerCapacityViewSchema.parse(payload)
+}
+
+export async function updateScreenerProviderSettings(actor: string, rawInput: unknown) {
+  const input = setScreenerProviderSettingsInputSchema.parse(rawInput)
+  await platformAdminRequest('/api/v1/admin/screener-provider-settings', {
+    method: 'POST',
+    actor,
+    body: {
+      environment: 'prod',
+      expected_revision: input.expectedRevision,
+      settings: input.settings,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  const payload = await platformAdminRequest('/api/v1/admin/screener-provider-settings')
+  return screenerProviderSettingsControlSchema.parse(payload)
 }
 
 export async function fetchArtifactReleaseControl() {

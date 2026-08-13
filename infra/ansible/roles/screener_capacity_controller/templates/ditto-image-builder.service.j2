@@ -19,6 +19,11 @@ ExecStart={{ screener_capacity_venv }}/bin/python -m screener_capacity.builder \
   --targon-resource {{ screener_capacity_builder_targon_resource }} \
   --kaniko-image {{ screener_capacity_builder_kaniko_image }} \
   --registry-service-account {{ screener_capacity_builder_registry_service_account }} \
+  --gcp-bootstrap-service-account {{ screener_capacity_gcp_bootstrap_service_account }} \
+  --source-review-secret-resource {{ screener_capacity_source_review_secret_resource }} \
+  --source-review-timeout-seconds {{ screener_capacity_source_review_timeout_seconds }} \
+  --candidate-registry-service-account {{ screener_capacity_candidate_registry_service_account }} \
+  --runtime-timeout-seconds {{ screener_capacity_runtime_timeout_seconds }} \
   --build-timeout-seconds {{ screener_capacity_builder_timeout_seconds }} \
   --interval-seconds {{ screener_capacity_builder_interval_seconds }}
 Restart=always

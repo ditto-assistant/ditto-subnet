@@ -36,6 +36,28 @@ resource "google_artifact_registry_repository" "public_runtime" {
   }
 }
 
+resource "google_artifact_registry_repository" "screening_candidates" {
+  project       = var.project
+  location      = var.region
+  repository_id = "ditto-screening-candidates"
+  format        = "DOCKER"
+  description   = "Private, ephemeral miner images promoted only after Platform byte verification."
+
+  cleanup_policy_dry_run = false
+  cleanup_policies {
+    id     = "delete-old-candidates"
+    action = "DELETE"
+    condition {
+      tag_state  = "ANY"
+      older_than = "86400s"
+    }
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "google_artifact_registry_repository_iam_member" "public_builders_reader" {
   project    = var.project
   location   = var.region
@@ -62,6 +84,14 @@ resource "google_artifact_registry_repository_iam_member" "image_builder_runtime
   project    = var.project
   location   = var.region
   repository = google_artifact_registry_repository.public_runtime.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.image_builder.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "image_builder_candidates_writer" {
+  project    = var.project
+  location   = var.region
+  repository = google_artifact_registry_repository.screening_candidates.repository_id
   role       = "roles/artifactregistry.writer"
   member     = "serviceAccount:${google_service_account.image_builder.email}"
 }

@@ -183,13 +183,15 @@ class TargonClient:
         envs: list[dict[str, str]] | None = None,
         commands: list[str] | None = None,
         args: list[str] | None = None,
+        ports: list[dict[str, Any]] | None = None,
+        registry_auth: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "type": "RENTAL",
             "name": name,
             "image": image,
             "resource_name": resource_name,
-            "ports": [],
+            "ports": ports or [],
         }
         if envs:
             payload["envs"] = envs
@@ -197,7 +199,60 @@ class TargonClient:
             payload["commands"] = commands
         if args:
             payload["args"] = args
+        if registry_auth:
+            payload["registry_auth"] = registry_auth
         value = self._request("POST", self._workload_path(), payload=payload)
+        if not isinstance(value, dict) or not isinstance(value.get("uid"), str):
+            raise TargonAPIError(
+                operation="POST /workloads",
+                status=None,
+                reason="invalid response shape",
+            )
+        return value
+
+    def create_ssh_key(self, *, name: str, public_key: str) -> dict[str, Any]:
+        value = self._request(
+            "POST",
+            f"/orgs/{urllib.parse.quote(self._org_slug or '', safe='')}/ssh-keys",
+            payload={"name": name, "ssh_key": public_key},
+        )
+        if not isinstance(value, dict) or not isinstance(value.get("uid"), str):
+            raise TargonAPIError(
+                operation="POST /ssh-keys",
+                status=None,
+                reason="invalid response shape",
+            )
+        return value
+
+    def delete_ssh_key(self, uid: str) -> None:
+        slug = urllib.parse.quote(self._org_slug or "", safe="")
+        try:
+            self._request("DELETE", f"/orgs/{slug}/ssh-keys/{uid}", retryable=True)
+        except TargonAPIError as error:
+            if error.status != 404:
+                raise
+
+    def create_vm(
+        self,
+        *,
+        name: str,
+        image: str,
+        resource_name: str,
+        ssh_key_uids: list[str],
+        password: str,
+    ) -> dict[str, Any]:
+        value = self._request(
+            "POST",
+            self._workload_path(),
+            payload={
+                "type": "VM",
+                "name": name,
+                "image": image,
+                "resource_name": resource_name,
+                "ssh_keys": ssh_key_uids,
+                "vm_config": {"password": password},
+            },
+        )
         if not isinstance(value, dict) or not isinstance(value.get("uid"), str):
             raise TargonAPIError(
                 operation="POST /workloads",

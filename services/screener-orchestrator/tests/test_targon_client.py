@@ -137,6 +137,52 @@ class TargonClientTests(unittest.TestCase):
         )
 
     @patch("screener_capacity.targon.urllib.request.urlopen")
+    def test_vm_and_ephemeral_ssh_key_stay_inside_selected_organization(
+        self, urlopen: object
+    ) -> None:
+        urlopen.side_effect = [  # type: ignore[attr-defined]
+            _Response({"uid": "key-1"}),
+            _Response({"uid": "vm-1"}),
+            _Response(None),
+        ]
+        client = TargonClient(api_key="x" * 40, org_slug="ditto")
+
+        client.create_ssh_key(name="probe-key", public_key="ssh-ed25519 public")
+        client.create_vm(
+            name="probe-vm",
+            image="ubuntu-24-04-lts-595",
+            resource_name="rtx6000b-small",
+            ssh_key_uids=["key-1"],
+            password="one-time-password",
+        )
+        client.delete_ssh_key("key-1")
+
+        requests = [
+            call.args[0]
+            for call in urlopen.call_args_list  # type: ignore[attr-defined]
+        ]
+        self.assertEqual(
+            [request.full_url for request in requests],
+            [
+                "https://api.targon.com/tha/v3/orgs/ditto/ssh-keys",
+                "https://api.targon.com/tha/v3/orgs/ditto/workloads",
+                "https://api.targon.com/tha/v3/orgs/ditto/ssh-keys/key-1",
+            ],
+        )
+        vm_payload = json.loads(requests[1].data)
+        self.assertEqual(
+            vm_payload,
+            {
+                "type": "VM",
+                "name": "probe-vm",
+                "image": "ubuntu-24-04-lts-595",
+                "resource_name": "rtx6000b-small",
+                "ssh_keys": ["key-1"],
+                "vm_config": {"password": "one-time-password"},
+            },
+        )
+
+    @patch("screener_capacity.targon.urllib.request.urlopen")
     def test_authenticated_workload_call_requires_org_slug(
         self, urlopen: object
     ) -> None:

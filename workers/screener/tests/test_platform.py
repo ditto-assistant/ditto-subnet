@@ -309,6 +309,67 @@ async def test_targon_build_digest_mismatch_discards_and_falls_back(
     ]
 
 
+@pytest.mark.parametrize(
+    ("observation", "accepted"),
+    [
+        (
+            {
+                "ok": True,
+                "risk_level": "low",
+                "categories": [],
+                "clearance_certified": True,
+            },
+            True,
+        ),
+        (
+            {
+                "ok": True,
+                "risk_level": "medium",
+                "categories": ["suspicious"],
+                "clearance_certified": True,
+            },
+            False,
+        ),
+    ],
+)
+async def test_targon_source_review_only_accepts_certified_low_risk(
+    make_config: Callable[..., ScreenerConfig],
+    observation: dict[str, object],
+    accepted: bool,
+) -> None:
+    attempt_id = uuid4()
+    review_id = uuid4()
+    deleted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal deleted
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "review_id": str(review_id),
+                    "attempt_id": str(attempt_id),
+                    "status": "succeeded",
+                    "provider": "targon",
+                    "artifact_sha256": "de" * 32,
+                    "observation": observation,
+                    "error_code": None,
+                },
+            )
+        if request.method == "DELETE":
+            deleted = True
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        result = await client.review_submission_source(
+            _AGENT, attempt_id=attempt_id, timeout=1
+        )
+    assert (result is not None) is accepted
+    assert deleted
+
+
 async def test_submit_result_posts_signed_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

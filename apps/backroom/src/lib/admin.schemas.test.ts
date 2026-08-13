@@ -236,7 +236,7 @@ describe('admin API schemas', () => {
   it('preserves the fenced multi-provider capacity contract', () => {
     const parsed = screenerCapacityViewSchema.parse({
       snapshot: {
-        environment: 'prod', controller_epoch: 'prod:epoch', runnable_backlog: 4,
+        environment: 'prod', controller_epoch: 'prod:epoch', provider_settings_revision: 0, runnable_backlog: 4,
         active_leases: 1, desired_slots: 2, global_cap: 6,
         targon_capability: 'nogo', targon_available: 6,
         targon_healthy: 0, targon_pending: 0, targon_draining: 0,
@@ -258,6 +258,18 @@ describe('admin API schemas', () => {
         current_phase: null,
       }],
       events: [],
+      provider_control: {
+        current: {
+          environment: 'prod', revision: 0, parent_revision: 0,
+          settings: {
+            runtime_provider_priority: ['targon', 'gcp'],
+            source_review_provider_priority: ['targon', 'gcp'],
+            build_provider_priority: ['targon', 'gcp'],
+          },
+          reason: 'Built-in default', actor: 'platform', created_at: null,
+        },
+        history: [],
+      },
     })
     expect(parsed.snapshot?.gce_target).toBe(2)
     expect(parsed.nodes[0].provider_resource_id).toBe('wk-123456')
@@ -271,6 +283,21 @@ describe('admin API schemas', () => {
     expect(auditReasonSchema(8).parse(detailed)).toBe(detailed)
     expect(() => auditReasonSchema(3).parse('no')).toThrow()
     expect(() => auditReasonSchema(8).parse('short')).toThrow()
+  })
+
+  it('uses safe provider defaults across a Platform-first rolling deploy', () => {
+    const parsed = screenerCapacityViewSchema.parse({
+      snapshot: null,
+      nodes: [],
+      events: [],
+      builds: [],
+    })
+
+    expect(parsed.provider_control.current.settings).toEqual({
+      runtime_provider_priority: ['targon', 'gcp'],
+      source_review_provider_priority: ['targon', 'gcp'],
+      build_provider_priority: ['targon', 'gcp'],
+    })
   })
 
   it('parses aggregate inference controls and rejects unsafe operator input', () => {

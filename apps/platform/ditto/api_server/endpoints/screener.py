@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
     ArtifactResponse,
+    EffectiveScreenerProviderSettings,
     ScreenedImageAbortRequest,
     ScreenedImageAbortResponse,
     ScreenedImageCompleteRequest,
@@ -72,6 +73,8 @@ from ditto.api_models import (
     ScreenResultResponse,
     SubmissionImageBuildRequest,
     SubmissionImageBuildResponse,
+    SubmissionSourceReviewRequest,
+    SubmissionSourceReviewResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
@@ -90,6 +93,17 @@ from ditto.api_models.screener_nodes import (
     SubmissionImageBuildCleanupRequest,
     SubmissionImageBuildControllerStatusResponse,
     SubmissionImageBuildControllerUpdateRequest,
+    SubmissionRuntimeArtifactClaimResponse,
+    SubmissionRuntimeArtifactResponse,
+    SubmissionRuntimeResultRequest,
+    SubmissionSourceReviewClaimResponse,
+    SubmissionSourceReviewClaimView,
+    SubmissionSourceReviewCleanupRequest,
+    SubmissionSourceReviewCompleteRequest,
+    SubmissionSourceReviewCompleteResponse,
+    SubmissionSourceReviewControllerStatusResponse,
+    SubmissionSourceReviewControllerUpdateRequest,
+    SubmissionSourceReviewSourceResponse,
     TrustedImageBuildClaimRequest,
     TrustedImageBuildClaimResponse,
     TrustedImageBuildCreateRequest,
@@ -97,6 +111,7 @@ from ditto.api_models.screener_nodes import (
     TrustedImageBuildUpdateRequest,
     TrustedImageBuildView,
 )
+from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import (
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
@@ -148,6 +163,7 @@ from ditto.db.models import (
     ScreeningAttempt,
     ScreeningQuarantine,
     SubmissionImageBuild,
+    SubmissionSourceReview,
     TrustedImageBuild,
 )
 from ditto.db.queries.agents import get_agent_by_id
@@ -160,13 +176,20 @@ from ditto.db.queries.heartbeats import (
     prune_stale_screener_heartbeats,
     upsert_screener_heartbeat,
 )
+from ditto.db.queries.screener_provider_settings import (
+    resolve_screener_provider_settings,
+)
 from ditto.db.queries.screening import (
     claim_screening_attempts,
     get_screening_attempt,
     prerequisite_screening_predicates,
     screening_priority_order,
 )
-from ditto_screening_protocol import ScreenResultOutcome, verdict_signing_message
+from ditto_screening_protocol import (
+    ScreenResultOutcome,
+    SourceReviewObservationPayload,
+    verdict_signing_message,
+)
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
@@ -188,6 +211,22 @@ _SCREENING_LEASE_TTL = timedelta(minutes=70)
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
 _HEARTBEAT_MAX_BYTES = 4096
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
+
+
+def _targon_first(providers: tuple[str, ...]) -> bool:
+    return bool(providers) and providers[0] == "targon"
+
+
+def _effective_provider_settings(
+    *, environment: str, revision: int, settings: ScreenerProviderSettings
+) -> EffectiveScreenerProviderSettings:
+    return EffectiveScreenerProviderSettings(
+        environment=environment,
+        revision=revision,
+        settings=settings,
+    )
+
+
 # instance_id stored for pre-v3 (no per-instance identity) heartbeats. Distinct
 # from any real GCE instance name, so upgraded workers never collide with it.
 _LEGACY_INSTANCE_ID = "legacy"
@@ -354,9 +393,15 @@ _SUBMISSION_BUILD_LEASE_TTL = timedelta(minutes=50)
 _SUBMISSION_BUILD_JOB_TTL = timedelta(minutes=45)
 _SUBMISSION_BUILD_URL_TTL = timedelta(minutes=15)
 _SUBMISSION_BUILD_MAX_BYTES = 4 * 1024**3
+_SOURCE_REVIEW_LEASE_TTL = timedelta(minutes=35)
+_SOURCE_REVIEW_JOB_TTL = timedelta(minutes=30)
+_SOURCE_REVIEW_URL_TTL = timedelta(minutes=10)
 _TRUSTED_SOURCE_REPOSITORY = "https://github.com/ditto-assistant/ditto-subnet.git"
 _TRUSTED_RUNTIME_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime"
+)
+_CANDIDATE_RUNTIME_REGISTRY = (
+    "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
 
 
@@ -398,24 +443,33 @@ async def _submission_build_view(
     storage: S3StorageClient | None = None,
 ) -> SubmissionImageBuildResponse:
     download_url: str | None = None
-    if row.status == "succeeded" and storage is not None:
+    externally_ready = row.status == "succeeded" and row.runtime_status not in {
+        "pending",
+        "running",
+    }
+    if externally_ready and storage is not None:
         download_url = await storage.presigned_get_url(
             key=row.output_key,
             expires_in=int(_SUBMISSION_BUILD_URL_TTL.total_seconds()),
         )
+    external_status = (
+        "running" if row.status == "succeeded" and not externally_ready else row.status
+    )
     return SubmissionImageBuildResponse(
         build_id=row.build_id,
         attempt_id=row.attempt_id,
-        status=cast(Any, row.status),
+        status=cast(Any, external_status),
         provider=cast(Literal["targon"] | None, row.provider),
         artifact_sha256=row.artifact_sha256,
         image_ref=row.image_ref,
-        output_sha256=row.output_sha256 if row.status == "succeeded" else None,
-        output_size_bytes=(
-            row.output_size_bytes if row.status == "succeeded" else None
-        ),
+        output_sha256=row.output_sha256 if externally_ready else None,
+        output_size_bytes=(row.output_size_bytes if externally_ready else None),
         download_url=download_url,
         error_code=row.error_code,
+        runtime_status=cast(Any, row.runtime_status),
+        runtime_provider="targon" if row.runtime_image_reference is not None else None,
+        runtime_image_reference=row.runtime_image_reference,
+        runtime_error_code=row.runtime_error_code,
     )
 
 
@@ -452,6 +506,52 @@ async def _locked_submission_build_for_job(
         raise HTTPException(status_code=401, detail="build job token expired")
     if row.status not in {"leased", "running"}:
         raise HTTPException(status_code=409, detail="build job is not active")
+    return row
+
+
+def _source_review_view(row: SubmissionSourceReview) -> SubmissionSourceReviewResponse:
+    observation = (
+        SourceReviewObservationPayload.model_validate(row.observation)
+        if row.status == "succeeded" and row.observation is not None
+        else None
+    )
+    return SubmissionSourceReviewResponse(
+        review_id=row.review_id,
+        attempt_id=row.attempt_id,
+        status=cast(Any, row.status),
+        provider=cast(Literal["targon"] | None, row.provider),
+        artifact_sha256=row.artifact_sha256,
+        observation=observation,
+        error_code=row.error_code,
+    )
+
+
+async def _locked_source_review_for_job(
+    session: AsyncSession,
+    *,
+    review_id: UUID,
+    authorization: str | None,
+) -> SubmissionSourceReview:
+    token = _submission_build_token(authorization)
+    row = await session.scalar(
+        select(SubmissionSourceReview)
+        .where(SubmissionSourceReview.review_id == review_id)
+        .with_for_update()
+    )
+    if row is None or row.job_token_hash is None:
+        raise HTTPException(status_code=401, detail="invalid source-review job token")
+    presented_hash = hashlib.sha256(token.encode()).hexdigest()
+    if not secrets.compare_digest(presented_hash, row.job_token_hash):
+        raise HTTPException(status_code=401, detail="invalid source-review job token")
+    expiry = row.job_token_expires_at
+    if expiry is None:
+        raise HTTPException(status_code=401, detail="source-review job token expired")
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    if datetime.now(UTC) >= expiry:
+        raise HTTPException(status_code=401, detail="source-review job token expired")
+    if row.status not in {"leased", "running"}:
+        raise HTTPException(status_code=409, detail="source-review job is not active")
     return row
 
 
@@ -842,6 +942,24 @@ async def release_screener_controller(
         snapshot.controller_lease_expires_at = now
 
 
+@router.get(
+    "/controller/provider-settings",
+    response_model=EffectiveScreenerProviderSettings,
+)
+async def get_controller_provider_settings(
+    _controller: ControllerDep,
+    session: SessionDep,
+    environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
+) -> EffectiveScreenerProviderSettings:
+    """Return the routing revision every provider mutator must obey."""
+    revision, settings = await resolve_screener_provider_settings(
+        session, environment=environment
+    )
+    return _effective_provider_settings(
+        environment=environment, revision=revision, settings=settings
+    )
+
+
 @router.post(
     "/controller/trusted-image-builds",
     response_model=TrustedImageBuildView,
@@ -853,6 +971,10 @@ async def queue_release_image_build(
 ) -> TrustedImageBuildView:
     """Idempotently queue the fixed release image contract for an exact SHA."""
     async with session.begin():
+        provider_revision, provider_settings = await resolve_screener_provider_settings(
+            session, environment="prod"
+        )
+        targon_enabled = _targon_first(provider_settings.build_provider_priority)
         values = {
             "build_id": uuid4(),
             "environment": "prod",
@@ -864,7 +986,15 @@ async def queue_release_image_build(
             "destination": (
                 f"{_TRUSTED_RUNTIME_REGISTRY}/screener:sha-{payload.source_sha}"
             ),
-            "status": "queued",
+            "status": "queued" if targon_enabled else "fallback_required",
+            "provider": None if targon_enabled else "targon",
+            "controller_epoch": (
+                None if targon_enabled else f"provider-policy:{provider_revision}"
+            ),
+            "error_code": (
+                None if targon_enabled else "TARGON_BUILD_DISABLED_BY_POLICY"
+            ),
+            "completed_at": None if targon_enabled else datetime.now(UTC),
             "created_by": f"github-release:{payload.source_sha}",
             "reason": payload.reason,
         }
@@ -942,6 +1072,27 @@ async def claim_trusted_image_build(
     """Lease one allowlisted trusted build under the current controller epoch."""
     now = datetime.now(UTC)
     async with session.begin():
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment=payload.environment
+        )
+        if not _targon_first(provider_settings.build_provider_priority):
+            await session.execute(
+                update(TrustedImageBuild)
+                .where(
+                    TrustedImageBuild.environment == payload.environment,
+                    TrustedImageBuild.status == "queued",
+                )
+                .values(
+                    status="fallback_required",
+                    provider="targon",
+                    controller_epoch=payload.controller_epoch,
+                    error_code="TARGON_BUILD_DISABLED_BY_POLICY",
+                    completed_at=now,
+                    lease_expires_at=None,
+                    updated_at=now,
+                )
+            )
+            return TrustedImageBuildClaimResponse(build=None)
         # A repeatedly abandoned lease must become an explicit Platform-issued
         # fallback decision instead of remaining leased forever.
         await session.execute(
@@ -1064,6 +1215,13 @@ async def queue_submission_image_build(
     """Queue a Targon build only after the owning screener validated source."""
     now = datetime.now(UTC)
     async with session.begin():
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment="prod"
+        )
+        targon_enabled = _targon_first(provider_settings.build_provider_priority)
+        runtime_targon_enabled = _targon_first(
+            provider_settings.runtime_provider_priority
+        )
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
@@ -1092,7 +1250,24 @@ async def queue_submission_image_build(
             "artifact_sha256": agent.sha256.lower(),
             "image_ref": f"ditto-screen/{agent_id}-{payload.attempt_id}:latest",
             "output_key": f"remote-builds/{build_id}/image.tar",
-            "status": "queued",
+            "status": "queued" if targon_enabled else "fallback_required",
+            "provider": None if targon_enabled else "targon",
+            "error_code": (
+                None if targon_enabled else "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
+            ),
+            "completed_at": None if targon_enabled else now,
+            "runtime_status": (
+                "pending" if targon_enabled and runtime_targon_enabled else "skipped"
+            ),
+            "runtime_error_code": (
+                None
+                if targon_enabled and runtime_targon_enabled
+                else (
+                    "TARGON_RUNTIME_DISABLED_BY_POLICY"
+                    if not runtime_targon_enabled
+                    else "TARGON_RUNTIME_SKIPPED_BUILD_UNAVAILABLE"
+                )
+            ),
         }
         await session.execute(
             pg_insert(SubmissionImageBuild)
@@ -1171,6 +1346,10 @@ async def consume_submission_image_build(
         output_key = row.output_key
         if active:
             row.status = "canceled"
+            if row.runtime_status in {"pending", "running"}:
+                row.runtime_status = "skipped"
+                row.runtime_error_code = "TARGON_RUNTIME_SKIPPED_BUILD_CANCELED"
+                row.runtime_completed_at = datetime.now(UTC)
             row.completed_at = datetime.now(UTC)
             row.lease_expires_at = None
             row.job_token_hash = None
@@ -1198,6 +1377,31 @@ async def claim_submission_image_build(
     """Lease one miner build and mint only its short-lived job capability."""
     now = datetime.now(UTC)
     async with session.begin():
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment=payload.environment
+        )
+        if not _targon_first(provider_settings.build_provider_priority):
+            await session.execute(
+                update(SubmissionImageBuild)
+                .where(
+                    SubmissionImageBuild.environment == payload.environment,
+                    SubmissionImageBuild.status == "queued",
+                )
+                .values(
+                    status="fallback_required",
+                    provider="targon",
+                    error_code="TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY",
+                    runtime_status="skipped",
+                    runtime_error_code="TARGON_RUNTIME_SKIPPED_BUILD_UNAVAILABLE",
+                    runtime_completed_at=now,
+                    completed_at=now,
+                    lease_expires_at=None,
+                    job_token_hash=None,
+                    job_token_expires_at=None,
+                    updated_at=now,
+                )
+            )
+            return SubmissionImageBuildClaimResponse(build=None)
         await session.execute(
             update(SubmissionImageBuild)
             .where(
@@ -1209,6 +1413,9 @@ async def claim_submission_image_build(
             .values(
                 status="fallback_required",
                 error_code="TARGON_SUBMISSION_BUILD_LEASE_EXHAUSTED",
+                runtime_status="skipped",
+                runtime_error_code="TARGON_RUNTIME_SKIPPED_BUILD_UNAVAILABLE",
+                runtime_completed_at=now,
                 completed_at=now,
                 lease_expires_at=None,
                 job_token_hash=None,
@@ -1227,7 +1434,14 @@ async def claim_submission_image_build(
                     & (ScreeningAttempt.deadline > now)
                 ),
             )
-            .values(status="canceled", completed_at=now, updated_at=now)
+            .values(
+                status="canceled",
+                runtime_status="skipped",
+                runtime_error_code="TARGON_RUNTIME_SKIPPED_BUILD_CANCELED",
+                runtime_completed_at=now,
+                completed_at=now,
+                updated_at=now,
+            )
         )
         row = await session.scalar(
             select(SubmissionImageBuild)
@@ -1310,6 +1524,10 @@ async def update_submission_image_build(
         row.started_at = row.started_at or now
         row.updated_at = now
         if payload.status == "fallback_required":
+            if row.runtime_status in {"pending", "running"}:
+                row.runtime_status = "skipped"
+                row.runtime_error_code = "TARGON_RUNTIME_SKIPPED_BUILD_UNAVAILABLE"
+                row.runtime_completed_at = now
             row.completed_at = now
             row.lease_expires_at = None
             row.job_token_hash = None
@@ -1336,6 +1554,172 @@ async def get_controller_submission_image_build(
         build_id=row.build_id,
         status=cast(Any, row.status),
     )
+
+
+@router.post(
+    "/controller/submission-runtime-smokes/claim",
+    response_model=SubmissionRuntimeArtifactClaimResponse,
+)
+async def claim_submission_runtime_smoke(
+    payload: TrustedImageBuildClaimRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+    storage: StorageDep,
+) -> SubmissionRuntimeArtifactClaimResponse:
+    now = datetime.now(UTC)
+    async with session.begin():
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment=payload.environment
+        )
+        if not _targon_first(provider_settings.runtime_provider_priority):
+            await session.execute(
+                update(SubmissionImageBuild)
+                .where(
+                    SubmissionImageBuild.environment == payload.environment,
+                    SubmissionImageBuild.runtime_status.in_(("pending", "running")),
+                )
+                .values(
+                    runtime_status="skipped",
+                    runtime_error_code="TARGON_RUNTIME_DISABLED_BY_POLICY",
+                    runtime_completed_at=now,
+                    updated_at=now,
+                )
+            )
+            return SubmissionRuntimeArtifactClaimResponse(artifact=None)
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.environment == payload.environment,
+                SubmissionImageBuild.status == "succeeded",
+                or_(
+                    SubmissionImageBuild.runtime_status == "pending",
+                    (
+                        (SubmissionImageBuild.runtime_status == "running")
+                        & (
+                            SubmissionImageBuild.updated_at
+                            < now - timedelta(minutes=20)
+                        )
+                    ),
+                ),
+                SubmissionImageBuild.output_sha256.is_not(None),
+                SubmissionImageBuild.output_size_bytes.is_not(None),
+            )
+            .order_by(SubmissionImageBuild.completed_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if row is None:
+            return SubmissionRuntimeArtifactClaimResponse(artifact=None)
+        row.runtime_status = "running"
+        row.controller_epoch = payload.controller_epoch
+        row.updated_at = now
+        output_sha256 = cast(str, row.output_sha256)
+        output_size_bytes = cast(int, row.output_size_bytes)
+        output_key = row.output_key
+        build_id = row.build_id
+    url = await storage.presigned_get_url(
+        key=output_key,
+        expires_in=int(_SUBMISSION_BUILD_URL_TTL.total_seconds()),
+    )
+    return SubmissionRuntimeArtifactClaimResponse(
+        artifact=SubmissionRuntimeArtifactResponse(
+            build_id=build_id,
+            archive_url_b64=base64.b64encode(url.encode()).decode(),
+            output_sha256=output_sha256,
+            output_size_bytes=output_size_bytes,
+            destination=f"{_CANDIDATE_RUNTIME_REGISTRY}:build-{build_id.hex}",
+        )
+    )
+
+
+@router.post(
+    "/controller/submission-image-builds/{build_id}/runtime-result",
+    response_model=None,
+    status_code=204,
+)
+async def complete_submission_runtime_smoke(
+    build_id: UUID,
+    payload: SubmissionRuntimeResultRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.build_id == build_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="submission image build not found"
+            )
+        if (
+            row.environment != payload.environment
+            or row.controller_epoch != payload.controller_epoch
+        ):
+            raise HTTPException(status_code=409, detail="runtime smoke fence is stale")
+        if row.status != "succeeded" or row.runtime_status not in {
+            "pending",
+            "running",
+        }:
+            raise HTTPException(status_code=409, detail="runtime smoke is terminal")
+        row.runtime_status = payload.status
+        row.runtime_provider_resource_id = payload.provider_resource_id
+        row.runtime_image_reference = payload.image_reference
+        row.runtime_error_code = payload.error_code
+        row.updated_at = now
+        if payload.status in {"succeeded", "fallback_required"}:
+            row.runtime_completed_at = now
+
+
+@router.post(
+    "/controller/submission-image-builds/{build_id}/runtime-cleanup-required",
+    response_model=None,
+    status_code=204,
+)
+async def mark_submission_runtime_cleanup_required(
+    build_id: UUID,
+    payload: SubmissionImageBuildCleanupRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.build_id == build_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="submission image build not found"
+            )
+        if (
+            row.environment != payload.environment
+            or row.controller_epoch != payload.controller_epoch
+            or row.runtime_provider_resource_id != payload.provider_resource_id
+        ):
+            raise HTTPException(
+                status_code=409, detail="runtime cleanup fence is stale"
+            )
+        row.runtime_error_code = "TARGON_RUNTIME_CLEANUP_REQUIRED"
+        row.updated_at = now
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment=payload.environment,
+                event_type="provider_cleanup_required",
+                provider="targon",
+                node_id=None,
+                detail=(
+                    "A suspended zero-replica runtime-smoke rental requires "
+                    "provider deletion retry."
+                ),
+                controller_epoch=payload.controller_epoch,
+                created_at=now,
+            )
+        )
 
 
 @router.post(
@@ -1520,6 +1904,425 @@ async def complete_submission_build_upload(
         stored.job_token_hash = None
         stored.job_token_expires_at = None
     return SubmissionBuildCompleteResponse(verified=True)
+
+
+@router.post(
+    "/agent/{agent_id}/submission-source-reviews",
+    response_model=SubmissionSourceReviewResponse,
+)
+async def queue_submission_source_review(
+    agent_id: UUID,
+    payload: SubmissionSourceReviewRequest,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> SubmissionSourceReviewResponse:
+    """Queue a bounded read-only review alongside the mechanical lane."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment="prod"
+        )
+        targon_enabled = _targon_first(
+            provider_settings.source_review_provider_priority
+        )
+        agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
+        attempt = await get_screening_attempt(
+            session, attempt_id=payload.attempt_id, for_update=True
+        )
+        deadline = attempt.deadline if attempt is not None else now
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if (
+            agent is None
+            or attempt is None
+            or attempt.agent_id != agent_id
+            or attempt.screener_hotkey != screener_hotkey
+            or attempt.status != "running"
+            or now >= deadline
+        ):
+            raise AgentNotScreenableError(
+                "remote source review does not match an active screening attempt"
+            )
+        values = {
+            "review_id": uuid4(),
+            "agent_id": agent_id,
+            "attempt_id": payload.attempt_id,
+            "environment": "prod",
+            "artifact_sha256": agent.sha256.lower(),
+            "status": "queued" if targon_enabled else "fallback_required",
+            "provider": None if targon_enabled else "targon",
+            "error_code": (
+                None if targon_enabled else "TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY"
+            ),
+            "completed_at": None if targon_enabled else now,
+        }
+        await session.execute(
+            pg_insert(SubmissionSourceReview)
+            .values(**values)
+            .on_conflict_do_nothing(constraint="submission_source_reviews_attempt_key")
+        )
+        row = await session.scalar(
+            select(SubmissionSourceReview).where(
+                SubmissionSourceReview.attempt_id == payload.attempt_id
+            )
+        )
+        if row is None:  # pragma: no cover
+            raise HTTPException(
+                status_code=503, detail="source-review queue unavailable"
+            )
+    return _source_review_view(row)
+
+
+@router.get(
+    "/agent/{agent_id}/submission-source-reviews/{review_id}",
+    response_model=SubmissionSourceReviewResponse,
+)
+async def get_submission_source_review(
+    agent_id: UUID,
+    review_id: UUID,
+    attempt_id: UUID,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> SubmissionSourceReviewResponse:
+    row = await session.get(SubmissionSourceReview, review_id)
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    if row is None or row.agent_id != agent_id or row.attempt_id != attempt_id:
+        raise HTTPException(
+            status_code=404, detail="submission source review not found"
+        )
+    if attempt is None or attempt.screener_hotkey != screener_hotkey:
+        raise AgentNotScreenableError(
+            "remote source review does not match screener lease"
+        )
+    return _source_review_view(row)
+
+
+@router.delete(
+    "/agent/{agent_id}/submission-source-reviews/{review_id}",
+    response_model=None,
+    status_code=204,
+)
+async def consume_submission_source_review(
+    agent_id: UUID,
+    review_id: UUID,
+    attempt_id: UUID,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> None:
+    async with session.begin():
+        row = await session.scalar(
+            select(SubmissionSourceReview)
+            .where(SubmissionSourceReview.review_id == review_id)
+            .with_for_update()
+        )
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        if row is None or row.agent_id != agent_id or row.attempt_id != attempt_id:
+            raise HTTPException(
+                status_code=404, detail="submission source review not found"
+            )
+        if attempt is None or attempt.screener_hotkey != screener_hotkey:
+            raise AgentNotScreenableError(
+                "remote source review does not match screener lease"
+            )
+        if row.status in {"queued", "leased", "running"}:
+            row.status = "canceled"
+            row.completed_at = datetime.now(UTC)
+        elif row.status == "succeeded":
+            row.status = "consumed"
+            row.consumed_at = datetime.now(UTC)
+        elif row.status not in {"fallback_required", "canceled", "consumed"}:
+            raise AgentNotScreenableError("remote source review is not discardable")
+        row.lease_expires_at = None
+        row.job_token_hash = None
+        row.job_token_expires_at = None
+        row.updated_at = datetime.now(UTC)
+
+
+@router.post(
+    "/controller/submission-source-reviews/claim",
+    response_model=SubmissionSourceReviewClaimResponse,
+)
+async def claim_submission_source_review(
+    payload: TrustedImageBuildClaimRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> SubmissionSourceReviewClaimResponse:
+    now = datetime.now(UTC)
+    async with session.begin():
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment=payload.environment
+        )
+        if not _targon_first(provider_settings.source_review_provider_priority):
+            await session.execute(
+                update(SubmissionSourceReview)
+                .where(
+                    SubmissionSourceReview.environment == payload.environment,
+                    SubmissionSourceReview.status == "queued",
+                )
+                .values(
+                    status="fallback_required",
+                    provider="targon",
+                    error_code="TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY",
+                    completed_at=now,
+                    updated_at=now,
+                )
+            )
+            return SubmissionSourceReviewClaimResponse(review=None)
+        await session.execute(
+            update(SubmissionSourceReview)
+            .where(
+                SubmissionSourceReview.environment == payload.environment,
+                SubmissionSourceReview.status.in_(("leased", "running")),
+                SubmissionSourceReview.lease_expires_at < now,
+                SubmissionSourceReview.attempt_count >= 3,
+            )
+            .values(
+                status="fallback_required",
+                error_code="TARGON_SOURCE_REVIEW_LEASE_EXHAUSTED",
+                completed_at=now,
+                lease_expires_at=None,
+                job_token_hash=None,
+                job_token_expires_at=None,
+                updated_at=now,
+            )
+        )
+        await session.execute(
+            update(SubmissionSourceReview)
+            .where(
+                SubmissionSourceReview.environment == payload.environment,
+                SubmissionSourceReview.status == "queued",
+                ~exists().where(
+                    (ScreeningAttempt.attempt_id == SubmissionSourceReview.attempt_id)
+                    & (ScreeningAttempt.status == "running")
+                    & (ScreeningAttempt.deadline > now)
+                ),
+            )
+            .values(status="canceled", completed_at=now, updated_at=now)
+        )
+        row = await session.scalar(
+            select(SubmissionSourceReview)
+            .join(
+                ScreeningAttempt,
+                ScreeningAttempt.attempt_id == SubmissionSourceReview.attempt_id,
+            )
+            .where(
+                SubmissionSourceReview.environment == payload.environment,
+                ScreeningAttempt.status == "running",
+                ScreeningAttempt.deadline > now,
+                or_(
+                    SubmissionSourceReview.status == "queued",
+                    (
+                        SubmissionSourceReview.status.in_(("leased", "running"))
+                        & (SubmissionSourceReview.lease_expires_at < now)
+                        & (SubmissionSourceReview.attempt_count < 3)
+                    ),
+                ),
+            )
+            .order_by(SubmissionSourceReview.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if row is None:
+            return SubmissionSourceReviewClaimResponse(review=None)
+        image_build = await session.scalar(
+            select(TrustedImageBuild)
+            .where(
+                TrustedImageBuild.environment == payload.environment,
+                TrustedImageBuild.component == "screener",
+                TrustedImageBuild.status == "succeeded",
+                TrustedImageBuild.image_digest.is_not(None),
+            )
+            .order_by(TrustedImageBuild.completed_at.desc())
+            .limit(1)
+        )
+        if image_build is None or image_build.image_digest is None:
+            row.status = "fallback_required"
+            row.provider = "targon"
+            row.error_code = "TARGON_SOURCE_REVIEW_IMAGE_UNPUBLISHED"
+            row.completed_at = now
+            row.updated_at = now
+            return SubmissionSourceReviewClaimResponse(review=None)
+        image_repository = image_build.destination.rsplit(":", 1)[0]
+        image_reference = f"{image_repository}@{image_build.image_digest}"
+        token = _fresh_node_token()
+        token_expires_at = now + _SOURCE_REVIEW_JOB_TTL
+        row.status = "leased"
+        row.provider = "targon"
+        row.controller_epoch = payload.controller_epoch
+        row.lease_expires_at = now + _SOURCE_REVIEW_LEASE_TTL
+        row.attempt_count += 1
+        row.job_token_hash = hashlib.sha256(token.encode()).hexdigest()
+        row.job_token_expires_at = token_expires_at
+        row.updated_at = now
+    return SubmissionSourceReviewClaimResponse(
+        review=SubmissionSourceReviewClaimView(
+            review_id=row.review_id,
+            agent_id=row.agent_id,
+            attempt_id=row.attempt_id,
+            artifact_sha256=row.artifact_sha256,
+            image_reference=image_reference,
+            job_token=token,
+            job_token_expires_at=token_expires_at,
+        )
+    )
+
+
+@router.put(
+    "/controller/submission-source-reviews/{review_id}",
+    response_model=None,
+    status_code=204,
+)
+async def update_submission_source_review(
+    review_id: UUID,
+    payload: SubmissionSourceReviewControllerUpdateRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await session.scalar(
+            select(SubmissionSourceReview)
+            .where(SubmissionSourceReview.review_id == review_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="submission source review not found"
+            )
+        if row.controller_epoch != payload.controller_epoch:
+            raise HTTPException(
+                status_code=409, detail="source-review lease epoch is stale"
+            )
+        if row.status not in {"leased", "running"}:
+            raise HTTPException(
+                status_code=409, detail="submission source review is terminal"
+            )
+        row.status = payload.status
+        row.provider = "targon"
+        row.provider_resource_id = payload.provider_resource_id
+        row.error_code = payload.error_code
+        row.started_at = row.started_at or now
+        row.updated_at = now
+        if payload.status == "fallback_required":
+            row.completed_at = now
+            row.lease_expires_at = None
+            row.job_token_hash = None
+            row.job_token_expires_at = None
+
+
+@router.get(
+    "/controller/submission-source-reviews/{review_id}",
+    response_model=SubmissionSourceReviewControllerStatusResponse,
+)
+async def get_controller_submission_source_review(
+    review_id: UUID,
+    environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")],
+    controller_epoch: Annotated[str, Query(pattern=r"^[A-Za-z0-9._:@/-]{8,200}$")],
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> SubmissionSourceReviewControllerStatusResponse:
+    row = await session.get(SubmissionSourceReview, review_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail="submission source review not found"
+        )
+    if row.environment != environment or row.controller_epoch != controller_epoch:
+        raise HTTPException(
+            status_code=409, detail="source-review lease epoch is stale"
+        )
+    return SubmissionSourceReviewControllerStatusResponse(
+        review_id=row.review_id, status=cast(Any, row.status)
+    )
+
+
+@router.post(
+    "/controller/submission-source-reviews/{review_id}/cleanup-required",
+    response_model=None,
+    status_code=204,
+)
+async def mark_submission_source_review_cleanup_required(
+    review_id: UUID,
+    payload: SubmissionSourceReviewCleanupRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await session.scalar(
+            select(SubmissionSourceReview)
+            .where(SubmissionSourceReview.review_id == review_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="submission source review not found"
+            )
+        if (
+            row.environment != payload.environment
+            or row.controller_epoch != payload.controller_epoch
+            or row.provider_resource_id != payload.provider_resource_id
+        ):
+            raise HTTPException(
+                status_code=409, detail="source-review cleanup fence is stale"
+            )
+        row.error_code = "TARGON_SOURCE_REVIEW_CLEANUP_REQUIRED"
+        row.updated_at = now
+
+
+@router.get(
+    "/submission-source-reviews/{review_id}/source",
+    response_model=SubmissionSourceReviewSourceResponse,
+)
+async def get_submission_source_review_source(
+    review_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> SubmissionSourceReviewSourceResponse:
+    async with session.begin():
+        row = await _locked_source_review_for_job(
+            session, review_id=review_id, authorization=authorization
+        )
+        agent_id = row.agent_id
+        artifact_sha256 = row.artifact_sha256
+    url = await storage.presigned_get_url(
+        key=_artifact_key(agent_id),
+        expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
+    )
+    return SubmissionSourceReviewSourceResponse(
+        source_url_b64=base64.b64encode(url.encode()).decode(),
+        artifact_sha256=artifact_sha256,
+    )
+
+
+@router.post(
+    "/submission-source-reviews/{review_id}/complete",
+    response_model=SubmissionSourceReviewCompleteResponse,
+)
+async def complete_submission_source_review(
+    review_id: UUID,
+    payload: SubmissionSourceReviewCompleteRequest,
+    session: SessionDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> SubmissionSourceReviewCompleteResponse:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await _locked_source_review_for_job(
+            session, review_id=review_id, authorization=authorization
+        )
+        finding = payload.observation.finding
+        if finding is not None and finding.artifact_sha256 != row.artifact_sha256:
+            raise HTTPException(
+                status_code=409, detail="source-review artifact mismatch"
+            )
+        row.observation = payload.observation.model_dump(mode="json")
+        row.status = "succeeded"
+        row.completed_at = now
+        row.updated_at = now
+        row.lease_expires_at = None
+        row.job_token_hash = None
+        row.job_token_expires_at = None
+    return SubmissionSourceReviewCompleteResponse(verified=True)
 
 
 @router.put("/controller/nodes/{node_id}", response_model=None, status_code=204)

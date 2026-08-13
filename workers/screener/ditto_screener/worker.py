@@ -30,7 +30,11 @@ from ditto_screener.heartbeat import (
     ScreenerProgressStage,
     ScreenerRuntimeState,
 )
-from ditto_screener.policy import ScreeningOutcome, core_decision
+from ditto_screener.policy import (
+    ScreeningOutcome,
+    SourceReviewObservation,
+    core_decision,
+)
 from ditto_screener.review_settings import (
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
@@ -365,6 +369,34 @@ class ScreenerWorker:
                             build_id=build_id,
                         )
 
+                    async def remote_source_review() -> SourceReviewObservation | None:
+                        payload = await self._platform.review_submission_source(
+                            agent_id,
+                            attempt_id=attempt_id,
+                            timeout=self._config.source_review_timeout_seconds,
+                        )
+                        if payload is None:
+                            return None
+                        return SourceReviewObservation(
+                            ok=payload.ok,
+                            risk_level=payload.risk_level,
+                            finding_digest=payload.finding_digest,
+                            categories=tuple(payload.categories),
+                            error_code=payload.error_code,
+                            finding=(
+                                payload.finding.model_dump(mode="json")
+                                if payload.finding is not None
+                                else None
+                            ),
+                            failure_disposition=payload.failure_disposition,
+                            clearance_certified=payload.clearance_certified,
+                            review_audit=(
+                                payload.review_audit.model_dump(mode="json")
+                                if payload.review_audit is not None
+                                else None
+                            ),
+                        )
+
                     result = await self._gate.screen(
                         agent_id=agent_id,
                         attempt_id=attempt_id,
@@ -376,6 +408,7 @@ class ScreenerWorker:
                         publish_image=publish_image,
                         remote_build=remote_build,
                         remote_build_consumed=remote_build_consumed,
+                        remote_source_review=remote_source_review,
                         # A build-only item requests the mechanical lane. That
                         # lane is used both for an already-adjudicated rebuild
                         # and for score-first admission when the complete source

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import patch
 
 from screener_capacity.controller import (
@@ -13,6 +14,7 @@ from screener_capacity.controller import (
     GCPBootstrapTokenMinter,
     PlatformControl,
     ProviderCounts,
+    ProviderRouting,
     Settings,
     _targon_counts,
     _validate_public_worker_env,
@@ -70,6 +72,10 @@ class _Platform:
         demand: Demand,
         nodes: dict[str, dict[str, object]] | None = None,
         image: str = "registry.invalid/screener@sha256:" + "a" * 64,
+        screening_priority: tuple[Literal["targon", "gcp"], ...] = (
+            "targon",
+            "gcp",
+        ),
     ) -> None:
         self._demand = demand
         self._nodes = nodes or {}
@@ -77,9 +83,18 @@ class _Platform:
         self.drained: list[str] = []
         self.fences = 0
         self._image = image
+        self._screening_priority = screening_priority
 
     def demand(self, **_kwargs: object) -> Demand:
         return self._demand
+
+    def provider_routing(self) -> ProviderRouting:
+        return ProviderRouting(
+            revision=0,
+            runtime_provider_priority=self._screening_priority,
+            source_review_provider_priority=self._screening_priority,
+            build_provider_priority=("targon", "gcp"),
+        )
 
     def renew(self, snapshot: dict[str, object]) -> dict[str, object]:
         self.renewed.append(snapshot)
@@ -445,6 +460,12 @@ class CapacityDecisionTests(unittest.TestCase):
 
             platform = SimpleNamespace(
                 demand=lambda **_kwargs: Demand(runnable=5, active=0, desired=3),
+                provider_routing=lambda: ProviderRouting(
+                    revision=0,
+                    runtime_provider_priority=("targon", "gcp"),
+                    source_review_provider_priority=("targon", "gcp"),
+                    build_provider_priority=("targon", "gcp"),
+                ),
                 renew=lambda snapshot: snapshot,
                 fence=lambda **_kwargs: None,
             )
@@ -478,6 +499,60 @@ class CapacityDecisionTests(unittest.TestCase):
                 snapshot = reconcile(settings)
             self.assertEqual(snapshot["gce_target"], 0)
             self.assertEqual(resized, [3, 0])
+
+    def test_gcp_first_policy_prevents_targon_scale_up(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            platform = _Platform(
+                Demand(runnable=4, active=0, desired=2),
+                screening_priority=("gcp", "targon"),
+            )
+            gce = _GCE()
+            targon = _Targon()
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                patch("screener_capacity.controller.TargonClient", return_value=targon),
+            ):
+                snapshot = reconcile(settings)
+            self.assertEqual(gce.resized, [2])
+            self.assertNotIn("targon:create", targon.operations)
+            self.assertEqual(
+                snapshot["fallback_reason"], "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
+            )
+
+    def test_unavailable_provider_revision_fails_closed_to_gcp(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            platform = _Platform(Demand(runnable=3, active=0, desired=2))
+            gce = _GCE()
+            targon = _Targon()
+            with (
+                patch.object(
+                    platform,
+                    "provider_routing",
+                    side_effect=ControllerError("provider settings unavailable"),
+                ),
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                patch("screener_capacity.controller.TargonClient", return_value=targon),
+            ):
+                snapshot = reconcile(settings)
+            self.assertEqual(gce.resized, [2])
+            self.assertNotIn("targon:create", targon.operations)
+            self.assertEqual(
+                snapshot["fallback_reason"], "PROVIDER_ROUTING_UNAVAILABLE"
+            )
+            self.assertEqual(
+                snapshot["last_provider_error_code"],
+                "PROVIDER_ROUTING_UNAVAILABLE",
+            )
 
     def test_targon_failure_preserves_active_lease_floor_and_reports_not_ready(
         self,

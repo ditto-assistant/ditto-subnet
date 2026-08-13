@@ -6,12 +6,14 @@ import argparse
 import base64
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -20,7 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from screener_capacity.controller import ControllerError, _read_secret_file
+from screener_capacity.controller import (
+    ControllerError,
+    GCPBootstrapTokenMinter,
+    _read_secret_file,
+)
 from screener_capacity.targon import TargonAPIError, TargonClient
 
 _DIGEST = re.compile(r"DITTO_BUILD_DIGEST=(sha256:[0-9a-f]{64})")
@@ -215,6 +221,139 @@ class SubmissionBuildControl:
         )
 
 
+class SourceReviewControl:
+    def __init__(self, *, platform_url: str, token: str, environment: str, epoch: str):
+        self.base = platform_url.rstrip("/")
+        self.token = token
+        self.environment = environment
+        self.epoch = epoch
+
+    def claim(self) -> dict[str, Any] | None:
+        value = _request(
+            "POST",
+            f"{self.base}/api/v1/screener/controller/submission-source-reviews/claim",
+            token=self.token,
+            payload={"environment": self.environment, "controller_epoch": self.epoch},
+        )
+        review = value.get("review")
+        if review is None:
+            return None
+        if not isinstance(review, dict):
+            raise ControllerError("Platform source-review claim is invalid")
+        return review
+
+    def update(
+        self,
+        review_id: str,
+        *,
+        status: str,
+        provider_resource_id: str | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        _request(
+            "PUT",
+            f"{self.base}/api/v1/screener/controller/submission-source-reviews/{review_id}",
+            token=self.token,
+            payload={
+                "environment": self.environment,
+                "controller_epoch": self.epoch,
+                "status": status,
+                "provider_resource_id": provider_resource_id,
+                "error_code": error_code,
+            },
+            retryable=True,
+        )
+
+    def status(self, review_id: str) -> str:
+        query = urllib.parse.urlencode(
+            {"environment": self.environment, "controller_epoch": self.epoch}
+        )
+        value = _request(
+            "GET",
+            f"{self.base}/api/v1/screener/controller/submission-source-reviews/"
+            f"{review_id}?{query}",
+            token=self.token,
+            retryable=True,
+        )
+        status = value.get("status")
+        if not isinstance(status, str):
+            raise ControllerError("Platform source-review status is invalid")
+        return status
+
+    def cleanup_required(self, review_id: str, *, provider_resource_id: str) -> None:
+        _request(
+            "POST",
+            f"{self.base}/api/v1/screener/controller/submission-source-reviews/"
+            f"{review_id}/cleanup-required",
+            token=self.token,
+            payload={
+                "environment": self.environment,
+                "controller_epoch": self.epoch,
+                "provider_resource_id": provider_resource_id,
+            },
+        )
+
+
+class RuntimeSmokeControl:
+    def __init__(self, *, platform_url: str, token: str, environment: str, epoch: str):
+        self.base = platform_url.rstrip("/")
+        self.token = token
+        self.environment = environment
+        self.epoch = epoch
+
+    def claim(self) -> dict[str, Any] | None:
+        value = _request(
+            "POST",
+            f"{self.base}/api/v1/screener/controller/submission-runtime-smokes/claim",
+            token=self.token,
+            payload={"environment": self.environment, "controller_epoch": self.epoch},
+        )
+        artifact = value.get("artifact")
+        if artifact is None:
+            return None
+        if not isinstance(artifact, dict):
+            raise ControllerError("Platform runtime-smoke claim is invalid")
+        return artifact
+
+    def update(
+        self,
+        build_id: str,
+        *,
+        status: str,
+        provider_resource_id: str | None = None,
+        image_reference: str | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        _request(
+            "POST",
+            f"{self.base}/api/v1/screener/controller/submission-image-builds/"
+            f"{build_id}/runtime-result",
+            token=self.token,
+            payload={
+                "environment": self.environment,
+                "controller_epoch": self.epoch,
+                "status": status,
+                "provider_resource_id": provider_resource_id,
+                "image_reference": image_reference,
+                "error_code": error_code,
+            },
+            retryable=True,
+        )
+
+    def cleanup_required(self, build_id: str, *, provider_resource_id: str) -> None:
+        _request(
+            "POST",
+            f"{self.base}/api/v1/screener/controller/submission-image-builds/"
+            f"{build_id}/runtime-cleanup-required",
+            token=self.token,
+            payload={
+                "environment": self.environment,
+                "controller_epoch": self.epoch,
+                "provider_resource_id": provider_resource_id,
+            },
+        )
+
+
 def _mint_access_token(service_account: str) -> str:
     try:
         result = subprocess.run(
@@ -355,6 +494,316 @@ class Settings:
     interval_seconds: int
     lock_file: Path
     submission_builder_image: str
+    gcp_bootstrap_service_account: str
+    gcp_bootstrap_delegate_service_account: str | None
+    source_review_secret_resource: str
+    source_review_timeout_seconds: int
+    candidate_registry_service_account: str
+    runtime_timeout_seconds: int
+
+
+def _download_runtime_archive(artifact: dict[str, Any], destination: Path) -> None:
+    try:
+        url = base64.b64decode(str(artifact["archive_url_b64"]), validate=True).decode()
+        expected = str(artifact["output_sha256"])
+        expected_size = int(artifact["output_size_bytes"])
+    except (KeyError, TypeError, ValueError, UnicodeError) as error:
+        raise ControllerError("runtime artifact contract is invalid") from error
+    if not url.startswith("https://") or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ControllerError("runtime artifact contract is invalid")
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with (
+            urllib.request.urlopen(url, timeout=300) as response,
+            destination.open("xb") as handle,
+        ):
+            os.chmod(destination, 0o600)
+            while chunk := response.read(8 * 1024**2):
+                total += len(chunk)
+                if total > expected_size:
+                    raise ControllerError("runtime artifact exceeded declared size")
+                digest.update(chunk)
+                handle.write(chunk)
+    except (OSError, urllib.error.URLError) as error:
+        raise ControllerError("runtime artifact download failed") from error
+    if total != expected_size or digest.hexdigest() != expected:
+        raise ControllerError("runtime artifact verification failed")
+
+
+def _promote_runtime_archive(
+    *, archive: Path, destination: str, access_token: str
+) -> str:
+    registry = destination.split("/", 1)[0]
+    descriptor, auth_path_raw = tempfile.mkstemp(prefix="ditto-registry-auth-")
+    auth_path = Path(auth_path_raw)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w") as handle:
+            json.dump(
+                {
+                    "auths": {
+                        registry: {
+                            "auth": base64.b64encode(
+                                f"oauth2accesstoken:{access_token}".encode()
+                            ).decode()
+                        }
+                    }
+                },
+                handle,
+                separators=(",", ":"),
+            )
+        result = subprocess.run(
+            [
+                "skopeo",
+                "copy",
+                "--authfile",
+                str(auth_path),
+                f"docker-archive:{archive}",
+                f"docker://{destination}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        inspect = subprocess.run(
+            [
+                "skopeo",
+                "inspect",
+                "--authfile",
+                str(auth_path),
+                "--format",
+                "{{.Digest}}",
+                f"docker://{destination}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ControllerError("runtime image promotion failed") from error
+    finally:
+        auth_path.unlink(missing_ok=True)
+    del result
+    digest = inspect.stdout.strip()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ControllerError("runtime image promotion returned invalid digest")
+    return f"{destination.rsplit(':', 1)[0]}@{digest}"
+
+
+def run_one_runtime_smoke(
+    settings: Settings,
+    client: TargonClient,
+    control: RuntimeSmokeControl,
+) -> bool:
+    artifact = control.claim()
+    if artifact is None:
+        return False
+    build_id = str(artifact.get("build_id", ""))
+    uid: str | None = None
+    archive: Path | None = None
+    try:
+        inventory = {
+            str(row.get("name")): int(row.get("available", 0))
+            for row in client.inventory()
+        }
+        if inventory.get(settings.targon_resource, 0) < 1:
+            control.update(
+                build_id,
+                status="fallback_required",
+                error_code="TARGON_RUNTIME_CAPACITY_UNAVAILABLE",
+            )
+            return True
+        destination = str(artifact["destination"])
+        descriptor, raw_path = tempfile.mkstemp(prefix="ditto-runtime-", suffix=".tar")
+        os.close(descriptor)
+        os.unlink(raw_path)
+        archive = Path(raw_path)
+        _download_runtime_archive(artifact, archive)
+        registry_token = _mint_access_token(settings.candidate_registry_service_account)
+        image_reference = _promote_runtime_archive(
+            archive=archive, destination=destination, access_token=registry_token
+        )
+        created = client.create_rental(
+            name=f"ditto-runtime-{build_id.replace('-', '')[:14]}"[:32],
+            image=image_reference,
+            resource_name=settings.targon_resource,
+            envs=[
+                {"name": "OPENROUTER_API_KEY", "value": "sk-screener-smoke"},
+                {"name": "DITTOBENCH_DB", "value": "/tmp/dittobench.db"},
+            ],
+            ports=[{"port": 8080, "protocol": "TCP", "routing": "PROXIED"}],
+            registry_auth={
+                "server": destination.split("/", 1)[0],
+                "username": "oauth2accesstoken",
+                "password": registry_token,
+            },
+        )
+        uid = str(created["uid"])
+        control.update(build_id, status="running", provider_resource_id=uid)
+        client.deploy(uid)
+        deadline = time.monotonic() + settings.runtime_timeout_seconds
+        while time.monotonic() < deadline:
+            state = client.state(uid)
+            urls = state.get("urls")
+            if isinstance(urls, list):
+                for row in urls:
+                    if not isinstance(row, dict) or row.get("port") != 8080:
+                        continue
+                    url = str(row.get("url", "")).rstrip("/")
+                    if not url.startswith("https://"):
+                        continue
+                    try:
+                        with urllib.request.urlopen(
+                            f"{url}/health", timeout=5
+                        ) as response:
+                            if 200 <= response.status < 300:
+                                control.update(
+                                    build_id,
+                                    status="succeeded",
+                                    provider_resource_id=uid,
+                                    image_reference=image_reference,
+                                )
+                                return True
+                    except (OSError, urllib.error.URLError):
+                        pass
+            if str(state.get("status", "")).casefold() == "error":
+                break
+            time.sleep(5)
+        control.update(
+            build_id,
+            status="fallback_required",
+            provider_resource_id=uid,
+            error_code="TARGON_RUNTIME_HEALTH_FAILED",
+        )
+        return True
+    except (ControllerError, TargonAPIError, KeyError, ValueError):
+        with contextlib.suppress(ControllerError):
+            control.update(
+                build_id,
+                status="fallback_required",
+                provider_resource_id=uid,
+                error_code="TARGON_RUNTIME_PROVIDER_ERROR",
+            )
+        return True
+    finally:
+        if archive is not None:
+            archive.unlink(missing_ok=True)
+        if uid is not None and not _delete_rental(client, uid):
+            with contextlib.suppress(ControllerError):
+                control.cleanup_required(build_id, provider_resource_id=uid)
+
+
+def run_one_source_review(
+    settings: Settings,
+    client: TargonClient,
+    control: SourceReviewControl,
+) -> bool:
+    review = control.claim()
+    if review is None:
+        return False
+    review_id = str(review.get("review_id", ""))
+    name = f"ditto-source-{review_id.replace('-', '')[:16]}"[:32]
+    uid: str | None = None
+    try:
+        inventory = {
+            str(row.get("name")): int(row.get("available", 0))
+            for row in client.inventory()
+        }
+        if inventory.get(settings.targon_resource, 0) < 1:
+            control.update(
+                review_id,
+                status="fallback_required",
+                error_code="TARGON_SOURCE_REVIEW_CAPACITY_UNAVAILABLE",
+            )
+            return True
+        image_reference = str(review["image_reference"])
+        if (
+            re.fullmatch(
+                r"[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}",
+                image_reference,
+            )
+            is None
+        ):
+            raise ValueError("source-review image reference is invalid")
+        job_token = str(review["job_token"])
+        if len(job_token) < 43:
+            raise ValueError("source-review token is invalid")
+        created = client.create_rental(
+            name=name,
+            image=image_reference,
+            resource_name=settings.targon_resource,
+            commands=["uv", "run", "--no-sync", "python", "-m"],
+            args=["ditto_screener.source_review_job"],
+        )
+        uid = str(created["uid"])
+        bootstrap_token = GCPBootstrapTokenMinter(
+            target=settings.gcp_bootstrap_service_account,
+            delegate=settings.gcp_bootstrap_delegate_service_account,
+        ).mint()
+        env = {
+            "DITTO_PLATFORM_URL": control.base,
+            "DITTO_SOURCE_REVIEW_ID": review_id,
+            "DITTO_SOURCE_REVIEW_ATTEMPT_ID": str(review["attempt_id"]),
+            "DITTO_SOURCE_REVIEW_ARTIFACT_SHA256": str(review["artifact_sha256"]),
+            "DITTO_SOURCE_REVIEW_JOB_TOKEN": job_token,
+            "SCREENER_NODE_CREDENTIAL_FILE": "/tmp/ditto-source-review/node.json",
+            "SCREENER_GCP_BOOTSTRAP_ACCESS_TOKEN": bootstrap_token,
+            "SCREENER_SOURCE_REVIEW_SECRET_RESOURCE": (
+                settings.source_review_secret_resource
+            ),
+            "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS": str(
+                settings.source_review_timeout_seconds
+            ),
+            "SCREENER_STATIC_PREFLIGHT_V2_MODE": "off",
+        }
+        client.update(
+            uid,
+            envs=[{"name": key, "value": value} for key, value in sorted(env.items())],
+        )
+        control.update(review_id, status="running", provider_resource_id=uid)
+        client.deploy(uid)
+        deadline = (
+            time.monotonic()
+            + settings.provision_timeout_seconds
+            + (settings.source_review_timeout_seconds + 120)
+        )
+        while time.monotonic() < deadline:
+            status = control.status(review_id)
+            if status in {"succeeded", "fallback_required", "canceled", "consumed"}:
+                return True
+            state = client.state(uid)
+            if str(state.get("status", "")).casefold() == "error":
+                control.update(
+                    review_id,
+                    status="fallback_required",
+                    provider_resource_id=uid,
+                    error_code="TARGON_SOURCE_REVIEW_RUNTIME_ERROR",
+                )
+                return True
+            time.sleep(10)
+        control.update(
+            review_id,
+            status="fallback_required",
+            provider_resource_id=uid,
+            error_code="TARGON_SOURCE_REVIEW_TIMEOUT",
+        )
+        return True
+    except (ControllerError, TargonAPIError, KeyError, ValueError):
+        with contextlib.suppress(ControllerError):
+            control.update(
+                review_id,
+                status="fallback_required",
+                provider_resource_id=uid,
+                error_code="TARGON_SOURCE_REVIEW_PROVIDER_ERROR",
+            )
+        return True
+    finally:
+        if uid is not None and not _delete_rental(client, uid):
+            with contextlib.suppress(ControllerError):
+                control.cleanup_required(review_id, provider_resource_id=uid)
 
 
 def run_one(settings: Settings, client: TargonClient, control: BuildControl) -> bool:
@@ -578,6 +1027,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--targon-resource", default="cpu-small")
     parser.add_argument("--kaniko-image", required=True)
     parser.add_argument("--registry-service-account", required=True)
+    parser.add_argument("--gcp-bootstrap-service-account", required=True)
+    parser.add_argument("--gcp-bootstrap-delegate-service-account")
+    parser.add_argument("--source-review-secret-resource", required=True)
+    parser.add_argument("--source-review-timeout-seconds", type=int, default=180)
+    parser.add_argument("--candidate-registry-service-account", required=True)
+    parser.add_argument("--runtime-timeout-seconds", type=int, default=180)
     parser.add_argument("--provision-timeout-seconds", type=int, default=600)
     parser.add_argument("--build-timeout-seconds", type=int, default=1800)
     parser.add_argument("--interval-seconds", type=int, default=15)
@@ -602,6 +1057,14 @@ def main() -> int:
         interval_seconds=args.interval_seconds,
         lock_file=Path(args.lock_file),
         submission_builder_image=_submission_builder_image(_source_revision()),
+        gcp_bootstrap_service_account=args.gcp_bootstrap_service_account,
+        gcp_bootstrap_delegate_service_account=(
+            args.gcp_bootstrap_delegate_service_account
+        ),
+        source_review_secret_resource=args.source_review_secret_resource,
+        source_review_timeout_seconds=args.source_review_timeout_seconds,
+        candidate_registry_service_account=args.candidate_registry_service_account,
+        runtime_timeout_seconds=args.runtime_timeout_seconds,
     )
     control = BuildControl(
         platform_url=args.platform_url,
@@ -610,6 +1073,18 @@ def main() -> int:
         epoch=epoch,
     )
     submission_control = SubmissionBuildControl(
+        platform_url=args.platform_url,
+        token=platform_token,
+        environment=args.environment,
+        epoch=epoch,
+    )
+    source_review_control = SourceReviewControl(
+        platform_url=args.platform_url,
+        token=platform_token,
+        environment=args.environment,
+        epoch=epoch,
+    )
+    runtime_control = RuntimeSmokeControl(
         platform_url=args.platform_url,
         token=platform_token,
         environment=args.environment,
@@ -625,7 +1100,16 @@ def main() -> int:
             return 75
         while True:
             try:
+                # Build first because both downstream Targon lanes consume a
+                # successfully verified image. Runtime smoke then qualifies
+                # that exact archive before source review uses spare capacity.
                 handled = run_one_submission(settings, client, submission_control)
+                if not handled:
+                    handled = run_one_runtime_smoke(settings, client, runtime_control)
+                if not handled:
+                    handled = run_one_source_review(
+                        settings, client, source_review_control
+                    )
                 if not handled:
                     handled = run_one(settings, client, control)
             except ControllerError as error:

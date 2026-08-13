@@ -308,6 +308,49 @@ export type ScreenerReviewControl = z.infer<typeof screenerReviewControlSchema>
 export type ScreenerReviewSettings = z.infer<typeof screenerReviewSettingsSchema>
 
 const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'home', 'test'])
+const capacityProviderSchema = z.enum(['targon', 'gcp'])
+const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(2).superRefine((value, context) => {
+  if (new Set(value).size !== value.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Provider priorities must be unique.' })
+  }
+  if (!value.includes('gcp')) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'GCP must remain as the safety fallback.' })
+  }
+})
+
+export const screenerProviderSettingsSchema = z.object({
+  build_provider_priority: providerPrioritySchema,
+  runtime_provider_priority: providerPrioritySchema,
+  source_review_provider_priority: providerPrioritySchema,
+})
+
+export const screenerProviderSettingsRevisionSchema = z.object({
+  environment: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  settings: screenerProviderSettingsSchema,
+  reason: z.string().min(1),
+  actor: z.string().min(1),
+  created_at: z.string().nullable(),
+})
+
+export const screenerProviderSettingsControlSchema = z.object({
+  current: screenerProviderSettingsRevisionSchema,
+  history: z.array(screenerProviderSettingsRevisionSchema),
+})
+
+export const setScreenerProviderSettingsInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  settings: screenerProviderSettingsSchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export function screenerProviderSettingsConfirmation(
+  settings: z.infer<typeof screenerProviderSettingsSchema>,
+) {
+  return `APPLY SCREENER PROVIDERS BUILDS=${settings.build_provider_priority.join('>')} RUNTIME=${settings.runtime_provider_priority.join('>')} SOURCE_REVIEW=${settings.source_review_provider_priority.join('>')}`
+}
 const screenerNodeStatusSchema = z.enum(['active', 'draining', 'quarantined', 'revoked'])
 
 export const screenerCapacityEventSchema = z.object({
@@ -323,6 +366,7 @@ export const screenerCapacityEventSchema = z.object({
 export const screenerCapacitySnapshotSchema = z.object({
   environment: z.string().min(1),
   controller_epoch: z.string().min(1),
+  provider_settings_revision: z.number().int().nonnegative(),
   runnable_backlog: z.number().int().nonnegative(),
   active_leases: z.number().int().nonnegative(),
   desired_slots: z.number().int().nonnegative(),
@@ -404,11 +448,40 @@ export const screenerCapacityViewSchema = z.object({
   nodes: z.array(screenerCapacityNodeSchema),
   events: z.array(screenerCapacityEventSchema),
   builds: z.array(trustedImageBuildSchema).default([]),
+  provider_jobs: z.array(z.object({
+    job_id: z.string().uuid(),
+    lane: z.enum(['build', 'runtime', 'source_review']),
+    status: z.string().min(1),
+    provider: z.literal('targon').nullable(),
+    provider_resource_id: z.string().nullable(),
+    image_reference: z.string().nullable(),
+    error_code: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })).default([]),
+  provider_control: screenerProviderSettingsControlSchema.default({
+    current: {
+      environment: 'prod',
+      revision: 0,
+      parent_revision: 0,
+      settings: {
+        build_provider_priority: ['targon', 'gcp'],
+        runtime_provider_priority: ['targon', 'gcp'],
+        source_review_provider_priority: ['targon', 'gcp'],
+      },
+      reason: 'Built-in Targon-first settings with GCP safety fallback',
+      actor: 'platform',
+      created_at: null,
+    },
+    history: [],
+  }),
 })
 
 export type ScreenerCapacityView = z.infer<typeof screenerCapacityViewSchema>
 export type ScreenerCapacityNode = z.infer<typeof screenerCapacityNodeSchema>
 export type TrustedImageBuild = z.infer<typeof trustedImageBuildSchema>
+export type ScreenerProviderSettings = z.infer<typeof screenerProviderSettingsSchema>
+export type ScreenerProviderSettingsControl = z.infer<typeof screenerProviderSettingsControlSchema>
 
 export const ARTIFACT_RELEASE_MIN_HOURS = 6
 // Mirrors the platform's range bound. 48 hours is still the community-agreed

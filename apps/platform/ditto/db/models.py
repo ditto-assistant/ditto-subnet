@@ -1999,6 +1999,9 @@ class ScreenerCapacitySnapshot(Base):
     environment: Mapped[str] = mapped_column(Text, primary_key=True)
     controller_epoch: Mapped[str] = mapped_column(Text, nullable=False)
     controller_source_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_settings_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     provider_ready: Mapped[bool] = mapped_column(Boolean, nullable=False)
     controller_heartbeat_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
@@ -2039,6 +2042,10 @@ class ScreenerCapacitySnapshot(Base):
         CheckConstraint(
             "controller_source_sha ~ '^[0-9a-f]{40}$'",
             name="screener_capacity_snapshots_source_sha_check",
+        ),
+        CheckConstraint(
+            "provider_settings_revision >= 0",
+            name="screener_capacity_snapshots_provider_revision_check",
         ),
         CheckConstraint(
             "runnable_backlog >= 0 AND active_leases >= 0 AND "
@@ -2084,6 +2091,52 @@ class ScreenerCapacityEvent(Base):
             "screener_capacity_events_environment_created_idx",
             "environment",
             "created_at",
+        ),
+    )
+
+
+class ScreenerProviderSettingsRevision(Base):
+    """Append-only operator routing for screening and remote-build providers."""
+
+    __tablename__ = "screener_provider_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
+            name="screener_provider_settings_environment_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="screener_provider_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="screener_provider_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="screener_provider_settings_actor_check",
+        ),
+        Index(
+            "screener_provider_settings_environment_revision_idx",
+            "environment",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "environment",
+            "parent_revision",
+            name="screener_provider_settings_environment_parent_key",
         ),
     )
 
@@ -2185,6 +2238,15 @@ class SubmissionImageBuild(Base):
     output_sha256: Mapped[str | None] = mapped_column(Text)
     output_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     error_code: Mapped[str | None] = mapped_column(Text)
+    runtime_status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="skipped"
+    )
+    runtime_provider_resource_id: Mapped[str | None] = mapped_column(Text)
+    runtime_image_reference: Mapped[str | None] = mapped_column(Text)
+    runtime_error_code: Mapped[str | None] = mapped_column(Text)
+    runtime_completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
     attempt_count: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="0"
     )
@@ -2241,6 +2303,16 @@ class SubmissionImageBuild(Base):
             name="submission_image_builds_provider_check",
         ),
         CheckConstraint(
+            "runtime_status IN ('pending', 'running', 'succeeded', "
+            "'fallback_required', 'skipped')",
+            name="submission_image_builds_runtime_status_check",
+        ),
+        CheckConstraint(
+            "runtime_image_reference IS NULL OR runtime_image_reference ~ "
+            "'^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'",
+            name="submission_image_builds_runtime_image_check",
+        ),
+        CheckConstraint(
             "output_sha256 IS NULL OR output_sha256 ~ '^[0-9a-f]{64}$'",
             name="submission_image_builds_output_sha_check",
         ),
@@ -2259,6 +2331,88 @@ class SubmissionImageBuild(Base):
         UniqueConstraint("attempt_id", name="submission_image_builds_attempt_key"),
         Index(
             "submission_image_builds_queue_idx",
+            "environment",
+            "status",
+            "created_at",
+        ),
+    )
+
+
+class SubmissionSourceReview(Base):
+    """Attempt-bound, provider-routed read-only source review."""
+
+    __tablename__ = "submission_source_reviews"
+
+    review_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    provider: Mapped[str | None] = mapped_column(Text)
+    provider_resource_id: Mapped[str | None] = mapped_column(Text)
+    observation: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    controller_epoch: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    job_token_hash: Mapped[str | None] = mapped_column(Text)
+    job_token_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="submission_source_reviews_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="submission_source_reviews_attempt_id_fkey",
+        ),
+        CheckConstraint(
+            "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
+            name="submission_source_reviews_environment_check",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="submission_source_reviews_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'running', 'succeeded', "
+            "'fallback_required', 'canceled', 'consumed')",
+            name="submission_source_reviews_status_check",
+        ),
+        CheckConstraint(
+            "provider IS NULL OR provider = 'targon'",
+            name="submission_source_reviews_provider_check",
+        ),
+        CheckConstraint(
+            "job_token_hash IS NULL OR job_token_hash ~ '^[0-9a-f]{64}$'",
+            name="submission_source_reviews_token_hash_check",
+        ),
+        CheckConstraint(
+            "attempt_count BETWEEN 0 AND 3",
+            name="submission_source_reviews_attempt_count_check",
+        ),
+        UniqueConstraint("attempt_id", name="submission_source_reviews_attempt_key"),
+        Index(
+            "submission_source_reviews_queue_idx",
             "environment",
             "status",
             "created_at",

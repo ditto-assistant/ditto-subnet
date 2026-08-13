@@ -81,6 +81,7 @@ from ditto.db.models import (
     ScreenedImageUpload,
     ScreenerCapacityEvent,
     ScreenerHeartbeat,
+    ScreenerProviderSettingsRevision,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
@@ -89,6 +90,7 @@ from ditto.db.models import (
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
     SubmissionImageBuild,
+    SubmissionSourceReview,
     TrustedImageBuild,
     ValidatorTicket,
 )
@@ -669,6 +671,7 @@ def _capacity_payload(epoch: str) -> dict[str, object]:
         "environment": "prod",
         "controller_epoch": epoch,
         "controller_source_sha": "a" * 40,
+        "provider_settings_revision": 0,
         "provider_ready": True,
         "runnable_backlog": 0,
         "active_leases": 0,
@@ -689,6 +692,98 @@ def _capacity_payload(epoch: str) -> dict[str, object]:
 
 
 class TestFederatedScreenerNodes:
+    async def test_submission_source_review_is_attempt_bound_and_digest_verified(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        _install_storage(app)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                TrustedImageBuild(
+                    build_id=uuid4(),
+                    environment="prod",
+                    component="screener",
+                    source_repository=(
+                        "https://github.com/ditto-assistant/ditto-subnet.git"
+                    ),
+                    source_sha="a" * 40,
+                    context_path=".",
+                    dockerfile_path="workers/screener/Dockerfile",
+                    destination=(
+                        "us-central1-docker.pkg.dev/ditto-app-dev/"
+                        "ditto-public-runtime/screener:sha-test"
+                    ),
+                    status="succeeded",
+                    provider="targon",
+                    image_digest="sha256:" + "b" * 64,
+                    completed_at=datetime.now(UTC),
+                    created_by="test",
+                    reason="provide a pinned reviewed source worker image",
+                )
+            )
+        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        attempt_id = claim.json()["items"][0]["attempt_id"]
+        queued = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/submission-source-reviews",
+            headers=_AUTH_HEADER,
+            json={"attempt_id": attempt_id},
+        )
+        assert queued.status_code == 200, queued.text
+        review_id = queued.json()["review_id"]
+        controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        leased = await client.post(
+            "/api/v1/screener/controller/submission-source-reviews/claim",
+            headers=controller_headers,
+            json={"environment": "prod", "controller_epoch": "builder:test"},
+        )
+        assert leased.status_code == 200, leased.text
+        job = leased.json()["review"]
+        assert job["review_id"] == review_id
+        assert job["image_reference"].endswith("@sha256:" + "b" * 64)
+        job_headers = {"Authorization": f"Bearer {job['job_token']}"}
+        source = await client.get(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/source",
+            headers=job_headers,
+        )
+        assert source.status_code == 200, source.text
+        assert source.json()["artifact_sha256"] == _SHA256
+        complete = await client.post(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
+            headers=job_headers,
+            json={
+                "observation": {
+                    "ok": True,
+                    "risk_level": "low",
+                    "categories": [],
+                    "clearance_certified": True,
+                }
+            },
+        )
+        assert complete.status_code == 200, complete.text
+        ready = await client.get(
+            f"/api/v1/screener/agent/{agent_id}/submission-source-reviews/{review_id}",
+            headers=_AUTH_HEADER,
+            params={"attempt_id": attempt_id},
+        )
+        assert ready.status_code == 200, ready.text
+        assert ready.json()["observation"]["clearance_certified"] is True
+        async with session_maker() as session:
+            row = await session.get(SubmissionSourceReview, UUID(review_id))
+            assert row is not None
+            assert row.job_token_hash is None
+
     async def test_submission_build_is_attempt_bound_and_fully_verified(
         self,
         app: FastAPI,
@@ -804,6 +899,41 @@ class TestFederatedScreenerNodes:
             key=f"remote-builds/{build_id}/image.tar", expected_size_bytes=123
         )
 
+        runtime = await client.post(
+            "/api/v1/screener/controller/submission-runtime-smokes/claim",
+            headers=controller_headers,
+            json={"environment": "prod", "controller_epoch": "builder:test"},
+        )
+        assert runtime.status_code == 200, runtime.text
+        assert runtime.json()["artifact"]["build_id"] == build_id
+        assert base64.b64decode(
+            runtime.json()["artifact"]["archive_url_b64"]
+        ).startswith(b"https://")
+        runtime_fallback = await client.post(
+            f"/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result",
+            headers=controller_headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "status": "fallback_required",
+                "provider_resource_id": "wrk-runtime",
+                "error_code": "TARGON_RUNTIME_HEALTH_FAILED",
+            },
+        )
+        assert runtime_fallback.status_code == 204, runtime_fallback.text
+
+        runtime_cleanup = await client.post(
+            f"/api/v1/screener/controller/submission-image-builds/{build_id}"
+            "/runtime-cleanup-required",
+            headers=controller_headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "provider_resource_id": "wrk-runtime",
+            },
+        )
+        assert runtime_cleanup.status_code == 204, runtime_cleanup.text
+
         ready = await client.get(
             f"/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}",
             headers=_AUTH_HEADER,
@@ -811,6 +941,7 @@ class TestFederatedScreenerNodes:
         )
         assert ready.status_code == 200, ready.text
         assert ready.json()["status"] == "succeeded"
+        assert ready.json()["runtime_status"] == "fallback_required"
         assert ready.json()["output_sha256"] == output_sha
         assert ready.json()["download_url"].startswith("https://")
 
@@ -825,14 +956,17 @@ class TestFederatedScreenerNodes:
         )
         assert cleanup.status_code == 204, cleanup.text
         async with session_maker() as session:
-            event = await session.scalar(
-                select(ScreenerCapacityEvent).where(
-                    ScreenerCapacityEvent.event_type == "provider_cleanup_required"
+            events = list(
+                await session.scalars(
+                    select(ScreenerCapacityEvent).where(
+                        ScreenerCapacityEvent.event_type == "provider_cleanup_required"
+                    )
                 )
             )
-            assert event is not None
-            assert event.provider == "targon"
-            assert "zero-replica" in event.detail
+            assert len(events) == 2
+            assert all(event.provider == "targon" for event in events)
+            assert any("zero-replica" in event.detail for event in events)
+            assert any("runtime-smoke" in event.detail for event in events)
 
         consumed = await client.delete(
             f"/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}",
@@ -918,6 +1052,55 @@ class TestFederatedScreenerNodes:
                 .where(TrustedImageBuild.source_sha == "c" * 40)
             )
         assert count == 1
+
+    async def test_gcp_first_builder_policy_authorizes_immediate_fallback(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreenerProviderSettingsRevision(
+                    environment="prod",
+                    parent_revision=0,
+                    settings={
+                        "runtime_provider_priority": ["targon", "gcp"],
+                        "source_review_provider_priority": ["targon", "gcp"],
+                        "build_provider_priority": ["gcp"],
+                    },
+                    reason="Disable Targon builders during provider maintenance",
+                    actor="operator@example.com",
+                )
+            )
+        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        settings = await client.get(
+            "/api/v1/screener/controller/provider-settings?environment=prod",
+            headers=headers,
+        )
+        assert settings.status_code == 200, settings.text
+        assert settings.json()["settings"]["build_provider_priority"] == ["gcp"]
+
+        queued = await client.post(
+            "/api/v1/screener/controller/trusted-image-builds",
+            headers=headers,
+            json={
+                "component": "screener",
+                "source_sha": "e" * 40,
+                "reason": "prove operator-disabled Targon fallback is immediate",
+            },
+        )
+        assert queued.status_code == 200, queued.text
+        assert queued.json()["status"] == "fallback_required"
+        assert queued.json()["error_code"] == "TARGON_BUILD_DISABLED_BY_POLICY"
 
     async def test_third_expired_build_lease_requests_explicit_fallback(
         self,
@@ -1127,13 +1310,16 @@ class TestFederatedScreenerNodes:
             ),
         )
         controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        legacy_payload = _capacity_payload("prod:first")
+        legacy_payload.pop("provider_settings_revision")
         first = await client.put(
             "/api/v1/screener/controller/capacity",
             headers=controller_headers,
-            json=_capacity_payload("prod:first"),
+            json=legacy_payload,
         )
         assert first.status_code == 200, first.text
         assert first.json()["controller_lease_expires_at"]
+        assert first.json()["provider_settings_revision"] == 0
 
         fenced = await client.put(
             "/api/v1/screener/controller/capacity",

@@ -614,6 +614,8 @@ class BuildGate:
         publish_image: Callable[[BuiltImageArtifact], Awaitable[None]] | None = None,
         remote_build: Callable[[], Awaitable[RemoteImageArchive | None]] | None = None,
         remote_build_consumed: Callable[[UUID], Awaitable[None]] | None = None,
+        remote_source_review: Callable[[], Awaitable[SourceReviewObservation | None]]
+        | None = None,
         build_only: bool = False,
         deferred_source_review: bool = False,
     ) -> ScreeningDecision:
@@ -818,15 +820,31 @@ class BuildGate:
                         return decision
 
                 if preflight_clearance is None:
-                    review_task = asyncio.create_task(
-                        self._source_reviewer.review(
+
+                    async def review_with_provider_fallback() -> (
+                        SourceReviewObservation
+                    ):
+                        if remote_source_review is not None:
+                            try:
+                                remote = await remote_source_review()
+                            except Exception:  # noqa: BLE001 - local is authoritative fallback
+                                logger.warning(
+                                    "remote source reviewer raised unexpectedly; "
+                                    "using local reviewer",
+                                    exc_info=True,
+                                )
+                            else:
+                                if remote is not None:
+                                    return remote
+                        return await self._source_reviewer.review(
                             tmp_path,
                             artifact_sha256=sha256.lower(),
                             attempt_id=attempt_id,
                             progress=report_review_progress,
                             deadline=deadline,
                         )
-                    )
+
+                    review_task = asyncio.create_task(review_with_provider_fallback())
                 else:
 
                     async def cleared_preflight() -> SourceReviewObservation:

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.screener_nodes import (
@@ -17,9 +18,19 @@ from ditto.api_models.screener_nodes import (
     ScreenerNodeStatus,
     ScreenerNodeView,
     ScreenerProvider,
+    ScreenerProviderJobView,
     TrustedImageBuildCreateRequest,
     TrustedImageBuildStatus,
     TrustedImageBuildView,
+)
+from ditto.api_models.screener_provider_settings import (
+    ScreenerProviderSettings,
+    ScreenerProviderSettingsControl,
+    ScreenerProviderSettingsWriteRequest,
+    provider_settings_confirmation,
+)
+from ditto.api_models.screener_provider_settings import (
+    ScreenerProviderSettingsRevision as ProviderSettingsRevisionModel,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -28,7 +39,14 @@ from ditto.db.models import (
     ScreenerCapacitySnapshot,
     ScreenerHeartbeat,
     ScreenerNode,
+    ScreenerProviderSettingsRevision,
+    SubmissionImageBuild,
+    SubmissionSourceReview,
     TrustedImageBuild,
+)
+from ditto.db.queries.screener_provider_settings import (
+    DEFAULT_SCREENER_PROVIDER_SETTINGS,
+    latest_screener_provider_settings,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -73,6 +91,113 @@ def _build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
         completed_at=_aware(row.completed_at),
         updated_at=_required_aware(row.updated_at),
     )
+
+
+def _provider_revision(
+    row: ScreenerProviderSettingsRevision,
+) -> ProviderSettingsRevisionModel:
+    return ProviderSettingsRevisionModel(
+        environment=row.environment,
+        revision=row.revision,
+        parent_revision=row.parent_revision,
+        settings=ScreenerProviderSettings.model_validate(row.settings),
+        reason=row.reason,
+        actor=row.actor,
+        created_at=_required_aware(row.created_at),
+    )
+
+
+def _default_provider_revision(environment: str) -> ProviderSettingsRevisionModel:
+    return ProviderSettingsRevisionModel(
+        environment=environment,
+        revision=0,
+        parent_revision=0,
+        settings=DEFAULT_SCREENER_PROVIDER_SETTINGS,
+        reason="Built-in Targon-first settings with GCP safety fallback",
+        actor="platform",
+        created_at=None,
+    )
+
+
+async def _provider_control(
+    session: AsyncSession, *, environment: str
+) -> ScreenerProviderSettingsControl:
+    rows = list(
+        await session.scalars(
+            select(ScreenerProviderSettingsRevision)
+            .where(ScreenerProviderSettingsRevision.environment == environment)
+            .order_by(desc(ScreenerProviderSettingsRevision.revision))
+            .limit(100)
+        )
+    )
+    return ScreenerProviderSettingsControl(
+        current=(
+            _provider_revision(rows[0])
+            if rows
+            else _default_provider_revision(environment)
+        ),
+        history=[_provider_revision(row) for row in rows],
+    )
+
+
+@router.get(
+    "/screener-provider-settings", response_model=ScreenerProviderSettingsControl
+)
+async def get_screener_provider_settings(
+    _admin: AdminDep,
+    session: SessionDep,
+    environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
+) -> ScreenerProviderSettingsControl:
+    return await _provider_control(session, environment=environment)
+
+
+@router.post(
+    "/screener-provider-settings", response_model=ProviderSettingsRevisionModel
+)
+async def set_screener_provider_settings(
+    payload: ScreenerProviderSettingsWriteRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> ProviderSettingsRevisionModel:
+    expected_confirmation = provider_settings_confirmation(payload.settings)
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {expected_confirmation}",
+        )
+    latest = await latest_screener_provider_settings(
+        session, environment=payload.environment
+    )
+    actual_revision = latest.revision if latest is not None else 0
+    if payload.expected_revision != actual_revision:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "screener provider settings changed; refresh before applying "
+                f"(expected {payload.expected_revision}, current {actual_revision})"
+            ),
+        )
+    row = ScreenerProviderSettingsRevision(
+        environment=payload.environment,
+        parent_revision=actual_revision,
+        settings=payload.settings.model_dump(mode="json"),
+        reason=payload.reason.strip(),
+        actor=payload.actor.strip(),
+    )
+    session.add(row)
+    try:
+        await session.commit()
+    except IntegrityError as error:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "screener provider settings changed concurrently; "
+                "refresh before applying"
+            ),
+        ) from error
+    await session.refresh(row)
+    return _provider_revision(row)
 
 
 @router.post("/trusted-image-builds", response_model=TrustedImageBuildView)
@@ -150,12 +275,29 @@ async def screener_capacity(
             .limit(100)
         )
     )
+    submission_build_rows = list(
+        await session.scalars(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.environment == environment)
+            .order_by(desc(SubmissionImageBuild.created_at))
+            .limit(50)
+        )
+    )
+    source_review_rows = list(
+        await session.scalars(
+            select(SubmissionSourceReview)
+            .where(SubmissionSourceReview.environment == environment)
+            .order_by(desc(SubmissionSourceReview.created_at))
+            .limit(50)
+        )
+    )
     snapshot_view = None
     if snapshot is not None:
         snapshot_view = ScreenerCapacitySnapshotResponse(
             environment=snapshot.environment,
             controller_epoch=snapshot.controller_epoch,
             controller_source_sha=snapshot.controller_source_sha,
+            provider_settings_revision=snapshot.provider_settings_revision,
             provider_ready=snapshot.provider_ready,
             controller_heartbeat_at=_required_aware(snapshot.controller_heartbeat_at),
             controller_lease_expires_at=_required_aware(
@@ -242,4 +384,53 @@ async def screener_capacity(
         nodes=nodes,
         events=events,
         builds=[_build_view(row) for row in build_rows],
+        provider_jobs=sorted(
+            [
+                *[
+                    ScreenerProviderJobView(
+                        job_id=row.build_id,
+                        lane="build",
+                        status=row.status,
+                        provider=cast(Literal["targon"] | None, row.provider),
+                        provider_resource_id=row.provider_resource_id,
+                        error_code=row.error_code,
+                        created_at=_required_aware(row.created_at),
+                        updated_at=_required_aware(row.updated_at),
+                    )
+                    for row in submission_build_rows
+                ],
+                *[
+                    ScreenerProviderJobView(
+                        job_id=row.build_id,
+                        lane="runtime",
+                        status=row.runtime_status,
+                        provider=(
+                            "targon" if row.runtime_status != "skipped" else None
+                        ),
+                        provider_resource_id=row.runtime_provider_resource_id,
+                        image_reference=row.runtime_image_reference,
+                        error_code=row.runtime_error_code,
+                        created_at=_required_aware(row.created_at),
+                        updated_at=_required_aware(row.updated_at),
+                    )
+                    for row in submission_build_rows
+                ],
+                *[
+                    ScreenerProviderJobView(
+                        job_id=row.review_id,
+                        lane="source_review",
+                        status=row.status,
+                        provider=cast(Literal["targon"] | None, row.provider),
+                        provider_resource_id=row.provider_resource_id,
+                        error_code=row.error_code,
+                        created_at=_required_aware(row.created_at),
+                        updated_at=_required_aware(row.updated_at),
+                    )
+                    for row in source_review_rows
+                ],
+            ],
+            key=lambda row: row.updated_at,
+            reverse=True,
+        )[:100],
+        provider_control=await _provider_control(session, environment=environment),
     )

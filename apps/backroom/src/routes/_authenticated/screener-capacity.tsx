@@ -13,20 +13,24 @@ export const Route = createFileRoute('/_authenticated/screener-capacity')({
 
 function ScreenerCapacityPage() {
   const initialState = Route.useLoaderData()
+  const { user } = Route.useRouteContext()
   return (
     <div>
       <PageHeader
         label="SN118 screening"
         title="Screener capacity"
-        description="Live provider allocation, controller fencing, worker identity, and failover state for Targon-first screening with a zero-idle GCE fallback."
+        description="Live provider allocation, audited routing controls, controller fencing, worker identity, and failover state for screening and remote builds."
         aside={
           <div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted-strong)]">
             <ServerCog className="h-3.5 w-3.5 text-[var(--cyan)]" />
-            Read-only operations
+            Provider controls
           </div>
         }
       />
-      <ScreenerCapacityPanel initialState={initialState} />
+      <ScreenerCapacityPanel
+        initialState={initialState}
+        readOnly={user.accessLevel === 'read'}
+      />
     </div>
   )
 }

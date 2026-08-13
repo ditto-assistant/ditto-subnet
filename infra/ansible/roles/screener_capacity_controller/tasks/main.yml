@@ -5,6 +5,7 @@
       - screener_capacity_gcp_bootstrap_service_account | length > 0
       - screener_capacity_source_review_secret_resource | length > 0
       - screener_capacity_builder_registry_service_account | length > 0
+      - screener_capacity_candidate_registry_service_account | length > 0
       - screener_capacity_builder_kaniko_image | length > 0
       - screener_capacity_targon_org_slug | length > 0
       - screener_capacity_global_cap | int > 0
@@ -13,6 +14,12 @@
 - name: Verify gcloud is available for ADC and Secret Manager
   ansible.builtin.command: gcloud --version
   changed_when: false
+
+- name: Install trusted registry promotion client
+  ansible.builtin.apt:
+    name: skopeo
+    state: present
+    update_cache: true
 
 - name: Ensure controller directories
   ansible.builtin.file:

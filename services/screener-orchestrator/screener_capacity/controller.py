@@ -24,7 +24,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from screener_capacity.targon import TargonAPIError, TargonClient
@@ -64,6 +64,25 @@ class ProviderCounts:
     @property
     def supplied(self) -> int:
         return self.healthy + self.pending
+
+
+@dataclass(frozen=True)
+class ProviderRouting:
+    revision: int
+    runtime_provider_priority: tuple[Literal["targon", "gcp"], ...]
+    source_review_provider_priority: tuple[Literal["targon", "gcp"], ...]
+    build_provider_priority: tuple[Literal["targon", "gcp"], ...]
+
+    @property
+    def targon_screeners_enabled(self) -> bool:
+        # Legacy monolithic workers are eligible only when both decomposed
+        # lanes still select Targon. New lane-specific jobs use their own list.
+        return (
+            bool(self.runtime_provider_priority)
+            and self.runtime_provider_priority[0] == "targon"
+            and bool(self.source_review_provider_priority)
+            and self.source_review_provider_priority[0] == "targon"
+        )
 
 
 def desired_slots(*, runnable: int, active: int, jobs_per_slot: int, cap: int) -> int:
@@ -197,6 +216,43 @@ class PlatformControl:
         if not isinstance(body, dict):
             raise ControllerError("Platform capacity response is invalid")
         return body
+
+    def provider_routing(self) -> ProviderRouting:
+        body = _json_request(
+            "GET",
+            f"{self._base}/api/v1/screener/controller/provider-settings"
+            f"?environment={self.environment}",
+            token=self._token,
+        )
+        if not isinstance(body, dict):
+            raise ControllerError("Platform provider settings response is invalid")
+        revision = body.get("revision")
+        values = body.get("settings")
+        if (
+            not isinstance(revision, int)
+            or revision < 0
+            or not isinstance(values, dict)
+        ):
+            raise ControllerError("Platform provider settings response is invalid")
+
+        def priority(field: str) -> tuple[Literal["targon", "gcp"], ...]:
+            raw = values.get(field)
+            if (
+                not isinstance(raw, list)
+                or not raw
+                or not all(item in {"targon", "gcp"} for item in raw)
+                or len(raw) != len(set(raw))
+                or "gcp" not in raw
+            ):
+                raise ControllerError("Platform provider priority is invalid")
+            return cast(tuple[Literal["targon", "gcp"], ...], tuple(raw))
+
+        return ProviderRouting(
+            revision=revision,
+            runtime_provider_priority=priority("runtime_provider_priority"),
+            source_review_provider_priority=priority("source_review_provider_priority"),
+            build_provider_priority=priority("build_provider_priority"),
+        )
 
     def latest_screener_image(self) -> str | None:
         body = _json_request(
@@ -662,6 +718,7 @@ class Settings:
 def _snapshot(
     *,
     settings: Settings,
+    provider_routing: ProviderRouting,
     demand: Demand,
     capability: Capability,
     reason: str | None,
@@ -679,6 +736,7 @@ def _snapshot(
         "environment": settings.environment,
         "controller_epoch": settings.epoch,
         "controller_source_sha": settings.source_sha,
+        "provider_settings_revision": provider_routing.revision,
         "runnable_backlog": demand.runnable,
         "active_leases": demand.active,
         "desired_slots": demand.desired,
@@ -747,12 +805,41 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     demand = platform.demand(
         jobs_per_slot=settings.jobs_per_slot, cap=settings.global_cap
     )
+    provider_routing_available = True
+    try:
+        provider_routing = platform.provider_routing()
+    except ControllerError:
+        # Platform is deployed before the controller in the normal release, but
+        # a rolling boundary or transient read failure must never resurrect
+        # Targon against an unknown operator setting. Route through GCP until a
+        # revision can be read.
+        provider_routing_available = False
+        provider_routing = ProviderRouting(
+            revision=0,
+            runtime_provider_priority=("gcp",),
+            source_review_provider_priority=("gcp",),
+            build_provider_priority=("gcp",),
+        )
     capability, reason = _capability(settings.targon_capability_file)
+    targon_screeners_enabled = provider_routing.targon_screeners_enabled
+    targon_allowed = capability == "go" and targon_screeners_enabled
+    if not targon_screeners_enabled:
+        if not provider_routing_available:
+            reason = "PROVIDER_ROUTING_UNAVAILABLE"
+        else:
+            reason = (
+                "TARGON_SCREENERS_DISABLED_BY_POLICY"
+                if (
+                    "targon" not in provider_routing.runtime_provider_priority
+                    or "targon" not in provider_routing.source_review_provider_priority
+                )
+                else "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
+            )
     desired_targon_image: str | None = None
-    if capability == "go":
+    if targon_allowed:
         desired_targon_image = platform.latest_screener_image()
         if desired_targon_image is None:
-            capability = "nogo"
+            targon_allowed = False
             reason = "TARGON_WORKER_IMAGE_UNPUBLISHED"
     targon_counts = ProviderCounts()
     targon_rows: list[dict[str, Any]] = []
@@ -763,6 +850,9 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_success_at: str | None = None
     provider_error_code: str | None = None
     provider_error_at: str | None = None
+    if not provider_routing_available:
+        provider_error_code = "PROVIDER_ROUTING_UNAVAILABLE"
+        provider_error_at = datetime.now(UTC).isoformat()
     if settings.targon_api_key_file is not None:
         key = _read_secret_file(settings.targon_api_key_file)
         targon_client = TargonClient(api_key=key, org_slug=settings.targon_org_slug)
@@ -772,6 +862,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 node_states = platform.node_states()
             except ControllerError:
                 capability = "nogo"
+                targon_allowed = False
                 reason = "TARGON_HEARTBEAT_STATE_UNAVAILABLE"
                 provider_error_code = reason
                 provider_error_at = datetime.now(UTC).isoformat()
@@ -785,7 +876,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 targon_rows,
                 node_states,
                 stuck_uids,
-                desired_image=(desired_targon_image if capability == "go" else None),
+                desired_image=(desired_targon_image if targon_allowed else None),
             )
             targon_available = sum(
                 max(0, int(row.get("available", 0)))
@@ -795,6 +886,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             provider_success_at = datetime.now(UTC).isoformat()
         except TargonAPIError:
             capability = "nogo"
+            targon_allowed = False
             reason = "TARGON_API_UNAVAILABLE"
             provider_error_code = reason
             provider_error_at = datetime.now(UTC).isoformat()
@@ -816,22 +908,24 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     outdated_targon_uids = {
         str(row.get("uid", ""))
         for row in targon_rows
-        if capability == "go"
+        if targon_allowed
         and str(row.get("uid", ""))
         and node_states.get(str(row.get("uid", "")), {}).get("image_reference")
         != desired_targon_image
     }
 
     worker_env: dict[str, str] = {}
-    if capability == "go":
+    if targon_allowed:
         if targon_client is None or desired_targon_image is None:
             capability = "nogo"
+            targon_allowed = False
             reason = "TARGON_WORKER_CONFIG_MISSING"
         elif (
             settings.gcp_bootstrap_service_account is None
             or settings.source_review_secret_resource is None
         ):
             capability = "nogo"
+            targon_allowed = False
             reason = "TARGON_SECRET_BOOTSTRAP_MISSING"
         elif settings.targon_worker_env_file is not None:
             try:
@@ -851,7 +945,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     # Capacity planned for this pass counts as pending before computing the GCE
     # residual.  That prevents both providers scaling to the full demand.
     planned_targon = targon_counts.supplied
-    if capability == "go":
+    if targon_allowed:
         occupied_names = {str(row.get("name", "")) for row in targon_rows}
         available_slot_count = sum(
             1
@@ -875,7 +969,9 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     )
 
     target = fallback_target(
-        demand=demand.desired, targon=planned_counts, capability=capability
+        demand=demand.desired,
+        targon=planned_counts,
+        capability="go" if targon_allowed else "nogo",
     )
     if target < current_target and demand.active > 0:
         # Never remove GCE capacity while any provider still owns a live lease.
@@ -890,7 +986,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 "detail": f"GCE target {current_target} -> {target}",
             }
         )
-    if capability != "go" and targon_rows:
+    if not targon_allowed and targon_rows:
         events.append(
             {
                 "event_type": "targon_fail_closed",
@@ -935,6 +1031,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         starting_error_at = prior_error_at
     snapshot = _snapshot(
         settings=settings,
+        provider_routing=provider_routing,
         demand=demand,
         capability=capability,
         reason=reason,
@@ -983,7 +1080,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 detail="GCE fallback scale-up failed",
             )
             raise
-    if capability != "go" and targon_client is not None:
+    if not targon_allowed and targon_client is not None:
         drained_node_ids: set[str] = set()
         for row in targon_rows:
             name = str(row.get("name", ""))
@@ -1037,7 +1134,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 and node_id not in drained_node_ids
             ):
                 platform.drain_node(node_id=node_id, epoch=settings.epoch)
-    elif capability == "go" and targon_client is not None:
+    elif targon_allowed and targon_client is not None:
         for row in targon_rows:
             uid = str(row.get("uid", ""))
             name = str(row.get("name", ""))

@@ -6,8 +6,12 @@ import argparse
 import json
 import os
 import secrets
+import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
+import urllib.request
 from dataclasses import asdict
 
 from screener_capacity.targon import TargonAPIError, TargonClient, workload_summary
@@ -39,6 +43,47 @@ def _safe_state(client: TargonClient, uid: str) -> dict[str, object]:
         "total_replicas": state.get("total_replicas"),
         "updated_at": state.get("updated_at"),
     }
+
+
+def _safe_logs(client: TargonClient, uid: str, *, tail: int) -> str:
+    try:
+        return client.logs(uid, tail=tail)
+    except TargonAPIError:
+        return "provider logs unavailable"
+
+
+def _cleanup_probe_workload(client: TargonClient, uid: str) -> dict[str, object]:
+    """Delete first without letting provider cleanup hide the probe result."""
+    try:
+        client.delete(uid)
+        return {"phase": "deleted", "uid": uid, "deleted": True, "suspended": False}
+    except TargonAPIError:
+        try:
+            state = _safe_state(client, uid)
+        except TargonAPIError:
+            state = {}
+        status = str(state.get("status", "")).casefold()
+        if status == "deleted":
+            return {
+                "phase": "deleted",
+                "uid": uid,
+                "deleted": True,
+                "suspended": False,
+            }
+        suspended = status == "suspended"
+        if status not in {"suspended", "deleted", "error"}:
+            try:
+                client.suspend(uid)
+                suspended = True
+            except TargonAPIError:
+                pass
+        return {
+            "phase": "cleanup-required",
+            "uid": uid,
+            "deleted": False,
+            "suspended": suspended,
+            "status": status or None,
+        }
 
 
 def _wait_until_ready(
@@ -97,7 +142,6 @@ def command_rootless_probe(args: argparse.Namespace) -> int:
 
     name = f"ditto-rootless-probe-{secrets.token_hex(3)}"
     uid: str | None = None
-    suspended = False
     try:
         created = client.create_rental(
             name=name,
@@ -111,11 +155,10 @@ def command_rootless_probe(args: argparse.Namespace) -> int:
             client,
             uid,
             args.provision_timeout_seconds,
-            require_ready_replica=False,
         )
         print(json.dumps({"phase": "deployed", **state}, sort_keys=True))
         if state.get("status") != "running":
-            logs = client.logs(uid, tail=80)
+            logs = _safe_logs(client, uid, tail=80)
             print(
                 json.dumps(
                     {
@@ -153,24 +196,21 @@ def command_rootless_probe(args: argparse.Namespace) -> int:
             return 3
         print(json.dumps({"capability_gate": "GO"}))
         return 0
+    except TargonAPIError as error:
+        logs = _safe_logs(client, uid, tail=120) if uid is not None else ""
+        print(
+            json.dumps(
+                {
+                    "capability_gate": "NOGO",
+                    "reason": str(error),
+                    "probe_logs": _safe_probe_output(logs),
+                }
+            )
+        )
+        return 5
     finally:
         if uid is not None and not args.keep:
-            try:
-                state = _safe_state(client, uid)
-                if state.get("status") not in {"suspended", "deleted", "error"}:
-                    client.suspend(uid)
-                    suspended = True
-            finally:
-                client.delete(uid)
-                print(
-                    json.dumps(
-                        {
-                            "phase": "deleted",
-                            "uid": uid,
-                            "suspended_first": suspended,
-                        }
-                    )
-                )
+            print(json.dumps(_cleanup_probe_workload(client, uid), sort_keys=True))
 
 
 def _safe_probe_output(value: str, *, limit: int = 8000) -> str:
@@ -191,7 +231,6 @@ def _run_builder_probe(
 
     name = f"ditto-{backend}-probe-{secrets.token_hex(3)}"
     uid: str | None = None
-    suspended = False
     try:
         created = client.create_rental(
             name=name,
@@ -205,7 +244,6 @@ def _run_builder_probe(
             client,
             uid,
             args.provision_timeout_seconds,
-            require_ready_replica=False,
         )
         print(json.dumps({"phase": "deployed", **state}, sort_keys=True))
         if state.get("status") != "running":
@@ -372,22 +410,7 @@ def _run_builder_probe(
         return 5
     finally:
         if uid is not None and not args.keep:
-            try:
-                state = _safe_state(client, uid)
-                if state.get("status") not in {"suspended", "deleted", "error"}:
-                    client.suspend(uid)
-                    suspended = True
-            finally:
-                client.delete(uid)
-                print(
-                    json.dumps(
-                        {
-                            "phase": "deleted",
-                            "uid": uid,
-                            "suspended_first": suspended,
-                        }
-                    )
-                )
+            print(json.dumps(_cleanup_probe_workload(client, uid), sort_keys=True))
 
 
 def command_buildkit_probe(args: argparse.Namespace) -> int:
@@ -515,7 +538,6 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
             client,
             runtime_uid,
             args.provision_timeout_seconds,
-            require_ready_replica=False,
         )
         time.sleep(10)
         runtime_output = client.exec(runtime_uid, ["cat", "/probe.txt"])
@@ -539,21 +561,275 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
             for cleanup_uid in (runtime_uid, uid):
                 if cleanup_uid is None:
                     continue
-                suspended = False
+                print(
+                    json.dumps(
+                        _cleanup_probe_workload(client, cleanup_uid), sort_keys=True
+                    )
+                )
+
+
+def command_agent_probe(args: argparse.Namespace) -> int:
+    """Prove ordinary Targon Rentals can host noninteractive coding agents."""
+    client = _client(args, authenticated=True)
+    inventory = {row.get("name"): row for row in client.inventory()}
+    selected = inventory.get(args.resource)
+    if not isinstance(selected, dict) or int(selected.get("available", 0)) < 1:
+        raise RuntimeError(f"{args.resource} is not currently available")
+
+    script = (
+        "set -eu; "
+        f"npm install -g opencode-ai@{args.opencode_version} "
+        f"@mariozechner/pi-coding-agent@{args.pi_version} >/tmp/npm-install.log 2>&1; "
+        "printf 'opencode='; opencode --version; "
+        "printf 'pi='; pi --version; "
+        "echo AGENT_RUNTIME_AVAILABLE; "
+        "sleep 600"
+    )
+    name = f"ditto-agent-probe-{secrets.token_hex(3)}"
+    uid: str | None = None
+    try:
+        created = client.create_rental(
+            name=name,
+            image=args.image,
+            resource_name=args.resource,
+            commands=["/bin/sh", "-c"],
+            args=[script],
+        )
+        uid = str(created["uid"])
+        print(json.dumps({"phase": "registered", "uid": uid, "name": name}))
+        client.deploy(uid)
+        deadline = time.monotonic() + args.provision_timeout_seconds
+        last_state: dict[str, object] = {}
+        logs = ""
+        while time.monotonic() < deadline:
+            last_state = _safe_state(client, uid)
+            logs = _safe_logs(client, uid, tail=80)
+            if "AGENT_RUNTIME_AVAILABLE" in logs or last_state.get("status") == "error":
+                break
+            time.sleep(5)
+        available = "AGENT_RUNTIME_AVAILABLE" in logs
+        print(
+            json.dumps(
+                {
+                    "phase": "agent-runtime",
+                    **last_state,
+                    "capability": "AVAILABLE" if available else "UNAVAILABLE",
+                    "probe_logs": _safe_probe_output(logs),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0 if available else 6
+    finally:
+        if uid is not None and not args.keep:
+            print(json.dumps(_cleanup_probe_workload(client, uid), sort_keys=True))
+
+
+def command_runtime_probe(args: argparse.Namespace) -> int:
+    """Prove a Rental can expose a direct-image HTTP health contract."""
+    client = _client(args, authenticated=True)
+    inventory = {row.get("name"): row for row in client.inventory()}
+    selected = inventory.get(args.resource)
+    if not isinstance(selected, dict) or int(selected.get("available", 0)) < 1:
+        raise RuntimeError(f"{args.resource} is not currently available")
+    uid: str | None = None
+    try:
+        created = client.create_rental(
+            name=f"ditto-runtime-probe-{secrets.token_hex(3)}",
+            image=args.image,
+            resource_name=args.resource,
+            commands=["/bin/sh", "-c"],
+            args=[
+                "mkdir -p /tmp/site; printf ok >/tmp/site/health; "
+                "cd /tmp/site; exec python -m http.server 8080"
+            ],
+            ports=[{"port": 8080, "protocol": "TCP", "routing": "PROXIED"}],
+        )
+        uid = str(created["uid"])
+        print(json.dumps({"phase": "registered", "uid": uid}))
+        client.deploy(uid)
+        deadline = time.monotonic() + args.provision_timeout_seconds
+        state: dict[str, object] = {}
+        health_url: str | None = None
+        while time.monotonic() < deadline:
+            state = client.state(uid)
+            urls = state.get("urls")
+            if isinstance(urls, list):
+                for row in urls:
+                    if isinstance(row, dict) and row.get("port") == 8080:
+                        base = str(row.get("url", "")).rstrip("/")
+                        if base.startswith("https://"):
+                            health_url = f"{base}/health"
+            if health_url is not None:
                 try:
-                    state = _safe_state(client, cleanup_uid)
-                    if state.get("status") not in {"suspended", "deleted", "error"}:
-                        client.suspend(cleanup_uid)
-                        suspended = True
-                finally:
-                    client.delete(cleanup_uid)
+                    with urllib.request.urlopen(health_url, timeout=5) as response:
+                        if response.status == 200 and response.read(16) == b"ok":
+                            print(
+                                json.dumps(
+                                    {
+                                        "phase": "runtime-health",
+                                        "status": state.get("status"),
+                                        "ready_replicas": state.get("ready_replicas"),
+                                        "capability": "AVAILABLE",
+                                    },
+                                    sort_keys=True,
+                                )
+                            )
+                            return 0
+                except (OSError, urllib.error.URLError):
+                    pass
+            if state.get("status") == "error":
+                break
+            time.sleep(5)
+        print(
+            json.dumps(
+                {
+                    "phase": "runtime-health",
+                    "status": state.get("status"),
+                    "capability": "UNAVAILABLE",
+                },
+                sort_keys=True,
+            )
+        )
+        return 6
+    finally:
+        if uid is not None and not args.keep:
+            print(json.dumps(_cleanup_probe_workload(client, uid), sort_keys=True))
+
+
+def command_vm_probe(args: argparse.Namespace) -> int:
+    """Prove a Targon VM supplies the kernel boundary Rentals do not."""
+    client = _client(args, authenticated=True)
+    vm_uid: str | None = None
+    ssh_key_uid: str | None = None
+    with tempfile.TemporaryDirectory(prefix="ditto-targon-vm-probe-") as directory:
+        private_key = os.path.join(directory, "id_ed25519")
+        known_hosts = os.path.join(directory, "known_hosts")
+        try:
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", private_key],
+                check=True,
+                timeout=30,
+            )
+            with open(f"{private_key}.pub", encoding="utf-8") as handle:
+                public_key = handle.read().strip()
+            ssh_key = client.create_ssh_key(
+                name=f"ditto-screener-vm-probe-{secrets.token_hex(3)}",
+                public_key=public_key,
+            )
+            ssh_key_uid = str(ssh_key["uid"])
+            password = secrets.token_urlsafe(24)
+            vm = client.create_vm(
+                name=f"ditto-screener-vm-{secrets.token_hex(3)}",
+                image=args.image,
+                resource_name=args.resource,
+                ssh_key_uids=[ssh_key_uid],
+                password=password,
+            )
+            vm_uid = str(vm["uid"])
+            print(json.dumps({"phase": "registered", "uid": vm_uid}))
+            client.deploy(vm_uid)
+            deadline = time.monotonic() + args.provision_timeout_seconds
+            state: dict[str, object] = {}
+            while time.monotonic() < deadline:
+                state = client.state(vm_uid)
+                status = str(state.get("status", "")).casefold()
+                if status == "error":
+                    break
+                if (
+                    status == "running"
+                    and isinstance(state.get("public_ip"), str)
+                    and isinstance(state.get("ssh_port"), int)
+                ):
+                    break
+                time.sleep(5)
+            if str(state.get("status", "")).casefold() != "running":
+                print(
+                    json.dumps({"capability_gate": "NOGO", "reason": "VM did not run"})
+                )
+                return 2
+            public_ip = str(state.get("public_ip", ""))
+            raw_ssh_port = state.get("ssh_port")
+            ssh_port = raw_ssh_port if isinstance(raw_ssh_port, int) else 0
+            if not public_ip or ssh_port < 1:
+                print(
+                    json.dumps(
+                        {"capability_gate": "NOGO", "reason": "VM SSH unavailable"}
+                    )
+                )
+                return 3
+            base_ssh = [
+                "ssh",
+                "-i",
+                private_key,
+                "-p",
+                str(ssh_port),
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-o",
+                f"UserKnownHostsFile={known_hosts}",
+                f"ubuntu@{public_ip}",
+            ]
+            for _attempt in range(60):
+                connected = subprocess.run(
+                    [*base_ssh, "true"],
+                    capture_output=True,
+                    timeout=20,
+                )
+                if connected.returncode == 0:
+                    break
+                time.sleep(5)
+            else:
+                print(
+                    json.dumps(
+                        {"capability_gate": "NOGO", "reason": "VM SSH timed out"}
+                    )
+                )
+                return 4
+            probe = subprocess.run(
+                [
+                    *base_ssh,
+                    "sudo -S -p '' sh -s",
+                ],
+                capture_output=True,
+                input=(
+                    f"{password}\n"
+                    "set -eu\n"
+                    "id\n"
+                    "grep -E '^(CapEff|NoNewPrivs|Seccomp):' /proc/1/status\n"
+                    "unshare -Ur true\n"
+                    "echo user_namespace=yes\n"
+                    "test -e /dev/fuse && echo dev_fuse=yes || echo dev_fuse=no\n"
+                    "test -e /dev/kvm && echo dev_kvm=yes || echo dev_kvm=no\n"
+                    "systemctl is-system-running || true\n"
+                ),
+                text=True,
+                timeout=60,
+            )
+            output = _safe_probe_output(probe.stdout + probe.stderr)
+            print(json.dumps({"phase": "vm-kernel", "output": output}))
+            available = probe.returncode == 0 and "user_namespace=yes" in output
+            print(json.dumps({"capability_gate": "GO" if available else "NOGO"}))
+            return 0 if available else 5
+        finally:
+            if vm_uid is not None and not args.keep:
+                try:
+                    client.delete(vm_uid)
+                    print(json.dumps({"phase": "vm-deleted", "uid": vm_uid}))
+                except TargonAPIError:
+                    print(json.dumps({"phase": "vm-cleanup-required", "uid": vm_uid}))
+            if ssh_key_uid is not None and not args.keep:
+                try:
+                    client.delete_ssh_key(ssh_key_uid)
+                    print(json.dumps({"phase": "ssh-key-deleted", "uid": ssh_key_uid}))
+                except TargonAPIError:
                     print(
                         json.dumps(
-                            {
-                                "phase": "deleted",
-                                "uid": cleanup_uid,
-                                "suspended_first": suspended,
-                            }
+                            {"phase": "ssh-key-cleanup-required", "uid": ssh_key_uid}
                         )
                     )
 
@@ -618,6 +894,26 @@ def build_parser() -> argparse.ArgumentParser:
     kaniko.add_argument("--roundtrip", action="store_true")
     kaniko.add_argument("--keep", action="store_true")
     kaniko.set_defaults(handler=command_kaniko_probe)
+    agent = subparsers.add_parser("agent-probe")
+    agent.add_argument("--resource", default="cpu-small")
+    agent.add_argument("--image", default="node:22-bookworm-slim")
+    agent.add_argument("--opencode-version", default="1.18.18")
+    agent.add_argument("--pi-version", default="0.73.1")
+    agent.add_argument("--provision-timeout-seconds", type=float, default=600)
+    agent.add_argument("--keep", action="store_true")
+    agent.set_defaults(handler=command_agent_probe)
+    runtime = subparsers.add_parser("runtime-probe")
+    runtime.add_argument("--resource", default="cpu-small")
+    runtime.add_argument("--image", default="python:3.12-alpine")
+    runtime.add_argument("--provision-timeout-seconds", type=float, default=600)
+    runtime.add_argument("--keep", action="store_true")
+    runtime.set_defaults(handler=command_runtime_probe)
+    vm = subparsers.add_parser("vm-probe")
+    vm.add_argument("--resource", default="rtx6000b-small")
+    vm.add_argument("--image", default="ubuntu-24-04-lts-595")
+    vm.add_argument("--provision-timeout-seconds", type=float, default=900)
+    vm.add_argument("--keep", action="store_true")
+    vm.set_defaults(handler=command_vm_probe)
     return parser
 
 

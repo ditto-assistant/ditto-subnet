@@ -101,6 +101,22 @@ class SubmissionImageBuildResponse(BaseModel):
     output_size_bytes: Annotated[int, Field(gt=0, le=4 * 1024**3)] | None = None
     download_url: str | None = None
     error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+    runtime_status: Literal[
+        "pending", "running", "succeeded", "fallback_required", "skipped"
+    ] = "skipped"
+    runtime_provider: Literal["targon"] | None = None
+    runtime_image_reference: (
+        Annotated[
+            str,
+            Field(
+                pattern=r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+            ),
+        ]
+        | None
+    ) = None
+    runtime_error_code: (
+        Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None
+    ) = None
 
     @model_validator(mode="after")
     def validate_terminal_payload(self) -> SubmissionImageBuildResponse:
@@ -115,6 +131,15 @@ class SubmissionImageBuildResponse(BaseModel):
             raise ValueError("only a successful remote build exposes an archive")
         if self.status == "fallback_required" and self.error_code is None:
             raise ValueError("fallback remote build requires an error code")
+        if self.runtime_status == "succeeded" and (
+            self.runtime_provider != "targon" or self.runtime_image_reference is None
+        ):
+            raise ValueError("successful runtime smoke requires provider provenance")
+        if (
+            self.runtime_status == "fallback_required"
+            and self.runtime_error_code is None
+        ):
+            raise ValueError("runtime fallback requires an error code")
         return self
 
 
@@ -684,6 +709,83 @@ class ScreenReviewAudit(BaseModel):
             self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
         )
         return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+SubmissionSourceReviewStatus = Literal[
+    "queued",
+    "leased",
+    "running",
+    "succeeded",
+    "fallback_required",
+    "canceled",
+    "consumed",
+]
+
+
+class SubmissionSourceReviewRequest(BaseModel):
+    """Queue one attempt-bound remote, read-only source review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: UUID
+
+
+class SourceReviewObservationPayload(BaseModel):
+    """Bounded source-review observation safe to cross provider boundaries."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+    risk_level: Literal["low", "medium", "high"] | None = None
+    finding_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    categories: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=64)]],
+        Field(default_factory=list, max_length=8),
+    ]
+    error_code: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")] | None = (
+        None
+    )
+    finding: SourceReviewFinding | None = None
+    failure_disposition: Literal[
+        "retryable_infra", "inconclusive", "pass_inconclusive"
+    ] = "retryable_infra"
+    clearance_certified: bool = False
+    review_audit: ScreenReviewAudit | None = None
+
+    @model_validator(mode="after")
+    def validate_finding_binding(self) -> SourceReviewObservationPayload:
+        if self.finding is not None:
+            if self.finding_digest is None:
+                raise ValueError("source-review finding requires its digest")
+            if self.finding.canonical_digest() != self.finding_digest:
+                raise ValueError("source-review finding does not match its digest")
+        if self.ok and self.risk_level is None:
+            raise ValueError("successful source review requires a risk level")
+        return self
+
+
+class SubmissionSourceReviewResponse(BaseModel):
+    """Status and terminal observation for an attempt-bound remote review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    review_id: UUID
+    attempt_id: UUID
+    status: SubmissionSourceReviewStatus
+    provider: Literal["targon"] | None = None
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    observation: SourceReviewObservationPayload | None = None
+    error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_terminal_payload(self) -> SubmissionSourceReviewResponse:
+        if self.status == "succeeded" and self.observation is None:
+            raise ValueError("successful remote source review requires an observation")
+        if self.status != "succeeded" and self.observation is not None:
+            raise ValueError("only a successful remote source review exposes a result")
+        if self.status == "fallback_required" and self.error_code is None:
+            raise ValueError("fallback source review requires an error code")
+        return self
 
 
 class ScreenResultRequest(BaseModel):

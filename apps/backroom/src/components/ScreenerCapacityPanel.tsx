@@ -5,16 +5,23 @@ import {
   Cloud,
   Container,
   Hammer,
+  Route,
   RefreshCw,
   ServerCog,
 } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type {
   ScreenerCapacityNode,
   ScreenerCapacityView,
+  ScreenerProviderSettings,
+  ScreenerProviderSettingsControl,
   TrustedImageBuild,
 } from '../lib/admin.schemas'
-import { getScreenerCapacity } from '../server/admin.functions'
+import { screenerProviderSettingsConfirmation } from '../lib/admin.schemas'
+import {
+  getScreenerCapacity,
+  updateScreenerProviderSettings,
+} from '../server/admin.functions'
 
 function formatWhen(value: string | null) {
   if (!value) return 'Never'
@@ -43,7 +50,188 @@ function buildTone(status: TrustedImageBuild['status']) {
   return 'bg-[var(--cyan-dim)] text-[var(--cyan)]'
 }
 
-export function ScreenerCapacityPanel({ initialState }: { initialState: ScreenerCapacityView }) {
+function capabilityGuidance(reason: string | null) {
+  if (reason === 'TARGON_CAPABILITY_ATTESTATION_EXPIRED') {
+    return 'The safety record expired; this is not a Targon API outage. A fresh hostile-runtime probe and reviewed GO result are required before full workers can start.'
+  }
+  if (reason?.includes('ROOTLESSKIT') || reason?.includes('NESTED_RUNTIME')) {
+    return 'The nested hostile-runtime boundary did not pass its safety probe. Keep full workers on GCE until a fresh probe returns GO.'
+  }
+  return 'A fresh reviewed hostile-runtime capability is required before full workers can start.'
+}
+
+type ProviderMode = 'targon-first' | 'gcp-first' | 'gcp-only'
+
+function providerMode(priority: ScreenerProviderSettings['runtime_provider_priority']): ProviderMode {
+  if (!priority.includes('targon')) return 'gcp-only'
+  return priority[0] === 'targon' ? 'targon-first' : 'gcp-first'
+}
+
+function priorityForMode(mode: ProviderMode): ('targon' | 'gcp')[] {
+  if (mode === 'targon-first') return ['targon', 'gcp']
+  if (mode === 'gcp-first') return ['gcp', 'targon']
+  return ['gcp']
+}
+
+function ProviderRoutingControl({
+  control,
+  appliedRevision,
+  readOnly,
+  onApplied,
+}: {
+  control: ScreenerProviderSettingsControl
+  appliedRevision: number | null
+  readOnly: boolean
+  onApplied: (control: ScreenerProviderSettingsControl) => void
+}) {
+  const apply = useServerFn(updateScreenerProviderSettings)
+  const [settings, setSettings] = useState(control.current.settings)
+  const [reason, setReason] = useState('')
+  const [confirmation, setConfirmation] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const expectedConfirmation = screenerProviderSettingsConfirmation(settings)
+  const ready = reason.trim().length >= 8 && confirmation === expectedConfirmation
+  const caughtUp = appliedRevision === control.current.revision
+
+  useEffect(() => {
+    setSettings(control.current.settings)
+    setConfirmation('')
+  }, [control.current.revision, control.current.settings])
+
+  const setMode = (lane: 'build' | 'runtime' | 'source-review', mode: ProviderMode) => {
+    const priority = priorityForMode(mode)
+    const field =
+      lane === 'build'
+        ? 'build_provider_priority'
+        : lane === 'runtime'
+          ? 'runtime_provider_priority'
+          : 'source_review_provider_priority'
+    setSettings((current) => ({
+      ...current,
+      [field]: priority,
+    }))
+    setConfirmation('')
+  }
+
+  const submit = async () => {
+    if (!ready || readOnly) return
+    setLoading(true)
+    setError('')
+    try {
+      const next = await apply({
+        data: {
+          expectedRevision: control.current.revision,
+          settings,
+          reason,
+          confirmation,
+        },
+      })
+      onApplied(next)
+      setSettings(next.current.settings)
+      setReason('')
+      setConfirmation('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to apply provider settings')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+      <div className="flex items-start gap-3 border-b border-[var(--line)] p-4 sm:p-5">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--acid-dim)] text-[var(--acid)]">
+          <Route className="h-4 w-4" />
+        </div>
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold">Provider routing</h2>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${caughtUp ? 'bg-[var(--acid-dim)] text-[var(--acid)]' : 'bg-[var(--amber-dim)] text-[var(--amber)]'}`}>
+              {caughtUp ? `Applied r${control.current.revision}` : `Awaiting controller r${control.current.revision}`}
+            </span>
+          </div>
+          <p className="mt-1 max-w-[78ch] text-xs leading-5 text-[var(--muted)]">
+            Builds, direct-image runtime checks, and bounded source review are independent lanes.
+            GCP remains the mandatory safety path; Targon can be preferred, demoted, or disabled
+            without a deploy.
+          </p>
+        </div>
+      </div>
+      <div className="space-y-5 p-4 sm:p-5">
+        <div className="grid gap-4 lg:grid-cols-3">
+          {([
+            ['build', 'Remote image builders', settings.build_provider_priority],
+            ['runtime', 'Runtime smoke checks', settings.runtime_provider_priority],
+            ['source-review', 'Source review', settings.source_review_provider_priority],
+          ] as const).map(([lane, label, priority]) => (
+            <fieldset key={lane} disabled={readOnly || loading} className="rounded-lg border border-[var(--line)] p-4">
+              <legend className="px-1 text-xs font-semibold">{label}</legend>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                {([
+                  ['targon-first', 'Targon first'],
+                  ['gcp-first', 'GCP first'],
+                  ['gcp-only', 'Targon off'],
+                ] as const).map(([mode, modeLabel]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={providerMode(priority) === mode}
+                    onClick={() => setMode(lane, mode)}
+                    className={`min-h-11 rounded-lg border px-3 py-2 text-left text-xs disabled:opacity-40 ${providerMode(priority) === mode ? 'border-[var(--acid)] bg-[var(--acid-dim)] text-[var(--acid)]' : 'border-[var(--line)] text-[var(--muted-strong)] hover:bg-white/5'}`}
+                  >
+                    {modeLabel}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          ))}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="text-xs text-[var(--muted)]">
+            Audit reason
+            <textarea
+              rows={3}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              disabled={readOnly || loading}
+              className="mt-1.5 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 py-2 text-sm text-white disabled:opacity-50"
+            />
+          </label>
+          <label className="text-xs text-[var(--muted)]">
+            Type to confirm
+            <input
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              disabled={readOnly || loading}
+              placeholder={expectedConfirmation}
+              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white disabled:opacity-50"
+            />
+            <span className="mt-2 block break-all font-mono text-[10px]">{expectedConfirmation}</span>
+          </label>
+        </div>
+        {error ? <p role="alert" className="text-xs text-[var(--red)]">{error}</p> : null}
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={!ready || loading || readOnly}
+          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[var(--acid)] px-4 text-xs font-semibold text-[var(--ink)] disabled:opacity-35"
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          Append provider revision
+        </button>
+      </div>
+    </section>
+  )
+}
+
+export function ScreenerCapacityPanel({
+  initialState,
+  readOnly,
+}: {
+  initialState: ScreenerCapacityView
+  readOnly: boolean
+}) {
   const fetchCapacity = useServerFn(getScreenerCapacity)
   const [state, setState] = useState(initialState)
   const [loading, setLoading] = useState(false)
@@ -52,6 +240,23 @@ export function ScreenerCapacityPanel({ initialState }: { initialState: Screener
   const leaseFresh = snapshot
     ? new Date(snapshot.controller_lease_expires_at).getTime() > Date.now()
     : false
+  const cleanupEvents = state.events.filter(
+    (event) => event.provider === 'targon' && event.event_type === 'provider_cleanup_required',
+  )
+  const latestCleanup = cleanupEvents[0]
+  const runtimeMode = providerMode(
+    state.provider_control.current.settings.runtime_provider_priority,
+  )
+  const buildMode = providerMode(
+    state.provider_control.current.settings.build_provider_priority,
+  )
+  const sourceReviewMode = providerMode(
+    state.provider_control.current.settings.source_review_provider_priority,
+  )
+  const targonWorkerBlocked =
+    snapshot?.targon_capability !== 'go'
+    || runtimeMode !== 'targon-first'
+    || sourceReviewMode !== 'targon-first'
 
   async function refresh() {
     setLoading(true)
@@ -67,19 +272,33 @@ export function ScreenerCapacityPanel({ initialState }: { initialState: Screener
 
   if (!snapshot) {
     return (
-      <section className="mt-6 rounded-xl border border-[var(--amber)]/30 bg-[var(--amber-dim)] p-6">
-        <AlertTriangle className="h-5 w-5 text-[var(--amber)]" />
-        <h2 className="mt-3 text-base font-semibold">Capacity controller has not checked in</h2>
-        <p className="mt-2 max-w-[70ch] text-sm leading-6 text-[var(--muted-strong)]">
-          The independent GCE watchdog is eligible to scale out when queue depth is nonzero.
-          No Targon workload will be started without a valid capability attestation.
-        </p>
-      </section>
+      <div className="mt-6 space-y-5">
+        <ProviderRoutingControl
+          control={state.provider_control}
+          appliedRevision={null}
+          readOnly={readOnly}
+          onApplied={(provider_control) => setState((current) => ({ ...current, provider_control }))}
+        />
+        <section className="rounded-xl border border-[var(--amber)]/30 bg-[var(--amber-dim)] p-6">
+          <AlertTriangle className="h-5 w-5 text-[var(--amber)]" />
+          <h2 className="mt-3 text-base font-semibold">Capacity controller has not checked in</h2>
+          <p className="mt-2 max-w-[70ch] text-sm leading-6 text-[var(--muted-strong)]">
+            The independent GCE watchdog is eligible to scale out when queue depth is nonzero.
+            No Targon workload will be started without a valid capability attestation.
+          </p>
+        </section>
+      </div>
     )
   }
 
   return (
     <div className="mt-6 space-y-5">
+      <ProviderRoutingControl
+        control={state.provider_control}
+        appliedRevision={snapshot.provider_settings_revision}
+        readOnly={readOnly}
+        onApplied={(provider_control) => setState((current) => ({ ...current, provider_control }))}
+      />
       <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
         <div className="flex flex-col gap-4 border-b border-[var(--line)] p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
           <div className="flex items-start gap-3">
@@ -89,8 +308,9 @@ export function ScreenerCapacityPanel({ initialState }: { initialState: Screener
             <div>
               <h2 className="text-sm font-semibold">Controller authority</h2>
               <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">
-                One fenced writer allocates Targon first and sends only residual demand to
-                GCE. The GCP watchdog may scale out only after this lease expires.
+                One fenced writer applies provider revision {snapshot.provider_settings_revision}
+                {' '}and sends only residual demand to the lower-priority lane. The GCP watchdog
+                may scale out only after this lease expires.
               </p>
             </div>
           </div>
@@ -130,19 +350,28 @@ export function ScreenerCapacityPanel({ initialState }: { initialState: Screener
             </div>
           </div>
 
-          {snapshot.targon_capability !== 'go' ? (
+          {targonWorkerBlocked ? (
             <div className="mt-4 flex items-start gap-3 rounded-lg border border-[var(--amber)]/30 bg-[var(--amber-dim)] p-4">
               <Container className="mt-0.5 h-4 w-4 shrink-0 text-[var(--amber)]" />
               <div>
-                <p className="text-sm font-medium">Targon execution boundary is blocked</p>
+                <p className="text-sm font-medium">Full Targon worker lane is blocked</p>
                 <p className="mt-1 break-words text-xs leading-5 text-[var(--muted-strong)]">
-                  Capability is {snapshot.targon_capability.toUpperCase()}. No miner artifact is
-                  sent to Targon; GCE receives the entire residual target. Reason:{' '}
+                  Capability is {snapshot.targon_capability.toUpperCase()} and the configured lane
+                  is runtime {runtimeMode.replaceAll('-', ' ')} / source review{' '}
+                  {sourceReviewMode.replaceAll('-', ' ')}. This blocks full Targon screener
+                  workers, not the independently controlled credential-minimal Kaniko build lane.
+                  GCE receives all screening-worker demand and completes the health, source, and
+                  policy gates. Reason:{' '}
                   <span className="break-all">
                     {snapshot.fallback_reason ?? 'No current capability attestation'}
                   </span>
                   .
                 </p>
+                {snapshot.targon_capability !== 'go' ? (
+                  <p className="mt-2 text-xs leading-5 text-[var(--muted-strong)]">
+                    {capabilityGuidance(snapshot.fallback_reason)}
+                  </p>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -165,16 +394,88 @@ export function ScreenerCapacityPanel({ initialState }: { initialState: Screener
         </div>
       </section>
 
+      {latestCleanup ? (
+        <section className="rounded-xl border border-[var(--amber)]/30 bg-[var(--amber-dim)] p-4 sm:p-5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--amber)]" />
+            <div>
+              <h2 className="text-sm font-semibold">Targon provider cleanup is incomplete</h2>
+              <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted-strong)]">
+                {cleanupEvents.length} cleanup-required {cleanupEvents.length === 1 ? 'event' : 'events'}
+                {' '}appear in the latest {state.events.length}-event audit window. The affected
+                submission-build rentals were suspended at zero replicas, but provider deletion
+                still needs retry. Latest event {formatWhen(latestCleanup.created_at)}.
+              </p>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+        <div className="border-b border-[var(--line)] px-4 py-4 sm:px-5">
+          <h2 className="text-sm font-semibold">Recent provider jobs</h2>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            Redacted build, direct-image runtime, and source-review lifecycle state. A remote
+            runtime result remains advisory until the GCE isolated smoke also passes.
+          </p>
+        </div>
+        {state.provider_jobs.length === 0 ? (
+          <p className="p-5 text-sm text-[var(--muted)]">No one-shot provider job has been recorded.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left text-xs">
+              <thead className="bg-[var(--panel-soft)] text-[var(--muted)]">
+                <tr>
+                  <th className="px-4 py-3 font-medium sm:px-5">Lane</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Rental</th>
+                  <th className="px-4 py-3 font-medium">Provenance</th>
+                  <th className="px-4 py-3 font-medium">Updated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--line)]">
+                {state.provider_jobs.slice(0, 30).map((job) => (
+                  <tr key={`${job.lane}-${job.job_id}`}>
+                    <td className="px-4 py-3.5 font-medium capitalize sm:px-5">
+                      {job.lane.replaceAll('_', ' ')}
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <span className="rounded-full bg-[var(--cyan-dim)] px-2 py-1 text-[var(--cyan)]">
+                        {job.status.replaceAll('_', ' ')}
+                      </span>
+                      {job.error_code ? <p className="mt-1 break-all text-[10px] text-[var(--muted)]">{job.error_code}</p> : null}
+                    </td>
+                    <td className="px-4 py-3.5 font-mono text-[var(--muted-strong)]">
+                      {job.provider_resource_id ? shortIdentity(job.provider_resource_id) : '—'}
+                    </td>
+                    <td className="px-4 py-3.5 font-mono text-[var(--muted-strong)]">
+                      {job.image_reference ? shortIdentity(job.image_reference) : shortIdentity(job.job_id)}
+                    </td>
+                    <td className="px-4 py-3.5 text-[var(--muted-strong)]">{formatWhen(job.updated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
         <div className="flex items-start gap-3 border-b border-[var(--line)] px-4 py-4 sm:px-5">
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--cyan-dim)] text-[var(--cyan)]">
             <Hammer className="h-4 w-4" />
           </span>
           <div>
-            <h2 className="text-sm font-semibold">Trusted image builds</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold">Trusted image builds</h2>
+              <span className="rounded-full bg-[var(--cyan-dim)] px-2 py-0.5 text-[10px] font-medium text-[var(--cyan)]">
+                {buildMode.replaceAll('-', ' ')}
+              </span>
+            </div>
             <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-              Release builds use a dedicated Kaniko rental on Targon first. GCP runs the
-              allowlisted fallback; hostile miner builds never enter this trusted lane.
+              Release and miner-image builds follow the independent builder priority above.
+              Targon uses a dedicated credential-minimal Kaniko rental; GCP runs the allowlisted
+              fallback. Hostile miner runtimes never enter this trusted lane.
             </p>
           </div>
         </div>
@@ -234,14 +535,15 @@ export function ScreenerCapacityPanel({ initialState }: { initialState: Screener
           <h2 className="text-sm font-semibold">Provider allocation</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">
             Pending capacity is counted before fallback so Targon and GCE never both scale to
-            the full queue.
+            the full queue. Advertised inventory is available supply, not an active worker count;
+            zero healthy workers is expected when desired slots are zero.
           </p>
         </div>
         <div className="divide-y divide-[var(--line)]">
           <ProviderRow
             icon={<Container className="h-4 w-4" />}
             name="Targon"
-            detail={`${snapshot.targon_available} CPU rentals currently advertised`}
+            detail={`${snapshot.targon_available} CPU rentals advertised; full workers require a GO capability`}
             values={{
               healthy: snapshot.targon_healthy,
               pending: snapshot.targon_pending,
