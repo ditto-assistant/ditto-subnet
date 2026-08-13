@@ -26,8 +26,9 @@ import bittensor
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select, text
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
 )
@@ -108,6 +109,7 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
+    ValidatorRequestNonce,
     ValidatorTicket,
 )
 from ditto.db.queries.artifact_fetch_audit import (
@@ -136,6 +138,7 @@ from ditto.db.queries.retry_budget import (
     MAX_AGENT_INFRA_RETRY_GRANTS,
     MAX_INFRA_RETRY_GRANTS,
 )
+from ditto.db.queries.rollout_dispatch import ROLLOUT_DISPATCH_LOCK_KEY
 from ditto.tests.legacy_era import retired_era_writes_allowed
 
 # Real dev keypairs: sign for real so _verify_signature runs end to end. The k=3
@@ -1634,6 +1637,7 @@ class TestHeartbeat:
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
+        engine: AsyncEngine,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         first = await _seed_agent(
@@ -1670,21 +1674,46 @@ class TestHeartbeat:
                 },
             ],
         }
-        response = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=10,
-                state="running_benchmark",
-                active_agent_id=first,
-                benchmark_progress=first_progress,
-                capabilities=_V9_CAPABILITIES,
-                stack=_V7_STACK,
-                stack_health=_V9_STACK_HEALTH,
-                benchmark_capacity=capacity,
-            ),
-        )
+        statements: list[str] = []
+
+        def record_statement(
+            _connection: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            statements.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_statement)
+        try:
+            response = await client.post(
+                "/api/v1/validator/heartbeat",
+                headers=_AUTH_HEADER,
+                json=_heartbeat_payload(
+                    protocol_version=10,
+                    state="running_benchmark",
+                    active_agent_id=first,
+                    benchmark_progress=first_progress,
+                    capabilities=_V9_CAPABILITIES,
+                    stack=_V7_STACK,
+                    stack_health=_V9_STACK_HEALTH,
+                    benchmark_capacity=capacity,
+                ),
+            )
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", record_statement)
         assert response.status_code == 200, response.text
+        slot_ticket_reads = [
+            statement
+            for statement in statements
+            if "FROM validator_tickets" in statement
+            and "validator_tickets.slot_id" in statement
+        ]
+        # Validation plus SKIP-LOCKED first-report stamping: constant at two
+        # ticket round trips instead of two or three per active slot.
+        assert len(slot_ticket_reads) == 2
 
         public = (await client.get("/api/v1/public/validators")).json()["validators"][0]
         assert public["configured_slots"] == 2
@@ -4064,6 +4093,62 @@ class TestRequestJob:
         await _seed_activated_era(session_maker)
         await _install_ticket_inference(app, session_maker)
 
+    async def test_busy_dispatch_fence_returns_immediately_and_retries_same_nonce(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A forced allocator interleaving neither waits nor burns the claim."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_capable_pool(session_maker, keypairs=(_KEYPAIR,))
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claim = _job_payload(slot_id=_SLOT_ID)
+        nonce = UUID(claim["nonce"])
+
+        async with session_maker() as holder:
+            await holder.begin()
+            await holder.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": ROLLOUT_DISPATCH_LOCK_KEY},
+            )
+            response = await asyncio.wait_for(
+                client.post("/api/v1/validator/job", headers=_AUTH_HEADER, json=claim),
+                timeout=0.5,
+            )
+            assert response.status_code == 204
+            async with session_maker() as probe:
+                assert await probe.get(ValidatorRequestNonce, nonce) is None
+                assert (
+                    await probe.scalar(
+                        select(func.count())
+                        .select_from(ValidatorTicket)
+                        .where(ValidatorTicket.agent_id == agent_id)
+                    )
+                    == 0
+                )
+            await holder.rollback()
+
+        retry = await client.post(
+            "/api/v1/validator/job", headers=_AUTH_HEADER, json=claim
+        )
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["agent_id"] == str(agent_id)
+        async with session_maker() as probe:
+            assert await probe.get(ValidatorRequestNonce, nonce) is not None
+            assert (
+                await probe.scalar(
+                    select(func.count())
+                    .select_from(ValidatorTicket)
+                    .where(
+                        ValidatorTicket.agent_id == agent_id,
+                        ValidatorTicket.validator_hotkey == _VALIDATOR_HOTKEY,
+                    )
+                )
+                == 1
+            )
+
     async def test_source_backfill_declines_while_the_new_era_has_work(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -6357,6 +6442,40 @@ class TestFailJob:
             )
             assert ticket is not None
             assert ticket.infra_retry_grants == 1
+
+    async def test_seed_store_timeout_preserves_retry_budget_and_code(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="infrastructure",
+                failure_detail="seed_store_lock_timeout",
+            ),
+        )
+
+        assert failed.status_code == 200, failed.text
+        assert failed.json()["reopened"] is True
+        async with session_maker() as session:
+            ticket = await session.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.status == TicketStatus.EXPIRED
+            assert ticket.failure_reason == "infrastructure"
+            assert ticket.failure_detail == "seed_store_lock_timeout"
+            assert ticket.infra_retry_grants == 1
+            assert ticket.attempt_count == 1
 
     async def test_scoring_error_failure_consumes_the_budget(
         self,

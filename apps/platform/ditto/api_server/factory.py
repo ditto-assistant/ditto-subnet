@@ -85,6 +85,7 @@ from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
 from ditto.api_server.storage import create_storage_client
 from ditto.api_server.validator_names import create_validator_names
+from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
 from ditto.api_server.validator_slot_settings import ValidatorSlotSettingsResolver
 from ditto.chain import create_chain_client
 from ditto.db import create_db_engine, create_session_maker
@@ -241,6 +242,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await provider_routes.start()
             app.state.inference_provider_routes = provider_routes
+
+            nonce_janitor = ValidatorNonceJanitor(session_maker=app.state.session_maker)
+            stack.push_async_callback(nonce_janitor.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await nonce_janitor.start()
+            app.state.validator_nonce_janitor = nonce_janitor
 
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)

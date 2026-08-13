@@ -3684,8 +3684,8 @@ class ValidatorRequestNonce(Base):
     """A recently consumed signed validator request nonce.
 
     Rows are short-lived replay guards. The UUID primary key makes consuming a
-    nonce atomic across every platform replica; expired rows are pruned during
-    subsequent claims.
+    nonce atomic across every platform replica; a bounded singleton janitor
+    prunes expired rows outside signed request transactions.
     """
 
     __tablename__ = "validator_request_nonces"

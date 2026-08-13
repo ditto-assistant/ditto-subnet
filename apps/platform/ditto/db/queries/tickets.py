@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, tuple_
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
@@ -720,14 +720,16 @@ async def issue_ticket(
             # so it also serializes with a paid generation submitted after a
             # hotkey rotation. A truly unlinked legacy row falls back to its
             # hotkey. The canonical ordering prevents multi-key deadlocks.
-            for owner_lock_key in linkage.advisory_lock_keys:
-                await session.execute(
-                    select(
-                        func.pg_advisory_xact_lock(
-                            func.hashtextextended(owner_lock_key, 0)
-                        )
-                    )
-                )
+            await session.execute(
+                text(
+                    """
+                    SELECT pg_advisory_xact_lock(hashtextextended(owner_key, 0))
+                    FROM unnest(CAST(:owner_keys AS text[])) AS owner_key
+                    ORDER BY owner_key
+                    """
+                ),
+                {"owner_keys": list(linkage.advisory_lock_keys)},
+            )
         # Both owner rails, in one expression the queue preview calls too, so
         # relaxing the rule cannot relax it for only one of them.
         #
@@ -1149,6 +1151,33 @@ async def get_live_slot_ticket(
     if ticket is None or _as_utc(ticket.deadline) <= now:
         return None
     return ticket
+
+
+async def list_live_slot_tickets(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    slots: Collection[tuple[str, UUID]],
+    now: datetime,
+    first_report_unstamped_only: bool = False,
+    for_update_skip_locked: bool = False,
+) -> dict[tuple[str, UUID], ValidatorTicket]:
+    """Batch one heartbeat's bounded slot claims into one ledger read."""
+    identities = list(slots)
+    if not identities:
+        return {}
+    statement = select(ValidatorTicket).where(
+        ValidatorTicket.validator_hotkey == validator_hotkey,
+        ValidatorTicket.status == TicketStatus.ISSUED,
+        ValidatorTicket.deadline > now,
+        tuple_(ValidatorTicket.slot_id, ValidatorTicket.agent_id).in_(identities),
+    )
+    if first_report_unstamped_only:
+        statement = statement.where(ValidatorTicket.first_reported_at.is_(None))
+    if for_update_skip_locked:
+        statement = statement.with_for_update(skip_locked=True)
+    tickets = list(await session.scalars(statement))
+    return {(ticket.slot_id, ticket.agent_id): ticket for ticket in tickets}
 
 
 async def list_validator_live_leases(

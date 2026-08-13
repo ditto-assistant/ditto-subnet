@@ -316,20 +316,23 @@ async def revoke_ticket_inference(
             )
         ).all()
     )
-    for grant in grants:
+    requests_by_grant: dict[UUID, list[InferenceRequest]] = {}
+    if grants:
         requests = list(
-            (
-                await session.scalars(
-                    select(InferenceRequest)
-                    .where(
-                        InferenceRequest.grant_id == grant.grant_id,
-                        InferenceRequest.status == "started",
-                    )
-                    .with_for_update()
+            await session.scalars(
+                select(InferenceRequest)
+                .where(
+                    InferenceRequest.grant_id.in_([grant.grant_id for grant in grants]),
+                    InferenceRequest.status == "started",
                 )
-            ).all()
+                .order_by(InferenceRequest.grant_id, InferenceRequest.nonce)
+                .with_for_update()
+            )
         )
         for request in requests:
+            requests_by_grant.setdefault(request.grant_id, []).append(request)
+    for grant in grants:
+        for request in requests_by_grant.get(grant.grant_id, []):
             request.status = "canceled"
             request.prompt_tokens = request.reserved_tokens
             request.completed_at = now

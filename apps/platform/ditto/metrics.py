@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 
 # Fires whenever a *signed, authenticated* heartbeat kept its liveness columns
 # (``seen_at`` / ``reported_at``) but had its work payload dropped because the
@@ -28,6 +28,7 @@ VALIDATOR_HEARTBEAT_PAYLOAD_DEGRADED = Counter(
 )
 
 DispatchDeclineReason = Literal[
+    "allocator_busy",
     "not_accepting",
     "slot_not_healthy",
     "slot_ceiling",
@@ -55,6 +56,20 @@ VALIDATOR_DISPATCH_DECLINED = Counter(
     "ditto_validator_dispatch_declined_total",
     "Validator job polls that were answered 204, by the gate that declined them.",
     ("reason",),
+)
+
+VALIDATOR_NONCE_JANITOR_RUNS = Counter(
+    "ditto_validator_nonce_janitor_runs_total",
+    "Bounded expired validator nonce sweeps, by outcome.",
+    ("outcome",),
+)
+VALIDATOR_NONCE_JANITOR_DELETED = Counter(
+    "ditto_validator_nonce_janitor_deleted_total",
+    "Expired validator replay guards deleted by the periodic janitor.",
+)
+VALIDATOR_NONCE_JANITOR_DURATION_SECONDS = Histogram(
+    "ditto_validator_nonce_janitor_duration_seconds",
+    "Duration of bounded validator nonce janitor sweeps.",
 )
 
 

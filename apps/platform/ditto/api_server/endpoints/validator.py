@@ -254,6 +254,7 @@ from ditto.db.queries.retry_budget import (
     grant_no_fault_retry,
     infra_retry_backoff,
 )
+from ditto.db.queries.rollout_dispatch import try_lock_rollout_dispatch
 from ditto.db.queries.score_ranking import (
     dedupe_owner_rows,
     resolve_efficiency_adjustments,
@@ -279,10 +280,10 @@ from ditto.db.queries.tickets import (
     OWNER_CONCURRENT_SUBMISSION_LIMIT_DEFAULT,
     RETRY_COOLDOWN,
     SIMILARITY_CONCURRENT_SUBMISSION_LIMIT_DEFAULT,
-    get_live_slot_ticket,
     get_open_ticket,
     issue_confirmation_ticket,
     issue_ticket,
+    list_live_slot_tickets,
     list_validator_live_leases,
     mark_ticket_scored,
 )
@@ -2194,46 +2195,58 @@ async def _validated_heartbeat_work(
                     slot.slot_id: slot for slot in previous_capacity.active
                 }
         valid_active = []
+        slot_identities = [
+            (slot.slot_id, slot.agent_id) for slot in stored_benchmark_capacity.active
+        ]
+        agents_by_id = (
+            {
+                agent.agent_id: agent
+                for agent in await session.scalars(
+                    select(Agent).where(
+                        Agent.agent_id.in_(
+                            {agent_id for _slot_id, agent_id in slot_identities}
+                        )
+                    )
+                )
+            }
+            if slot_identities
+            else {}
+        )
+        tickets_by_slot = await list_live_slot_tickets(
+            session,
+            validator_hotkey=validator_hotkey,
+            slots=slot_identities,
+            now=now,
+        )
+        valid_identities = {
+            identity
+            for identity, ticket in tickets_by_slot.items()
+            if ticket is not None
+            and (agent := agents_by_id.get(identity[1])) is not None
+            and agent.status in _SCOREABLE_STATUSES
+        }
+        stampable = await list_live_slot_tickets(
+            session,
+            validator_hotkey=validator_hotkey,
+            slots=valid_identities,
+            now=now,
+            first_report_unstamped_only=True,
+            for_update_skip_locked=True,
+        )
+        for stamp_ticket in stampable.values():
+            stamp_ticket.first_reported_at = now
         for slot in stored_benchmark_capacity.active:
-            agent = await get_agent_by_id(session, agent_id=slot.agent_id)
+            agent = agents_by_id.get(slot.agent_id)
             # Identity, not deadline stamp. A re-issued lease moves the deadline
             # the validator cached, and matching on it evicted a live slot from
             # the stored capacity: its progress vanished from the fleet view and
             # the revoker then read the absence as proof the slot was idle.
-            ticket = await get_live_slot_ticket(
-                session,
-                agent_id=slot.agent_id,
-                validator_hotkey=validator_hotkey,
-                slot_id=slot.slot_id,
-                now=now,
-            )
+            slot_ticket = tickets_by_slot.get((slot.slot_id, slot.agent_id))
             if (
-                ticket is not None
+                slot_ticket is not None
                 and agent is not None
                 and agent.status in _SCOREABLE_STATUSES
             ):
-                if ticket.first_reported_at is None:
-                    # The first time the ledger confirms this lease against a
-                    # live slot. From here on its silence means something, and
-                    # the liveness gate is allowed to weigh it; before this it
-                    # was only ever "not heard from yet". Stamped once and never
-                    # moved -- the gate asks whether this lease has *ever*
-                    # testified, not when it last did, and the freshness of the
-                    # latest testimony is already ``heartbeat.seen_at``.
-                    stampable_ticket = await get_live_slot_ticket(
-                        session,
-                        agent_id=slot.agent_id,
-                        validator_hotkey=validator_hotkey,
-                        slot_id=slot.slot_id,
-                        now=now,
-                        for_update=True,
-                        skip_locked=True,
-                    )
-                    if (
-                        stampable_ticket is not None
-                        and stampable_ticket.first_reported_at is None
-                    ):
-                        stampable_ticket.first_reported_at = now
                 previous_slot = previous_slots.get(slot.slot_id)
                 if previous_slot is not None:
                     try:
@@ -2603,6 +2616,19 @@ async def request_job(
 
     job: JobResponse | None = None
     async with session.begin():
+        # The allocator has several independently-correct lanes whose row-lock
+        # orders are not interchangeable (ordinary tickets, rollout members,
+        # and queued score re-tests).  Fence the complete dispatch transaction
+        # before the first one can lock a row.  Pollers are retry loops, so a
+        # busy fence is a cheap 204 rather than another waiter extending the
+        # control-plane saturation incident.
+        if not await try_lock_rollout_dispatch(session):
+            _record_dispatch_decline(
+                "allocator_busy",
+                validator_hotkey=payload.validator_hotkey,
+                slot_id=payload.slot_id or "slot-0",
+            )
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
         await _assert_validator_compatible(
             session,
             validator_hotkey=payload.validator_hotkey,
