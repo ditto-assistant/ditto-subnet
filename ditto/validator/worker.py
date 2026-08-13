@@ -1543,7 +1543,10 @@ class ValidatorWorker:
             )
 
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
-        weight_entries = filter_weight_confirmed(ledger.entries)
+        weight_entries = filter_weight_confirmed(
+            ledger.entries,
+            enforce=ledger.v9_confirmation_mode == "enforce",
+        )
         if ledger.entries and not weight_entries:
             # A non-empty ledger containing only score contracts this layer
             # cannot yet fold is not an empty scoring pool. Preserve the last
@@ -1648,7 +1651,10 @@ class ValidatorWorker:
             logger.warning("event-driven king check failed: %s", e)
             return False, None
         champion = select_champion(
-            filter_weight_confirmed(ledger.entries),
+            filter_weight_confirmed(
+                ledger.entries,
+                enforce=ledger.v9_confirmation_mode == "enforce",
+            ),
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
         )

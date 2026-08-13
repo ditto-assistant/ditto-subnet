@@ -196,15 +196,19 @@ def filter_eligible(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
     return [e for e in entries if _entry_eligible(e)]
 
 
-def filter_weight_confirmed(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
-    """Keep entries whose score contract is supported by the active fold.
+def filter_weight_confirmed(
+    entries: Sequence[LedgerEntry], *, enforce: bool = True
+) -> list[LedgerEntry]:
+    """Keep entries whose score contract is payable under the served policy.
 
-    Bench v9's ordinary quorum proves the base score but this stack layer does
-    not yet expose the separate full-confirmation receipt required to pay it.
-    Exclude those rows individually instead of conflating rollout eligibility
-    with signature verification and rejecting the entire ledger. The duck-typed
-    receipt check deliberately becomes live when the later confirmation layer
-    adds ``LedgerEntry.v9_confirmation``; versions beyond v9 remain fail closed.
+    A Bench v9 ordinary quorum is reward authority while confirmation is off or
+    shadowing.  Only the Platform's explicit ``v9_confirmation_mode=enforce``
+    marker makes a full-confirmation receipt mandatory.  Treating the mere
+    presence of v9 as enforce used to drop the whole post-rollout ledger, build
+    an empty weight vector, and leave the previous 100% burn visible on-chain.
+
+    Versions beyond v9 remain fail closed.  The default preserves the stricter
+    behavior for callers that do not possess the signed ledger-level mode.
     """
     return [
         entry
@@ -212,7 +216,7 @@ def filter_weight_confirmed(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]
         if _entry_version(entry) < 9
         or (
             _entry_version(entry) == 9
-            and getattr(entry, "v9_confirmation", None) is not None
+            and (not enforce or getattr(entry, "v9_confirmation", None) is not None)
         )
     ]
 

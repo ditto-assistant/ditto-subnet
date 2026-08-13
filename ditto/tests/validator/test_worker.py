@@ -189,6 +189,12 @@ class TestComputeWeights:
 
         assert filter_weight_confirmed([v8, v9]) == [v8]
 
+    def test_shadow_fold_pays_ordinary_v9_quorum(self) -> None:
+        v8 = _entry("v8", 0.7, bench_version=8)
+        v9 = _entry("v9", 0.9, bench_version=9)
+
+        assert filter_weight_confirmed([v8, v9], enforce=False) == [v8, v9]
+
     def test_preconfirmation_fold_rejects_v9_only_pool(self) -> None:
         assert filter_weight_confirmed([_entry("v9", 0.9, bench_version=9)]) == []
 
@@ -417,10 +423,14 @@ class TestWeightFoldUsesPlatformBurn:
         for hotkey, weight in miners.items():
             assert weight == pytest.approx(uncapped[hotkey] * 0.6)
 
-    async def test_unconfirmed_v9_row_cannot_freeze_v8_weight_update(self) -> None:
+    async def test_enforce_unconfirmed_v9_row_cannot_freeze_v8_weight_update(
+        self,
+    ) -> None:
         v8 = _entry("5V8" + "x" * 44, 0.70, bench_version=8)
         v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
-        ledger = LedgerResponse(entries=[v9, v8], count=2)
+        ledger = LedgerResponse(
+            entries=[v9, v8], count=2, v9_confirmation_mode="enforce"
+        )
         platform = MagicMock()
         platform.get_ledger = AsyncMock(return_value=ledger)
         worker = ValidatorWorker(
@@ -454,11 +464,13 @@ class TestWeightFoldUsesPlatformBurn:
             {v8.miner_hotkey: pytest.approx(1.0)}
         )
 
-    async def test_v9_only_ledger_preserves_existing_weights(self) -> None:
+    async def test_v9_only_enforce_ledger_preserves_existing_weights(self) -> None:
         v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
         platform = MagicMock()
         platform.get_ledger = AsyncMock(
-            return_value=LedgerResponse(entries=[v9], count=1)
+            return_value=LedgerResponse(
+                entries=[v9], count=1, v9_confirmation_mode="enforce"
+            )
         )
         worker = ValidatorWorker(
             config=_config(),
@@ -475,6 +487,52 @@ class TestWeightFoldUsesPlatformBurn:
         assert not outcome.submitted
         assert outcome.weights == {}
         assert outcome.leaderboard == [(v9.miner_hotkey, v9.composite)]
+        worker._registered_ledger_entries.assert_not_awaited()  # type: ignore[attr-defined]
+        worker._put_weights_with_retry.assert_not_awaited()  # type: ignore[attr-defined]
+
+    async def test_v9_only_shadow_ledger_restores_miner_weights(self) -> None:
+        """Regression: off/shadow v9 is ordinary reward authority.
+
+        Confirmation receipt filtering is activated by the ledger marker, not
+        by the benchmark version alone.  Otherwise a completed v9 rollout turns
+        every positive score into an empty vector and strands the old burn.
+        """
+        v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
+        weights = await self._submitted_weights(
+            LedgerResponse(
+                entries=[v9],
+                count=1,
+                v9_confirmation_mode=None,
+                burn_share=0,
+            )
+        )
+
+        assert weights == {v9.miner_hotkey: pytest.approx(1.0)}
+        assert _BURN_HOTKEY not in weights
+
+    async def test_v9_enforce_without_receipts_preserves_existing_weights(self) -> None:
+        v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
+        platform = MagicMock()
+        platform.get_ledger = AsyncMock(
+            return_value=LedgerResponse(
+                entries=[v9],
+                count=1,
+                v9_confirmation_mode="enforce",
+            )
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._registered_ledger_entries = AsyncMock()  # type: ignore[method-assign]
+        worker._put_weights_with_retry = AsyncMock()  # type: ignore[method-assign]
+
+        outcome = await worker._update_weights()
+
+        assert not outcome.submitted
         worker._registered_ledger_entries.assert_not_awaited()  # type: ignore[attr-defined]
         worker._put_weights_with_retry.assert_not_awaited()  # type: ignore[attr-defined]
 
@@ -4006,10 +4064,16 @@ class TestChainCadenceFloor:
 
 class TestIndependentWeightLoop:
     @staticmethod
-    def _worker_observing(entries: list[LedgerEntry]) -> ValidatorWorker:
+    def _worker_observing(
+        entries: list[LedgerEntry], *, enforce: bool = False
+    ) -> ValidatorWorker:
         platform = MagicMock()
         platform.get_ledger = AsyncMock(
-            return_value=LedgerResponse(entries=entries, count=len(entries))
+            return_value=LedgerResponse(
+                entries=entries,
+                count=len(entries),
+                v9_confirmation_mode="enforce" if enforce else None,
+            )
         )
         return ValidatorWorker(
             config=_config(),
@@ -4024,7 +4088,7 @@ class TestIndependentWeightLoop:
     ) -> None:
         v8 = _entry("5V8" + "x" * 44, 0.70, bench_version=8)
         unconfirmed_v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
-        worker = self._worker_observing([unconfirmed_v9, v8])
+        worker = self._worker_observing([unconfirmed_v9, v8], enforce=True)
 
         available, fingerprint = await worker._observe_platform_king()
 
@@ -4035,12 +4099,21 @@ class TestIndependentWeightLoop:
         self,
     ) -> None:
         unconfirmed_v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
-        worker = self._worker_observing([unconfirmed_v9])
+        worker = self._worker_observing([unconfirmed_v9], enforce=True)
 
         available, fingerprint = await worker._observe_platform_king()
 
         assert available
         assert fingerprint is None
+
+    async def test_king_observer_accepts_ordinary_v9_while_shadowing(self) -> None:
+        ordinary_v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9)
+        worker = self._worker_observing([ordinary_v9])
+
+        available, fingerprint = await worker._observe_platform_king()
+
+        assert available
+        assert fingerprint == worker._king_fingerprint(ordinary_v9)
 
     async def test_king_observer_accepts_confirmed_v9(self) -> None:
         confirmed_v9 = _entry("5V9" + "x" * 44, 0.99, bench_version=9).model_copy(
