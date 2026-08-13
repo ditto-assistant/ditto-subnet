@@ -90,6 +90,8 @@ def settings_payload(**overrides: object) -> dict[str, object]:
         "profile_revision": "profile-1",
         "profile_checksum": _PROFILE,
         "challenger_z": 1.64,
+        "eligibility_mode": "rank",
+        "min_base_score_micros": 950_000,
     }
     payload.update(overrides)
     return payload
@@ -296,6 +298,8 @@ class TestSettingsPermissionsAndDefaults:
             "profile_revision": None,
             "profile_checksum": None,
             "challenger_z": 1.64,
+            "eligibility_mode": "rank",
+            "min_base_score_micros": 950_000,
         }
         effective = body["effective"]
         assert effective["revision"] == 0
