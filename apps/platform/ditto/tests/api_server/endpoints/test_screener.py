@@ -6911,6 +6911,90 @@ class TestQuarantineSourceInspection:
         )
         assert binary.status_code == 422
 
+    async def test_source_search_locates_code_across_the_whole_artifact(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """One request answers "where", which the manifest and excerpt cannot.
+
+        The excerpt reader is capped at 400 lines and needs a line number the
+        operator does not have yet, so locating a construction in a real
+        10,000-line ``baseline.rs`` used to mean bisecting with blind reads.
+        """
+        agent_id, _storage = await self._seed_with_tarball(app, session_maker)
+        response = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/source-search",
+            params={"pattern": "fast_path", "context": 1},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["artifact_sha256"]
+        assert body["match_count"] == 1
+        assert body["has_more"] is False
+        assert body["truncated"] is False
+        assert body["matches"] == [
+            {
+                "path": "src/main.rs",
+                "line": 2,
+                "text": "    fast_path();",
+                "context_before": [{"line": 1, "text": "fn main() {"}],
+                "context_after": [{"line": 3, "text": "}"}],
+            }
+        ]
+        # The binary member is never searched; its count travels with the answer.
+        assert body["opaque_skipped"] == 1
+        assert body["files_searched"] == 2
+
+    async def test_source_search_is_audited_and_records_the_pattern(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A search reads miner source, so it leaves the same trail a read does."""
+        agent_id, _storage = await self._seed_with_tarball(app, session_maker)
+        response = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/source-search",
+            params={"pattern": "fast_path"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200
+        async with session_maker() as s:
+            rows = (
+                await s.scalars(
+                    select(ArtifactFetchAudit).order_by(ArtifactFetchAudit.seq)
+                )
+            ).all()
+        assert [row.endpoint for row in rows] == ["admin.search_screening_source"]
+        assert (rows[0].detail or {}).get("pattern") == "fast_path"
+        assert rows[0].requester_kind == "admin"
+
+    async def test_source_search_rejects_a_bad_pattern_and_anonymous_callers(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id, _storage = await self._seed_with_tarball(app, session_maker)
+        broken = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/source-search",
+            params={"pattern": "(unclosed"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert broken.status_code == 422
+
+        headers = dict(_ADMIN_HEADERS)
+        headers.pop("X-Admin-Actor")
+        anonymous = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/source-search",
+            params={"pattern": "fast_path"},
+            headers=headers,
+        )
+        assert anonymous.status_code == 422
+
     async def test_source_reads_require_admin_actor_and_matching_digest(
         self,
         app: FastAPI,

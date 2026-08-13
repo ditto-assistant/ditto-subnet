@@ -582,6 +582,47 @@ class AdminSourceExcerpt(BaseModel):
     lines: list[AdminSourceLine]
 
 
+class AdminSourceSearchMatch(BaseModel):
+    path: str
+    line: int
+    text: str
+    """The matching line, clipped to 500 characters like every excerpt line."""
+
+    context_before: list[AdminSourceLine] = Field(default_factory=list)
+    context_after: list[AdminSourceLine] = Field(default_factory=list)
+
+
+class AdminSourceSearchResult(BaseModel):
+    """Regex/literal hits across one submission's readable members."""
+
+    agent_id: UUID
+    artifact_sha256: str
+    pattern: str
+    mode: Literal["regex", "literal"]
+    path_glob: str | None = None
+    matches: list[AdminSourceSearchMatch]
+    match_count: int
+    """Matches the scan found. A lower bound when ``truncated``."""
+
+    returned: int
+    limit: int
+    offset: int
+    has_more: bool
+    """True when matches exist past this page — the paging signal."""
+
+    files_searched: int
+    files_matched: int
+    opaque_skipped: int
+    """Members never searched because they are binary or oversized.
+
+    The same blobs ``AdminSourceListing.opaque_blobs`` names: a search cannot
+    clear them, so their count travels with every result.
+    """
+
+    truncated: bool
+    """True when the scan stopped at its match cap; totals are lower bounds."""
+
+
 class AdminStarterKitProvenance(BaseModel):
     """Which starter-kit revision the submission was diffed against."""
 

@@ -379,6 +379,29 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
   })
 
+  it('gates source search on the artifact scope like an excerpt read', async () => {
+    // A search returns the matching source lines themselves. Treating it as an
+    // ordinary read because it "only" answers a location question would let a
+    // read-scoped connection extract miner code a line at a time.
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'search_screening_source',
+          arguments: {
+            agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+            pattern: 'RunResponse',
+          },
+        },
+      }),
+    })
+    expect(await callsWriteTool(request)).toBe(false)
+    expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
+  })
+
   it('leaves owner-link attestations on the ordinary read scope', async () => {
     // A signed owner link is identity metadata, not miner source. The artifact
     // scope exists for source (tarballs, file listings, diffs), so gating

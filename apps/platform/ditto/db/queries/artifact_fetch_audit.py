@@ -60,6 +60,7 @@ ENDPOINT_SCREENER_ARTIFACT = "screener.agent_artifact"
 ENDPOINT_ADMIN_SCREENING_ARTIFACT = "admin.get_screening_artifact"
 ENDPOINT_ADMIN_SOURCE_FILES = "admin.list_screening_source_files"
 ENDPOINT_ADMIN_SOURCE_FILE = "admin.read_screening_source_file"
+ENDPOINT_ADMIN_SOURCE_SEARCH = "admin.search_screening_source"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF = "admin.get_copy_review_source_diff"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE = "admin.get_copy_review_source_diff_file"
 

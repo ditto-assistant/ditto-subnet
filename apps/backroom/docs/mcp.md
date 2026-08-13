@@ -25,7 +25,7 @@ Three scopes, in ascending sensitivity:
 | Scope | Grants |
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
-| `backroom:artifact:read` | Miner-submitted source: tarball URLs, file listings, copy and baseline diffs. |
+| `backroom:artifact:read` | Miner-submitted source: tarball URLs, file listings, source search, copy and baseline diffs. |
 | `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO. |
 
 Two independent gates apply to every privileged call. The grant must carry the
@@ -76,3 +76,24 @@ Keep the catalog description in `MCP_CATALOG_DESCRIPTIONS` short — the whole
 catalog is loaded into model context before any call, and the test bounds both
 the total and the per-description length. Long-form operational notes belong in
 the `description` field, which `get_backroom_tool_help` serves on demand.
+
+## Reading miner source
+
+Three tools, used in this order. Skipping the middle one is the expensive
+mistake:
+
+1. `list_screening_source_files` — the manifest: which paths exist and which
+   are opaque blobs the text reader cannot show.
+2. `search_screening_source` — **where**. One regex or literal scan of the whole
+   artifact returning `{path, line, text}`. A miner `baseline.rs` routinely runs
+   past 10,000 lines, so without this, locating the `protocol::RunResponse`
+   construction that a `deferred_source_review` turns on means bisecting with
+   400-line windows: six to eight reads per agent, repeatedly.
+3. `read_screening_source_file` — the excerpt, once you have a line number.
+
+Search paging happens on the platform, which holds the whole ordered match
+list; the Worker must not re-slice a window it never had. `has_more` reports the
+page boundary, while `truncated` reports that the *scan* stopped at its own
+match cap, so the totals are lower bounds. `opaque_skipped` counts the members
+no search can reach — a `.onnx` or `.bin` weights file is never searched, and a
+search that never opened one cannot clear it.

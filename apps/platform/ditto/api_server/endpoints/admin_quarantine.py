@@ -67,6 +67,7 @@ from ditto.api_models.admin_quarantine import (
     AdminScreeningSubmissionList,
     AdminSourceExcerpt,
     AdminSourceListing,
+    AdminSourceSearchResult,
     AdminStarterKitProvenance,
     AdminValidatorAssignment,
     AdminValidatorAssignmentList,
@@ -104,6 +105,9 @@ from ditto.api_server.source_diff import (
 )
 from ditto.api_server.source_inspect import (
     MAX_READ_LINES,
+    MAX_SEARCH_CONTEXT,
+    MAX_SEARCH_MATCHES,
+    MAX_SEARCH_PATTERN_CHARS,
     MAX_TARBALL_BYTES,
     SourceInspectError,
     TarSourceInspector,
@@ -135,6 +139,7 @@ from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_ADMIN_SCREENING_ARTIFACT,
     ENDPOINT_ADMIN_SOURCE_FILE,
     ENDPOINT_ADMIN_SOURCE_FILES,
+    ENDPOINT_ADMIN_SOURCE_SEARCH,
     record_artifact_fetch,
 )
 from ditto.db.queries.audit import (
@@ -2967,6 +2972,88 @@ async def read_screening_source_file(
         ),
     )
     return AdminSourceExcerpt(agent_id=agent_id, **excerpt)  # type: ignore[arg-type]
+
+
+@router.get(
+    "/screening-submissions/{agent_id}/source-search",
+    response_model=AdminSourceSearchResult,
+)
+async def search_screening_source(
+    agent_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: StorageDep,
+    pattern: Annotated[str, Query(min_length=1, max_length=MAX_SEARCH_PATTERN_CHARS)],
+    mode: Literal["regex", "literal"] = "regex",
+    ignore_case: bool = False,
+    path_glob: Annotated[str | None, Query(max_length=240)] = None,
+    context: Annotated[int, Query(ge=0, le=MAX_SEARCH_CONTEXT)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_SEARCH_MATCHES)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminSourceSearchResult:
+    """Audited grep across one submission's readable source, in one request.
+
+    The source-review question is almost always *where* — where the agent
+    constructs its graded ``RunResponse``, where a flagged import is used,
+    where a hardcoded answer table lives. The manifest cannot answer it and
+    :func:`read_screening_source_file` is capped at 400 lines, so on the
+    10,000-line ``baseline.rs`` a real submission ships, locating the code
+    meant bisecting with six to eight blind reads. This returns
+    ``path:line:text`` for the whole artifact in one call, and the operator
+    then reads only the region it names.
+
+    Read-only and bounded on every axis: opaque members are skipped and
+    counted, the scan stops at its match cap, lines are clipped, and the page
+    reports ``has_more``.
+    """
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    agent, inspector = await _load_inspector(agent_id, session, storage)
+    try:
+        found = await asyncio.to_thread(
+            inspector.search,
+            pattern,
+            mode=mode,
+            ignore_case=ignore_case,
+            path_glob=path_glob,
+            context=context,
+            limit=limit,
+            offset=offset,
+        )
+    except SourceInspectError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    logger.info(
+        "admin_actor=%s searched screening source agent_id=%s mode=%s matches=%s",
+        x_admin_actor,
+        agent_id,
+        mode,
+        found["match_count"],
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent_id,
+        endpoint=ENDPOINT_ADMIN_SOURCE_SEARCH,
+        requester_kind="admin",
+        requester_id=x_admin_actor,
+        artifact_sha256=agent.sha256,
+        source_ip=client_ip(request),
+        # The pattern is recorded: the audit trail's job is to show what an
+        # operator went looking for in miner source, not merely that they did.
+        detail=request_detail(
+            request,
+            pattern=pattern,
+            mode=mode,
+            path_glob=path_glob,
+            match_count=found["match_count"],
+        ),
+    )
+    return AdminSourceSearchResult(
+        agent_id=agent_id,
+        artifact_sha256=agent.sha256,
+        **found,  # type: ignore[arg-type]
+    )
 
 
 async def _baseline_pair(

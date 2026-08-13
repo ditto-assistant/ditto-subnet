@@ -51,6 +51,8 @@ import {
   sourceExcerptSchema,
   sourceListingInputSchema,
   sourceListingSchema,
+  sourceSearchInputSchema,
+  sourceSearchResultSchema,
   unavailableCopyReviewComparison,
   validatorAssignmentListSchema,
   releaseValidatorAssignmentInputSchema,
@@ -1599,6 +1601,36 @@ export async function fetchQuarantineSourceExcerpt(rawInput: unknown, actor: str
     { actor },
   )
   return sourceExcerptSchema.parse(payload)
+}
+
+/**
+ * Grep one screened artifact's readable source in a single request.
+ *
+ * Paging is server-side: the platform scans the whole archive, orders matches
+ * by `(path, line)`, and returns the requested window with `has_more`, so an
+ * operator can widen a page without the rows shifting underneath them.
+ */
+export async function searchQuarantineSource(
+  rawInput: unknown,
+  actor: string,
+  limit: number,
+  offset: number,
+) {
+  const input = sourceSearchInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    pattern: input.pattern,
+    mode: input.mode,
+    ignore_case: String(input.ignoreCase),
+    context: String(input.context),
+    limit: String(limit),
+    offset: String(offset),
+  })
+  if (input.pathGlob) query.set('path_glob', input.pathGlob)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-submissions/${encodeURIComponent(input.agentId)}/source-search?${query.toString()}`,
+    { actor },
+  )
+  return sourceSearchResultSchema.parse(payload)
 }
 
 export async function fetchCopyReviewSourceDiff(rawInput: unknown, actor: string) {

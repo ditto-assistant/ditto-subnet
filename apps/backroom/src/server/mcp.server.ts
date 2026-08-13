@@ -33,6 +33,7 @@ import {
   screeningDisputeResolutionSchema,
   screeningArtifactInputSchema,
   screeningSubmissionLookupInputSchema,
+  sourceSearchInputSchema,
   ownerAttestationLookupInputSchema,
   retryValidationInputSchema,
   withdrawValidationInputSchema,
@@ -77,6 +78,7 @@ import {
   fetchQuarantineBaselineDiffFile,
   fetchQuarantineSourceExcerpt,
   fetchQuarantineSourceFiles,
+  searchQuarantineSource,
   fetchScreeningArtifact,
   fetchScreeningQuarantineContext,
   fetchScreeningQuarantineContexts,
@@ -195,6 +197,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // on the same dedicated artifact scope as the tarball download.
   ['list_screening_source_files', BACKROOM_ARTIFACT_SCOPE],
   ['read_screening_source_file', BACKROOM_ARTIFACT_SCOPE],
+  // A search returns the matching source lines themselves, so it discloses
+  // exactly what an excerpt read does and gates identically.
+  ['search_screening_source', BACKROOM_ARTIFACT_SCOPE],
   // Copy-review diffs render miner source from two submissions side by side,
   // so they gate on the same dedicated artifact scope.
   ['get_copy_review_source_diff', BACKROOM_ARTIFACT_SCOPE],
@@ -414,6 +419,13 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Withdraw an exhausted submission using a fresh snapshot and "REMOVE FROM VALIDATOR QUEUE". Preserves the record, scores, artifact, payment, and history. Use evict_live_validator_leases instead when live leases still consume capacity.',
   get_score_history:
     'Read authoritative accepted-score aggregates across benchmark versions for one agent. Seeds remain exact decimal strings; omitted versions were never scored. Versions are returned newest-first.',
+  search_screening_source:
+    'Grep one screened submission\'s readable source (regex, or mode=literal) for {path, line, text} matches with optional context — the "where is X" tool for a 10,000-line baseline.rs. Scope with pathGlob; has_more is the paging signal; opaque_skipped counts binaries never searched. Requires backroom:artifact:read.',
+  // Paired with the tool above: an operator now arrives here already holding a
+  // line number, so the catalog entry says where to get one instead of
+  // repeating the excerpt semantics that get_backroom_tool_help carries.
+  read_screening_source_file:
+    'Read a bounded line range (max 400 lines) from one file in a screened submission. Get the line first from search_screening_source, or from flagged path:line evidence. Requires backroom:artifact:read.',
 }
 
 export function createBackroomMcpServer(props: McpGrantProps) {
@@ -609,7 +621,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Read screening source file',
       description:
-        'Read a bounded line range (max 400 lines) from one file inside a quarantined submission tarball. Pair with the flagged path:line evidence from get_screening_quarantine_context to inspect exactly the suspicious code. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+        'Read a bounded line range (max 400 lines) from one file inside a quarantined submission tarball. Pair with the flagged path:line evidence from get_screening_quarantine_context to inspect exactly the suspicious code. When you do not have a line number yet, do NOT bisect with successive 400-line windows — call search_screening_source, which scans the whole artifact in one request and returns the path:line to read here. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: {
         agentId: z.string().uuid(),
         path: z.string().min(1).max(240),
@@ -620,6 +632,24 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       artifact(() => fetchQuarantineSourceExcerpt(input, props.session.email)),
+  )
+
+  registerTool(
+    'search_screening_source',
+    {
+      title: 'Search screening source',
+      description:
+        'Search one screened submission\'s readable source for a regex (mode=regex, the default) or an exact string (mode=literal), returning {path, line, text} for every match with optional surrounding context lines. This is the tool for "where is X": deciding a deferred_source_review means finding where the agent constructs its protocol::RunResponse — who authors the graded answer, final_text, abstain and tool_calls fields — and a miner baseline.rs routinely runs 10,000+ lines, so locating that with 400-line read_screening_source_file windows costs six to eight blind reads. Search for `RunResponse` or `answer:` first, then read only the region the match names. Scope with pathGlob (`src/*.rs`; a glob with no `/` also matches the basename), widen with context (0-5 lines each side). Matches come back ordered by path then line, so paging is stable: `count` is the total the scan found, `has_more` is the only field reporting the page boundary, `truncated` means the scan itself hit its match cap and the totals are lower bounds. Binary and oversized members are never searched — the same `opaque_blobs` list_screening_source_files reports — and `opaque_skipped` counts them, so a weights file cannot be silently cleared by a search that never opened it. Requires the dedicated backroom:artifact:read scope because it returns miner source lines.',
+      inputSchema: { ...sourceSearchInputSchema.shape, ...MCP_PAGINATION_INPUT },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset, ...input }) =>
+      artifact(async () =>
+        compacted(
+          await searchQuarantineSource(input, props.session.email, limit, offset),
+          { matches: { pin: ['path', 'line'] } },
+        ),
+      ),
   )
 
   registerTool(

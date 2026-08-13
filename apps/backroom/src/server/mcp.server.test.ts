@@ -120,6 +120,7 @@ describe('Backroom MCP tools', () => {
         'list_screening_source_files',
         'list_screening_submissions',
         'read_screening_source_file',
+        'search_screening_source',
         'rebuild_screened_image',
         'get_screening_artifact',
         'refresh_benchmark_contract',
@@ -599,6 +600,7 @@ describe('Backroom MCP tools', () => {
       'list_screening_disputes',
       'list_screening_source_files',
       'list_screening_submissions',
+      'search_screening_source',
       'list_stuck_submissions',
       'list_lease_revocations',
       'get_leaderboard',
@@ -3340,6 +3342,139 @@ describe('Backroom MCP tools', () => {
           'X-Admin-Actor': 'peyton@omniaura.ai',
         }),
       }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('finds the response construction in one call and gates on the artifact scope', async () => {
+    // The regression this tool exists for: a deferred_source_review decision
+    // needs the `protocol::RunResponse` construction, which sits at line 8919
+    // of a 10,795-line baseline.rs. Six to eight blind 400-line reads used to
+    // be the only way there.
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        artifact_sha256: 'ab'.repeat(32),
+        pattern: 'RunResponse',
+        mode: 'regex',
+        path_glob: 'src/*.rs',
+        matches: [
+          {
+            path: 'src/baseline.rs',
+            line: 8919,
+            text: '    Ok(protocol::RunResponse { answer, abstain })',
+            context_before: [{ line: 8918, text: '    let answer = pick(&ctx);' }],
+            context_after: [{ line: 8920, text: '}' }],
+          },
+        ],
+        match_count: 1,
+        returned: 1,
+        limit: 50,
+        offset: 0,
+        has_more: false,
+        files_searched: 12,
+        files_matched: 1,
+        opaque_skipped: 2,
+        truncated: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refused = await connect([BACKROOM_READ_SCOPE])
+    const denied = await refused.client.callTool({
+      name: 'search_screening_source',
+      arguments: { agentId, pattern: 'RunResponse' },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await refused.client.close()
+    await refused.server.close()
+
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_ARTIFACT_SCOPE,
+    ])
+    const response = await client.callTool({
+      name: 'search_screening_source',
+      arguments: {
+        agentId,
+        pattern: 'RunResponse',
+        pathGlob: 'src/*.rs',
+        context: 1,
+        limit: 50,
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      match_count: 1,
+      has_more: false,
+      truncated: false,
+      // A search can never clear the binary members it never opened, so their
+      // count travels with the result.
+      opaque_skipped: 2,
+      matches: [{ path: 'src/baseline.rs', line: 8919 }],
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/source-search?pattern=RunResponse&mode=regex&ignore_case=false&context=1&limit=50&offset=0&path_glob=src%2F*.rs`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('pages source search on the platform so match windows stay stable', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        artifact_sha256: 'ab'.repeat(32),
+        pattern: 'answer',
+        mode: 'literal',
+        path_glob: null,
+        matches: [{ path: 'src/b.rs', line: 4, text: 'answer', context_before: [], context_after: [] }],
+        match_count: 900,
+        returned: 1,
+        limit: 1,
+        offset: 3,
+        has_more: true,
+        files_searched: 12,
+        files_matched: 4,
+        opaque_skipped: 0,
+        truncated: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_ARTIFACT_SCOPE,
+    ])
+    const response = await client.callTool({
+      name: 'search_screening_source',
+      arguments: { agentId, pattern: 'answer', mode: 'literal', limit: 1, offset: 3 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      match_count: 900,
+      offset: 3,
+      has_more: true,
+    })
+    // The window is resolved by the platform, which holds the whole ordered
+    // match list; the worker must not re-slice a page it never had.
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('mode=literal&ignore_case=false&context=0&limit=1&offset=3'),
+      expect.anything(),
     )
 
     await client.close()

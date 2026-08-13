@@ -1305,6 +1305,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-submissions/{agent_id}/source-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Screening Source
+         * @description Audited grep across one submission's readable source, in one request.
+         *
+         *     The source-review question is almost always *where* — where the agent
+         *     constructs its graded ``RunResponse``, where a flagged import is used,
+         *     where a hardcoded answer table lives. The manifest cannot answer it and
+         *     :func:`read_screening_source_file` is capped at 400 lines, so on the
+         *     10,000-line ``baseline.rs`` a real submission ships, locating the code
+         *     meant bisecting with six to eight blind reads. This returns
+         *     ``path:line:text`` for the whole artifact in one call, and the operator
+         *     then reads only the region it names.
+         *
+         *     Read-only and bounded on every axis: opaque members are skipped and
+         *     counted, the scan stops at its match cap, lines are clipped, and the page
+         *     reports ``has_more``.
+         */
+        get: operations["search_screening_source_api_v1_admin_screening_submissions__agent_id__source_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/submission-settings": {
         parameters: {
             query?: never;
@@ -6178,6 +6211,61 @@ export interface components {
             opaque_blobs: components["schemas"]["AdminOpaqueBlobEntry"][];
             /** Opaque Total */
             opaque_total: number;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** AdminSourceSearchMatch */
+        AdminSourceSearchMatch: {
+            /** Context After */
+            context_after?: components["schemas"]["AdminSourceLine"][];
+            /** Context Before */
+            context_before?: components["schemas"]["AdminSourceLine"][];
+            /** Line */
+            line: number;
+            /** Path */
+            path: string;
+            /** Text */
+            text: string;
+        };
+        /**
+         * AdminSourceSearchResult
+         * @description Regex/literal hits across one submission's readable members.
+         */
+        AdminSourceSearchResult: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Files Matched */
+            files_matched: number;
+            /** Files Searched */
+            files_searched: number;
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Match Count */
+            match_count: number;
+            /** Matches */
+            matches: components["schemas"]["AdminSourceSearchMatch"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "regex" | "literal";
+            /** Offset */
+            offset: number;
+            /** Opaque Skipped */
+            opaque_skipped: number;
+            /** Path Glob */
+            path_glob?: string | null;
+            /** Pattern */
+            pattern: string;
+            /** Returned */
+            returned: number;
             /** Truncated */
             truncated: boolean;
         };
@@ -18910,6 +18998,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminSourceListing"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_screening_source_api_v1_admin_screening_submissions__agent_id__source_search_get: {
+        parameters: {
+            query: {
+                pattern: string;
+                mode?: "regex" | "literal";
+                ignore_case?: boolean;
+                path_glob?: string | null;
+                context?: number;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSourceSearchResult"];
                 };
             };
             /** @description Validation Error */

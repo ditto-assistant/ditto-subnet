@@ -3078,6 +3078,49 @@ export const sourceExcerptSchema = z.object({
   lines: z.array(z.object({ line: z.number().int().positive(), text: z.string() })),
 })
 
+export const sourceSearchInputSchema = z.object({
+  agentId: z.string().uuid(),
+  pattern: z.string().min(1).max(200),
+  mode: z.enum(['regex', 'literal']).default('regex'),
+  ignoreCase: z.boolean().default(false),
+  pathGlob: z.string().min(1).max(240).optional(),
+  context: z.number().int().min(0).max(5).default(0),
+})
+
+const sourceSearchLineSchema = z.object({
+  line: z.number().int().positive(),
+  text: z.string(),
+})
+
+export const sourceSearchMatchSchema = z.object({
+  path: z.string(),
+  line: z.number().int().positive(),
+  text: z.string(),
+  context_before: z.array(sourceSearchLineSchema),
+  context_after: z.array(sourceSearchLineSchema),
+})
+
+export const sourceSearchResultSchema = z.object({
+  agent_id: z.string().uuid(),
+  artifact_sha256: z.string(),
+  pattern: z.string(),
+  mode: z.enum(['regex', 'literal']),
+  path_glob: z.string().nullish().default(null),
+  matches: z.array(sourceSearchMatchSchema),
+  match_count: z.number().int().nonnegative(),
+  returned: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+  files_searched: z.number().int().nonnegative(),
+  files_matched: z.number().int().nonnegative(),
+  // Members the search could not open: binary weights and oversized blobs.
+  // A search can never clear those, so the count travels with every result
+  // rather than leaving the operator to infer the gap from the manifest.
+  opaque_skipped: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+})
+
 export const screeningArtifactInputSchema = z.object({ agentId: z.string().uuid() })
 
 export const screeningSubmissionLookupInputSchema = z.object({
@@ -4535,6 +4578,7 @@ export type ScreeningQuarantineContext = z.infer<typeof screeningQuarantineConte
 export type ShadowReviewObservation = z.infer<typeof shadowReviewObservationSchema>
 export type SourceListing = z.infer<typeof sourceListingSchema>
 export type SourceExcerpt = z.infer<typeof sourceExcerptSchema>
+export type SourceSearchResult = z.infer<typeof sourceSearchResultSchema>
 export type CopyReviewItem = z.infer<typeof copyReviewItemSchema>
 export type CopyReviewGeneration = z.infer<typeof copyReviewGenerationSchema>
 export type CopyReviewConsoleItem = z.infer<typeof copyReviewConsoleItemSchema>
