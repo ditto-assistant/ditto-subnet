@@ -166,7 +166,7 @@ func startOpenRouterShim(broker *inferenceBroker, caBundlePath string, port int)
 	if err != nil || tlsConfig == nil {
 		return err
 	}
-	listener, err := tls.Listen("tcp", ":"+fmt.Sprint(port), tlsConfig)
+	listener, err := tls.Listen("tcp4", "0.0.0.0:"+fmt.Sprint(port), tlsConfig)
 	if err != nil {
 		return fmt.Errorf("listen for OpenRouter compatibility traffic: %w", err)
 	}

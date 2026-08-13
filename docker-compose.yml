@@ -211,7 +211,11 @@ services:
       - openrouter-shim-ca:/var/lib/dittobench-openrouter-shim
       - dittobench-private-artifacts:/var/lib/dittobench-private-artifacts
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8000/health"]
+      # Readiness covers both the control API and the IPv4 compatibility listener
+      # that miner containers actually use. A live :8000 process is not enough:
+      # without :11436 every Ollama-shaped embedding request fails before it can
+      # reach the locked Platform/Perplexity route.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/health && wget -q -O /dev/null http://127.0.0.1:11436/health"]
       interval: 10s
       timeout: 5s
       retries: 12

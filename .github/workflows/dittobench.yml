@@ -5,12 +5,20 @@ on:
     paths:
       - services/dittobench-api/**
       - research/dittobench-datagen/**
+      - docker-compose.yml
+      - Dockerfile.sandbox-docker
+      - scripts/sandbox-docker-entrypoint.sh
+      - scripts/test-validator-embedding-gateway.sh
       - .github/workflows/dittobench.yml
   push:
     branches: [main]
     paths:
       - services/dittobench-api/**
       - research/dittobench-datagen/**
+      - docker-compose.yml
+      - Dockerfile.sandbox-docker
+      - scripts/sandbox-docker-entrypoint.sh
+      - scripts/test-validator-embedding-gateway.sh
       - .github/workflows/dittobench.yml
 
 concurrency:
@@ -25,6 +33,15 @@ env:
   SERVICE_DIR: services/dittobench-api
 
 jobs:
+  validator-stack-gateway:
+    name: validator stack embedding gateway
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/test-validator-embedding-gateway.sh
+
   test:
     name: build · vet · test
     runs-on: ubuntu-24.04

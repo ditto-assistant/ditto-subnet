@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -1863,6 +1864,18 @@ func TestInferenceBrokerHTTPServerSetsUntrustedListenerTimeouts(t *testing.T) {
 		server.ReadTimeout != brokerReadTimeout || server.WriteTimeout != brokerWriteTimeout ||
 		server.IdleTimeout != brokerIdleTimeout || server.MaxHeaderBytes != brokerMaximumHeaderBytes {
 		t.Fatalf("unexpected broker server limits: %+v", server)
+	}
+}
+
+func TestInferenceBrokerListenerUsesDockerHostGatewayAddressFamily(t *testing.T) {
+	listener, err := listenInferenceBrokerTCP4("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	address, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || address.IP.To4() == nil {
+		t.Fatalf("broker listener address = %v, want IPv4", listener.Addr())
 	}
 }
 

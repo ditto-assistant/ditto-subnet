@@ -263,6 +263,10 @@ func main() {
 	// ticket-bound inference route. Keeping this off the control-plane mux means
 	// a harness cannot probe submit, cancel, run, or session-management APIs.
 	brokerMux := http.NewServeMux()
+	brokerMux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	brokerMux.HandleFunc("GET /v1/inference/{rest...}", s.broker.handle)
 	brokerMux.HandleFunc("POST /v1/inference/{rest...}", s.broker.handle)
 	brokerMux.HandleFunc("POST /api/embed", s.broker.handleEmbedding)
@@ -273,9 +277,13 @@ func main() {
 		log.Fatalf("invalid DITTOBENCH_BROKER_PORT: must be an unprivileged port distinct from the API port")
 	}
 	go func() {
-		brokerAddr := ":" + strconv.Itoa(brokerPort)
+		brokerAddr := "0.0.0.0:" + strconv.Itoa(brokerPort)
 		log.Printf("trusted inference broker listening on %s", brokerAddr)
-		if err := newInferenceBrokerHTTPServer(brokerAddr, brokerMux).ListenAndServe(); err != nil {
+		listener, err := listenInferenceBrokerTCP4(brokerAddr)
+		if err != nil {
+			log.Fatalf("inference broker listen error: %v", err)
+		}
+		if err := newInferenceBrokerHTTPServer("", brokerMux).Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("inference broker error: %v", err)
 		}
 	}()

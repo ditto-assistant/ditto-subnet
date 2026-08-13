@@ -384,6 +384,16 @@ func newInferenceBrokerHTTPServer(addr string, handler http.Handler) *http.Serve
 	}
 }
 
+// listenInferenceBrokerTCP4 binds the miner-facing compatibility plane to the
+// address family used by Docker's host-gateway mapping. A generic ":port"
+// listener is allowed to become an IPv6 wildcard and rely on IPv4-mapped IPv6
+// behavior from the validator host. That host sysctl is outside the signed
+// stack contract, while every sandbox receives an IPv4 host-gateway address.
+// Bind the contract directly instead of depending on host IPv6 policy.
+func listenInferenceBrokerTCP4(addr string) (net.Listener, error) {
+	return net.Listen("tcp4", addr)
+}
+
 type inferenceBroker struct {
 	mu                   sync.RWMutex
 	sessions             map[string]*brokerSession

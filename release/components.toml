@@ -189,5 +189,6 @@ paths = [
   "scripts/build-stack-release.py",
   "scripts/publish-compat-runtime-index.sh",
   "scripts/release-plan.py",
+  "scripts/test-validator-embedding-gateway.sh",
   "uv.lock",
 ]
