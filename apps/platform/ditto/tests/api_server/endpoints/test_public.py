@@ -4461,6 +4461,29 @@ class TestActiveBenchCapabilityGate:
             "scorer identity is not eligible for bench v9"
         )
 
+    def test_a_coherent_self_managed_v9_source_release_is_serviceable(self) -> None:
+        """The public verdict mirrors leasing for an exact monorepo source tree."""
+        now = datetime(2026, 8, 13, 2, 0, tzinfo=UTC)
+        row = _v8_only_capable_row(now, hotkey=_VALIDATOR_C, seen_at=now)
+        revision = "c" * 40
+        row.software_version = "0.53.23"
+        scorer = row.capabilities["scorer_benchmarks"]
+        scorer["supported_bench_versions"] = [8, 9]
+        scorer["software_version"] = "source-build"
+        scorer["source_revision"] = revision
+        row.stack["components"]["ditto_subnet"].update(
+            source_revision=revision, version="0.53.23"
+        )
+        row.stack["components"]["dittobench_api"].update(
+            source_revision=revision, version="source-build"
+        )
+
+        entry = self._snapshot([row], version=9, now=now).validators[0]
+
+        assert entry.bench_serviceability == "serving"
+        assert entry.health == "healthy"
+        assert entry.health_reasons == []
+
 
 class TestPublicFleet:
     def test_stale_boundaries_and_recovery_after_delayed_heartbeat(self) -> None:

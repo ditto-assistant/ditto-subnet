@@ -1303,8 +1303,11 @@ def verified_scorer_for_version(
         or version not in scorer.supported_bench_versions
     ):
         return None
-    if version >= 9 and not _scorer_version_at_least(
-        scorer.software_version, minimum=_V9_MINIMUM_SCORER_VERSION
+    if version >= 9 and not _scorer_meets_version_floor(
+        heartbeat,
+        scorer=scorer,
+        stack=stack,
+        minimum=_V9_MINIMUM_SCORER_VERSION,
     ):
         return None
     if version >= 7 and (
@@ -1353,6 +1356,44 @@ def _scorer_version_at_least(
     if len(parts) != 3 or any(not part.isdecimal() for part in parts):
         return False
     return tuple(int(part) for part in parts) >= minimum
+
+
+def _scorer_meets_version_floor(
+    heartbeat: ValidatorHeartbeat,
+    *,
+    scorer: ScorerBenchmarkCapability,
+    stack: ValidatorStackIdentity,
+    minimum: tuple[int, int, int],
+) -> bool:
+    """Accept a stable scorer version or one coherent monorepo source build.
+
+    Older self-managed Compose stacks correctly report the scorer's build label
+    as ``source-build`` even when the whole stack reports one stable monorepo
+    release.  The label alone cannot clear a semantic floor, but the signed
+    heartbeat also carries enough identity to prove that the scorer and worker
+    are the same source tree.  In that narrow case the worker release is the
+    scorer release: require a stable worker version at the floor, require the
+    heartbeat and stack to agree on it, and require both components plus the
+    fresh scorer probe to name one exact revision.
+
+    Custom/mixed source stacks still fail closed.  A floating ``source-build``
+    label, a mismatched root/scorer revision, or a free-form worker version is
+    not promoted into a release identity.
+    """
+    if _scorer_version_at_least(scorer.software_version, minimum=minimum):
+        return True
+    if scorer.software_version != "source-build" or stack.mode != "source":
+        return False
+    worker = stack.components.ditto_subnet
+    component = stack.components.dittobench_api
+    return (
+        _scorer_version_at_least(heartbeat.software_version, minimum=minimum)
+        and worker.version == heartbeat.software_version
+        and worker.source_revision is not None
+        and worker.source_revision == scorer.source_revision
+        and component.source_revision == scorer.source_revision
+        and component.version == scorer.software_version
+    )
 
 
 def heartbeat_matches_inference_contract(

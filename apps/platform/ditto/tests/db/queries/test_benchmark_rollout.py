@@ -2722,6 +2722,71 @@ async def test_v9_requires_the_authoritative_enforce_scorer_release(
     assert heartbeat_supports_version(heartbeat, now=now, version=9) is supports_v9
 
 
+async def test_v9_accepts_a_coherent_monorepo_source_build() -> None:
+    """A self-managed release need not relabel its exact source-built scorer."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    heartbeat = _heartbeat(
+        "coherent-source-v9", now, versions=[7, 8, 9], protocol_version=18
+    )
+    capabilities = heartbeat.capabilities
+    stack = heartbeat.stack
+    assert capabilities is not None
+    assert stack is not None
+    revision = "c" * 40
+    heartbeat.software_version = "0.53.23"
+    scorer = capabilities["scorer_benchmarks"]
+    scorer["software_version"] = "source-build"
+    scorer["source_revision"] = revision
+    stack["components"]["ditto_subnet"].update(
+        source_revision=revision, version="0.53.23"
+    )
+    stack["components"]["dittobench_api"].update(
+        source_revision=revision, version="source-build"
+    )
+
+    assert heartbeat_supports_version(heartbeat, now=now, version=9)
+
+
+@pytest.mark.parametrize(
+    ("worker_version", "stack_version", "worker_revision", "supports_v9"),
+    [
+        ("0.53.9", "0.53.9", "c" * 40, False),
+        ("source-build", "source-build", "c" * 40, False),
+        ("0.53.23", "0.53.22", "c" * 40, False),
+        ("0.53.23", "0.53.23", "d" * 40, False),
+        ("0.53.23", "0.53.23", "c" * 40, True),
+    ],
+)
+async def test_v9_source_build_fallback_fails_closed_on_root_identity(
+    worker_version: str,
+    stack_version: str,
+    worker_revision: str,
+    supports_v9: bool,
+) -> None:
+    """The worker release substitutes only when every signed source id agrees."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    heartbeat = _heartbeat(
+        "source-v9-identity", now, versions=[7, 8, 9], protocol_version=18
+    )
+    capabilities = heartbeat.capabilities
+    stack = heartbeat.stack
+    assert capabilities is not None
+    assert stack is not None
+    revision = "c" * 40
+    heartbeat.software_version = worker_version
+    scorer = capabilities["scorer_benchmarks"]
+    scorer["software_version"] = "source-build"
+    scorer["source_revision"] = revision
+    stack["components"]["ditto_subnet"].update(
+        source_revision=worker_revision, version=stack_version
+    )
+    stack["components"]["dittobench_api"].update(
+        source_revision=revision, version="source-build"
+    )
+
+    assert heartbeat_supports_version(heartbeat, now=now, version=9) is supports_v9
+
+
 async def test_capable_counts_exclude_stale_v9_advertisers(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
