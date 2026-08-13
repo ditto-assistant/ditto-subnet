@@ -18,6 +18,7 @@ Load only the returned anchors and the relevant specialized skill:
   datagen, and adapters;
 - `.agents/skills/ditto-subnet-release-ops` for releases, deployments,
   screeners, Targon/GCE, GCP, Cloudflare, Terraform, and Ansible;
+- `.agents/skills/wandb-ops` for live W&B run, metric, and table diagnosis;
 - `.agents/skills/ditto-subnet-worktree` plus `.agents/skills/github` for
   isolation and stacked PRs.
 

@@ -38,6 +38,18 @@
       "related": ["dittobench-scoring", "contracts", "release-delivery"]
     },
     {
+      "id": "wandb-operations",
+      "title": "W&B validator and worker operations",
+      "keywords": ["wandb", "w&b", "telemetry", "run", "metrics", "history", "logs", "node failure", "fleet diagnosis"],
+      "summary": "Query bounded W&B run evidence through the authenticated API, then corroborate it with Platform or chain truth.",
+      "owns": [".agents/skills/wandb-ops"],
+      "read": [".agents/skills/wandb-ops/SKILL.md"],
+      "search": ["rg -n 'wandb|record_sweep|weights/status' ditto services workers"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "python3 -m py_compile .agents/skills/wandb-ops/scripts/query_wandb.py"],
+      "invariants": ["Never print or inspect the W&B API key or dump run configs.", "W&B is diagnostic telemetry; Platform and chain state remain authoritative."],
+      "related": ["validator-miner", "platform-api"]
+    },
+    {
       "id": "platform-api",
       "title": "Platform API, database, migrations, and queue control",
       "keywords": ["platform", "api", "fastapi", "database", "postgres", "alembic", "migration", "queue", "ticket", "lease", "admin endpoint"],

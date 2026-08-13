@@ -1,0 +1,4 @@
+interface:
+  display_name: "W&B Operations"
+  short_description: "Query validator runs and failures safely"
+  default_prompt: "Use $wandb-ops to compare current validator runs and diagnose the shared failure."
