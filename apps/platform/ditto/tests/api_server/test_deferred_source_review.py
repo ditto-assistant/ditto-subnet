@@ -516,23 +516,30 @@ async def test_terminal_deep_attempt_suppresses_old_admission_marker(
 
 
 @pytest.mark.asyncio
-async def test_off_mode_computes_nothing_at_all(
+@pytest.mark.parametrize("mode", ["off", "bypass"])
+async def test_off_and_bypass_compute_nothing_at_all(
     session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
+    mode: str,
 ) -> None:
-    """``off`` is a true skip, not a suppressed hold.
+    """``off`` and ``bypass`` are true skips, not suppressed holds.
 
     ``observe`` already covers "qualify but do not hold". The distinction that
-    makes ``off`` a separate mode is that the qualification is never *computed*,
+    makes these separate modes is that the qualification is never *computed*,
     so the canonical ledger is not even read. Asserting only the absence of a
-    hold would pass in either mode and would not notice ``off`` quietly
-    degrading into an unrecorded ``observe``.
+    hold would pass in either mode and would not notice one quietly degrading
+    into an unrecorded ``observe``.
+
+    For ``bypass`` this is the post-score half of "no source review at all";
+    ``test_bypass_admits_on_the_cheap_screen_like_enforce`` pins the pre-score
+    half. Together they are the whole claim: nothing expensive runs at either
+    end, and the submission goes straight to validator scoring.
     """
     now = datetime.now(UTC)
     agent = Agent(
         agent_id=uuid4(),
-        miner_hotkey="off-miner",
-        name="off-agent",
+        miner_hotkey=f"{mode}-miner",
+        name=f"{mode}-agent",
         sha256="ef" * 32,
         status=AgentStatus.SCORED,
         screening_policy_version=9,
@@ -553,7 +560,7 @@ async def test_off_mode_computes_nothing_at_all(
         session.add_all([agent, admission])
 
     async def _fail(*_args: object, **_kwargs: object) -> list[LedgerRow]:
-        raise AssertionError("off mode must not read the canonical ledger")
+        raise AssertionError(f"{mode} mode must not read the canonical ledger")
 
     monkeypatch.setattr(
         "ditto.api_server.endpoints.validator.list_eligible_ledger", _fail
@@ -564,7 +571,7 @@ async def test_off_mode_computes_nothing_at_all(
             agent=agent,
             bench_version=8,
             score_count=3,
-            settings=DeferredSourceReviewSettings(mode="off"),
+            settings=DeferredSourceReviewSettings(mode=mode),  # type: ignore[arg-type]
             now=now,
         )
 
@@ -581,7 +588,7 @@ async def test_off_mode_computes_nothing_at_all(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["off", "observe", "enforce"])
+@pytest.mark.parametrize("mode", ["off", "observe", "enforce", "bypass"])
 async def test_copy_hold_survives_every_deferred_mode(
     session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -590,7 +597,9 @@ async def test_copy_hold_survives_every_deferred_mode(
     """Turning the source-integrity branch down never releases a copy hold.
 
     This board scopes the *source-integrity* branch only. The dangerous misread
-    is that ``mode="off"`` also stands down plagiarism enforcement, so pin the
+    is that ``mode="off"`` -- or, worse, the new ``mode="bypass"``, which really
+    does mean "no source review at all" -- also stands down plagiarism
+    enforcement, so pin the
     boundary directly: an agent held for copy review keeps its pending hold, its
     ``review_kind``, its matched pointer and its ``ATH_PENDING_REVIEW`` status in
     every mode. The deferred path acts only on ``SCORED``/``LIVE`` rows, so a

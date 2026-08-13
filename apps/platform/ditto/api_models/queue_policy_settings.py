@@ -148,10 +148,11 @@ ROLLOUT_LOCKED_FIELDS = ("lane_cycle_size", "fresh_submission_slots")
 class DeferredSourceReviewSettings(BaseModel):
     """Hot-swappable post-score deep-review admission and anomaly policy.
 
-    This board decides *when* the expensive source review runs, not whether
-    source integrity is checked at all. Every mode reviews every submission; they
-    differ in whether the review happens before scoring (automatic, by a
-    screener) or after it (as an operator-adjudicated hold).
+    This board decides *where* the expensive source review runs -- before
+    scoring (automatic, by a screener), after it (as an operator-adjudicated
+    hold), or, in ``bypass``, nowhere at all. Three of the four modes review
+    every submission somewhere; ``bypass`` is the one that does not, and it is
+    the only way to send admitted submissions straight to validator scoring.
 
     SCOPE -- source integrity only
     ==============================
@@ -161,15 +162,29 @@ class DeferredSourceReviewSettings(BaseModel):
     score finalization, which never reads this board, runs *before* the deferred
     path, and wins outright: a copy hold moves the agent to
     ``ATH_PENDING_REVIEW``, and the deferred path only acts on agents still in
-    ``SCORED``/``LIVE``. Setting ``mode="off"`` disables the deferred
-    source-integrity branch and **leaves plagiarism detection fully armed**.
-    The same is true of the transform/overfit audit, which has its own switch.
+    ``SCORED``/``LIVE``. Setting ``mode="off"`` or ``mode="bypass"`` disables the
+    deferred source-integrity branch and **leaves plagiarism detection fully
+    armed**. The same is true of the transform/overfit audit, which has its own
+    switch. "No source review" never means "no copy detection".
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    mode: Literal["off", "observe", "enforce"] = "off"
+    mode: Literal["off", "observe", "enforce", "bypass"] = "off"
     """Where the expensive source review runs, and whether it can hold.
+
+    ====================================================================
+    mode        pre-score deep screen   post-score qualification   holds
+    ====================================================================
+    ``off``     every submission        never computed             none
+    ``observe`` every submission        computed, recorded only    none
+    ``enforce`` build-only admission    computed                   opens
+    ``bypass``  build-only admission    never computed             none
+    ====================================================================
+
+    Read that table before assuming ``off`` is the light one: ``off`` is the
+    *heaviest* mode (a full deep screen on every submission) and ``bypass`` is
+    the lightest (no source review anywhere).
 
     ``off`` -- the legacy full pre-score review. Every fresh submission gets the
         complete deep screen *before* it is scoreable, so no deferred hold is
@@ -195,28 +210,44 @@ class DeferredSourceReviewSettings(BaseModel):
         ``ATH_PENDING_REVIEW``, and excludes it from the emission-eligible
         ledger until the review completes.
 
-    OPERATIONAL HAZARD -- flipping away from ``enforce`` strands open holds
-    ======================================================================
+    ``bypass`` -- **no source review at all.** Admission is the same cheap
+        build-only screen as ``enforce`` (the screened image still has to be
+        built, verified and hashed before anything can score it), and no
+        post-score qualification is computed, so no deferred hold can ever
+        open. An admitted submission goes straight to validator scoring. This
+        is the lightest mode and the only one that runs neither half of the
+        source review. It does **not** disable copy/plagiarism enforcement --
+        see the scope note on the class.
 
-    Moving to ``observe`` or ``off`` stops new holds, but it also switches off
-    the machinery that *clears* the ones already open. A pending deferred hold
-    is normally resolved automatically: the agent's ``ATH_PENDING_REVIEW`` row
-    is re-claimed by a screener for the deep pass, and a passing verdict clears
-    the hold and releases the agent. That re-claim is gated on this field being
-    ``enforce`` (see ``deferred_ath_eligible`` in
-    ``ditto.db.queries.screening``); in any other mode it is ``false()``, so no
-    screener will ever pick those agents up again.
+    Flipping back to ``enforce`` later re-qualifies everything that was
+    mechanically admitted while ``bypass`` was set: those rows still carry the
+    immutable ``deferred-mechanical-admission`` marker and have no terminal deep
+    review, so the next canonical ledger mutation reconsiders them. Nothing is
+    lost by turning it off, only deferred.
 
-    The holds therefore do not drain on their own -- they freeze, and every
-    frozen agent stays out of the emission ledger indefinitely. The evidence is
-    deliberately preserved rather than auto-cleared, because a bulk clearance
-    would write an unreasoned resolution onto each agent's public audit record.
-    Releasing them is an explicit operator action per agent
-    (``resolve_ath_review``).
+    OPEN HOLDS ALWAYS DRAIN, IN EVERY MODE
+    ======================================
 
-    So the safe order is **drain, then flip**: clear the open queue while still
-    in ``enforce``, and only then move to ``observe``. Flipping first leaves
-    whatever was pending at that instant stuck until it is resolved by hand.
+    Leaving ``enforce`` stops *new* holds. It deliberately does **not** stop the
+    machinery that clears the ones already open: a pending deferred hold is
+    resolved by a screener re-claiming the agent's ``ATH_PENDING_REVIEW`` row
+    for its deep pass, and that re-claim (``deferred_ath_eligible`` in
+    ``ditto.db.queries.screening``) is independent of this field.
+
+    That independence is load-bearing rather than incidental. The re-claim used
+    to be gated on ``mode == "enforce"``, which meant any flip away from
+    ``enforce`` froze every hold that happened to be open at that instant: those
+    agents stayed out of the emission-eligible ledger with no screener willing
+    to pick them up again, releasable only one at a time by hand. A control
+    whose whole purpose is to reduce review load must not be able to strand
+    miners as a side effect, so the gate was removed instead of being inherited
+    by ``bypass``. The bounded, finite work of draining an already-open queue is
+    the price of that, and it ends.
+
+    Holds are still never auto-cleared: a bulk clearance would write an
+    unreasoned resolution onto each agent's public audit record. They drain the
+    normal way -- a deep pass with a real verdict, or an explicit
+    ``resolve_ath_review``.
     """
 
     min_cohort_size: Annotated[int, Field(ge=5, le=100)] = 8

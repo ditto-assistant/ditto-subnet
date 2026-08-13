@@ -42,6 +42,7 @@ from ditto.api_models.benchmark_progress import (
     benchmark_progress_signing_token,
 )
 from ditto.api_models.queue_policy_settings import (
+    DeferredSourceReviewSettings,
     PrevGenCarryoverSettings,
     QueuePolicySettings,
 )
@@ -784,6 +785,34 @@ async def _widest_carryover_policy(
     # The resolver reads through app.state, not the request session override.
     app.state.session_maker = maker
     app.state.queue_policy_settings.invalidate()
+
+
+async def _install_deferred_review_mode(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession], mode: str
+) -> None:
+    """Write a queue policy that only changes the source-review mode."""
+    settings = QueuePolicySettings(
+        deferred_source_review=DeferredSourceReviewSettings(mode=mode)  # type: ignore[arg-type]
+    )
+    payload = settings.model_dump(mode="json")
+    async with maker() as session, session.begin():
+        await insert_queue_policy_settings_revision(
+            session,
+            parent_revision=0,
+            scope="*",
+            settings=payload,
+            checksum=hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            reason=f"test: deferred source review mode {mode}",
+            actor="test",
+        )
+    app.state.session_maker = maker
+    app.state.queue_policy_settings.invalidate()
+    # Self-verifying: a helper that silently failed to install the policy would
+    # make every test using it pass for the wrong reason.
+    resolved = await app.state.queue_policy_settings.resolve(maker)
+    assert resolved.deferred_source_review.mode == mode
 
 
 async def _seed_activated_era(
@@ -7980,6 +8009,54 @@ class TestAntiCopyGate:
                 "backfilled": False,
                 "opened_at_source": "agent_finalized_audit",
             }
+
+    async def test_exact_copy_is_still_held_with_source_review_bypassed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """``deferred_source_review.mode="bypass"`` is not "no plagiarism check".
+
+        The mode names the SOURCE-INTEGRITY branch and nothing else. Copy holds
+        come from the duplicate-signal decision at score finalization, which
+        never reads that policy, so the whole anti-copy gate must survive the
+        one setting an operator is most likely to read as "screening off".
+        """
+        _install_db(app, session_maker)
+        _install_chain(app)
+        await _install_deferred_review_mode(app, session_maker, "bypass")
+        incumbent = await _seed_agent(
+            session_maker, status=AgentStatus.EVALUATING, sha256="cd" * 32
+        )
+        await self._score(
+            client, incumbent, maker=session_maker, run_id="run_inc_np", composite=0.80
+        )
+        copy = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            miner_hotkey=_MINER_B,
+            sha256="cd" * 32,
+        )
+        resp = await self._score(
+            client, copy, maker=session_maker, run_id="run_copy_np", composite=0.80
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == AgentStatus.ATH_PENDING_REVIEW
+        async with session_maker() as s:
+            held = await s.get(Agent, copy)
+            review = await s.scalar(select(AthReview).where(AthReview.agent_id == copy))
+            assert held is not None
+            assert review is not None
+            assert held.status == AgentStatus.ATH_PENDING_REVIEW
+            assert held.duplicate_of == incumbent
+            assert review.status == "pending"
+            assert review.original_duplicate_of == incumbent
+            assert (
+                review.algorithm_provenance["opened_at_source"]
+                == "agent_finalized_audit"
+            )
 
     async def test_near_dup_dethroner_is_held(
         self,

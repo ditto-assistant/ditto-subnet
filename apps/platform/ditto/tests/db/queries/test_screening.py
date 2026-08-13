@@ -357,7 +357,7 @@ async def test_claim_preserves_attempt_reported_active_by_a_fresh_worker(
 
 
 @pytest.mark.parametrize("mode", ["off", "observe"])
-async def test_only_enforce_uses_mechanical_first_claim(
+async def test_full_review_modes_do_not_use_mechanical_first_claim(
     session: AsyncSession, mode: str
 ) -> None:
     agent = Agent(
@@ -374,6 +374,79 @@ async def test_only_enforce_uses_mechanical_first_claim(
     attempt, _duplicate = _claimed_duplicate(claimed, agent)
 
     assert attempt.build_only is False
+
+
+async def test_bypass_admits_on_the_cheap_screen_like_enforce(
+    session: AsyncSession,
+) -> None:
+    """``bypass`` skips the pre-score deep screen, exactly as ``enforce`` does.
+
+    The deep screen is the expensive half; the build-only pass is not optional,
+    because nothing can score a submission whose screened image has not been
+    built and verified. So "no screening" means the same cheap admission
+    ``enforce`` uses -- what ``bypass`` removes is the deep review at both ends,
+    which the post-score half of this feature covers.
+    """
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-bypass",
+        name="fresh-bypass",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.UPLOADED,
+    )
+    async with session.begin():
+        session.add(agent)
+
+    claimed = await _claim(session, deferred_review_mode="bypass")
+    attempt, _duplicate = _claimed_duplicate(claimed, agent)
+
+    assert attempt.build_only is True
+    assert attempt.reason_code == "deferred-mechanical-admission"
+
+
+@pytest.mark.parametrize("mode", ["off", "observe", "bypass"])
+async def test_open_deferred_hold_still_drains_after_leaving_enforce(
+    session: AsyncSession, mode: str
+) -> None:
+    """A mode change must not strand the holds that were open when it happened.
+
+    The re-claim of an ``ath_pending_review`` agent for its deferred deep pass
+    used to be gated on ``mode == "enforce"``, so any flip away from it froze
+    every open hold: no screener would pick those agents up again and they sat
+    outside the emission-eligible ledger indefinitely. The mode now decides only
+    whether NEW holds open; settling an existing one is always allowed.
+    """
+    opened_at = datetime.now(UTC) - timedelta(minutes=5)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey=f"5HK-drain-{mode}",
+        name=f"held-{mode}",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.ATH_PENDING_REVIEW,
+    )
+    async with session.begin():
+        session.add(agent)
+        await session.flush()
+        session.add(
+            AthReview(
+                review_id=uuid4(),
+                agent_id=agent.agent_id,
+                status="pending",
+                opened_at=opened_at,
+                original_reason="deferred review",
+                original_policy_version=SCREENING_POLICY_VERSION,
+                original_evidence={"previous_status": AgentStatus.SCORED.value},
+                algorithm_provenance={
+                    "review_kind": "deferred_source_review",
+                },
+            )
+        )
+
+    claimed = await _claim(session, deferred_review_mode=mode)
+    deep, _duplicate = _claimed_duplicate(claimed, agent)
+
+    assert deep.build_only is False
+    assert deep.reason_code is None
 
 
 async def test_enforce_uses_mechanical_first_then_one_deep_claim(
@@ -413,10 +486,6 @@ async def test_enforce_uses_mechanical_first_then_one_deep_claim(
                 },
             )
         )
-
-    # Rollback is a true stop: off mode preserves the hold/evidence for manual
-    # adjudication but starts no new expensive deep review.
-    assert await _claim(session, deferred_review_mode="off") == []
 
     claimed = await _claim(session, deferred_review_mode="enforce")
     deep, _duplicate = _claimed_duplicate(claimed, agent)

@@ -673,10 +673,18 @@ async def _evaluate_and_record_deferred_review(
     immutable mechanical-admission marker can acquire a delayed hold, and the
     marker resolver suppresses pending or terminal deep-review lifecycles.
     """
-    if settings.mode == "off" or agent.status not in {
-        AgentStatus.SCORED,
-        AgentStatus.LIVE,
-    }:
+    # ``off`` and ``bypass`` differ only in pre-score depth (see
+    # ``claim_screening_attempts``); neither computes anything after scoring, so
+    # the canonical ledger is never even read for them.
+    if (
+        settings.mode == "off"
+        or settings.mode == "bypass"
+        or agent.status
+        not in {
+            AgentStatus.SCORED,
+            AgentStatus.LIVE,
+        }
+    ):
         return
     mode: Literal["observe", "enforce"] = settings.mode
     await session.flush()

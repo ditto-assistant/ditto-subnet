@@ -394,6 +394,63 @@ class TestWholePolicyWrites:
         effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
         assert effective["settings"]["prev_gen_carryover"] == carryover
 
+    async def test_bypass_mode_round_trips_and_is_attributed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The no-source-review mode is an ordinary audited policy write.
+
+        It travels the same append-only board as every other queue knob, so the
+        revision that turns source review off carries an actor, a reason and a
+        timestamp like any other privileged mutation -- there is no side door.
+        """
+        _install(app, settings_maker)
+        deferred = {
+            "mode": "bypass",
+            "min_cohort_size": 8,
+            "composite_mad_multiplier": 6.0,
+            "axis_mad_multiplier": 6.0,
+            "min_composite_delta": 0.10,
+            "min_axis_delta": 0.15,
+        }
+        created = await client.post(
+            _URL, headers=_HEADERS, json=_payload(deferred_source_review=deferred)
+        )
+        assert created.status_code == 200, created.text
+
+        board = (await client.get(_URL, headers=_HEADERS)).json()
+        assert board["effective"]["settings"]["deferred_source_review"] == deferred
+        latest = board["history"][0]
+        assert latest["settings"]["deferred_source_review"]["mode"] == "bypass"
+        assert latest["actor"] == "backroom:test"
+        assert latest["reason"]
+        assert latest["created_at"]
+
+    async def test_unknown_deferred_mode_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        response = await client.post(
+            _URL,
+            headers=_HEADERS,
+            json=_payload(
+                deferred_source_review={
+                    "mode": "disabled",
+                    "min_cohort_size": 8,
+                    "composite_mad_multiplier": 6.0,
+                    "axis_mad_multiplier": 6.0,
+                    "min_composite_delta": 0.10,
+                    "min_axis_delta": 0.15,
+                }
+            ),
+        )
+        assert response.status_code == 422
+
 
 class TestLaneFloors:
     """The lane split may be retuned but never collapsed onto one lane."""

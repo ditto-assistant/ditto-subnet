@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, case, exists, false, func, or_, select
+from sqlalchemy import ColumnElement, and_, case, exists, func, or_, select
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import ScalarSelect
 
@@ -491,7 +491,17 @@ async def claim_screening_attempts(
     netuid: int = 118,
     deferred_review_mode: str = "off",
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
-    """Claim completion-lane contenders, then least-scored eligible work."""
+    """Claim completion-lane contenders, then least-scored eligible work.
+
+    ``deferred_review_mode`` is the operator's
+    ``queue_policy_settings.deferred_source_review.mode``. It decides only how
+    deep a *fresh* admission is screened: ``enforce`` and ``bypass`` admit on a
+    cheap build-only pass, ``off`` and ``observe`` run the full deep screen
+    before the submission is scoreable. It never decides whether an agent
+    already holding a pending deferred review can be re-claimed for that
+    review -- that stays eligible in every mode, or a mode change would strand
+    the holds open when it was made.
+    """
     # Claiming is already a short transaction. Serialize it in Postgres so two
     # workers cannot skip-lock sibling rows with the same hash and admit both.
     # SQLite serializes writes itself and does not provide advisory locks.
@@ -568,11 +578,18 @@ async def claim_screening_attempts(
             ),
         )
     )
+    # Deliberately NOT gated on ``deferred_review_mode``. An open deferred hold
+    # is an obligation the queue already took on, and the only way it clears is
+    # a screener re-claiming the agent for its deep pass. Gating this on
+    # ``enforce`` (as it once was) meant every flip to another mode froze the
+    # holds open at that instant: those agents stay out of the emission-eligible
+    # ledger with nothing willing to pick them up again, releasable only one at
+    # a time by hand. Draining an already-open queue is bounded work that ends;
+    # stranding a miner is not. The mode decides whether NEW holds open, never
+    # whether existing ones can be settled.
     deferred_ath_eligible = (
-        (Agent.status == AgentStatus.ATH_PENDING_REVIEW) & pending_deferred_review
-        if deferred_review_mode == "enforce"
-        else false()
-    )
+        Agent.status == AgentStatus.ATH_PENDING_REVIEW
+    ) & pending_deferred_review
     eligible = or_(
         Agent.status == AgentStatus.UPLOADED,
         Agent.status == AgentStatus.SCREENING_FAILED,
@@ -797,7 +814,13 @@ async def claim_screening_attempts(
         # (UPLOADED), failed, or stale-policy submission still gets the full
         # review.
         deferred_deep_review = agent.status == AgentStatus.ATH_PENDING_REVIEW
-        mechanical_first = deferred_review_mode == "enforce" and agent.status in {
+        # ``enforce`` defers the deep review to the submissions that qualify;
+        # ``bypass`` never runs it at all. Both admit on the same cheap
+        # build-only pass, so the pre-score depth is one predicate over the two.
+        mechanical_first = deferred_review_mode in {
+            "enforce",
+            "bypass",
+        } and agent.status in {
             AgentStatus.UPLOADED,
             AgentStatus.SCREENING_FAILED,
         }
