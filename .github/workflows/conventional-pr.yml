@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   title:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Require a release-aware squash title
         env:

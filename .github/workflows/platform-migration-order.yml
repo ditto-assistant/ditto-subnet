@@ -21,7 +21,7 @@ jobs:
   migration-order:
     name: Platform migration order
     if: github.event_name != 'push'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       statuses: write
@@ -62,7 +62,7 @@ jobs:
   recheck-open-prs:
     name: Re-check open Platform migrations against new main
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read

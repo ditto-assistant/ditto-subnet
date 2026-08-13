@@ -41,3 +41,11 @@ def test_untrusted_workflows_do_not_use_privileged_triggers() -> None:
             assert not PRIVILEGED_TRIGGER.match(line.split("#", 1)[0]), (
                 f"{workflow.name}:{line_number} uses a privileged trigger"
             )
+
+
+def test_workflows_do_not_depend_on_blacksmith() -> None:
+    for workflow in WORKFLOWS.glob("*.yml"):
+        contents = workflow.read_text().lower()
+        assert "blacksmith" not in contents, (
+            f"{workflow.name} still depends on Blacksmith capacity or actions"
+        )

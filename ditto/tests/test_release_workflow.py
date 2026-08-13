@@ -430,7 +430,7 @@ def test_frozen_updater_descriptor_uses_direct_platform_manifests() -> None:
     )
 
 
-def test_validator_release_smokes_each_architecture_natively_before_promotion() -> None:
+def test_validator_release_smokes_each_architecture_before_promotion() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
 
@@ -438,12 +438,13 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
     # jobs read it from there instead of each declaring its own copy.
     assert workflow["env"]["HEARTBEAT_PROTOCOL"] == str(HEARTBEAT_PROTOCOL_VERSION)
 
-    # The amd64 validator is smoke-tested natively inside assemble-stack (which
-    # runs on the x86 fan-in runner); the arm64 validator is smoke-tested on a
-    # native arm runner in parallel. Neither smoke relies on emulation.
-    assert jobs["assemble-stack"]["runs-on"] == "blacksmith-4vcpu-ubuntu-2404"
-    assert (
-        jobs["smoke-validator-arm64"]["runs-on"] == "blacksmith-4vcpu-ubuntu-2404-arm"
+    # Both jobs use ordinary GitHub-hosted x86 capacity. The arm64 lane installs
+    # QEMU explicitly before it pulls and boots the exact arm64 child manifest.
+    assert jobs["assemble-stack"]["runs-on"] == "ubuntu-24.04"
+    assert jobs["smoke-validator-arm64"]["runs-on"] == "ubuntu-24.04"
+    _step(
+        jobs["smoke-validator-arm64"]["steps"],
+        "Set up QEMU for the arm64 runtime smoke",
     )
     amd64_smoke = _step(
         jobs["assemble-stack"]["steps"],
@@ -453,8 +454,8 @@ def test_validator_release_smokes_each_architecture_natively_before_promotion() 
         jobs["smoke-validator-arm64"]["steps"],
         "Smoke-test the arm64 validator artifact by exact child digest",
     )
-    # Each native smoke authenticates the arch it actually runs on and asserts
-    # the heartbeat-protocol label matches the release constant.
+    # Each smoke authenticates the arch it actually runs and asserts the
+    # heartbeat-protocol label matches the release constant.
     assert "--platform linux/amd64" in amd64_smoke["run"]
     assert "--platform linux/arm64" in arm64_smoke["run"]
     for smoke in (amd64_smoke, arm64_smoke):
@@ -543,64 +544,33 @@ def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> 
     assert "build/stack-release-amd64/compose.yml" in steps[smoke_index]["run"]
 
 
-def test_release_scopes_each_docker_layer_cache_to_one_image() -> None:
-    """Concurrent release builds must not share one layer cache.
-
-    The image jobs fan out from the same ``needs``, and Blacksmith resolves
-    concurrent committers to a cache key Last-Write-Wins. On a shared key only
-    one of the parallel builds keeps its layers per release, so every build
-    needs a key scoped to the image it actually builds.
-    """
+def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
+    """Concurrent release images use disjoint GitHub Actions cache scopes."""
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
 
-    keys: dict[str, str] = {}
+    scopes: dict[str, list[str]] = {}
     for job_name, job in jobs.items():
         for step in job.get("steps") or []:
-            if "useblacksmith/setup-docker-builder@" not in (step.get("uses") or ""):
+            if "docker/build-push-action@" not in (step.get("uses") or ""):
                 continue
-            key = (step.get("with") or {}).get("cache-key")
-            # An unkeyed builder falls back to the repository-wide cache that
-            # every other image build also lands on.
-            assert key, f"{job_name} sets up a builder without a cache-key"
-            assert key.startswith("ditto-subnet/"), (
-                f"{job_name} cache-key is not repository-scoped: {key}"
+            values = step.get("with") or {}
+            cache_from = values.get("cache-from")
+            cache_to = values.get("cache-to")
+            assert cache_from and cache_from.startswith("type=gha,scope=")
+            assert cache_to and cache_to.startswith("type=gha,mode=max,scope=")
+            assert cache_from.removeprefix("type=gha,scope=") == cache_to.removeprefix(
+                "type=gha,mode=max,scope="
             )
-            assert "${{" not in key, f"{job_name} cache-key is not a static string"
-            keys[job_name] = key
+            scopes.setdefault(job_name, []).append(
+                cache_from.removeprefix("type=gha,scope=")
+            )
 
-    assert keys == {
-        "build-validator": "ditto-subnet/Dockerfile",
-        "build-sandbox-docker": "ditto-subnet/Dockerfile.sandbox-docker",
-        "build-pylon": "ditto-subnet/Dockerfile.pylon",
-        "build-dittobench": "ditto-subnet/services/dittobench-api",
-        "assemble-stack": "ditto-subnet/Dockerfile.stack-release",
-        # Neither of these builds an image; they only need buildx for
-        # imagetools, so they stay off the caches the build jobs depend on.
-        "smoke-validator-arm64": "ditto-subnet/release-manifest-tools",
-        "promote-stack-release": "ditto-subnet/release-manifest-tools",
+    assert scopes == {
+        "build-validator": ["validator"],
+        "build-sandbox-docker": ["sandbox-docker"],
+        "build-pylon": ["pylon"],
+        "build-dittobench": ["dittobench-api", "model-relay-compat"],
+        "assemble-stack": ["stack-release"],
     }
-
-    # No Dockerfile may be split across keys, and no key may collect Dockerfiles
-    # that share no layers. Both cost cache hits on every release.
-    for job_name, key in keys.items():
-        built = {
-            (step.get("with") or {}).get("file")
-            for step in jobs[job_name]["steps"]
-            if "build-push-action@" in (step.get("uses") or "")
-        }
-        if key == "ditto-subnet/release-manifest-tools":
-            assert not built, f"{job_name} builds an image on the no-build key"
-        elif len(built) == 1:
-            assert built == {key.removeprefix("ditto-subnet/")}
-        else:
-            # An image set behind one builder: the scorer and the frozen relay
-            # shim are built from one job and share a distroless runtime base.
-            assert job_name == "build-dittobench"
-            assert built == {
-                "services/dittobench-api/Dockerfile",
-                "${{ env.MODEL_RELAY_COMPAT_DIR }}/Dockerfile",
-            }
-            assert workflow["env"]["MODEL_RELAY_COMPAT_DIR"].startswith(
-                key.removeprefix("ditto-subnet/")
-            )
+    assert len({scope for job_scopes in scopes.values() for scope in job_scopes}) == 6

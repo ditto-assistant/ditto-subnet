@@ -90,7 +90,7 @@ env:
 
 jobs:
   changes:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       relay: ${{ steps.paths.outputs.relay }}
     steps:
@@ -115,7 +115,7 @@ jobs:
   relay-build:
     needs: changes
     if: needs.changes.outputs.relay == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: apps/platform
@@ -141,7 +141,7 @@ jobs:
 
   deploy:
     needs: changes
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Keep API deploys ordered without making a slow relay rollout block a
     # later API-only release to the same environment.
     concurrency:
@@ -418,7 +418,7 @@ jobs:
       needs.changes.outputs.relay == 'true' &&
       needs.relay-build.result == 'success' &&
       needs.deploy.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Relay rolls remain serialized on their own lane so two releases cannot
     # touch the same PM2 slots concurrently.
     concurrency:
