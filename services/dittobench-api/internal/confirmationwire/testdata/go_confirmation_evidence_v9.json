@@ -1,14 +1,14 @@
 {
   "fixture_schema": "dittobench-v9-confirmation-go-evidence-v1",
   "longmemeval": {
-    "go_evidence_sha256": "9567afaa313142d6de3ace83a9a8cd68fc1cd0e52e7f2095d9452f1a67a4e599",
+    "go_evidence_sha256": "39623b9b35b1e541ebc8d8da6ac0f4da337c61fe48faa350142526d3285bace8",
     "latency_ms": 4321,
     "evidence": {
       "schema_version": 2,
       "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "bench_version": 9,
-      "profile_checksum": "ad51dfb8ea46a9cf7a941988529456f04895ce100f379b49c6e64ba751a96756",
-      "case_set_digest": "221786234dc4526dda0175add1743c487f1df7f019fe6cd87d192ae267f1a4b2",
+      "profile_checksum": "413d8c26a17834ff60f3243b5f96b24dd9a18deaf7d0ee21cb3c642c3e024927",
+      "case_set_digest": "9cc5237a16747ee9de0680adbcf25e761e153294270282181d90a434bcbc761f",
       "dataset_revision": "longmemeval-s-2026-08-08",
       "dataset_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "latency_ms": 4321,
@@ -72,6 +72,23 @@
           "total_tokens": 1320,
           "cost_usd_micros": 12345,
           "receipt_set_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        {
+          "lane": "reader",
+          "cost_source": "provider_receipt_v1",
+          "currency": "USD",
+          "provider": "openrouter",
+          "profile_revision": "longmem-reader-v1",
+          "model": "openai/gpt-oss-20b",
+          "fallback_used": false,
+          "requests": 12,
+          "successes": 12,
+          "receipted_requests": 12,
+          "prompt_tokens": 1000,
+          "completion_tokens": 100,
+          "total_tokens": 1100,
+          "cost_usd_micros": 10000,
+          "receipt_set_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         }
       ]
     }

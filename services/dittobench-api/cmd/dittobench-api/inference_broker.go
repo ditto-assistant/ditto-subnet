@@ -34,6 +34,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
+	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
 )
@@ -106,6 +107,23 @@ type brokerTicketIdentity struct {
 	TicketDeadline time.Time
 }
 
+type brokerConfirmationGrant struct {
+	Lane               string
+	GrantID            string
+	Bearer             string
+	ProxyURL           string
+	Generation         int
+	ExpiresAt          time.Time
+	Provider           string
+	RouteProvider      string
+	ReceiptProvider    string
+	ProfileRevision    string
+	Model              string
+	RequestBudget      uint64
+	TokenBudget        uint64
+	CostBudgetMicrousd uint64
+}
+
 type brokerSession struct {
 	mu               sync.Mutex
 	id               string
@@ -135,6 +153,8 @@ type brokerSession struct {
 	boundRunID          string
 	benchVersion        int
 	confirmationSession bool
+	confirmationGrants  map[string]brokerConfirmationGrant
+	embeddingGrant      brokerConfirmationGrant
 	inFlight            int
 	// caseGeneration binds every admitted v9 chat request to the ordinary case
 	// window in which it started. A harness may return its /run response while
@@ -1232,6 +1252,203 @@ type brokerActivation struct {
 	Model            string    `json:"model"`
 }
 
+type brokerConfirmationGrantWire struct {
+	Lane               string    `json:"lane"`
+	GrantID            string    `json:"grant_id"`
+	Bearer             string    `json:"bearer"`
+	ProxyURL           string    `json:"proxy_url"`
+	Generation         int       `json:"generation"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	Provider           string    `json:"provider"`
+	RouteProvider      string    `json:"route_provider"`
+	ReceiptProvider    string    `json:"receipt_provider"`
+	ProfileRevision    string    `json:"profile_revision"`
+	Model              string    `json:"model"`
+	RequestBudget      uint64    `json:"request_budget"`
+	TokenBudget        uint64    `json:"token_budget"`
+	CostBudgetMicrousd uint64    `json:"cost_budget_microusd"`
+}
+
+type brokerConfirmationActivation struct {
+	ActivationSecret string                        `json:"activation_secret"`
+	AgentID          string                        `json:"agent_id"`
+	SlotID           string                        `json:"slot_id"`
+	TicketDeadline   time.Time                     `json:"ticket_deadline"`
+	Grants           []brokerConfirmationGrantWire `json:"grants"`
+}
+
+type brokerConfirmationAuthorizer struct {
+	broker    *inferenceBroker
+	sessionID string
+}
+
+func (a brokerConfirmationAuthorizer) Authorize(
+	_ context.Context,
+	reference longmemeval.SecretManagerReference,
+	request *http.Request,
+) error {
+	if a.broker == nil || request == nil {
+		return errors.New("confirmation platform capability is unavailable")
+	}
+	a.broker.mu.RLock()
+	session := a.broker.sessions[a.sessionID]
+	a.broker.mu.RUnlock()
+	if session == nil {
+		return errors.New("confirmation platform capability is unavailable")
+	}
+	session.mu.Lock()
+	grant, ok := session.confirmationGrants[reference.SecretID]
+	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
+	active := session.confirmationSession && session.expiresAt.After(time.Now())
+	session.mu.Unlock()
+	if !ok || !active || request.URL.String() != grant.ProxyURL || len(privateKey) != ed25519.PrivateKeySize {
+		return errors.New("confirmation platform capability is unavailable")
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, brokerBodyLimit+1))
+	if err != nil || len(body) > brokerBodyLimit {
+		return errors.New("confirmation platform request is invalid")
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	nonce := uuid.NewString()
+	requested := time.Now().UTC().Format("2006-01-02T15:04:05.000000+00:00")
+	digest := sha256.Sum256(body)
+	message := fmt.Sprintf("ditto-inference:v1:%s:%d:%s:%s:%s", grant.GrantID, grant.Generation, nonce, requested, hex.EncodeToString(digest[:]))
+	request.Header.Set("Authorization", "Bearer "+grant.Bearer)
+	request.Header.Set("X-Ditto-Grant", grant.GrantID)
+	request.Header.Set("X-Ditto-Generation", fmt.Sprint(grant.Generation))
+	request.Header.Set("X-Ditto-Nonce", nonce)
+	request.Header.Set("X-Ditto-Requested-At", requested)
+	request.Header.Set("X-Ditto-Proof", base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(message))))
+	return nil
+}
+
+func (b *inferenceBroker) confirmationProviderRuntime(
+	sessionID string,
+	profile confirmationExecutionProfileWire,
+) (longmemeval.ProviderRuntimeConfig, error) {
+	b.mu.RLock()
+	session := b.sessions[sessionID]
+	b.mu.RUnlock()
+	if session == nil {
+		return longmemeval.ProviderRuntimeConfig{}, errors.New("confirmation platform capability is unavailable")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if !session.confirmationSession || len(session.confirmationGrants) != 3 ||
+		len(session.privateKey) != ed25519.PrivateKeySize || !session.expiresAt.After(time.Now()) {
+		return longmemeval.ProviderRuntimeConfig{}, errors.New("confirmation platform capability is unavailable")
+	}
+	policies := make(map[string]confirmationProviderLaneProfile, 2)
+	for _, policy := range profile.ProviderLanes {
+		policies[policy.Lane] = policy
+	}
+	lanes := make([]longmemeval.ProviderLaneRuntimeConfig, 0, 2)
+	for _, lane := range []string{longmemeval.ReaderLane, longmemeval.JudgeLane} {
+		grant := session.confirmationGrants[lane]
+		policy, found := policies[lane]
+		if !found || grant.Model != policy.Model || grant.Provider != policy.Provider ||
+			grant.RouteProvider != policy.RouteProvider || grant.ReceiptProvider != policy.ReceiptProvider ||
+			grant.ProfileRevision != policy.ProfileRevision {
+			return longmemeval.ProviderRuntimeConfig{}, errors.New("confirmation platform capability drift")
+		}
+		lanes = append(lanes, longmemeval.ProviderLaneRuntimeConfig{
+			Lane: lane, UpstreamURL: grant.ProxyURL, RouteProvider: grant.RouteProvider,
+			ReceiptProvider:     grant.ReceiptProvider,
+			CredentialReference: longmemeval.SecretManagerReference{ProjectID: "platform", SecretID: lane, Version: "ticket"},
+			RequestTimeout:      10 * time.Minute,
+		})
+	}
+	authorizer := brokerConfirmationAuthorizer{broker: b, sessionID: sessionID}
+	return longmemeval.ProviderRuntimeConfig{Lanes: lanes, Authorizer: authorizer}, nil
+}
+
+func confirmationProxyPath(lane string) string {
+	if lane == "embedding" {
+		return "/api/v1/inference/confirmation/embeddings"
+	}
+	return "/api/v1/inference/confirmation/chat/completions"
+}
+
+func validConfirmationProxyURL(raw, lane string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil &&
+		parsed.RawQuery == "" && parsed.Fragment == "" && parsed.Path == confirmationProxyPath(lane)
+}
+
+func (b *inferenceBroker) activateConfirmation(w http.ResponseWriter, r *http.Request) {
+	if !b.requireControl(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		writeError(w, http.StatusNotFound, "inference session not found")
+		return
+	}
+	var activation brokerConfirmationActivation
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&activation) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid confirmation inference activation")
+		return
+	}
+	now := time.Now()
+	identity := brokerTicketIdentity{AgentID: activation.AgentID, SlotID: activation.SlotID, TicketDeadline: activation.TicketDeadline}
+	secretMatches := subtle.ConstantTimeCompare([]byte(activation.ActivationSecret), []byte(session.activationSecret)) == 1
+	if !secretMatches || len(activation.Grants) != 3 || !validBrokerTicketIdentity(
+		brokerTicketIdentity{GrantID: activation.Grants[0].GrantID, AgentID: identity.AgentID, SlotID: identity.SlotID, TicketDeadline: identity.TicketDeadline}, now,
+	) {
+		writeError(w, http.StatusUnauthorized, "invalid confirmation inference activation")
+		return
+	}
+	grants := make(map[string]brokerConfirmationGrant, 3)
+	for _, offer := range activation.Grants {
+		if (offer.Lane != "reader" && offer.Lane != "judge" && offer.Lane != "embedding") || grants[offer.Lane].Lane != "" ||
+			offer.Bearer == "" || len(offer.Bearer) > 4096 || offer.Generation < 1 || offer.RequestBudget < 1 ||
+			offer.TokenBudget < 1 || offer.CostBudgetMicrousd < 1 || offer.ExpiresAt.After(activation.TicketDeadline) ||
+			!offer.ExpiresAt.After(now) || !validConfirmationProxyURL(offer.ProxyURL, offer.Lane) ||
+			strings.TrimSpace(offer.Provider) == "" || strings.TrimSpace(offer.RouteProvider) == "" ||
+			strings.TrimSpace(offer.ReceiptProvider) == "" || strings.TrimSpace(offer.ProfileRevision) == "" ||
+			strings.TrimSpace(offer.Model) == "" {
+			writeError(w, http.StatusUnauthorized, "invalid confirmation inference activation")
+			return
+		}
+		if _, err := uuid.Parse(offer.GrantID); err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid confirmation inference activation")
+			return
+		}
+		grants[offer.Lane] = brokerConfirmationGrant{
+			Lane: offer.Lane, GrantID: offer.GrantID, Bearer: offer.Bearer, ProxyURL: offer.ProxyURL,
+			Generation: offer.Generation, ExpiresAt: offer.ExpiresAt, Provider: offer.Provider,
+			RouteProvider: offer.RouteProvider, ReceiptProvider: offer.ReceiptProvider,
+			ProfileRevision: offer.ProfileRevision, Model: offer.Model, RequestBudget: offer.RequestBudget,
+			TokenBudget: offer.TokenBudget, CostBudgetMicrousd: offer.CostBudgetMicrousd,
+		}
+	}
+	if len(grants) != 3 {
+		writeError(w, http.StatusUnauthorized, "invalid confirmation inference activation")
+		return
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.activationSecret == "" || session.boundRunID != "" {
+		writeError(w, http.StatusConflict, "confirmation inference session is unavailable")
+		return
+	}
+	session.activationSecret = ""
+	session.confirmationSession = true
+	session.confirmationGrants = grants
+	session.ticketAgentID = activation.AgentID
+	session.ticketSlotID = activation.SlotID
+	session.ticketDeadline = activation.TicketDeadline
+	session.expiresAt = activation.TicketDeadline
+	session.embeddingConcurrency = v8EmbeddingSessionConcurrency
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]bool{"active": true})
+}
+
 func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 	if !b.requireControl(w, r) {
 		return
@@ -1782,12 +1999,12 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 	}
 
 	var decoded embeddingResponse
-	if ablationScope != nil && ablationScope.lane == ablation.LaneOrdinary ||
-		(ablationScope == nil && session.confirmationSession) {
-		// Confirmation uses the existing local, fixed embedding seam for the
-		// paid-free ordinary/reference trace. Both intervention rounds either
-		// replay this response or synthesize the targeted lane above.
-		decoded, err = b.forwardLocalEmbedding(requestContext, payload.Input)
+	if ablationScope != nil && ablationScope.lane == ablation.LaneOrdinary {
+		// The ordinary confirmation trace is still provider-backed.  Its
+		// response is then replayed by the paid-free intervention round; only
+		// that replay/synthetic work is allowed to avoid the purpose-bound
+		// Platform grant.
+		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input)
 	} else if usesPlatformEmbedding(benchVersion) {
 		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input)
 	} else {
@@ -2001,24 +2218,35 @@ func platformEmbeddingURL(chatProxyURL string) (string, error) {
 }
 
 func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session *brokerSession, inputs []string) (embeddingResponse, error) {
-	body, err := json.Marshal(platformEmbeddingRequest{
-		Model: hostedEmbeddingModel, Input: inputs,
-		Dimensions: embeddingDimensions, EncodingFormat: "float",
-	})
-	if err != nil {
-		return embeddingResponse{}, err
-	}
 	session.mu.Lock()
 	if !usesPlatformEmbedding(session.benchVersion) || !session.activeLocked(time.Now()) {
 		session.mu.Unlock()
 		return embeddingResponse{}, fmt.Errorf("embedding session unavailable")
 	}
 	grantID, bearer, proxyURL, generation := session.grantID, session.bearer, session.proxyURL, session.generation
+	model := hostedEmbeddingModel
+	dimensions := embeddingDimensions
+	if session.confirmationSession {
+		grant := session.confirmationGrants["embedding"]
+		grantID, bearer, proxyURL, generation = grant.GrantID, grant.Bearer, grant.ProxyURL, grant.Generation
+		model = grant.Model
+		dimensions = embeddingDimensions
+	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	session.mu.Unlock()
-	endpoint, err := platformEmbeddingURL(proxyURL)
+	body, err := json.Marshal(platformEmbeddingRequest{
+		Model: model, Input: inputs,
+		Dimensions: dimensions, EncodingFormat: "float",
+	})
 	if err != nil {
 		return embeddingResponse{}, err
+	}
+	endpoint := proxyURL
+	if !session.confirmationSession {
+		endpoint, err = platformEmbeddingURL(proxyURL)
+		if err != nil {
+			return embeddingResponse{}, err
+		}
 	}
 	nonce := uuid.NewString()
 	requested := time.Now().UTC().Format("2006-01-02T15:04:05.000000+00:00")
@@ -2074,7 +2302,7 @@ func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session 
 		return embeddingResponse{}, fmt.Errorf("embedding platform returned %d", response.StatusCode)
 	}
 	var platformResponse platformEmbeddingResponse
-	if json.Unmarshal(responseBody, &platformResponse) != nil || platformResponse.Model != hostedEmbeddingModel ||
+	if json.Unmarshal(responseBody, &platformResponse) != nil || platformResponse.Model != model ||
 		len(platformResponse.Data) != len(inputs) || platformResponse.Usage.PromptTokens < 0 ||
 		platformResponse.Usage.TotalTokens != platformResponse.Usage.PromptTokens {
 		return embeddingResponse{}, fmt.Errorf("invalid platform embedding response")
@@ -2083,7 +2311,7 @@ func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session 
 		Embeddings: make([][]float64, len(inputs)), PromptEvalCount: platformResponse.Usage.PromptTokens,
 	}
 	for index, item := range platformResponse.Data {
-		if item.Index != index || len(item.Embedding) != embeddingDimensions {
+		if item.Index != index || len(item.Embedding) != dimensions {
 			return embeddingResponse{}, fmt.Errorf("invalid platform embedding response")
 		}
 		for _, value := range item.Embedding {

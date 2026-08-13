@@ -518,6 +518,7 @@ def v9_confirmation_claim_signing_message(
     slot_id: str,
     profile_revision: str,
     profile_checksum: str,
+    broker_public_key: str,
     nonce: UUID,
     requested_at: datetime,
 ) -> bytes:
@@ -532,7 +533,7 @@ def v9_confirmation_claim_signing_message(
     return (
         "validator-v9-confirmation-claim:v1:"
         f"{validator_hotkey}:{slot_id}:{profile_revision}:{profile_checksum}:"
-        f"{nonce}:{requested}"
+        f"{broker_public_key.rstrip('=')}:{nonce}:{requested}"
     ).encode()
 
 
@@ -543,6 +544,7 @@ def sign_v9_confirmation_claim(
     slot_id: str,
     profile_revision: str,
     profile_checksum: str,
+    broker_public_key: str,
     nonce: UUID,
     requested_at: datetime,
 ) -> str:
@@ -552,6 +554,7 @@ def sign_v9_confirmation_claim(
             slot_id=slot_id,
             profile_revision=profile_revision,
             profile_checksum=profile_checksum,
+            broker_public_key=broker_public_key,
             nonce=nonce,
             requested_at=requested_at,
         )

@@ -1,6 +1,6 @@
 {
   "fixture_schema": "dittobench-v9-confirmation-execution-profile-v1",
-  "expected_checksum": "34ce9c1572f7d3b432adaf1223a07e7ee04bc34d83bca9e799c7729762130a3c",
+  "expected_checksum": "38d9334acd0f17e257d151d66e3feb6d5c0a200f0c5091f8bd29f90e387fd3f1",
   "profile": {
     "schema_version": 1,
     "revision": "v9-launch-calibrated-2026-08-08",
@@ -17,6 +17,8 @@
       {
         "lane": "judge",
         "provider": "pinned-provider",
+        "route_provider": "openai",
+        "receipt_provider": "OpenAI",
         "profile_revision": "provider-launch-v1",
         "model": "pinned-model",
         "max_requests": 10,
@@ -28,6 +30,8 @@
       {
         "lane": "reader",
         "provider": "pinned-provider",
+        "route_provider": "openai",
+        "receipt_provider": "OpenAI",
         "profile_revision": "provider-launch-v1",
         "model": "pinned-model",
         "max_requests": 10,
@@ -37,6 +41,16 @@
         "max_cost_usd_micros": 10000
       }
     ],
+    "embedding_lane": {
+      "lane": "embedding",
+      "provider": "pinned-provider",
+      "profile_revision": "embedding-launch-v1",
+      "model": "pinned-embedding-model",
+      "dimensions": 768,
+      "max_requests": 1000,
+      "max_input_tokens": 1000000,
+      "max_cost_usd_micros": 100000
+    },
     "ablation_profile_revision": "ablation-launch-v1",
     "ablation_profile_checksum": "e0b74cf414c630c79854810fdf5c0cb33cdabec0ad2a663cb3bba4243969d89e",
     "ablation_dataset_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

@@ -34,6 +34,7 @@ type confirmationExecutionRequest struct {
 	TicketID               string          `json:"ticket_id"`
 	AgentID                string          `json:"agent_id"`
 	SlotID                 string          `json:"slot_id"`
+	InferenceSessionID     string          `json:"inference_session_id"`
 	Mode                   string          `json:"mode"`
 	ArtifactURL            string          `json:"artifact_url"`
 	ArtifactSHA256         string          `json:"artifact_sha256"`
@@ -84,7 +85,8 @@ func (request confirmationExecutionRequest) validate(now time.Time, readiness co
 		request.SlotID[len(request.SlotID)-1] >= '0' &&
 		request.SlotID[len(request.SlotID)-1] <= '7'
 	if strings.TrimSpace(request.BundleID) == "" || strings.TrimSpace(request.TicketID) == "" ||
-		strings.TrimSpace(request.AgentID) == "" || !validSlot {
+		strings.TrimSpace(request.AgentID) == "" || !validSlot || len(request.InferenceSessionID) < 16 ||
+		len(request.InferenceSessionID) > 128 || strings.TrimSpace(request.InferenceSessionID) != request.InferenceSessionID {
 		return errors.New("confirmation bundle, ticket, agent, and slot identities are required")
 	}
 	if request.Mode != "shadow" && request.Mode != "enforce" {

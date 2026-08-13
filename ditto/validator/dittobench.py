@@ -407,6 +407,7 @@ class DittobenchClient:
         *,
         job: V9ConfirmationJobResponse,
         artifact: ArtifactResponse,
+        inference_session_id: str,
     ) -> V9ConfirmationScorerResult:
         """Execute one costly bundle through the protected local control plane."""
         if (
@@ -442,6 +443,7 @@ class DittobenchClient:
             ticket_id=job.ticket_id,
             agent_id=job.agent_id,
             slot_id=job.slot_id,
+            inference_session_id=inference_session_id,
             artifact_url=artifact.download_url,
             artifact_sha256=job.artifact_sha256,
             screened_image_url=artifact.screened_image_url,
@@ -564,6 +566,36 @@ class DittobenchClient:
             ) from error
         if response.status_code != 200:
             raise ValidatorInfrastructureError("inference broker activation rejected")
+
+    async def activate_confirmation_inference_session(
+        self,
+        session: InferenceBrokerSession,
+        *,
+        job: V9ConfirmationJobResponse,
+    ) -> None:
+        """Atomically install the three purpose-bound confirmation grants."""
+        payload = {
+            "activation_secret": session.activation_secret,
+            "agent_id": str(job.agent_id),
+            "slot_id": job.slot_id,
+            "ticket_deadline": job.deadline.isoformat(),
+            "grants": [grant.model_dump(mode="json") for grant in job.inference_grants],
+        }
+        try:
+            response = await self._client.post(
+                f"{self._config.dittobench_api_url}/v1/inference/session/"
+                f"{session.session_id}/activate-confirmation",
+                json=payload,
+                headers=self._control_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise ValidatorInfrastructureError(
+                f"confirmation inference broker activation failed: {error}"
+            ) from error
+        if response.status_code != 200:
+            raise ValidatorInfrastructureError(
+                "confirmation inference broker activation rejected"
+            )
 
     async def cancel_inference_session(self, session_id: str) -> None:
         """Best-effort deletion for pre-run failures and completed sessions."""

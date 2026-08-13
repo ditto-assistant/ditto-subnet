@@ -148,6 +148,58 @@
         ],
         "type": "object"
       },
+      "ConfirmationEmbeddingLaneProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "dimensions": {
+            "exclusiveMinimum": 0,
+            "maximum": 16384,
+            "type": "integer"
+          },
+          "lane": {
+            "const": "embedding",
+            "type": "string"
+          },
+          "max_cost_usd_micros": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_input_tokens": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_requests": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane",
+          "provider",
+          "profile_revision",
+          "model",
+          "dimensions",
+          "max_requests",
+          "max_input_tokens",
+          "max_cost_usd_micros"
+        ],
+        "type": "object"
+      },
       "ConfirmationProviderLaneProfile": {
         "additionalProperties": false,
         "properties": {
@@ -161,7 +213,7 @@
             "type": "integer"
           },
           "max_cost_usd_micros": {
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "max_prompt_tokens": {
@@ -190,11 +242,23 @@
             "maxLength": 128,
             "minLength": 1,
             "type": "string"
+          },
+          "receipt_provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "route_provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
           }
         },
         "required": [
           "lane",
           "provider",
+          "route_provider",
+          "receipt_provider",
           "profile_revision",
           "model",
           "max_requests",
@@ -257,6 +321,9 @@
       },
       "embedding_ablation": {
         "$ref": "#/$defs/ConfirmationAblationProfile"
+      },
+      "embedding_lane": {
+        "$ref": "#/$defs/ConfirmationEmbeddingLaneProfile"
       },
       "inference_ablation": {
         "$ref": "#/$defs/ConfirmationAblationProfile"
@@ -336,6 +403,7 @@
       "longmem_seed_batch_pairs",
       "longmem_projection_key_sha256",
       "provider_lanes",
+      "embedding_lane",
       "ablation_profile_revision",
       "ablation_profile_checksum",
       "ablation_dataset_sha256",
@@ -352,6 +420,10 @@
   "V9ConfirmationClaimRequest": {
     "additionalProperties": false,
     "properties": {
+      "broker_public_key": {
+        "pattern": "^[A-Za-z0-9_-]{43}=?$",
+        "type": "string"
+      },
       "nonce": {
         "format": "uuid",
         "type": "string"
@@ -391,6 +463,7 @@
       "slot_id",
       "profile_revision",
       "profile_checksum",
+      "broker_public_key",
       "nonce",
       "requested_at",
       "signature"
@@ -636,6 +709,58 @@
         ],
         "type": "object"
       },
+      "ConfirmationEmbeddingLaneProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "dimensions": {
+            "exclusiveMinimum": 0,
+            "maximum": 16384,
+            "type": "integer"
+          },
+          "lane": {
+            "const": "embedding",
+            "type": "string"
+          },
+          "max_cost_usd_micros": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_input_tokens": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_requests": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane",
+          "provider",
+          "profile_revision",
+          "model",
+          "dimensions",
+          "max_requests",
+          "max_input_tokens",
+          "max_cost_usd_micros"
+        ],
+        "type": "object"
+      },
       "ConfirmationExecutionProfile": {
         "additionalProperties": false,
         "properties": {
@@ -688,6 +813,9 @@
           },
           "embedding_ablation": {
             "$ref": "#/$defs/ConfirmationAblationProfile"
+          },
+          "embedding_lane": {
+            "$ref": "#/$defs/ConfirmationEmbeddingLaneProfile"
           },
           "inference_ablation": {
             "$ref": "#/$defs/ConfirmationAblationProfile"
@@ -767,6 +895,7 @@
           "longmem_seed_batch_pairs",
           "longmem_projection_key_sha256",
           "provider_lanes",
+          "embedding_lane",
           "ablation_profile_revision",
           "ablation_profile_checksum",
           "ablation_dataset_sha256",
@@ -777,6 +906,94 @@
           "inference_ablation",
           "embedding_ablation",
           "composite"
+        ],
+        "type": "object"
+      },
+      "ConfirmationInferenceGrantOffer": {
+        "additionalProperties": false,
+        "properties": {
+          "bearer": {
+            "maxLength": 128,
+            "minLength": 32,
+            "type": "string"
+          },
+          "cost_budget_microusd": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "generation": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "lane": {
+            "enum": [
+              "reader",
+              "judge",
+              "embedding"
+            ],
+            "type": "string"
+          },
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "profile_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "proxy_url": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "receipt_provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "request_budget": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "route_provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "token_budget": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane",
+          "grant_id",
+          "bearer",
+          "generation",
+          "proxy_url",
+          "model",
+          "provider",
+          "route_provider",
+          "receipt_provider",
+          "profile_revision",
+          "request_budget",
+          "token_budget",
+          "cost_budget_microusd",
+          "expires_at"
         ],
         "type": "object"
       },
@@ -793,7 +1010,7 @@
             "type": "integer"
           },
           "max_cost_usd_micros": {
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "max_prompt_tokens": {
@@ -822,11 +1039,23 @@
             "maxLength": 128,
             "minLength": 1,
             "type": "string"
+          },
+          "receipt_provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "route_provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
           }
         },
         "required": [
           "lane",
           "provider",
+          "route_provider",
+          "receipt_provider",
           "profile_revision",
           "model",
           "max_requests",
@@ -864,6 +1093,14 @@
       },
       "execution_profile": {
         "$ref": "#/$defs/ConfirmationExecutionProfile"
+      },
+      "inference_grants": {
+        "items": {
+          "$ref": "#/$defs/ConfirmationInferenceGrantOffer"
+        },
+        "maxItems": 3,
+        "minItems": 3,
+        "type": "array"
       },
       "mode": {
         "$ref": "#/$defs/ConfirmationBundleMode"
@@ -925,7 +1162,8 @@
       "mode",
       "per_bundle_request_cap",
       "per_bundle_token_cap",
-      "execution_profile"
+      "execution_profile",
+      "inference_grants"
     ],
     "type": "object"
   },

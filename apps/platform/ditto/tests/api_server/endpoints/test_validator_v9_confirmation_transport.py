@@ -456,12 +456,14 @@ def _claim_payload(
     checksum = profile_checksum or profile.checksum()
     claim_nonce = nonce or uuid4()
     claimed_at = requested_at or datetime.now(UTC)
+    broker_public_key = "A" * 43
     signature = keypair.sign(
         v9_confirmation_claim_signing_message(
             validator_hotkey=keypair.ss58_address,
             slot_id=slot_id,
             profile_revision=revision,
             profile_checksum=checksum,
+            broker_public_key=broker_public_key,
             nonce=claim_nonce,
             requested_at=claimed_at,
         )
@@ -471,6 +473,7 @@ def _claim_payload(
         slot_id=slot_id,
         profile_revision=revision,
         profile_checksum=checksum,
+        broker_public_key=broker_public_key,
         nonce=claim_nonce,
         requested_at=claimed_at,
         signature=signature,
@@ -1093,10 +1096,11 @@ class TestV9ConfirmationClaimAdmission:
         assert reservation.reservation_id == UUID(body["reservation_id"])
         assert ticket.deadline - ticket.issued_at == timedelta(minutes=90)
         assert bundle.state == "leased"
-        assert reservation.reserved_microusd == 200_000
+        # Reader, judge, and embedding caps are all reserved before execution.
+        assert reservation.reserved_microusd == 300_000
         assert reservation.state == "reserved"
         assert budget.issued_attempts == 1
-        assert budget.outstanding_reserved_microusd == 200_000
+        assert budget.outstanding_reserved_microusd == 300_000
         assert await _canonical_counts(session_maker, agent_id=seeded.agent_id) == (
             AgentStatus.SCORED,
             0,

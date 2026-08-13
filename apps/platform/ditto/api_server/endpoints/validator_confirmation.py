@@ -27,6 +27,7 @@ from ditto.api_models.confirmation_bundles import (
 from ditto.api_models.validator import ArtifactResponse
 from ditto.api_models.validator_confirmation import (
     ConfirmationExecutionProfile,
+    ConfirmationInferenceGrantOffer,
     V9ConfirmationClaimRequest,
     V9ConfirmationFailRequest,
     V9ConfirmationFailResponse,
@@ -83,6 +84,9 @@ from ditto.db.queries.confirmation_bundles import (
     reserve_confirmation_bundle_budget,
     settle_confirmation_bundle_budget,
 )
+from ditto.db.queries.confirmation_inference import (
+    ensure_confirmation_inference_grants,
+)
 from ditto.db.queries.confirmation_policy_lock import lock_confirmation_policy
 from ditto.db.queries.confirmation_ticket_recovery import (
     expire_overdue_confirmation_bundle_tickets,
@@ -111,6 +115,7 @@ def v9_confirmation_claim_signing_message(
     slot_id: str,
     profile_revision: str,
     profile_checksum: str,
+    broker_public_key: str,
     nonce: UUID,
     requested_at: datetime,
 ) -> bytes:
@@ -124,7 +129,7 @@ def v9_confirmation_claim_signing_message(
     return (
         "validator-v9-confirmation-claim:v1:"
         f"{validator_hotkey}:{slot_id}:{profile_revision}:{profile_checksum}:"
-        f"{nonce}:{requested}"
+        f"{broker_public_key.rstrip('=')}:{nonce}:{requested}"
     ).encode()
 
 
@@ -291,12 +296,49 @@ async def _job_response(
     reservation: ConfirmationBudgetReservation,
     settings: ConfirmationBundleSettings,
     profile: ConfirmationVerificationProfile,
+    broker_public_key: str,
+    proxy_base_url: str,
+    now: datetime,
 ) -> V9ConfirmationJobResponse:
     agent_id = await _subject_agent_id(session, bundle_id=bundle.bundle_id)
     if agent_id is None:
         raise ConfirmationBundlePersistenceError(
             "confirmation bundle has no attached base subject"
         )
+    grants = await ensure_confirmation_inference_grants(
+        session,
+        ticket=ticket,
+        broker_public_key=broker_public_key,
+        profile=profile,
+        now=now,
+    )
+    if len(grants) != 3:
+        raise ConfirmationBundlePersistenceError(
+            "confirmation ticket inference grants are not resumable"
+        )
+    offers = [
+        ConfirmationInferenceGrantOffer(
+            lane=grant.lane,
+            grant_id=grant.grant_id,
+            bearer=bearer,
+            generation=grant.generation,
+            proxy_url=(
+                f"{proxy_base_url}/api/v1/inference/confirmation/embeddings"
+                if grant.lane == "embedding"
+                else f"{proxy_base_url}/api/v1/inference/confirmation/chat/completions"
+            ),
+            model=grant.model,
+            provider=grant.provider,
+            route_provider=grant.route_provider,
+            receipt_provider=grant.receipt_provider,
+            profile_revision=grant.profile_revision,
+            request_budget=grant.request_budget,
+            token_budget=grant.token_budget,
+            cost_budget_microusd=grant.cost_budget_microusd,
+            expires_at=grant.expires_at,
+        )
+        for grant, bearer in grants
+    ]
     return V9ConfirmationJobResponse(
         purpose=_PURPOSE,
         bundle_id=bundle.bundle_id,
@@ -314,6 +356,7 @@ async def _job_response(
         per_bundle_request_cap=settings.per_bundle_request_cap,
         per_bundle_token_cap=settings.per_bundle_token_cap,
         execution_profile=_execution_profile(profile),
+        inference_grants=offers,
     )
 
 
@@ -337,6 +380,7 @@ async def _authenticate_claim(
         slot_id=payload.slot_id,
         profile_revision=payload.profile_revision,
         profile_checksum=payload.profile_checksum,
+        broker_public_key=payload.broker_public_key,
         nonce=payload.nonce,
         requested_at=payload.requested_at,
     )
@@ -463,6 +507,9 @@ async def request_v9_confirmation_job(
                     reservation=attempt.reservation,
                     settings=_settings(settings_row),
                     profile=profile,
+                    broker_public_key=payload.broker_public_key,
+                    proxy_base_url=request.app.state.config.inference_proxy.public_base_url,
+                    now=now,
                 )
 
             # New spend is governed by the latest effective global policy, not
@@ -550,8 +597,9 @@ async def request_v9_confirmation_job(
             ):
                 response.status_code = 204
                 return response
-            reserve_microusd = sum(
-                lane.max_cost_usd_micros for lane in profile.provider_lanes
+            reserve_microusd = (
+                sum(lane.max_cost_usd_micros for lane in profile.provider_lanes)
+                + profile.embedding_lane.max_cost_usd_micros
             )
             if reserve_microusd <= 0:
                 response.status_code = 204
@@ -594,6 +642,9 @@ async def request_v9_confirmation_job(
                 reservation=issued_attempt.reservation,
                 settings=settings,
                 profile=profile,
+                broker_public_key=payload.broker_public_key,
+                proxy_base_url=request.app.state.config.inference_proxy.public_base_url,
+                now=now,
             )
     except StaleConfirmationBudget as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

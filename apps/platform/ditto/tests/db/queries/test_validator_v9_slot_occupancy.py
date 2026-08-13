@@ -89,12 +89,14 @@ def _claim_payload(*, slot_id: str = "slot-0") -> V9ConfirmationClaimRequest:
     profile = verification_profile()
     nonce = uuid4()
     requested_at = datetime.now(UTC)
+    broker_public_key = "A" * 43
     signature = VALIDATOR_KEYPAIR.sign(
         v9_confirmation_claim_signing_message(
             validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
             slot_id=slot_id,
             profile_revision=profile.revision,
             profile_checksum=profile.checksum(),
+            broker_public_key=broker_public_key,
             nonce=nonce,
             requested_at=requested_at,
         )
@@ -104,6 +106,7 @@ def _claim_payload(*, slot_id: str = "slot-0") -> V9ConfirmationClaimRequest:
         slot_id=slot_id,
         profile_revision=profile.revision,
         profile_checksum=profile.checksum(),
+        broker_public_key=broker_public_key,
         nonce=nonce,
         requested_at=requested_at,
         signature=signature,

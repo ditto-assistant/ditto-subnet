@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +23,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/google/uuid"
 )
 
 type fakeConfirmationSandbox struct {
@@ -98,20 +101,37 @@ func TestScreenedAblationCaseRunnerUsesFreshScopedContainersAndZeroInterventionU
 	embedding := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		embeddingCalls.Add(1)
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(embeddingResponse{
-			Embeddings: [][]float64{make([]float64, embeddingDimensions)}, PromptEvalCount: 3,
-		})
+		response := platformEmbeddingResponse{}
+		response.Model = "perplexity/pplx-embed-v1-0.6b"
+		response.Data = append(response.Data, struct {
+			Index     int       `json:"index"`
+			Embedding []float64 `json:"embedding"`
+		}{Index: 0, Embedding: make([]float64, embeddingDimensions)})
+		response.Usage.PromptTokens, response.Usage.TotalTokens = 3, 3
+		_ = json.NewEncoder(writer).Encode(response)
 	}))
 	defer embedding.Close()
 
 	broker := newInferenceBroker(1, 1)
 	broker.embeddingURL = embedding.URL + embeddingAPIPath
 	sessionID, runID := "confirmation-runtime-test", "b881e493-7e8f-4a17-ab4e-24015fbb8c98"
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Hour)
 	session := &brokerSession{
-		id: sessionID, legacyGateway: provider.URL, expiresAt: time.Now().Add(time.Hour),
+		id: sessionID, privateKey: privateKey, legacyGateway: provider.URL, expiresAt: deadline,
 		expectedSourceIP: "127.0.0.1", provider: "test", model: model, requestModel: model,
 		profileRevision: "test", boundRunID: runID, benchVersion: confirmationBenchVersion,
-		confirmationSession: true, embeddingPhaseStarted: true, embeddingPhaseActive: true,
+		confirmationSession: true, confirmationGrants: map[string]brokerConfirmationGrant{
+			"embedding": {
+				Lane: "embedding", GrantID: "b881e493-7e8f-4a17-ab4e-24015fbb8c98", Bearer: "embedding-capability",
+				ProxyURL: embedding.URL, Generation: 1, ExpiresAt: deadline, Provider: "perplexity",
+				RouteProvider: "perplexity", ReceiptProvider: "Perplexity", ProfileRevision: "fixture-embedding-v1",
+				Model: "perplexity/pplx-embed-v1-0.6b", RequestBudget: 10, TokenBudget: 10_000, CostBudgetMicrousd: 10_000,
+			},
+		}, embeddingPhaseStarted: true, embeddingPhaseActive: true,
 		embeddingConcurrency: 1, embeddingCalls: make(map[chan struct{}]context.CancelFunc),
 		cancels: make(map[string]context.CancelFunc),
 	}
@@ -330,7 +350,7 @@ func TestConfirmationActivationIsExplicitAndContentAddressed(t *testing.T) {
 	}
 	directory := t.TempDir()
 	path := filepath.Join(directory, "confirmation.json")
-	raw := []byte(`{"schema_version":1,"execution_profile":{},"calibration_manifest_sha256":"` + strings.Repeat("a", 64) + `","calibration_manifest_path":"/calibration.json","longmem_dataset_path":"/dataset","ablation_dataset_path":"/ablation","longmem_projection_key_reference":{"project_id":"ditto-project","secret_id":"longmem-key","version":"1"},"ablation_selection_key_reference":{"project_id":"ditto-project","secret_id":"selection-key","version":"1"},"ablation_projection_key_reference":{"project_id":"ditto-project","secret_id":"projection-key","version":"1"},"provider_lanes":[],"sandbox_health_timeout_ms":1000}`)
+	raw := []byte(`{"schema_version":1,"execution_profile":{},"calibration_manifest_sha256":"` + strings.Repeat("a", 64) + `","calibration_manifest_path":"/calibration.json","longmem_dataset_path":"/dataset","ablation_dataset_path":"/ablation","longmem_projection_key_path":"/keys/longmem","ablation_selection_key_path":"/keys/selection","ablation_projection_key_path":"/keys/projection","sandbox_health_timeout_ms":1000}`)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -346,6 +366,89 @@ func TestConfirmationActivationIsExplicitAndContentAddressed(t *testing.T) {
 	}
 	if _, err := readConfirmationActivationFile(path, digestBytes(hostile)); err == nil {
 		t.Fatal("duplicate installation identity accepted")
+	}
+}
+
+func TestConfirmationFileKeyResolverIsContentAddressedAndDetectsDrift(t *testing.T) {
+	directory := t.TempDir()
+	values := [][]byte{
+		bytes.Repeat([]byte{0x11}, 32),
+		bytes.Repeat([]byte{0x22}, 32),
+		bytes.Repeat([]byte{0x33}, 32),
+	}
+	paths := make([]string, len(values))
+	for index, value := range values {
+		paths[index] = filepath.Join(directory, fmt.Sprintf("key-%d", index))
+		if err := os.WriteFile(paths[index], value, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := confirmationExecutionProfileWire{
+		LongMemProjectionKeySHA256:  digestBytes(values[0]),
+		AblationSelectionKeySHA256:  digestBytes(values[1]),
+		AblationProjectionKeySHA256: digestBytes(values[2]),
+	}
+	installation := confirmationActivationFile{
+		LongMemProjectionKeyPath: paths[0], AblationSelectionKeyPath: paths[1], AblationProjectionKeyPath: paths[2],
+	}
+	resolver, references, err := newConfirmationFileKeyResolver(installation, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, reference := range references {
+		resolved, err := resolver.Resolve(context.Background(), reference)
+		if err != nil || !bytes.Equal(resolved, values[index]) {
+			t.Fatalf("resolved key %d = %x, %v", index, resolved, err)
+		}
+		longmemeval.ZeroSecretBytes(resolved)
+	}
+	if err := os.WriteFile(paths[1], bytes.Repeat([]byte{0x44}, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := resolver.Resolve(context.Background(), references[1]); err == nil || resolved != nil {
+		t.Fatal("post-installation key drift was accepted")
+	}
+	if resolved, err := resolver.Resolve(context.Background(), confirmationFileKeyReference("unknown")); err == nil || resolved != nil {
+		t.Fatal("unknown local key reference was accepted")
+	}
+}
+
+func TestConfirmationFileKeyResolverRejectsUnsafeOrMismatchedFiles(t *testing.T) {
+	directory := t.TempDir()
+	validPath := filepath.Join(directory, "valid")
+	value := bytes.Repeat([]byte{0x55}, 32)
+	if err := os.WriteFile(validPath, value, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := confirmationExecutionProfileWire{
+		LongMemProjectionKeySHA256:  digestBytes(value),
+		AblationSelectionKeySHA256:  digestBytes(value),
+		AblationProjectionKeySHA256: digestBytes(value),
+	}
+	for name, path := range map[string]string{
+		"relative":     "relative-key",
+		"missing":      filepath.Join(directory, "missing"),
+		"undersized":   filepath.Join(directory, "undersized"),
+		"wrong digest": filepath.Join(directory, "wrong-digest"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if name == "undersized" {
+				if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if name == "wrong digest" {
+				if err := os.WriteFile(path, bytes.Repeat([]byte{0x66}, 32), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			installation := confirmationActivationFile{
+				LongMemProjectionKeyPath: path, AblationSelectionKeyPath: validPath, AblationProjectionKeyPath: validPath,
+			}
+			if resolver, _, err := newConfirmationFileKeyResolver(installation, profile); err == nil || resolver != nil {
+				t.Fatal("unsafe local key installation was accepted")
+			}
+		})
 	}
 }
 
@@ -495,12 +598,13 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	profile.LongMemProjectionKeySHA256 = digestBytes(longMemKey)
 	profile.ProviderLanes = []confirmationProviderLaneProfile{
 		{
-			Lane: longmemeval.JudgeLane, Provider: "openrouter",
+			Lane: longmemeval.JudgeLane, Provider: "openrouter", RouteProvider: "openai", ReceiptProvider: "OpenAI",
 			ProfileRevision: "longmemeval-official-gpt4o-openrouter-v1", Model: "openai/gpt-4o-2024-08-06",
 			MaxRequests: 10, MaxPromptTokens: 100, MaxCompletionTokens: 100, MaxTotalTokens: 200, MaxCostUSDmicros: 10_000,
 		},
 		{
-			Lane: longmemeval.ReaderLane, Provider: "openrouter", ProfileRevision: "fixture-reader-v1", Model: llm.HarnessModelForVersion(9),
+			Lane: longmemeval.ReaderLane, Provider: "openrouter", RouteProvider: "test", ReceiptProvider: "Test",
+			ProfileRevision: "fixture-reader-v1", Model: llm.HarnessModelForVersion(9),
 			MaxRequests: 10, MaxPromptTokens: 100, MaxCompletionTokens: 100, MaxTotalTokens: 200, MaxCostUSDmicros: 10_000,
 		},
 	}
@@ -515,7 +619,11 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	t.Cleanup(provider.Close)
 	embedding := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(embeddingResponse{Embeddings: [][]float64{make([]float64, embeddingDimensions)}})
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"model": profile.EmbeddingLane.Model,
+			"data":  []map[string]any{{"index": 0, "embedding": make([]float64, embeddingDimensions)}},
+			"usage": map[string]int{"prompt_tokens": 1, "total_tokens": 1},
+		})
 	}))
 	t.Cleanup(embedding.Close)
 	harness := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -528,26 +636,45 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	t.Cleanup(harness.Close)
 	broker := newInferenceBroker(2, 1)
 	broker.embeddingURL = embedding.URL + embeddingAPIPath
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Hour)
+	sessionID := "confirmation-session-fixture"
+	grant := func(lane, proxyURL, providerName, routeProvider, receiptProvider, revision, model string) brokerConfirmationGrant {
+		return brokerConfirmationGrant{
+			Lane: lane, GrantID: uuid.NewString(), Bearer: lane + "-capability", ProxyURL: proxyURL,
+			Generation: 1, ExpiresAt: deadline, Provider: providerName, RouteProvider: routeProvider,
+			ReceiptProvider: receiptProvider, ProfileRevision: revision, Model: model,
+			RequestBudget: 10_000, TokenBudget: 10_000_000, CostBudgetMicrousd: 10_000_000,
+		}
+	}
+	broker.sessions[sessionID] = &brokerSession{
+		id: sessionID, privateKey: privateKey, expiresAt: deadline, confirmationSession: true,
+		ticketAgentID: "agent", ticketSlotID: "slot-0", ticketDeadline: deadline,
+		confirmationGrants: map[string]brokerConfirmationGrant{
+			longmemeval.ReaderLane: grant(
+				longmemeval.ReaderLane, provider.URL+"/api/v1/chat/completions", "openrouter", "test", "Test",
+				"fixture-reader-v1", llm.HarnessModelForVersion(9),
+			),
+			longmemeval.JudgeLane: grant(
+				longmemeval.JudgeLane, provider.URL+"/api/v1/chat/completions", "openrouter", "openai", "OpenAI",
+				"longmemeval-official-gpt4o-openrouter-v1", "openai/gpt-4o-2024-08-06",
+			),
+			"embedding": grant(
+				"embedding", embedding.URL, profile.EmbeddingLane.Provider, profile.EmbeddingLane.Provider,
+				profile.EmbeddingLane.Provider, profile.EmbeddingLane.ProfileRevision, profile.EmbeddingLane.Model,
+			),
+		},
+		embeddingCalls: make(map[chan struct{}]context.CancelFunc), cancels: make(map[string]context.CancelFunc),
+	}
 	sandboxBackend := &fakeConfirmationSandbox{harnessURL: harness.URL}
 	resolver := &recordingConfirmationResolver{values: map[string][]byte{
 		"longmem-key": longMemKey, "selection-key": selectionKey, "projection-key": projectionKey,
 	}}
 	reference := func(secret string) longmemeval.SecretManagerReference {
-		return longmemeval.SecretManagerReference{ProjectID: "ditto-project", SecretID: secret, Version: "1"}
-	}
-	providerReference := reference("provider-key")
-	providerRuntime := longmemeval.ProviderRuntimeConfig{
-		Authorizer: noOpConfirmationAuthorizer{},
-		Lanes: []longmemeval.ProviderLaneRuntimeConfig{
-			{
-				Lane: longmemeval.JudgeLane, UpstreamURL: provider.URL + "/api/v1/chat/completions",
-				RouteProvider: "openai", ReceiptProvider: "OpenAI", CredentialReference: providerReference, RequestTimeout: time.Second,
-			},
-			{
-				Lane: longmemeval.ReaderLane, UpstreamURL: provider.URL + "/api/v1/chat/completions",
-				RouteProvider: "test", ReceiptProvider: "Test", CredentialReference: providerReference, RequestTimeout: time.Second,
-			},
-		},
+		return confirmationFileKeyReference(secret)
 	}
 	longMemFile, _, err := verifyConfirmationFile(longMemPath, 1024)
 	if err != nil {
@@ -570,19 +697,20 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 		longMemDataset: longMemFile, longMemProjectionKeyReference: reference("longmem-key"),
 		ablationFile: ablationFile, ablationDataset: dataset,
 		ablationSelectionKeyReference: reference("selection-key"), ablationProjectionKeyReference: reference("projection-key"),
-		secretResolver: resolver, providerRuntime: providerRuntime, healthTimeout: 5 * time.Millisecond,
+		secretResolver: resolver, healthTimeout: 5 * time.Millisecond,
+	}
+	identity := confirmationRuntimeIdentity{
+		BundleID: "bundle", TicketID: "ticket", AgentID: "agent", SlotID: "slot-0",
+		InferenceSessionID: sessionID, Deadline: deadline, ArtifactSHA256: strings.Repeat("a", 64),
+		Source: sandbox.Source{
+			TarballURL: "https://platform.example/artifact", TarballSHA256: strings.Repeat("a", 64),
+			ScreenedImageURL: "https://platform.example/image", ScreenedImageSHA256: strings.Repeat("b", 64),
+			ScreenedImageID: "sha256:" + strings.Repeat("c", 64), ScreenedImageRef: "screened@example", ScreenedImageSize: 1024,
+		},
 	}
 	return confirmationFactoryFixture{
 		factory: factory, sandbox: sandboxBackend, resolver: resolver,
-		identity: confirmationRuntimeIdentity{
-			BundleID: "bundle", TicketID: "ticket", AgentID: "agent", SlotID: "slot-0", Deadline: time.Now().Add(time.Hour),
-			ArtifactSHA256: strings.Repeat("a", 64),
-			Source: sandbox.Source{
-				TarballURL: "https://platform.example/artifact", TarballSHA256: strings.Repeat("a", 64),
-				ScreenedImageURL: "https://platform.example/image", ScreenedImageSHA256: strings.Repeat("b", 64),
-				ScreenedImageID: "sha256:" + strings.Repeat("c", 64), ScreenedImageRef: "screened@example", ScreenedImageSize: 1024,
-			},
-		},
+		identity:    identity,
 		longMemPath: longMemPath, ablationPath: ablationPath, calibrationPath: calibrationPath,
 		harness: harness, embedding: embedding, provider: provider,
 	}
@@ -664,8 +792,13 @@ func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *te
 			if runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity); err == nil || runtime != nil {
 				t.Fatal("partial lifecycle succeeded")
 			}
-			if !fixture.resolver.allReturnedZero() || len(fixture.factory.broker.sessions) != 0 {
-				t.Fatal("partial lifecycle retained keys or broker session")
+			wantSessions := 1
+			if name == "run failure" {
+				wantSessions = 0
+			}
+			if !fixture.resolver.allReturnedZero() || len(fixture.factory.broker.sessions) != wantSessions {
+				t.Fatalf("partial lifecycle retained keys or unexpected broker session count: got %d want %d",
+					len(fixture.factory.broker.sessions), wantSessions)
 			}
 			if name == "sandbox unavailable" && (fixture.resolver.calls != 0 || fixture.sandbox.builds != 0) {
 				t.Fatal("sandbox availability failure reached Secret Manager or build")
@@ -721,8 +854,8 @@ func TestConfirmationFactoryRejectsFileAndProviderDriftBeforeSecrets(t *testing.
 				t.Fatal(err)
 			}
 		},
-		"provider runtime": func(_ *testing.T, fixture *confirmationFactoryFixture) {
-			fixture.factory.providerRuntime.Lanes[0].RouteProvider = "wrong"
+		"key reference": func(_ *testing.T, fixture *confirmationFactoryFixture) {
+			fixture.factory.longMemProjectionKeyReference.ProjectID = "gcp-project"
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

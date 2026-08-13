@@ -13,6 +13,7 @@ from pydantic import BaseModel, ValidationError
 from ditto_screening_protocol.confirmation_transport import (
     ConfirmationAblationCoordinatorProfile,
     ConfirmationExecutionProfile,
+    ConfirmationInferenceGrantOffer,
     V9ConfirmationClaimRequest,
     V9ConfirmationFailRequest,
     V9ConfirmationJobResponse,
@@ -31,6 +32,79 @@ _PROFILE_FIXTURE_PATH = (
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _UUID = "10000000-0000-0000-0000-000000000001"
 _SHA = "a" * 64
+_BROKER_PUBLIC_KEY = "A" * 43
+
+
+def _inference_grant_payload(proxy_url: str) -> dict[str, Any]:
+    return {
+        "lane": "reader",
+        "grant_id": _UUID,
+        "bearer": "b" * 32,
+        "generation": 1,
+        "proxy_url": proxy_url,
+        "model": "openai/gpt-oss-20b",
+        "provider": "openrouter",
+        "route_provider": "openrouter",
+        "receipt_provider": "openrouter",
+        "profile_revision": "longmem-reader-v1",
+        "request_budget": 1,
+        "token_budget": 1,
+        "cost_budget_microusd": 1,
+        "expires_at": "2026-08-10T10:00:00Z",
+    }
+
+
+def _inference_grants() -> list[dict[str, Any]]:
+    grants = []
+    for lane, suffix, model in (
+        ("reader", 2, "openai/gpt-oss-20b"),
+        ("judge", 3, "openai/gpt-4o"),
+        ("embedding", 4, "perplexity/pplx-embed-v1"),
+    ):
+        grant = _inference_grant_payload(
+            "https://platform.example/api/v1/inference/proxy"
+        )
+        grant.update(
+            {
+                "lane": lane,
+                "grant_id": f"10000000-0000-0000-0000-{suffix:012d}",
+                "model": model,
+                "profile_revision": f"longmem-{lane}-v1",
+            }
+        )
+        grants.append(grant)
+    return grants
+
+
+@pytest.mark.parametrize(
+    "proxy_url",
+    [
+        "https://platform.example/api/v1/inference/chat/completions",
+        "http://localhost:8000/api/v1/inference/chat/completions",
+        "http://127.0.0.1:8000/api/v1/inference/chat/completions",
+        "http://[::1]:8000/api/v1/inference/chat/completions",
+    ],
+)
+def test_inference_grant_accepts_https_and_loopback_http(proxy_url: str) -> None:
+    grant = ConfirmationInferenceGrantOffer.model_validate(
+        _inference_grant_payload(proxy_url)
+    )
+    assert grant.proxy_url == proxy_url
+
+
+@pytest.mark.parametrize(
+    "proxy_url",
+    [
+        "http://platform.example/api/v1/inference/chat/completions",
+        "ftp://localhost/api/v1/inference/chat/completions",
+        "https:///missing-host",
+    ],
+)
+def test_inference_grant_rejects_non_tls_non_loopback_urls(proxy_url: str) -> None:
+    with pytest.raises(ValidationError, match="HTTPS or loopback HTTP"):
+        ConfirmationInferenceGrantOffer.model_validate(
+            _inference_grant_payload(proxy_url)
+        )
 
 
 def _execution_profile_payload() -> dict[str, Any]:
@@ -48,6 +122,7 @@ def _transport_cases() -> list[tuple[type[BaseModel], dict[str, Any], str]]:
                 "slot_id": "slot-0",
                 "profile_revision": "confirmation-v9",
                 "profile_checksum": _SHA,
+                "broker_public_key": _BROKER_PUBLIC_KEY,
                 "nonce": _UUID,
                 "requested_at": "2026-08-10T10:00:00Z",
                 "signature": "aa",
@@ -73,6 +148,7 @@ def _transport_cases() -> list[tuple[type[BaseModel], dict[str, Any], str]]:
                 "per_bundle_request_cap": 1,
                 "per_bundle_token_cap": 1,
                 "execution_profile": _execution_profile_payload(),
+                "inference_grants": _inference_grants(),
             },
             "deadline",
         ),
@@ -169,6 +245,7 @@ def test_transport_field_order_remains_wire_compatible() -> None:
         "slot_id",
         "profile_revision",
         "profile_checksum",
+        "broker_public_key",
         "nonce",
         "requested_at",
         "signature",
@@ -190,6 +267,7 @@ def test_transport_field_order_remains_wire_compatible() -> None:
         "per_bundle_request_cap",
         "per_bundle_token_cap",
         "execution_profile",
+        "inference_grants",
     )
 
 
@@ -200,6 +278,7 @@ def test_claim_json_bytes_preserve_declared_field_order() -> None:
         '{"validator_hotkey":"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",'
         '"slot_id":"slot-0","profile_revision":"confirmation-v9",'
         f'"profile_checksum":"{_SHA}",'
+        f'"broker_public_key":"{_BROKER_PUBLIC_KEY}",'
         f'"nonce":"{_UUID}","requested_at":"2026-08-10T10:00:00Z",'
         '"signature":"aa"}'
     )

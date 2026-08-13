@@ -1773,6 +1773,7 @@ class ValidatorWorker:
             if self._new_work_blocked(stop_requested, drain_requested):
                 return
             job = None
+            inference_session = None
 
             async def hand_back(
                 reason: Literal[
@@ -1801,10 +1802,17 @@ class ValidatorWorker:
                     )
 
             try:
+                # Prepare the trusted broker key before asking Platform for
+                # any provider capability.  The signed claim binds every
+                # reader, judge, and embedding bearer to this in-memory key;
+                # neither the validator process nor the sandbox ever receives
+                # its private half.
+                inference_session = await self._dittobench.prepare_inference_session()
                 job = await self._platform.request_v9_confirmation_job(
                     slot_id=slot_id,
                     profile_revision=readiness.profile_revision,
                     profile_checksum=readiness.profile_checksum,
+                    broker_public_key=inference_session.broker_public_key,
                 )
                 if job is None:
                     return
@@ -1824,10 +1832,15 @@ class ValidatorWorker:
                         "v9 confirmation lease cannot preserve its reporting margin"
                     )
 
+                await self._dittobench.activate_confirmation_inference_session(
+                    inference_session,
+                    job=job,
+                )
                 artifact = await self._platform.get_v9_confirmation_artifact(job)
                 result = await self._dittobench.execute_v9_confirmation(
                     job=job,
                     artifact=artifact,
+                    inference_session_id=inference_session.session_id,
                 )
                 if job.deadline <= datetime.now(UTC):
                     raise LeaseDeadlineError(
@@ -1892,6 +1905,11 @@ class ValidatorWorker:
                     slot_id,
                     error,
                 )
+            finally:
+                if inference_session is not None:
+                    await self._dittobench.cancel_inference_session(
+                        inference_session.session_id
+                    )
 
         heartbeat_stop = asyncio.Event()
 

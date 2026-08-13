@@ -116,17 +116,17 @@ def test_real_go_evidence_converts_and_rebuilds_confirmation_root() -> None:
     assert verified.ablations_complete is True
     assert verified.ablation_semantic_factor_bps == 0
     assert verified.root.totals.model_dump() == {
-        "request_count": 12,
-        "input_tokens": 1_200,
-        "output_tokens": 120,
-        "provider_cost_microusd": 12_345,
+        "request_count": 24,
+        "input_tokens": 2_200,
+        "output_tokens": 220,
+        "provider_cost_microusd": 22_345,
         "latency_ms": 4_765,
     }
     assert report.inference_ablation.latency_ms == 111
     assert report.embedding_ablation.latency_ms == 222
     assert verified.root.ablation_coordinator_latency_ms == 444
     assert verified.evidence_sha256 == (
-        "eb0daa39e43617bea27c0b6d7fd5409f33c15bf8fcf8549148ed59c6b7e0175f"
+        "1d99e2aafd3b1effd4179d966674087883496065514bdfb14b15551f8a68a824"
     )
 
 

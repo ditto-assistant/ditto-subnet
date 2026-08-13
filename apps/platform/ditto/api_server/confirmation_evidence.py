@@ -43,6 +43,8 @@ class ConfirmationEvidenceError(ValueError):
 class ProviderLanePolicy:
     lane: str
     provider: str
+    route_provider: str
+    receipt_provider: str
     profile_revision: str
     model: str
     max_requests: int
@@ -55,12 +57,51 @@ class ProviderLanePolicy:
         return {
             "lane": self.lane,
             "provider": self.provider,
+            "route_provider": self.route_provider,
+            "receipt_provider": self.receipt_provider,
             "profile_revision": self.profile_revision,
             "model": self.model,
             "max_requests": self.max_requests,
             "max_prompt_tokens": self.max_prompt_tokens,
             "max_completion_tokens": self.max_completion_tokens,
             "max_total_tokens": self.max_total_tokens,
+            "max_cost_usd_micros": self.max_cost_usd_micros,
+        }
+
+    def longmem_profile_payload(self) -> dict[str, str | int]:
+        """Return the stable research-profile shape consumed by Go.
+
+        Platform route and receipt identities are transport authority. They
+        are bound by the outer execution-profile checksum, while the existing
+        LongMem research checksum intentionally remains byte compatible with
+        the evaluator's provider-policy contract.
+        """
+        payload = self.payload()
+        payload.pop("route_provider")
+        payload.pop("receipt_provider")
+        return payload
+
+
+@dataclass(frozen=True)
+class EmbeddingLanePolicy:
+    lane: str
+    provider: str
+    profile_revision: str
+    model: str
+    dimensions: int
+    max_requests: int
+    max_input_tokens: int
+    max_cost_usd_micros: int
+
+    def payload(self) -> dict[str, str | int]:
+        return {
+            "lane": self.lane,
+            "provider": self.provider,
+            "profile_revision": self.profile_revision,
+            "model": self.model,
+            "dimensions": self.dimensions,
+            "max_requests": self.max_requests,
+            "max_input_tokens": self.max_input_tokens,
             "max_cost_usd_micros": self.max_cost_usd_micros,
         }
 
@@ -162,6 +203,7 @@ class ConfirmationVerificationProfile:
     longmem_seed_batch_pairs: int
     longmem_projection_key_sha256: str
     provider_lanes: tuple[ProviderLanePolicy, ...]
+    embedding_lane: EmbeddingLanePolicy
     ablation_profile_revision: str
     ablation_profile_checksum: str
     ablation_dataset_sha256: str
@@ -188,6 +230,7 @@ class ConfirmationVerificationProfile:
             "longmem_seed_batch_pairs": self.longmem_seed_batch_pairs,
             "longmem_projection_key_sha256": self.longmem_projection_key_sha256,
             "provider_lanes": [lane.payload() for lane in lanes],
+            "embedding_lane": self.embedding_lane.payload(),
             "ablation_profile_revision": self.ablation_profile_revision,
             "ablation_profile_checksum": self.ablation_profile_checksum,
             "ablation_dataset_sha256": self.ablation_dataset_sha256,
@@ -242,6 +285,7 @@ class ConfirmationVerificationProfile:
             raise ConfirmationEvidenceError(
                 "LongMem profile checksum does not bind its execution policy"
             )
+        _validate_embedding_policy(self.embedding_lane)
         _require_text(self.ablation_profile_revision, "ablation profile revision")
         for value, label in (
             (self.ablation_profile_checksum, "ablation profile checksum"),
@@ -290,7 +334,7 @@ class ConfirmationVerificationProfile:
                 "selector_revision": self.longmem_selector_revision,
                 "selection_seed": self.longmem_selection_seed,
                 "cases_per_capability": self.longmem_cases_per_capability,
-                "providers": [lane.payload() for lane in lanes],
+                "providers": [lane.longmem_profile_payload() for lane in lanes],
             }
         )
 
@@ -708,6 +752,8 @@ def _validate_provider_policy(policy: ProviderLanePolicy) -> None:
     for value, label in (
         (policy.lane, "provider lane"),
         (policy.provider, "provider"),
+        (policy.route_provider, "route provider"),
+        (policy.receipt_provider, "receipt provider"),
         (policy.profile_revision, "provider profile revision"),
         (policy.model, "provider model"),
     ):
@@ -730,6 +776,26 @@ def _validate_provider_policy(policy: ProviderLanePolicy) -> None:
         raise ConfirmationEvidenceError(
             f"provider lane {policy.lane!r} token cap is inconsistent"
         )
+
+
+def _validate_embedding_policy(policy: EmbeddingLanePolicy) -> None:
+    for value, label in (
+        (policy.lane, "embedding lane"),
+        (policy.provider, "embedding provider"),
+        (policy.profile_revision, "embedding profile revision"),
+        (policy.model, "embedding model"),
+    ):
+        _require_text(value, label)
+    if policy.lane != "embedding":
+        raise ConfirmationEvidenceError("embedding lane identity is invalid")
+    if not 0 < policy.dimensions <= 16_384:
+        raise ConfirmationEvidenceError("embedding dimensions are invalid")
+    if (
+        policy.max_requests <= 0
+        or policy.max_input_tokens <= 0
+        or policy.max_cost_usd_micros <= 0
+    ):
+        raise ConfirmationEvidenceError("embedding lane caps are invalid")
 
 
 def _validate_ablation_policy(
@@ -871,6 +937,7 @@ __all__ = [
     "CompositeVerificationPolicy",
     "ConfirmationEvidenceError",
     "ConfirmationVerificationProfile",
+    "EmbeddingLanePolicy",
     "LONGMEM_SELECTOR_REVISION_V1",
     "ProviderLanePolicy",
     "SubjectProjection",

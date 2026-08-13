@@ -43,6 +43,7 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitResponse,
 )
 from ditto.validator import worker as worker_module
+from ditto.validator.dittobench import InferenceBrokerSession
 from ditto.validator.errors import DittobenchError, PlatformError
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
@@ -65,11 +66,24 @@ from ditto_screening_protocol.confirmation_wire import (
 )
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+_CONFIRMATION_SESSION = InferenceBrokerSession(
+    session_id="confirmation-session-transport",
+    activation_secret="s" * 32,
+    broker_public_key="A" * 43,
+)
 _BUNDLE_ID = UUID("10000000-0000-0000-0000-000000000001")
 _TICKET_ID = UUID("20000000-0000-0000-0000-000000000002")
 _RESERVATION_ID = UUID("30000000-0000-0000-0000-000000000003")
 _AGENT_ID = UUID("40000000-0000-0000-0000-000000000004")
 _NONCE = UUID("50000000-0000-0000-0000-000000000005")
+
+
+def _configure_confirmation_session(dittobench: MagicMock) -> None:
+    dittobench.prepare_inference_session = AsyncMock(return_value=_CONFIRMATION_SESSION)
+    dittobench.activate_confirmation_inference_session = AsyncMock()
+    dittobench.cancel_inference_session = AsyncMock()
+
+
 _REQUESTED_AT = datetime(
     2026,
     8,
@@ -80,6 +94,7 @@ _REQUESTED_AT = datetime(
     123456,
     tzinfo=timezone(timedelta(hours=-4)),
 )
+_BROKER_PUBLIC_KEY = "A" * 43
 _DEADLINE = datetime(2026, 8, 9, 1, 2, 3, 456789, tzinfo=timezone(timedelta(hours=2)))
 _ARTIFACT_SHA = "a" * 64
 _PROFILE_REVISION = "confirmation-v9-2026-08-08"
@@ -121,9 +136,11 @@ def _execution_profile() -> dict[str, Any]:
         "longmem_projection_key_sha256": "e" * 64,
         "provider_lanes": [
             {
-                "lane": "longmem-primary",
+                "lane": lane,
                 "provider": "trusted-provider",
-                "profile_revision": "provider-profile-v1",
+                "route_provider": "openai",
+                "receipt_provider": "OpenAI",
+                "profile_revision": f"{lane}-profile-v1",
                 "model": "openai/gpt-oss-20b",
                 "max_requests": 9,
                 "max_prompt_tokens": 10_000,
@@ -131,7 +148,18 @@ def _execution_profile() -> dict[str, Any]:
                 "max_total_tokens": 12_000,
                 "max_cost_usd_micros": 42_000,
             }
+            for lane in ("reader", "judge")
         ],
+        "embedding_lane": {
+            "lane": "embedding",
+            "provider": "perplexity",
+            "profile_revision": "embedding-profile-v1",
+            "model": "perplexity/pplx-embed-v1-0.6b",
+            "dimensions": 768,
+            "max_requests": 100,
+            "max_input_tokens": 100_000,
+            "max_cost_usd_micros": 50_000,
+        },
         "ablation_profile_revision": "ablation-profile-v1",
         "ablation_profile_checksum": "01" * 32,
         "ablation_dataset_sha256": "02" * 32,
@@ -186,6 +214,32 @@ def _job_payload() -> dict[str, Any]:
         "per_bundle_request_cap": 100,
         "per_bundle_token_cap": 250_000,
         "execution_profile": _execution_profile(),
+        "inference_grants": [
+            {
+                "lane": lane,
+                "grant_id": str(UUID(int=index + 10)),
+                "bearer": f"grant-{lane}-" + ("x" * 32),
+                "generation": 1,
+                "proxy_url": (
+                    "https://platform.test/api/v1/inference/confirmation/"
+                    + ("embeddings" if lane == "embedding" else "chat/completions")
+                ),
+                "expires_at": _DEADLINE.isoformat(),
+                "model": (
+                    "perplexity/pplx-embed-v1-0.6b"
+                    if lane == "embedding"
+                    else "openai/gpt-oss-20b"
+                ),
+                "provider": "perplexity" if lane == "embedding" else "trusted-provider",
+                "route_provider": "perplexity" if lane == "embedding" else "openai",
+                "receipt_provider": "perplexity" if lane == "embedding" else "OpenAI",
+                "profile_revision": f"{lane}-profile-v1",
+                "request_budget": 100,
+                "token_budget": 250_000,
+                "cost_budget_microusd": 50_000,
+            }
+            for index, lane in enumerate(("reader", "judge", "embedding"))
+        ],
     }
 
 
@@ -340,6 +394,7 @@ def test_claim_signing_domain_is_byte_exact_and_normalizes_to_utc() -> None:
         slot_id="slot-3",
         profile_revision=_PROFILE_REVISION,
         profile_checksum=_PROFILE_CHECKSUM,
+        broker_public_key=_BROKER_PUBLIC_KEY,
         nonce=_NONCE,
         requested_at=_REQUESTED_AT,
     )
@@ -349,7 +404,7 @@ def test_claim_signing_domain_is_byte_exact_and_normalizes_to_utc() -> None:
         == (
             "validator-v9-confirmation-claim:v1:"
             f"{_HOTKEY}:slot-3:{_PROFILE_REVISION}:{_PROFILE_CHECKSUM}:"
-            f"{_NONCE}:2026-08-08T17:14:15.123456Z"
+            f"{_BROKER_PUBLIC_KEY}:{_NONCE}:2026-08-08T17:14:15.123456Z"
         ).encode()
     )
 
@@ -639,6 +694,7 @@ def test_claim_signature_rejects_each_field_tamper(field: str, tampered: Any) ->
         "slot_id": "slot-3",
         "profile_revision": _PROFILE_REVISION,
         "profile_checksum": _PROFILE_CHECKSUM,
+        "broker_public_key": _BROKER_PUBLIC_KEY,
         "nonce": _NONCE,
         "requested_at": _REQUESTED_AT,
     }
@@ -648,6 +704,7 @@ def test_claim_signature_rejects_each_field_tamper(field: str, tampered: Any) ->
         slot_id="slot-3",
         profile_revision=_PROFILE_REVISION,
         profile_checksum=_PROFILE_CHECKSUM,
+        broker_public_key=_BROKER_PUBLIC_KEY,
         nonce=_NONCE,
         requested_at=_REQUESTED_AT,
     )
@@ -659,6 +716,7 @@ def test_claim_signature_rejects_each_field_tamper(field: str, tampered: Any) ->
             slot_id=cast(str, values["slot_id"]),
             profile_revision=cast(str, values["profile_revision"]),
             profile_checksum=cast(str, values["profile_checksum"]),
+            broker_public_key=cast(str, values["broker_public_key"]),
             nonce=cast(UUID, values["nonce"]),
             requested_at=cast(datetime, values["requested_at"]),
         ),
@@ -784,6 +842,7 @@ def test_bundle_signature_rejects_each_field_tamper(field: str, tampered: Any) -
                 "slot_id": "slot-3",
                 "profile_revision": _PROFILE_REVISION,
                 "profile_checksum": _PROFILE_CHECKSUM,
+                "broker_public_key": _BROKER_PUBLIC_KEY,
                 "nonce": _NONCE,
                 "requested_at": _REQUESTED_AT.replace(tzinfo=None),
             },
@@ -945,11 +1004,13 @@ async def test_claim_uses_exact_private_route_headers_and_signed_profile() -> No
         assert claim.slot_id == "slot-3"
         assert claim.profile_revision == _PROFILE_REVISION
         assert claim.profile_checksum == _PROFILE_CHECKSUM
+        assert claim.broker_public_key == _BROKER_PUBLIC_KEY
         message = v9_confirmation_claim_signing_message(
             validator_hotkey=claim.validator_hotkey,
             slot_id=claim.slot_id,
             profile_revision=claim.profile_revision,
             profile_checksum=claim.profile_checksum,
+            broker_public_key=claim.broker_public_key,
             nonce=claim.nonce,
             requested_at=claim.requested_at,
         )
@@ -962,6 +1023,7 @@ async def test_claim_uses_exact_private_route_headers_and_signed_profile() -> No
             slot_id="slot-3",
             profile_revision=_PROFILE_REVISION,
             profile_checksum=_PROFILE_CHECKSUM,
+            broker_public_key=_BROKER_PUBLIC_KEY,
         )
 
     assert job is not None
@@ -984,6 +1046,7 @@ async def test_claim_returns_none_on_204_without_parsing_a_body() -> None:
             slot_id="slot-0",
             profile_revision=_PROFILE_REVISION,
             profile_checksum=_PROFILE_CHECKSUM,
+            broker_public_key=_BROKER_PUBLIC_KEY,
         )
 
     assert result is None
@@ -1040,6 +1103,7 @@ async def test_claim_rejects_malformed_or_requested_identity_mismatched_job(
                 slot_id="slot-3",
                 profile_revision=_PROFILE_REVISION,
                 profile_checksum=_PROFILE_CHECKSUM,
+                broker_public_key=_BROKER_PUBLIC_KEY,
             )
 
 
@@ -1062,12 +1126,14 @@ async def test_claim_rejects_invalid_json_and_http_rejection() -> None:
                 slot_id="slot-3",
                 profile_revision=_PROFILE_REVISION,
                 profile_checksum=_PROFILE_CHECKSUM,
+                broker_public_key=_BROKER_PUBLIC_KEY,
             )
         with pytest.raises(PlatformError, match=r"claim rejected \(409\)"):
             await client.request_v9_confirmation_job(
                 slot_id="slot-3",
                 profile_revision=_PROFILE_REVISION,
                 profile_checksum=_PROFILE_CHECKSUM,
+                broker_public_key=_BROKER_PUBLIC_KEY,
             )
 
 
@@ -1474,6 +1540,7 @@ async def test_v9_flow_never_invokes_legacy_top5_or_canonical_artifact_methods()
                 slot_id="slot-3",
                 profile_revision=_PROFILE_REVISION,
                 profile_checksum=_PROFILE_CHECKSUM,
+                broker_public_key=_BROKER_PUBLIC_KEY,
             )
             assert job is not None
             await client.get_v9_confirmation_artifact(job)
@@ -1506,6 +1573,7 @@ async def test_worker_independently_rebuilds_every_signed_root_field(
     platform.submit_v9_confirmation_report = AsyncMock()
     platform.fail_v9_confirmation_job = AsyncMock()
     dittobench = MagicMock()
+    _configure_confirmation_session(dittobench)
     dittobench.v9_confirmation_readiness = AsyncMock(
         return_value=V9ConfirmationScorerReadiness(
             ready=True,
@@ -1576,10 +1644,10 @@ async def test_worker_independently_rebuilds_every_signed_root_field(
     assert rebuilt_root.inference_ablation == prepared.inference_ablation
     assert rebuilt_root.embedding_ablation == prepared.embedding_ablation
     assert rebuilt_root.totals.model_dump() == {
-        "request_count": 12,
-        "input_tokens": 1_200,
-        "output_tokens": 120,
-        "provider_cost_microusd": 12_345,
+        "request_count": 24,
+        "input_tokens": 2_200,
+        "output_tokens": 220,
+        "provider_cost_microusd": 22_345,
         "latency_ms": 4_358,
     }
     signing_spy.assert_called_once()
@@ -1739,6 +1807,7 @@ async def test_worker_rejects_platform_root_tampering_before_sign_or_submit(
     platform.submit_v9_confirmation_report = AsyncMock()
     platform.fail_v9_confirmation_job = AsyncMock()
     dittobench = MagicMock()
+    _configure_confirmation_session(dittobench)
     dittobench.v9_confirmation_readiness = AsyncMock(
         return_value=V9ConfirmationScorerReadiness(
             ready=True,
@@ -1802,6 +1871,7 @@ async def test_worker_hands_private_failure_back_with_typed_reason(
     platform.fail_v9_confirmation_job = AsyncMock()
     platform.submit_v9_confirmation_report = AsyncMock()
     dittobench = MagicMock()
+    _configure_confirmation_session(dittobench)
     dittobench.v9_confirmation_readiness = AsyncMock(
         return_value=V9ConfirmationScorerReadiness(
             ready=True,
@@ -1852,6 +1922,7 @@ async def test_worker_cancellation_hands_back_then_reraises() -> None:
     )
     platform.fail_v9_confirmation_job = AsyncMock()
     dittobench = MagicMock()
+    _configure_confirmation_session(dittobench)
     dittobench.v9_confirmation_readiness = AsyncMock(
         return_value=V9ConfirmationScorerReadiness(
             ready=True,

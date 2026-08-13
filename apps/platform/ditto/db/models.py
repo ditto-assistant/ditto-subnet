@@ -4858,6 +4858,150 @@ class ConfirmationBundleTicket(Base):
     )
 
 
+class ConfirmationInferenceGrant(Base):
+    """One purpose-bound provider capability for a confirmation ticket.
+
+    Confirmation deliberately has its own ledger instead of weakening the hot
+    ordinary ``inference_grants`` table with nullable foreign keys.  The lane is
+    part of the durable identity: a reader bearer can never authorize the
+    official judge or the embedding service.
+    """
+
+    __tablename__ = "confirmation_inference_grants"
+
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    ticket_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bundle_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    lane: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    bearer_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    broker_public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    route_provider: Mapped[str] = mapped_column(Text, nullable=False)
+    receipt_provider: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_revision: Mapped[str] = mapped_column(Text, nullable=False)
+    request_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_budget: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_budget_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    active_requests: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ticket_id", "bundle_id"],
+            [
+                "confirmation_bundle_tickets.ticket_id",
+                "confirmation_bundle_tickets.bundle_id",
+            ],
+            ondelete="CASCADE",
+            name="confirmation_inference_grants_ticket_fkey",
+        ),
+        UniqueConstraint(
+            "ticket_id", "lane", name="confirmation_inference_grants_ticket_lane_key"
+        ),
+        CheckConstraint(
+            "lane IN ('reader', 'judge', 'embedding')",
+            name="confirmation_inference_grants_lane_check",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'revoked', 'exhausted')",
+            name="confirmation_inference_grants_status_check",
+        ),
+        CheckConstraint(
+            "request_budget > 0 AND token_budget > 0 AND cost_budget_microusd > 0",
+            name="confirmation_inference_grants_budget_check",
+        ),
+        CheckConstraint(
+            "request_count >= 0 AND prompt_tokens >= 0 "
+            "AND completion_tokens >= 0 AND cost_microusd >= 0 "
+            "AND active_requests >= 0",
+            name="confirmation_inference_grants_accounting_check",
+        ),
+        CheckConstraint(
+            "generation > 0", name="confirmation_inference_grants_generation_check"
+        ),
+        Index("confirmation_inference_grants_expiry_idx", "expires_at"),
+    )
+
+
+class ConfirmationInferenceRequest(Base):
+    """Replay-safe accounting for one confirmation provider request."""
+
+    __tablename__ = "confirmation_inference_requests"
+
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="started")
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_chargeable_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    upstream_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint("grant_id", "nonce"),
+        ForeignKeyConstraint(
+            ["grant_id"],
+            ["confirmation_inference_grants.grant_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "status IN ('started', 'completed', 'failed', 'canceled')",
+            name="confirmation_inference_requests_status_check",
+        ),
+        CheckConstraint(
+            "generation > 0 AND reserved_tokens > 0 "
+            "AND max_chargeable_tokens >= reserved_tokens",
+            name="confirmation_inference_requests_reservation_check",
+        ),
+        CheckConstraint(
+            "prompt_tokens >= 0 AND completion_tokens >= 0 AND cost_microusd >= 0",
+            name="confirmation_inference_requests_accounting_check",
+        ),
+        Index("confirmation_inference_requests_started_idx", "started_at"),
+    )
+
+
 class ConfirmationDimensionEvidence(Base):
     """Immutable typed evidence envelope for one shared bundle dimension."""
 

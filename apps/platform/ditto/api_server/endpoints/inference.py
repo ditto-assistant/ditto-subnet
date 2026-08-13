@@ -82,6 +82,11 @@ from ditto.api_server.inference_routing import (
     benchmark_reasoning,
     record_route_observation,
 )
+from ditto.db.queries.confirmation_inference import (
+    ConfirmationInferenceDecline,
+    begin_confirmation_inference_request,
+    finish_confirmation_inference_request,
+)
 from ditto.db.queries.inference import (
     InferenceDecline,
     activate_inference_grant,
@@ -2109,6 +2114,366 @@ async def proxy_embeddings(
             )
     if not deliverable or raw is None:
         raise HTTPException(status_code=409, detail="embedding grant is no longer live")
+    return Response(
+        content=raw,
+        status_code=200,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _confirmation_proof_headers(
+    *,
+    grant: Any,
+    generation: int,
+    proof: str,
+    grant_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+    body: bytes,
+) -> None:
+    if grant.broker_public_key is None or grant.generation != generation:
+        raise HTTPException(status_code=401, detail="invalid confirmation proof")
+    try:
+        decoded = base64.urlsafe_b64decode(proof + "=" * (-len(proof) % 4))
+        _decode_public_key(grant.broker_public_key).verify(
+            decoded,
+            _proxy_message(
+                grant_id=grant_id,
+                generation=generation,
+                nonce=nonce,
+                requested_at=requested_at,
+                body=body,
+            ),
+        )
+    except (ValueError, InvalidSignature) as error:
+        raise HTTPException(
+            status_code=401, detail="invalid confirmation proof"
+        ) from error
+
+
+def _confirmation_headers(
+    *,
+    grant: UUID | None,
+    generation: int | None,
+    nonce: UUID | None,
+    requested_at: datetime | None,
+    proof: str | None,
+    authorization: str | None,
+) -> tuple[UUID, int, UUID, datetime, str, str]:
+    if (
+        grant is None
+        or generation is None
+        or nonce is None
+        or requested_at is None
+        or proof is None
+        or authorization is None
+        or not authorization.startswith("Bearer ")
+    ):
+        raise HTTPException(status_code=401, detail="missing confirmation proof")
+    if abs(datetime.now(UTC) - requested_at.astimezone(UTC)) > _PROXY_MAX_AGE:
+        raise HTTPException(status_code=409, detail="confirmation request is stale")
+    return (
+        grant,
+        generation,
+        nonce,
+        requested_at,
+        proof,
+        authorization.removeprefix("Bearer "),
+    )
+
+
+def _locked_confirmation_chat_payload(
+    payload: Any, *, grant: Any, max_output_tokens: int
+) -> tuple[dict[str, Any], int]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid confirmation request")
+    provider = payload.get("provider")
+    expected_provider = {
+        "only": [grant.route_provider],
+        "order": [grant.route_provider],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+    }
+    if provider != expected_provider:
+        raise HTTPException(
+            status_code=403, detail="confirmation route is not permitted"
+        )
+    without_provider = {
+        key: value for key, value in payload.items() if key != "provider"
+    }
+    _validate_request_schema(without_provider)
+    if without_provider.get("model") != grant.model:
+        raise HTTPException(
+            status_code=403, detail="confirmation model is not permitted"
+        )
+    max_tokens = _output_token_limit(without_provider, max_output_tokens)
+    upstream = dict(without_provider)
+    upstream["model"] = grant.model
+    upstream["max_tokens"] = max_tokens
+    upstream.pop("max_completion_tokens", None)
+    upstream["n"] = 1
+    upstream["stream"] = False
+    upstream["provider"] = {**expected_provider, "zdr": True}
+    upstream["usage"] = {"include": True}
+    return upstream, max_tokens
+
+
+@router.post("/confirmation/chat/completions")
+async def proxy_confirmation_chat_completions(
+    request: Request,
+    x_ditto_grant: Annotated[UUID | None, Header()] = None,
+    x_ditto_generation: Annotated[int | None, Header()] = None,
+    x_ditto_nonce: Annotated[UUID | None, Header()] = None,
+    x_ditto_requested_at: Annotated[datetime | None, Header()] = None,
+    x_ditto_proof: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> Response:
+    """Serve one reader or judge call under its ticket-purpose capability."""
+    config = request.app.state.config.inference_proxy
+    if not config.enabled or config.openrouter_api_key is None:
+        raise HTTPException(status_code=404, detail="confirmation proxy is disabled")
+    grant_id, generation, nonce, requested_at, proof, bearer = _confirmation_headers(
+        grant=x_ditto_grant,
+        generation=x_ditto_generation,
+        nonce=x_ditto_nonce,
+        requested_at=x_ditto_requested_at,
+        proof=x_ditto_proof,
+        authorization=authorization,
+    )
+    body = await request.body()
+    if len(body) > config.request_body_bytes:
+        raise HTTPException(status_code=413, detail="confirmation request is too large")
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise HTTPException(status_code=400, detail="invalid JSON request") from error
+
+    session_maker = request.app.state.session_maker
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        from ditto.db.models import ConfirmationInferenceGrant
+
+        grant = await session.get(ConfirmationInferenceGrant, grant_id)
+        if grant is None or grant.lane not in {"reader", "judge"}:
+            raise HTTPException(status_code=401, detail="invalid confirmation proof")
+        _confirmation_proof_headers(
+            grant=grant,
+            generation=generation,
+            proof=proof,
+            grant_id=grant_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            body=body,
+        )
+        upstream, max_tokens = _locked_confirmation_chat_payload(
+            payload, grant=grant, max_output_tokens=config.max_output_tokens
+        )
+        reserved = await begin_confirmation_inference_request(
+            session,
+            grant_id=grant_id,
+            nonce=nonce,
+            bearer=bearer,
+            model=grant.model,
+            token_reservation=max_tokens + _estimated_tokens(body),
+            max_chargeable_tokens=_max_chargeable_tokens(
+                body, output_tokens=max_tokens
+            ),
+            now=now,
+        )
+        if isinstance(reserved, ConfirmationInferenceDecline):
+            raise HTTPException(
+                status_code=429, detail=f"confirmation inference declined: {reserved}"
+            )
+        generation = reserved[0].generation
+        expected_provider = reserved[0].receipt_provider
+        expected_model = reserved[0].model
+
+    status = "failed"
+    prompt_tokens = completion_tokens = cost_microusd = 0
+    receipt_provider: str | None = None
+    raw: bytes | None = None
+    try:
+        result = await _post_provider_with_retry(
+            request.app.state.inference_client,
+            config.upstream_url,
+            payload=upstream,
+            headers=_openrouter_headers(
+                config.openrouter_api_key, include_metadata=True
+            ),
+            retry_backpressure=False,
+        )
+        if result.response.status_code >= 400:
+            raise HTTPException(
+                status_code=502, detail="confirmation provider unavailable"
+            )
+        if len(result.response.content) > config.response_body_bytes:
+            raise HTTPException(
+                status_code=502, detail="confirmation response is too large"
+            )
+        decoded = result.response.json()
+        if not isinstance(decoded, dict) or decoded.get("model") != expected_model:
+            raise HTTPException(status_code=502, detail="provider identity mismatch")
+        receipt_provider = _upstream_provider(decoded)
+        usage = _bounded_usage(decoded)
+        cost_microusd = _bounded_provider_cost(decoded) or -1
+        if receipt_provider != expected_provider or usage is None or cost_microusd < 0:
+            raise HTTPException(status_code=502, detail="provider identity mismatch")
+        prompt_tokens, completion_tokens, _ = usage
+        trusted = _public_provider_response(decoded)
+        trusted["provider"] = receipt_provider
+        trusted_usage = trusted["usage"]
+        assert isinstance(trusted_usage, dict)
+        trusted_usage["cost"] = cost_microusd / 1_000_000
+        raw = json.dumps(trusted, separators=(",", ":")).encode()
+        status = "completed"
+    except ValueError as error:
+        raise HTTPException(
+            status_code=502, detail="invalid provider response"
+        ) from error
+    finally:
+        async with session_maker() as session, session.begin():
+            deliverable = await finish_confirmation_inference_request(
+                session,
+                grant_id=grant_id,
+                nonce=nonce,
+                generation=generation,
+                status=status,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cost_microusd=max(0, cost_microusd),
+                upstream_provider=receipt_provider,
+                now=datetime.now(UTC),
+            )
+    if not deliverable or raw is None:
+        raise HTTPException(
+            status_code=409, detail="confirmation grant is no longer live"
+        )
+    return Response(
+        content=raw,
+        status_code=200,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/confirmation/embeddings")
+async def proxy_confirmation_embeddings(
+    request: Request,
+    x_ditto_grant: Annotated[UUID | None, Header()] = None,
+    x_ditto_generation: Annotated[int | None, Header()] = None,
+    x_ditto_nonce: Annotated[UUID | None, Header()] = None,
+    x_ditto_requested_at: Annotated[datetime | None, Header()] = None,
+    x_ditto_proof: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> Response:
+    """Serve the frozen LongMem embedding space under a separate capability."""
+    config = request.app.state.config.inference_proxy
+    if not config.enabled or config.openrouter_api_key is None:
+        raise HTTPException(status_code=404, detail="confirmation proxy is disabled")
+    grant_id, generation, nonce, requested_at, proof, bearer = _confirmation_headers(
+        grant=x_ditto_grant,
+        generation=x_ditto_generation,
+        nonce=x_ditto_nonce,
+        requested_at=x_ditto_requested_at,
+        proof=x_ditto_proof,
+        authorization=authorization,
+    )
+    body = await request.body()
+    if len(body) > config.embedding_request_body_bytes:
+        raise HTTPException(status_code=413, detail="embedding request is too large")
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise HTTPException(status_code=400, detail="invalid JSON request") from error
+    inputs = _validated_embedding_payload(
+        payload, model=config.embedding_model, dimensions=config.embedding_dimensions
+    )
+    session_maker = request.app.state.session_maker
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        from ditto.db.models import ConfirmationInferenceGrant
+
+        grant = await session.get(ConfirmationInferenceGrant, grant_id)
+        if (
+            grant is None
+            or grant.lane != "embedding"
+            or grant.model != config.embedding_model
+            or grant.provider != config.embedding_provider
+        ):
+            raise HTTPException(status_code=401, detail="invalid confirmation proof")
+        _confirmation_proof_headers(
+            grant=grant,
+            generation=generation,
+            proof=proof,
+            grant_id=grant_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            body=body,
+        )
+        reserved = await begin_confirmation_inference_request(
+            session,
+            grant_id=grant_id,
+            nonce=nonce,
+            bearer=bearer,
+            model=grant.model,
+            token_reservation=_estimated_tokens(body),
+            max_chargeable_tokens=_max_chargeable_tokens(body),
+            now=now,
+        )
+        if isinstance(reserved, ConfirmationInferenceDecline):
+            raise HTTPException(
+                status_code=429, detail=f"confirmation embedding declined: {reserved}"
+            )
+        generation = reserved[0].generation
+        expected_provider = reserved[0].receipt_provider
+
+    status = "failed"
+    prompt_tokens = 0
+    raw: bytes | None = None
+    try:
+        provider_result = await _post_embedding_provider(
+            request.app.state.inference_client, config=config, inputs=inputs
+        )
+        upstream = provider_result.response
+        if upstream.status_code >= 400:
+            raise HTTPException(
+                status_code=502, detail="embedding provider unavailable"
+            )
+        decoded = upstream.json()
+        if provider_result.direct:
+            decoded = _perplexity_embedding_response(decoded)
+        public, prompt_tokens = _public_embedding_response(
+            decoded,
+            model=config.embedding_model,
+            dimensions=config.embedding_dimensions,
+            input_count=len(inputs),
+        )
+        raw = json.dumps(public, separators=(",", ":")).encode()
+        status = "completed"
+    except ValueError as error:
+        raise HTTPException(
+            status_code=502, detail="invalid provider response"
+        ) from error
+    finally:
+        async with session_maker() as session, session.begin():
+            deliverable = await finish_confirmation_inference_request(
+                session,
+                grant_id=grant_id,
+                nonce=nonce,
+                generation=generation,
+                status=status,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+                cost_microusd=round(prompt_tokens * 0.004),
+                upstream_provider=expected_provider,
+                now=datetime.now(UTC),
+            )
+    if not deliverable or raw is None:
+        raise HTTPException(
+            status_code=409, detail="confirmation grant is no longer live"
+        )
     return Response(
         content=raw,
         status_code=200,

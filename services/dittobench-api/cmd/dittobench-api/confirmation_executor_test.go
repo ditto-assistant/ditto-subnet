@@ -92,15 +92,20 @@ func validInstalledConfirmationProfile(t *testing.T) (confirmationExecutionProfi
 		LongMemSelectionSeed:       17, LongMemCasesPerCapability: 2, LongMemSeedBatchPairs: 2,
 		ProviderLanes: []confirmationProviderLaneProfile{
 			{
-				Lane: longmemeval.JudgeLane, Provider: "pinned-provider", ProfileRevision: "provider-launch-v1",
+				Lane: longmemeval.JudgeLane, Provider: "pinned-provider", RouteProvider: "openai", ReceiptProvider: "OpenAI", ProfileRevision: "provider-launch-v1",
 				Model: "pinned-model", MaxRequests: 10, MaxPromptTokens: 100,
 				MaxCompletionTokens: 100, MaxTotalTokens: 200, MaxCostUSDmicros: 10_000,
 			},
 			{
-				Lane: longmemeval.ReaderLane, Provider: "pinned-provider", ProfileRevision: "provider-launch-v1",
+				Lane: longmemeval.ReaderLane, Provider: "pinned-provider", RouteProvider: "openai", ReceiptProvider: "OpenAI", ProfileRevision: "provider-launch-v1",
 				Model: "pinned-model", MaxRequests: 10, MaxPromptTokens: 100,
 				MaxCompletionTokens: 100, MaxTotalTokens: 200, MaxCostUSDmicros: 10_000,
 			},
+		},
+		EmbeddingLane: confirmationEmbeddingLaneProfile{
+			Lane: "embedding", Provider: "pinned-provider", ProfileRevision: "embedding-launch-v1",
+			Model: "pinned-embedding-model", Dimensions: 768, MaxRequests: 1000,
+			MaxInputTokens: 1_000_000, MaxCostUSDmicros: 100_000,
 		},
 		AblationProfileRevision:         "ablation-launch-v1",
 		AblationDatasetSHA256:           strings.Repeat("a", 64),
@@ -129,7 +134,7 @@ func validInstalledConfirmationProfile(t *testing.T) (confirmationExecutionProfi
 		},
 	}
 	refreshConfirmationProfileChecksums(t, &profile)
-	if profile.Checksum != "34ce9c1572f7d3b432adaf1223a07e7ee04bc34d83bca9e799c7729762130a3c" {
+	if profile.Checksum != "38d9334acd0f17e257d151d66e3feb6d5c0a200f0c5091f8bd29f90e387fd3f1" {
 		t.Fatalf("cross-language outer profile checksum = %s", profile.Checksum)
 	}
 	raw, err := json.Marshal(profile)
@@ -158,7 +163,7 @@ func TestConfirmationExecutionProfileCrossLanguageFixture(t *testing.T) {
 	}
 	if fixture.FixtureSchema != "dittobench-v9-confirmation-execution-profile-v1" ||
 		digestBytes(payload) != fixture.ExpectedChecksum ||
-		fixture.ExpectedChecksum != "34ce9c1572f7d3b432adaf1223a07e7ee04bc34d83bca9e799c7729762130a3c" {
+		fixture.ExpectedChecksum != "38d9334acd0f17e257d151d66e3feb6d5c0a200f0c5091f8bd29f90e387fd3f1" {
 		t.Fatalf("cross-language execution profile fixture drift: schema=%s digest=%s expected=%s",
 			fixture.FixtureSchema, digestBytes(payload), fixture.ExpectedChecksum)
 	}

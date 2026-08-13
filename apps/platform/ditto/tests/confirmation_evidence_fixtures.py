@@ -27,6 +27,7 @@ from ditto.api_server.confirmation_evidence import (
     AblationVerificationPolicy,
     CompositeVerificationPolicy,
     ConfirmationVerificationProfile,
+    EmbeddingLanePolicy,
     ProviderLanePolicy,
     SyntheticBudgetPolicy,
     confirmation_signing_message,
@@ -96,6 +97,8 @@ def verification_profile() -> ConfirmationVerificationProfile:
             ProviderLanePolicy(
                 lane="reader",
                 provider="openai",
+                route_provider="openai",
+                receipt_provider="OpenAI",
                 profile_revision="reader-test-1",
                 model="openai/gpt-oss-20b",
                 max_requests=10,
@@ -107,6 +110,8 @@ def verification_profile() -> ConfirmationVerificationProfile:
             ProviderLanePolicy(
                 lane="judge",
                 provider="openai",
+                route_provider="openai",
+                receipt_provider="OpenAI",
                 profile_revision="judge-test-1",
                 model="openai/gpt-oss-20b",
                 max_requests=10,
@@ -115,6 +120,16 @@ def verification_profile() -> ConfirmationVerificationProfile:
                 max_total_tokens=2_000,
                 max_cost_usd_micros=100_000,
             ),
+        ),
+        embedding_lane=EmbeddingLanePolicy(
+            lane="embedding",
+            provider="perplexity",
+            profile_revision="embedding-test-1",
+            model="perplexity/pplx-embed-v1-0.6b",
+            dimensions=768,
+            max_requests=1_000,
+            max_input_tokens=1_000_000,
+            max_cost_usd_micros=100_000,
         ),
         ablation_profile_revision="ablation-v9-test-1",
         ablation_profile_checksum="0" * 64,
@@ -173,17 +188,32 @@ def go_verification_profile() -> ConfirmationVerificationProfile:
             "b8ac4b9f08133323931736991692cb99f3cc4806d3baafc367f6646130f3552d"
         ),
         provider_lanes=(
-            ProviderLanePolicy(
-                lane="judge",
-                provider="openrouter",
-                profile_revision="longmem-judge-v1",
-                model="openai/gpt-oss-20b",
-                max_requests=20,
-                max_prompt_tokens=2_000,
-                max_completion_tokens=400,
-                max_total_tokens=2_400,
-                max_cost_usd_micros=50_000,
+            *(
+                ProviderLanePolicy(
+                    lane=lane,
+                    provider="openrouter",
+                    route_provider="openai",
+                    receipt_provider="OpenAI",
+                    profile_revision=f"longmem-{lane}-v1",
+                    model="openai/gpt-oss-20b",
+                    max_requests=20,
+                    max_prompt_tokens=2_000,
+                    max_completion_tokens=400,
+                    max_total_tokens=2_400,
+                    max_cost_usd_micros=50_000,
+                )
+                for lane in ("judge", "reader")
             ),
+        ),
+        embedding_lane=EmbeddingLanePolicy(
+            lane="embedding",
+            provider="perplexity",
+            profile_revision="embedding-launch-v1",
+            model="perplexity/pplx-embed-v1-0.6b",
+            dimensions=768,
+            max_requests=1_000,
+            max_input_tokens=1_000_000,
+            max_cost_usd_micros=100_000,
         ),
         ablation_profile_revision="ablation-launch-v1",
         ablation_profile_checksum="0" * 64,
@@ -235,7 +265,7 @@ def go_verification_profile() -> ConfirmationVerificationProfile:
         ),
     )
     assert profile.longmem_checksum() == (
-        "ad51dfb8ea46a9cf7a941988529456f04895ce100f379b49c6e64ba751a96756"
+        "413d8c26a17834ff60f3243b5f96b24dd9a18deaf7d0ee21cb3c642c3e024927"
     )
     assert profile.ablation_checksum() == (
         "1801748138fb6d3e1b37f54a8a9f1db994c92564ecb62818b9c9c04290a77dbe"
@@ -272,6 +302,8 @@ def go_installed_verification_profile() -> ConfirmationVerificationProfile:
             ProviderLanePolicy(
                 lane=lane,
                 provider="pinned-provider",
+                route_provider="openai",
+                receipt_provider="OpenAI",
                 profile_revision="provider-launch-v1",
                 model="pinned-model",
                 max_requests=10,
@@ -281,6 +313,16 @@ def go_installed_verification_profile() -> ConfirmationVerificationProfile:
                 max_cost_usd_micros=10_000,
             )
             for lane in ("judge", "reader")
+        ),
+        embedding_lane=EmbeddingLanePolicy(
+            lane="embedding",
+            provider="pinned-provider",
+            profile_revision="embedding-launch-v1",
+            model="pinned-embedding-model",
+            dimensions=768,
+            max_requests=1_000,
+            max_input_tokens=1_000_000,
+            max_cost_usd_micros=100_000,
         ),
         ablation_profile_revision="ablation-launch-v1",
         ablation_profile_checksum="0" * 64,

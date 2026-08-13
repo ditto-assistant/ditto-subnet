@@ -52,7 +52,9 @@ from ditto_screening_protocol.confirmation_transport import (
     ConfirmationAblationProfile,
     ConfirmationBundleMode,
     ConfirmationCompositeProfile,
+    ConfirmationEmbeddingLaneProfile,
     ConfirmationExecutionProfile,
+    ConfirmationInferenceGrantOffer,
     ConfirmationProviderLaneProfile,
     V9ConfirmationClaimRequest,
     V9ConfirmationCompletionReport,
@@ -83,6 +85,7 @@ class V9ConfirmationScorerRequest(BaseModel):
     ticket_id: UUID
     agent_id: UUID
     slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")]
+    inference_session_id: Annotated[str, Field(min_length=16, max_length=128)]
     artifact_url: Annotated[str, Field(min_length=1)]
     artifact_sha256: Sha256
     screened_image_url: Annotated[str, Field(min_length=1)]
@@ -126,7 +129,9 @@ __all__ = [
     "ConfirmationAblationProfile",
     "ConfirmationBundleMode",
     "ConfirmationCompositeProfile",
+    "ConfirmationEmbeddingLaneProfile",
     "ConfirmationExecutionProfile",
+    "ConfirmationInferenceGrantOffer",
     "ConfirmationProviderLaneProfile",
     "V9ConfirmationClaimRequest",
     "V9ConfirmationCompletionReport",

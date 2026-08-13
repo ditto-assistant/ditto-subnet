@@ -40,39 +40,76 @@ const (
 	confirmationInstallationSHAEnv  = "DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256"
 )
 
-type confirmationSecretReferenceWire struct {
-	ProjectID string `json:"project_id"`
-	SecretID  string `json:"secret_id"`
-	Version   string `json:"version"`
-}
-
-func (reference confirmationSecretReferenceWire) native() longmemeval.SecretManagerReference {
-	return longmemeval.SecretManagerReference{
-		ProjectID: reference.ProjectID, SecretID: reference.SecretID, Version: reference.Version,
-	}
-}
-
-type confirmationProviderRuntimeWire struct {
-	Lane                string                          `json:"lane"`
-	UpstreamURL         string                          `json:"upstream_url"`
-	RouteProvider       string                          `json:"route_provider"`
-	ReceiptProvider     string                          `json:"receipt_provider"`
-	CredentialReference confirmationSecretReferenceWire `json:"credential_reference"`
-	RequestTimeoutMS    int64                           `json:"request_timeout_ms"`
-}
-
 type confirmationActivationFile struct {
-	SchemaVersion                    int                               `json:"schema_version"`
-	ExecutionProfile                 json.RawMessage                   `json:"execution_profile"`
-	CalibrationManifestSHA256        string                            `json:"calibration_manifest_sha256"`
-	CalibrationManifestPath          string                            `json:"calibration_manifest_path"`
-	LongMemDatasetPath               string                            `json:"longmem_dataset_path"`
-	AblationDatasetPath              string                            `json:"ablation_dataset_path"`
-	LongMemProjectionKeyReference    confirmationSecretReferenceWire   `json:"longmem_projection_key_reference"`
-	AblationSelectionKeyReference    confirmationSecretReferenceWire   `json:"ablation_selection_key_reference"`
-	AblationProjectionKeyReference   confirmationSecretReferenceWire   `json:"ablation_projection_key_reference"`
-	ProviderLanes                    []confirmationProviderRuntimeWire `json:"provider_lanes"`
-	SandboxHealthTimeoutMilliseconds int64                             `json:"sandbox_health_timeout_ms"`
+	SchemaVersion                    int             `json:"schema_version"`
+	ExecutionProfile                 json.RawMessage `json:"execution_profile"`
+	CalibrationManifestSHA256        string          `json:"calibration_manifest_sha256"`
+	CalibrationManifestPath          string          `json:"calibration_manifest_path"`
+	LongMemDatasetPath               string          `json:"longmem_dataset_path"`
+	AblationDatasetPath              string          `json:"ablation_dataset_path"`
+	LongMemProjectionKeyPath         string          `json:"longmem_projection_key_path"`
+	AblationSelectionKeyPath         string          `json:"ablation_selection_key_path"`
+	AblationProjectionKeyPath        string          `json:"ablation_projection_key_path"`
+	SandboxHealthTimeoutMilliseconds int64           `json:"sandbox_health_timeout_ms"`
+}
+
+const confirmationFileKeyProject = "local-confirmation"
+
+type confirmationFileKeyResolver struct {
+	files map[string]verifiedConfirmationFile
+}
+
+func confirmationFileKeyReference(secretID string) longmemeval.SecretManagerReference {
+	return longmemeval.SecretManagerReference{ProjectID: confirmationFileKeyProject, SecretID: secretID, Version: "1"}
+}
+
+func newConfirmationFileKeyResolver(
+	installation confirmationActivationFile,
+	profile confirmationExecutionProfileWire,
+) (*confirmationFileKeyResolver, [3]longmemeval.SecretManagerReference, error) {
+	paths := []string{
+		installation.LongMemProjectionKeyPath,
+		installation.AblationSelectionKeyPath,
+		installation.AblationProjectionKeyPath,
+	}
+	expected := []string{
+		profile.LongMemProjectionKeySHA256,
+		profile.AblationSelectionKeySHA256,
+		profile.AblationProjectionKeySHA256,
+	}
+	ids := []string{"longmem-projection", "ablation-selection", "ablation-projection"}
+	resolver := &confirmationFileKeyResolver{files: make(map[string]verifiedConfirmationFile, len(paths))}
+	var references [3]longmemeval.SecretManagerReference
+	for index, path := range paths {
+		file, raw, err := verifyImmutableConfirmationFile(path, 1024)
+		if err != nil || len(raw) < 32 || len(raw) > 1024 || file.sha256 != expected[index] {
+			longmemeval.ZeroSecretBytes(raw)
+			return nil, references, errors.New("confirmation local key does not match the installed profile")
+		}
+		longmemeval.ZeroSecretBytes(raw)
+		resolver.files[ids[index]] = file
+		references[index] = confirmationFileKeyReference(ids[index])
+	}
+	return resolver, references, nil
+}
+
+func (resolver *confirmationFileKeyResolver) Resolve(
+	_ context.Context,
+	reference longmemeval.SecretManagerReference,
+) ([]byte, error) {
+	if resolver == nil || reference.ProjectID != confirmationFileKeyProject || reference.Version != "1" {
+		return nil, errors.New("confirmation local key is unavailable")
+	}
+	file, ok := resolver.files[reference.SecretID]
+	if !ok {
+		return nil, errors.New("confirmation local key is unavailable")
+	}
+	verified, raw, err := verifyImmutableConfirmationFile(file.path, 1024)
+	if err != nil || verified.sha256 != file.sha256 || len(raw) < 32 || len(raw) > 1024 {
+		longmemeval.ZeroSecretBytes(raw)
+		return nil, errors.New("confirmation local key is unavailable")
+	}
+	return raw, nil
 }
 
 func readConfirmationActivationFile(path, expectedSHA256 string) (confirmationActivationFile, error) {
@@ -100,8 +137,9 @@ func readConfirmationActivationFile(path, expectedSHA256 string) (confirmationAc
 
 // confirmationExecutorFromEnvironment is the sole production activation door.
 // Absence is disabled, while any partially configured opt-in is fatal. The
-// environment carries only a path and content digest; key/provider credential
-// values remain in Secret Manager and are never read during startup.
+// environment carries only a path and content digest. Selector/projection keys
+// are immutable root-owned local files, while all provider credentials remain
+// on Platform behind ticket-scoped grants.
 func confirmationExecutorFromEnvironment(
 	getenv func(string) string,
 	sandboxRuntime *sandbox.LocalDocker,
@@ -129,20 +167,9 @@ func confirmationExecutorFromEnvironment(
 	if err != nil || calibrationFile.sha256 != installation.CalibrationManifestSHA256 {
 		return nil, errors.New("confirmation calibration manifest does not match launch approval")
 	}
-	authorizer, err := longmemeval.NewGCPSecretManagerAuthorizer(longmemeval.GCPSecretManagerAuthorizerConfig{})
+	keyResolver, keyReferences, err := newConfirmationFileKeyResolver(installation, profile)
 	if err != nil {
-		return nil, errors.New("confirmation Secret Manager integration is unavailable")
-	}
-	lanes := make([]longmemeval.ProviderLaneRuntimeConfig, len(installation.ProviderLanes))
-	for index, lane := range installation.ProviderLanes {
-		if lane.RequestTimeoutMS <= 0 || lane.RequestTimeoutMS > int64((30*time.Minute)/time.Millisecond) {
-			return nil, errors.New("confirmation provider timeout is invalid")
-		}
-		lanes[index] = longmemeval.ProviderLaneRuntimeConfig{
-			Lane: lane.Lane, UpstreamURL: lane.UpstreamURL, RouteProvider: lane.RouteProvider,
-			ReceiptProvider: lane.ReceiptProvider, CredentialReference: lane.CredentialReference.native(),
-			RequestTimeout: time.Duration(lane.RequestTimeoutMS) * time.Millisecond,
-		}
+		return nil, err
 	}
 	if installation.SandboxHealthTimeoutMilliseconds <= 0 ||
 		installation.SandboxHealthTimeoutMilliseconds > int64((10*time.Minute)/time.Millisecond) {
@@ -153,12 +180,11 @@ func confirmationExecutorFromEnvironment(
 		CalibrationManifestPath:        installation.CalibrationManifestPath,
 		CalibrationManifestSHA256:      installation.CalibrationManifestSHA256,
 		LongMemDatasetPath:             installation.LongMemDatasetPath,
-		LongMemProjectionKeyReference:  installation.LongMemProjectionKeyReference.native(),
+		LongMemProjectionKeyReference:  keyReferences[0],
 		AblationDatasetPath:            installation.AblationDatasetPath,
-		AblationSelectionKeyReference:  installation.AblationSelectionKeyReference.native(),
-		AblationProjectionKeyReference: installation.AblationProjectionKeyReference.native(),
-		SecretResolver:                 authorizer,
-		ProviderRuntime:                longmemeval.ProviderRuntimeConfig{Lanes: lanes, Authorizer: authorizer},
+		AblationSelectionKeyReference:  keyReferences[1],
+		AblationProjectionKeyReference: keyReferences[2],
+		SecretResolver:                 keyResolver,
 		SandboxHealthTimeout:           time.Duration(installation.SandboxHealthTimeoutMilliseconds) * time.Millisecond,
 	})
 	if err != nil {
@@ -171,8 +197,8 @@ func confirmationExecutorFromEnvironment(
 }
 
 // screenedConfirmationRuntimeFactoryConfig is server-owned immutable
-// configuration. ProviderRuntime contains Secret Manager references and a
-// trusted authorizer, never credential values.
+// configuration. Provider credentials are deliberately absent: they arrive
+// only as ticket-scoped Platform grants.
 type screenedConfirmationRuntimeFactoryConfig struct {
 	Profile                        confirmationExecutionProfileWire
 	Sandbox                        sandbox.Sandbox
@@ -185,7 +211,6 @@ type screenedConfirmationRuntimeFactoryConfig struct {
 	AblationSelectionKeyReference  longmemeval.SecretManagerReference
 	AblationProjectionKeyReference longmemeval.SecretManagerReference
 	SecretResolver                 longmemeval.SecretBytesResolver
-	ProviderRuntime                longmemeval.ProviderRuntimeConfig
 	SandboxHealthTimeout           time.Duration
 }
 
@@ -201,7 +226,6 @@ type screenedConfirmationRuntimeFactory struct {
 	ablationSelectionKeyReference  longmemeval.SecretManagerReference
 	ablationProjectionKeyReference longmemeval.SecretManagerReference
 	secretResolver                 longmemeval.SecretBytesResolver
-	providerRuntime                longmemeval.ProviderRuntimeConfig
 	healthTimeout                  time.Duration
 }
 
@@ -419,17 +443,11 @@ func newScreenedConfirmationRuntimeFactory(config screenedConfirmationRuntimeFac
 		ablationFile: ablationFile, ablationDataset: dataset,
 		ablationSelectionKeyReference:  config.AblationSelectionKeyReference,
 		ablationProjectionKeyReference: config.AblationProjectionKeyReference,
-		secretResolver:                 config.SecretResolver, providerRuntime: config.ProviderRuntime,
-		healthTimeout: config.SandboxHealthTimeout,
+		secretResolver:                 config.SecretResolver,
+		healthTimeout:                  config.SandboxHealthTimeout,
 	}
 	if err := factory.ValidateInstallation(config.Profile); err != nil {
 		return nil, err
-	}
-	// Construction validates every route, model, provider, cap, immutable
-	// Secret Manager reference, and official judge identity without retrieving a
-	// credential or making an upstream request.
-	if err := longmemeval.ValidateProviderRuntimeConfig(config.Profile.longMemProfile(), config.ProviderRuntime); err != nil {
-		return nil, fmt.Errorf("confirmation provider runtime is invalid: %w", err)
 	}
 	return factory, nil
 }
@@ -447,9 +465,6 @@ func validConfirmationEgressProxy(raw string) bool {
 func (factory *screenedConfirmationRuntimeFactory) ValidateInstallation(profile confirmationExecutionProfileWire) error {
 	if factory == nil || nilInterface(factory.sandbox) || factory.broker == nil || factory.healthTimeout <= 0 {
 		return errors.New("confirmation runtime factory is incomplete")
-	}
-	if !confirmationEmbeddingRouteIsLocal(factory.broker.embeddingURL) {
-		return errors.New("confirmation local embedding route is unavailable")
 	}
 	if file, _, fileErr := verifyImmutableConfirmationFile(factory.calibrationManifest.path, maximumConfirmationInstallationBytes); fileErr != nil ||
 		file.sha256 != factory.calibrationManifest.sha256 {
@@ -479,8 +494,8 @@ func (factory *screenedConfirmationRuntimeFactory) ValidateInstallation(profile 
 		factory.ablationSelectionKeyReference,
 		factory.ablationProjectionKeyReference,
 	} {
-		if err := longmemeval.ValidateSecretManagerReference(reference); err != nil {
-			return errors.New("confirmation key must use an immutable Secret Manager reference")
+		if reference.ProjectID != confirmationFileKeyProject || reference.Version != "1" || reference.SecretID == "" {
+			return errors.New("confirmation key must use an immutable local reference")
 		}
 	}
 	if file, _, fileErr := verifyConfirmationFile(factory.ablationFile.path, maximumConfirmationAblationDatasetBytes); fileErr != nil ||
@@ -493,9 +508,6 @@ func (factory *screenedConfirmationRuntimeFactory) ValidateInstallation(profile 
 	ablationChecksum, err := ablation.FrozenProfileSHA256(profile.ablationProfile())
 	if err != nil || ablationChecksum != profile.AblationProfileChecksum {
 		return errors.New("confirmation ablation profile drift")
-	}
-	if err := longmemeval.ValidateProviderRuntimeConfig(longMem, factory.providerRuntime); err != nil {
-		return fmt.Errorf("confirmation provider runtime drift: %w", err)
 	}
 	return nil
 }
@@ -521,7 +533,7 @@ func resolveConfirmationSecret(
 ) ([]byte, error) {
 	resolved, err := resolver.Resolve(ctx, reference)
 	if err != nil {
-		return nil, errors.New("confirmation key is unavailable from Secret Manager")
+		return nil, errors.New("confirmation key is unavailable from the local installation")
 	}
 	defer longmemeval.ZeroSecretBytes(resolved)
 	if len(resolved) < 32 || len(resolved) > 1024 {
@@ -557,10 +569,7 @@ func (factory *screenedConfirmationRuntimeFactory) installBrokerSession(
 	identity confirmationRuntimeIdentity,
 	provider *longmemeval.ProviderSession,
 ) (string, string, error) {
-	sessionID, err := randomToken(18)
-	if err != nil {
-		return "", "", errors.New("confirmation broker session identity is unavailable")
-	}
+	sessionID := identity.InferenceSessionID
 	runID := uuid.NewString()
 	readerPolicy := factory.profile.longMemProfile().Providers[0]
 	for _, lane := range factory.profile.longMemProfile().Providers {
@@ -568,20 +577,31 @@ func (factory *screenedConfirmationRuntimeFactory) installBrokerSession(
 			readerPolicy = lane
 		}
 	}
-	session := &brokerSession{
-		id: sessionID, trustedChatHandler: provider.ReaderHandler(), expiresAt: identity.Deadline,
-		provider: readerPolicy.Provider, model: readerPolicy.Model, requestModel: readerPolicy.Model,
-		profileRevision: readerPolicy.ProfileRevision, boundRunID: runID, benchVersion: confirmationBenchVersion,
-		confirmationSession: true, embeddingConcurrency: 1,
-		embeddingCalls: make(map[chan struct{}]context.CancelFunc), cancels: make(map[string]context.CancelFunc),
+	factory.broker.mu.RLock()
+	session := factory.broker.sessions[sessionID]
+	factory.broker.mu.RUnlock()
+	if session == nil {
+		return "", "", errors.New("confirmation broker session is unavailable")
 	}
-	factory.broker.mu.Lock()
-	if len(factory.broker.sessions) >= factory.broker.maxSessions {
-		factory.broker.mu.Unlock()
-		return "", "", errors.New("confirmation broker is at capacity")
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if !session.confirmationSession || session.boundRunID != "" || !session.expiresAt.Equal(identity.Deadline) ||
+		session.ticketAgentID != identity.AgentID || session.ticketSlotID != identity.SlotID || len(session.confirmationGrants) != 3 {
+		return "", "", errors.New("confirmation broker session identity mismatch")
 	}
-	factory.broker.sessions[sessionID] = session
-	factory.broker.mu.Unlock()
+	session.trustedChatHandler = provider.ReaderHandler()
+	session.provider = readerPolicy.Provider
+	session.model = readerPolicy.Model
+	session.requestModel = readerPolicy.Model
+	session.profileRevision = readerPolicy.ProfileRevision
+	session.boundRunID = runID
+	session.benchVersion = confirmationBenchVersion
+	if session.embeddingCalls == nil {
+		session.embeddingCalls = make(map[chan struct{}]context.CancelFunc)
+	}
+	if session.cancels == nil {
+		session.cancels = make(map[string]context.CancelFunc)
+	}
 	return sessionID, runID, nil
 }
 
@@ -660,7 +680,15 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 		_ = longMemSource.Close()
 		return nil, errors.New("confirmation key does not match the installed profile")
 	}
-	provider, err := longmemeval.NewProviderSession(ctx, factory.profile.longMemProfile(), factory.providerRuntime)
+	providerRuntime, err := factory.broker.confirmationProviderRuntime(
+		identity.InferenceSessionID,
+		factory.profile,
+	)
+	if err != nil {
+		_ = longMemSource.Close()
+		return nil, errors.New("confirmation platform capabilities are unavailable")
+	}
+	provider, err := longmemeval.NewProviderSession(ctx, factory.profile.longMemProfile(), providerRuntime)
 	if err != nil {
 		_ = longMemSource.Close()
 		return nil, errors.New("confirmation provider session is unavailable")

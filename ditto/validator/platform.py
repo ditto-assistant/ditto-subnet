@@ -162,6 +162,7 @@ class PlatformClient:
         slot_id: str,
         profile_revision: str,
         profile_checksum: str,
+        broker_public_key: str,
     ) -> V9ConfirmationJobResponse | None:
         """Claim one internal exact-profile bundle; ``None`` means no work."""
         requested_at = datetime.now(UTC)
@@ -171,6 +172,7 @@ class PlatformClient:
             slot_id=slot_id,
             profile_revision=profile_revision,
             profile_checksum=profile_checksum,
+            broker_public_key=broker_public_key,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_v9_confirmation_claim(
@@ -179,6 +181,7 @@ class PlatformClient:
                 slot_id=slot_id,
                 profile_revision=profile_revision,
                 profile_checksum=profile_checksum,
+                broker_public_key=broker_public_key,
                 nonce=nonce,
                 requested_at=requested_at,
             ),

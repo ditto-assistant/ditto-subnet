@@ -72,7 +72,7 @@ def test_real_go_fixture_has_pinned_normalized_canonical_digests() -> None:
     report = _report()
 
     assert evidence_digest(report.longmemeval.evidence) == (
-        "4f76ac6396cb9d16d470ef893833885baa963657a2438fe11ef132da214a820c"
+        "6a780e89db47149ea6531fc43a6f59208a880983dbab6e526da0ea63307980be"
     )
     assert report.longmemeval.evidence_sha256 == evidence_digest(
         report.longmemeval.evidence
@@ -84,7 +84,7 @@ def test_real_go_fixture_has_pinned_normalized_canonical_digests() -> None:
         report.embedding_ablation.evidence
     )
     assert hashlib.sha256(canonical_json(report)).hexdigest() == (
-        "e3922b21cd67a377a4f9d481d82a334c25c567a2a704517b188c27e83cccdd3a"
+        "3266ec7830fa0dda44f28e86ec649f9a8b45d7073a3552d6312303a10dd5aa26"
     )
 
 

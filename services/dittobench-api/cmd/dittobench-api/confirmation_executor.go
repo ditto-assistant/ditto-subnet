@@ -34,6 +34,8 @@ type confirmationProfileInstallation struct {
 type confirmationProviderLaneProfile struct {
 	Lane                string `json:"lane"`
 	Provider            string `json:"provider"`
+	RouteProvider       string `json:"route_provider"`
+	ReceiptProvider     string `json:"receipt_provider"`
 	ProfileRevision     string `json:"profile_revision"`
 	Model               string `json:"model"`
 	MaxRequests         uint64 `json:"max_requests"`
@@ -41,6 +43,17 @@ type confirmationProviderLaneProfile struct {
 	MaxCompletionTokens uint64 `json:"max_completion_tokens"`
 	MaxTotalTokens      uint64 `json:"max_total_tokens"`
 	MaxCostUSDmicros    uint64 `json:"max_cost_usd_micros"`
+}
+
+type confirmationEmbeddingLaneProfile struct {
+	Lane             string `json:"lane"`
+	Provider         string `json:"provider"`
+	ProfileRevision  string `json:"profile_revision"`
+	Model            string `json:"model"`
+	Dimensions       uint64 `json:"dimensions"`
+	MaxRequests      uint64 `json:"max_requests"`
+	MaxInputTokens   uint64 `json:"max_input_tokens"`
+	MaxCostUSDmicros uint64 `json:"max_cost_usd_micros"`
 }
 
 type confirmationAblationBudget struct {
@@ -81,6 +94,7 @@ type confirmationExecutionProfileWire struct {
 	LongMemSeedBatchPairs           int                               `json:"longmem_seed_batch_pairs"`
 	LongMemProjectionKeySHA256      string                            `json:"longmem_projection_key_sha256"`
 	ProviderLanes                   []confirmationProviderLaneProfile `json:"provider_lanes"`
+	EmbeddingLane                   confirmationEmbeddingLaneProfile  `json:"embedding_lane"`
 	AblationProfileRevision         string                            `json:"ablation_profile_revision"`
 	AblationProfileChecksum         string                            `json:"ablation_profile_checksum"`
 	AblationDatasetSHA256           string                            `json:"ablation_dataset_sha256"`
@@ -108,6 +122,7 @@ type confirmationExecutionProfilePayload struct {
 	LongMemSeedBatchPairs           int                               `json:"longmem_seed_batch_pairs"`
 	LongMemProjectionKeySHA256      string                            `json:"longmem_projection_key_sha256"`
 	ProviderLanes                   []confirmationProviderLaneProfile `json:"provider_lanes"`
+	EmbeddingLane                   confirmationEmbeddingLaneProfile  `json:"embedding_lane"`
 	AblationProfileRevision         string                            `json:"ablation_profile_revision"`
 	AblationProfileChecksum         string                            `json:"ablation_profile_checksum"`
 	AblationDatasetSHA256           string                            `json:"ablation_dataset_sha256"`
@@ -129,6 +144,7 @@ func (p confirmationExecutionProfileWire) payload() confirmationExecutionProfile
 		LongMemCasesPerCapability: p.LongMemCasesPerCapability, LongMemSeedBatchPairs: p.LongMemSeedBatchPairs,
 		LongMemProjectionKeySHA256: p.LongMemProjectionKeySHA256,
 		ProviderLanes:              append([]confirmationProviderLaneProfile(nil), p.ProviderLanes...),
+		EmbeddingLane:              p.EmbeddingLane,
 		AblationProfileRevision:    p.AblationProfileRevision, AblationProfileChecksum: p.AblationProfileChecksum,
 		AblationDatasetSHA256:           p.AblationDatasetSHA256,
 		AblationThresholdManifestSHA256: p.AblationThresholdManifestSHA256,
@@ -185,13 +201,14 @@ func (b confirmationAblationBudget) ablationBudget() ablation.Budget {
 func microsToScore(value uint64) float64 { return float64(value) / 1_000_000 }
 
 type confirmationRuntimeIdentity struct {
-	BundleID       string
-	TicketID       string
-	AgentID        string
-	SlotID         string
-	ArtifactSHA256 string
-	Deadline       time.Time
-	Source         sandbox.Source
+	BundleID           string
+	TicketID           string
+	AgentID            string
+	SlotID             string
+	InferenceSessionID string
+	ArtifactSHA256     string
+	Deadline           time.Time
+	Source             sandbox.Source
 }
 
 // confirmationRuntimeFactory is the only integration seam. Its production
@@ -324,7 +341,8 @@ func (executor *trustedConfirmationExecutor) Execute(
 	}
 	identity := confirmationRuntimeIdentity{
 		BundleID: request.BundleID, TicketID: request.TicketID, AgentID: request.AgentID, SlotID: request.SlotID,
-		ArtifactSHA256: request.ArtifactSHA256, Deadline: request.Deadline,
+		InferenceSessionID: request.InferenceSessionID,
+		ArtifactSHA256:     request.ArtifactSHA256, Deadline: request.Deadline,
 		Source: sandbox.Source{
 			TarballURL: request.ArtifactURL, TarballSHA256: request.ArtifactSHA256,
 			ScreenedImageURL: request.ScreenedImageURL, ScreenedImageSHA256: request.ScreenedImageSHA256,

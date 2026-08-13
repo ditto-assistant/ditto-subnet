@@ -27,6 +27,7 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationScorerResult,
 )
 from ditto.validator import worker as worker_mod
+from ditto.validator.dittobench import InferenceBrokerSession
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
@@ -38,6 +39,7 @@ _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _PROFILE_REVISION = "confirmation-v9-calibrated-1"
 _PROFILE_CHECKSUM = "11" * 32
 _ARTIFACT_SHA = "a" * 64
+_BROKER_PUBLIC_KEY = "A" * 43
 
 
 class _RecordingKeypair:
@@ -90,8 +92,10 @@ def _profile(
             "longmem_projection_key_sha256": "e" * 64,
             "provider_lanes": [
                 {
-                    "lane": "longmem-primary",
+                    "lane": "reader",
                     "provider": "trusted-provider",
+                    "route_provider": "openai",
+                    "receipt_provider": "OpenAI",
                     "profile_revision": "provider-v1",
                     "model": "provider/model",
                     "max_requests": 10,
@@ -99,8 +103,31 @@ def _profile(
                     "max_completion_tokens": 2_000,
                     "max_total_tokens": 12_000,
                     "max_cost_usd_micros": 50_000,
-                }
+                },
+                {
+                    "lane": "judge",
+                    "provider": "trusted-provider",
+                    "route_provider": "openai",
+                    "receipt_provider": "OpenAI",
+                    "profile_revision": "provider-v1",
+                    "model": "provider/model",
+                    "max_requests": 10,
+                    "max_prompt_tokens": 10_000,
+                    "max_completion_tokens": 2_000,
+                    "max_total_tokens": 12_000,
+                    "max_cost_usd_micros": 50_000,
+                },
             ],
+            "embedding_lane": {
+                "lane": "embedding",
+                "provider": "perplexity",
+                "profile_revision": "embedding-profile-v1",
+                "model": "perplexity/pplx-embed-v1-0.6b",
+                "dimensions": 1024,
+                "max_requests": 100,
+                "max_input_tokens": 250_000,
+                "max_cost_usd_micros": 50_000,
+            },
             "ablation_profile_revision": "ablation-v1",
             "ablation_profile_checksum": "66" * 32,
             "ablation_dataset_sha256": "69" * 32,
@@ -170,6 +197,32 @@ def _job(
         per_bundle_request_cap=100,
         per_bundle_token_cap=250_000,
         execution_profile=profile or _profile(),
+        inference_grants=[
+            {
+                "lane": lane,
+                "grant_id": UUID(int=suffix * 10 + index),
+                "bearer": f"grant-{lane}-" + ("x" * 32),
+                "generation": 1,
+                "proxy_url": "https://platform.test/api/v1/inference/confirmation/"
+                + ("embeddings" if lane == "embedding" else "chat/completions"),
+                "model": (
+                    "perplexity/pplx-embed-v1-0.6b"
+                    if lane == "embedding"
+                    else "provider/model"
+                ),
+                "provider": "perplexity" if lane == "embedding" else "trusted-provider",
+                "route_provider": "perplexity" if lane == "embedding" else "openai",
+                "receipt_provider": "perplexity" if lane == "embedding" else "OpenAI",
+                "profile_revision": (
+                    "embedding-profile-v1" if lane == "embedding" else "provider-v1"
+                ),
+                "request_budget": 100,
+                "token_budget": 250_000,
+                "cost_budget_microusd": 50_000,
+                "expires_at": deadline or datetime.now(UTC) + timedelta(hours=2),
+            }
+            for index, lane in enumerate(("reader", "judge", "embedding"), start=1)
+        ],
     )
 
 
@@ -217,12 +270,22 @@ def _worker(
     )
     platform.submit_v9_confirmation_report = AsyncMock()
     platform.fail_v9_confirmation_job = AsyncMock()
+    platform.request_v9_confirmation_job = AsyncMock(return_value=None)
     # These are sentinels: the private lane must never touch either score path.
     platform.submit_score = AsyncMock()
     platform.submit_top5_confirmation_score = AsyncMock()
     platform.report_ticket_failed = AsyncMock()
     dittobench = MagicMock()
     dittobench.v9_confirmation_readiness = AsyncMock(return_value=_readiness())
+    dittobench.prepare_inference_session = AsyncMock(
+        return_value=InferenceBrokerSession(
+            session_id="confirmation-session-0001",
+            activation_secret="s" * 32,
+            broker_public_key=_BROKER_PUBLIC_KEY,
+        )
+    )
+    dittobench.activate_confirmation_inference_session = AsyncMock()
+    dittobench.cancel_inference_session = AsyncMock()
     dittobench.execute_v9_confirmation = AsyncMock(return_value=_result())
     keypair = _RecordingKeypair()
     worker = ValidatorWorker(
@@ -324,6 +387,7 @@ class TestV9ConfirmationClaims:
                         "slot_id": slot_id,
                         "profile_revision": _PROFILE_REVISION,
                         "profile_checksum": _PROFILE_CHECKSUM,
+                        "broker_public_key": _BROKER_PUBLIC_KEY,
                     }.items()
                 )
             )
@@ -339,6 +403,7 @@ class TestV9ConfirmationClaims:
             slot_id="slot-2",
             profile_revision=_PROFILE_REVISION,
             profile_checksum=_PROFILE_CHECKSUM,
+            broker_public_key=_BROKER_PUBLIC_KEY,
         )
 
     async def test_duplicate_slot_scope_never_multiplies_a_claim(self) -> None:
@@ -350,6 +415,7 @@ class TestV9ConfirmationClaims:
             slot_id="slot-1",
             profile_revision=_PROFILE_REVISION,
             profile_checksum=_PROFILE_CHECKSUM,
+            broker_public_key=_BROKER_PUBLIC_KEY,
         )
 
     async def test_slot_with_canonical_agent_is_not_claimed(self) -> None:
@@ -392,7 +458,9 @@ class TestV9ConfirmationExecution:
 
         platform.get_v9_confirmation_artifact.assert_awaited_once_with(job)
         dittobench.execute_v9_confirmation.assert_awaited_once_with(
-            job=job, artifact=artifact
+            job=job,
+            artifact=artifact,
+            inference_session_id="confirmation-session-0001",
         )
         platform.submit_v9_confirmation_report.assert_awaited_once()
         submitted_job, report = platform.submit_v9_confirmation_report.await_args.args
@@ -539,9 +607,12 @@ class TestV9ConfirmationExecution:
             return _artifact(job)
 
         async def execute(
-            *, job: V9ConfirmationJobResponse, artifact: ArtifactResponse
+            *,
+            job: V9ConfirmationJobResponse,
+            artifact: ArtifactResponse,
+            inference_session_id: str,
         ) -> V9ConfirmationScorerResult:
-            del artifact
+            del artifact, inference_session_id
             if failing_stage == "execute" and job.slot_id == "slot-0":
                 raise DittobenchError("execute failed")
             return _result()

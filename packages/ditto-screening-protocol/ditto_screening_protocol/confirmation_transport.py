@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from ipaddress import ip_address
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import (
@@ -61,13 +63,36 @@ class ConfirmationProviderLaneProfile(BaseModel):
 
     lane: Annotated[str, Field(min_length=1, max_length=128)]
     provider: Annotated[str, Field(min_length=1, max_length=128)]
+    route_provider: Annotated[str, Field(min_length=1, max_length=128)]
+    receipt_provider: Annotated[str, Field(min_length=1, max_length=128)]
     profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
     model: Annotated[str, Field(min_length=1, max_length=256)]
     max_requests: Annotated[int, Field(ge=1)]
     max_prompt_tokens: Annotated[int, Field(ge=0)]
     max_completion_tokens: Annotated[int, Field(ge=0)]
     max_total_tokens: Annotated[int, Field(ge=0)]
-    max_cost_usd_micros: Annotated[int, Field(ge=0)]
+    max_cost_usd_micros: Annotated[int, Field(ge=1)]
+
+
+class ConfirmationEmbeddingLaneProfile(BaseModel):
+    """Frozen retrieval embedding route for the LongMem lane.
+
+    Embeddings are intentionally not a third LongMem judge/reader provider
+    receipt.  They have their own purpose-bound Platform capability and budget,
+    so a credential minted for retrieval cannot be replayed against either
+    chat model.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    lane: Literal["embedding"]
+    provider: Annotated[str, Field(min_length=1, max_length=128)]
+    profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
+    model: Annotated[str, Field(min_length=1, max_length=256)]
+    dimensions: Annotated[int, Field(gt=0, le=16_384)]
+    max_requests: Annotated[int, Field(ge=1)]
+    max_input_tokens: Annotated[int, Field(ge=1)]
+    max_cost_usd_micros: Annotated[int, Field(ge=1)]
 
 
 class ConfirmationAblationProfile(BaseModel):
@@ -135,6 +160,7 @@ class ConfirmationExecutionProfile(BaseModel):
     longmem_seed_batch_pairs: Annotated[int, Field(gt=0)]
     longmem_projection_key_sha256: Sha256
     provider_lanes: list[ConfirmationProviderLaneProfile]
+    embedding_lane: ConfirmationEmbeddingLaneProfile
     ablation_profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
     ablation_profile_checksum: Sha256
     ablation_dataset_sha256: Sha256
@@ -148,6 +174,9 @@ class ConfirmationExecutionProfile(BaseModel):
 
     @model_validator(mode="after")
     def ablation_roles_are_not_swappable(self) -> ConfirmationExecutionProfile:
+        lanes = [lane.lane for lane in self.provider_lanes]
+        if sorted(lanes) != ["judge", "reader"]:
+            raise ValueError("provider_lanes must contain exactly reader and judge")
         if self.inference_ablation.intervention != "inference":
             raise ValueError("inference_ablation must use the inference intervention")
         if self.embedding_ablation.intervention != "embedding":
@@ -165,6 +194,7 @@ class V9ConfirmationClaimRequest(BaseModel):
     slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")]
     profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
     profile_checksum: Sha256
+    broker_public_key: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}=?$")]
     nonce: UUID
     requested_at: datetime
     signature: SignatureHex
@@ -175,6 +205,50 @@ class V9ConfirmationClaimRequest(BaseModel):
         if value.tzinfo is None:
             raise ValueError("requested_at must include a timezone")
         return value
+
+
+class ConfirmationInferenceGrantOffer(BaseModel):
+    """One ticket-scoped, lane-specific Platform inference capability."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    lane: Literal["reader", "judge", "embedding"]
+    grant_id: UUID
+    bearer: Annotated[str, Field(min_length=32, max_length=128)]
+    generation: Annotated[int, Field(ge=1)]
+    proxy_url: Annotated[str, Field(min_length=1)]
+    model: Annotated[str, Field(min_length=1, max_length=256)]
+    provider: Annotated[str, Field(min_length=1, max_length=128)]
+    route_provider: Annotated[str, Field(min_length=1, max_length=128)]
+    receipt_provider: Annotated[str, Field(min_length=1, max_length=128)]
+    profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
+    request_budget: Annotated[int, Field(ge=1)]
+    token_budget: Annotated[int, Field(ge=1)]
+    cost_budget_microusd: Annotated[int, Field(ge=1)]
+    expires_at: datetime
+
+    @field_validator("expires_at")
+    @classmethod
+    def expires_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("expires_at must include a timezone")
+        return value
+
+    @field_validator("proxy_url")
+    @classmethod
+    def proxy_url_must_be_https(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme == "https" and parsed.hostname:
+            return value
+        if parsed.scheme == "http" and parsed.hostname:
+            hostname = parsed.hostname
+            try:
+                is_loopback = ip_address(hostname).is_loopback
+            except ValueError:
+                is_loopback = hostname == "localhost"
+            if is_loopback:
+                return value
+        raise ValueError("confirmation proxy_url must use HTTPS or loopback HTTP")
 
 
 class V9ConfirmationJobResponse(BaseModel):
@@ -196,6 +270,9 @@ class V9ConfirmationJobResponse(BaseModel):
     per_bundle_request_cap: Annotated[int, Field(ge=1, le=MAX_BUNDLE_REQUEST_CAP)]
     per_bundle_token_cap: Annotated[int, Field(ge=1, le=MAX_BUNDLE_TOKEN_CAP)]
     execution_profile: ConfirmationExecutionProfile
+    inference_grants: Annotated[
+        list[ConfirmationInferenceGrantOffer], Field(min_length=3, max_length=3)
+    ]
 
     @field_validator("deadline")
     @classmethod
@@ -309,7 +386,9 @@ __all__ = [
     "ConfirmationBundleMode",
     "ConfirmationEligibilityMode",
     "ConfirmationCompositeProfile",
+    "ConfirmationEmbeddingLaneProfile",
     "ConfirmationExecutionProfile",
+    "ConfirmationInferenceGrantOffer",
     "ConfirmationProviderLaneProfile",
     "MAX_BUNDLE_REQUEST_CAP",
     "MAX_BUNDLE_TOKEN_CAP",

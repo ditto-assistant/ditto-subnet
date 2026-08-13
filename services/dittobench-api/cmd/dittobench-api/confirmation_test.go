@@ -82,6 +82,7 @@ func validConfirmationRequest() confirmationExecutionRequest {
 		TicketID:               "ticket-00000001",
 		AgentID:                "agent-00000001",
 		SlotID:                 "slot-0",
+		InferenceSessionID:     "confirmation-session-00000001",
 		Mode:                   "shadow",
 		ArtifactURL:            "https://artifacts.invalid/v9/agent.tar.gz",
 		ArtifactSHA256:         testConfirmationArtifactChecksum,
