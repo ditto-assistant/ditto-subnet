@@ -40,7 +40,7 @@
     {
       "id": "wandb-operations",
       "title": "W&B validator and worker operations",
-      "keywords": ["wandb", "w&b", "telemetry", "run", "metrics", "history", "logs", "node failure", "fleet diagnosis"],
+      "keywords": ["wandb", "w&b", "weights and biases", "telemetry", "wandb run", "run history", "node failure", "fleet diagnosis"],
       "summary": "Query bounded W&B run evidence through the authenticated API, then corroborate it with Platform or chain truth.",
       "owns": [".agents/skills/wandb-ops"],
       "read": [".agents/skills/wandb-ops/SKILL.md"],

@@ -144,6 +144,20 @@ def test_longmemeval_query_preserves_research_scoring_boundary() -> None:
     assert topic_ids == ["dittobench-scoring", "research-adapters"]
 
 
+def test_wandb_query_routes_to_operations_without_hijacking_generic_run_verbs() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("compare wandb run history across validator nodes")
+    ]
+    assert topic_ids[0] == "wandb-operations"
+
+    generic = {
+        str(topic["id"])
+        for topic in lookup("run the validator scoring job again", maximum=3)
+    }
+    assert "wandb-operations" not in generic
+
+
 def test_submission_triage_skill_requires_public_backroom_and_guarded_writes() -> None:
     skill = ROOT / ".agents" / "skills" / "backroom-submission-triage"
     body = (skill / "SKILL.md").read_text()
