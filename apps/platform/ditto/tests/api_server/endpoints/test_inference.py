@@ -75,37 +75,42 @@ def _embedding_config(**overrides: Any) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_embedding_gateway_falls_back_to_direct_perplexity_on_429() -> None:
+async def test_embedding_gateway_falls_back_to_openrouter_on_direct_429() -> None:
     requests: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.url.host == "openrouter.ai":
+        if request.url.host == "api.perplexity.ai":
             return httpx.Response(429, request=request, headers={"Retry-After": "5"})
         payload = json.loads(request.content)
         assert payload == {
-            "model": "pplx-embed-v1-0.6b",
+            "model": "perplexity/pplx-embed-v1-0.6b",
             "input": ["private input"],
             "dimensions": 768,
-            "encoding_format": "base64_int8",
+            "encoding_format": "float",
+            "provider": {
+                "order": ["Perplexity"],
+                "allow_fallbacks": False,
+                "data_collection": "deny",
+            },
         }
-        assert request.headers["Authorization"] == "Bearer perplexity-test-key"
+        assert request.headers["Authorization"] == "Bearer openrouter-test-key"
         return httpx.Response(200, request=request, json={"data": []})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         result = await _post_embedding_provider(
             client, config=_embedding_config(), inputs=["private input"]
         )
-    assert result.direct
+    assert not result.direct
     assert result.attempts == 2
     assert [request.url.host for request in requests] == [
-        "openrouter.ai",
         "api.perplexity.ai",
+        "openrouter.ai",
     ]
 
 
 @pytest.mark.asyncio
-async def test_embedding_gateway_does_not_fallback_on_agent_request_error() -> None:
+async def test_embedding_gateway_does_not_fallback_on_direct_request_error() -> None:
     requests: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -116,13 +121,13 @@ async def test_embedding_gateway_does_not_fallback_on_agent_request_error() -> N
         result = await _post_embedding_provider(
             client, config=_embedding_config(), inputs=["private input"]
         )
-    assert not result.direct
+    assert result.direct
     assert result.response.status_code == 400
     assert len(requests) == 1
 
 
 @pytest.mark.asyncio
-async def test_embedding_gateway_keeps_openrouter_primary_when_healthy() -> None:
+async def test_embedding_gateway_keeps_direct_perplexity_primary_when_healthy() -> None:
     requests: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -133,9 +138,29 @@ async def test_embedding_gateway_keeps_openrouter_primary_when_healthy() -> None
         result = await _post_embedding_provider(
             client, config=_embedding_config(), inputs=["private input"]
         )
-    assert not result.direct
+    assert result.direct
     assert result.response.status_code == 200
     assert len(requests) == 1
+    assert requests[0].url.host == "api.perplexity.ai"
+
+
+@pytest.mark.asyncio
+async def test_direct_embedding_primary_avoids_hung_openrouter() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "openrouter.ai":
+            raise httpx.ReadTimeout("router must not be reached", request=request)
+        return httpx.Response(200, request=request, json={"data": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await _post_embedding_provider(
+            client, config=_embedding_config(), inputs=["private input"]
+        )
+    assert result.direct
+    assert result.attempts == 1
+    assert [request.url.host for request in requests] == ["api.perplexity.ai"]
 
 
 def test_direct_perplexity_int8_conversion_matches_openrouter_float_contract() -> None:

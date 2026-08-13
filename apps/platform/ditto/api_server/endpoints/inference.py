@@ -323,7 +323,14 @@ async def _post_embedding_provider(
     config: Any,
     inputs: list[str],
 ) -> _EmbeddingProviderResult:
-    """Use OpenRouter first, then direct Perplexity for the same frozen model."""
+    """Use direct Perplexity first, then OpenRouter for the same frozen model.
+
+    Both routes serve the frozen ``pplx-embed-v1-0.6b`` identity and the direct
+    int8 response is normalized to the public float contract below.  Keeping
+    the direct endpoint first is operationally important: a hung OpenRouter
+    request may consume the full shared provider timeout, leaving no time in a
+    harness's embedding deadline to reach an otherwise healthy fallback.
+    """
     openrouter_payload = {
         "model": config.embedding_model,
         "input": inputs,
@@ -335,8 +342,41 @@ async def _post_embedding_provider(
             "data_collection": "deny",
         },
     }
-    openrouter: _ProviderResult | None = None
-    openrouter_error: _ProviderCallError | None = None
+    direct: _ProviderResult | None = None
+    direct_error: _ProviderCallError | None = None
+    if config.perplexity_api_key is not None:
+        try:
+            direct = await _post_provider_with_retry(
+                client,
+                config.embedding_fallback_url,
+                payload={
+                    "model": _PPLX_EMBED_RESPONSE_MODEL,
+                    "input": inputs,
+                    "dimensions": config.embedding_dimensions,
+                    "encoding_format": "base64_int8",
+                },
+                headers={
+                    "Authorization": f"Bearer {config.perplexity_api_key}",
+                    "Content-Type": "application/json",
+                },
+                retry_backpressure=False,
+            )
+        except _ProviderCallError as error:
+            direct_error = error
+        if direct is not None and direct.response.status_code < 400:
+            return _EmbeddingProviderResult(
+                response=direct.response, attempts=direct.attempts, direct=True
+            )
+        if (
+            direct is not None
+            and direct.response.status_code not in _PROVIDER_RETRY_STATUSES
+        ):
+            return _EmbeddingProviderResult(
+                response=direct.response, attempts=direct.attempts, direct=True
+            )
+        if direct is not None:
+            await direct.response.aclose()
+
     try:
         openrouter = await _post_provider_with_retry(
             client,
@@ -346,61 +386,22 @@ async def _post_embedding_provider(
             retry_backpressure=False,
         )
     except _ProviderCallError as error:
-        openrouter_error = error
-    if openrouter is not None and openrouter.response.status_code < 400:
-        return _EmbeddingProviderResult(
-            response=openrouter.response, attempts=openrouter.attempts, direct=False
-        )
-    if config.perplexity_api_key is None or (
-        openrouter is not None
-        and openrouter.response.status_code not in _PROVIDER_RETRY_STATUSES
-    ):
-        if openrouter_error is not None:
-            raise openrouter_error
-        assert openrouter is not None
-        return _EmbeddingProviderResult(
-            response=openrouter.response, attempts=openrouter.attempts, direct=False
-        )
-    if openrouter is not None:
-        await openrouter.response.aclose()
-    try:
-        direct = await _post_provider_with_retry(
-            client,
-            config.embedding_fallback_url,
-            payload={
-                "model": _PPLX_EMBED_RESPONSE_MODEL,
-                "input": inputs,
-                "dimensions": config.embedding_dimensions,
-                "encoding_format": "base64_int8",
-            },
-            headers={
-                "Authorization": f"Bearer {config.perplexity_api_key}",
-                "Content-Type": "application/json",
-            },
-        )
-    except _ProviderCallError as error:
         raise _ProviderCallError(
-            attempts=(
-                openrouter.attempts
-                if openrouter is not None
-                else openrouter_error.attempts
-                if openrouter_error is not None
-                else 0
-            )
+            attempts=(direct_error.attempts if direct_error is not None else 0)
             + error.attempts,
             timed_out=error.timed_out,
         ) from error
     return _EmbeddingProviderResult(
-        response=direct.response,
+        response=openrouter.response,
         attempts=(
-            openrouter.attempts
-            if openrouter is not None
-            else openrouter_error.attempts
-            if openrouter_error is not None
+            direct.attempts
+            if direct is not None
+            else direct_error.attempts
+            if direct_error is not None
             else 0
         )
-        + direct.attempts,
-        direct=True,
+        + openrouter.attempts,
+        direct=False,
     )
 
 
