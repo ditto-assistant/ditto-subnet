@@ -1880,7 +1880,7 @@ class TestEarliestSourceAttribution:
             agent_id=_id("81266c17"),
             composite=0.8871,
             miner="5Gggggggg",
-            coldkey="5GgggColdkey",
+            coldkey="5GgggCold",
             sha256="8b" * 32,
             size_bytes=511000,
             content_fingerprint=_sk(shared | {f"gonly{i:011x}" for i in range(2)}),
@@ -1889,7 +1889,7 @@ class TestEarliestSourceAttribution:
         decision = evaluate_duplicate_signals(
             agent_id=_id("16eddfaf"),
             miner_hotkey="5Beking",
-            miner_coldkey="5BekingColdkey",
+            miner_coldkey="5BekingCold",
             sha256="9c" * 32,
             composite=0.8904,
             size_bytes=511400,
