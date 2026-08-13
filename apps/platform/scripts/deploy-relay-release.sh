@@ -16,8 +16,10 @@ artifact_dir="$(cd "$artifact_dir" && pwd)"
 state_root="${DITTO_RELAY_STATE_ROOT:-/opt/ditto-platform-relay}"
 release_root="$state_root/releases"
 release_dir="$release_root/$source_commit"
-platform_env="${DITTO_RELAY_PLATFORM_ENV:-/opt/ditto-platform/.env}"
-deploy_env="${DITTO_RELAY_DEPLOY_ENV:-/opt/ditto-platform/.env.deploy}"
+# Ansible owns the base env in the monorepo checkout; the Platform deployment
+# owns its sibling override. /opt/ditto-platform is the retired pre-cutover root.
+platform_env="${DITTO_RELAY_PLATFORM_ENV:-/opt/ditto-subnet/apps/platform/.env}"
+deploy_env="${DITTO_RELAY_DEPLOY_ENV:-/opt/ditto-subnet/apps/platform/.env.deploy}"
 canary_port="${DITTO_RELAY_CANARY_PORT:-8020}"
 start_timeout="${DITTO_RELAY_START_TIMEOUT_SECONDS:-120}"
 

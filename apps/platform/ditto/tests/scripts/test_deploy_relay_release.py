@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).parents[3]
 COMMIT = "a" * 40
+RELEASE_SCRIPT = ROOT / "scripts" / "deploy-relay-release.sh"
 
 
 def _write_executable(path: Path, source: str) -> None:
@@ -48,7 +49,9 @@ def _run_release(
         ).write_text("wheel")
     (artifact / "ecosystem.config.js").write_text("module.exports = {apps: []};\n")
     platform_env = tmp_path / "platform.env"
-    platform_env.write_text("PYLON_URL=http://127.0.0.1:1\n")
+    platform_env.write_text(
+        "PYLON_URL=http://127.0.0.1:1\nPERPLEXITY_API_KEY=direct-provider-test-key\n"
+    )
 
     command_log = tmp_path / "commands.log"
     jlist = json.dumps(
@@ -88,6 +91,7 @@ fi
         fake_bin / "pm2",
         f"""
 echo "pm2 $*" >> "$TEST_COMMAND_LOG"
+echo "pm2 perplexity-bound=${{PERPLEXITY_API_KEY:+yes}}" >> "$TEST_COMMAND_LOG"
 if [ "$1" = jlist ]; then
   printf '%s\\n' '{jlist}'
   exit 0
@@ -118,7 +122,7 @@ fi
     result = subprocess.run(
         [
             "bash",
-            str(ROOT / "scripts" / "deploy-relay-release.sh"),
+            str(RELEASE_SCRIPT),
             str(artifact),
             COMMIT,
         ],
@@ -149,7 +153,21 @@ def test_release_builds_once_and_rolls_slots_in_order(tmp_path: Path) -> None:
     assert commands.index("--only ditto-api-relay-1") < commands.index(
         "pm2 delete ditto-api-relay-2"
     )
+    assert "pm2 perplexity-bound=yes" in commands
     assert "relay-release-commit=" + COMMIT in result.stdout
+
+
+def test_release_defaults_to_ansible_owned_monorepo_env() -> None:
+    source = RELEASE_SCRIPT.read_text()
+
+    assert (
+        'platform_env="${DITTO_RELAY_PLATFORM_ENV:-'
+        '/opt/ditto-subnet/apps/platform/.env}"' in source
+    )
+    assert (
+        'deploy_env="${DITTO_RELAY_DEPLOY_ENV:-'
+        '/opt/ditto-subnet/apps/platform/.env.deploy}"' in source
+    )
 
 
 def test_release_restores_failed_second_slot(tmp_path: Path) -> None:

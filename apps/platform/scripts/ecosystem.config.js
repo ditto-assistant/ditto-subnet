@@ -91,8 +91,8 @@ const relayApp = (port, index) => ({
   instances: 1,
   exec_mode: "fork",
   env: {
-    // The only per-process differences. /opt/ditto-platform/.env is SHARED by
-    // every process here, so the role cannot come from there.
+    // The only per-process differences. The Ansible-owned Platform env is
+    // shared by every process here, so the role cannot come from there.
     DITTO_ROLE: "relay",
     // Wheel-based relay releases have no .git checkout. CI supplies the exact
     // source SHA and /health validates it before each rolling handover.
