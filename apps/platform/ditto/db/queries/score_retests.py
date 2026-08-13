@@ -512,12 +512,9 @@ async def activate_next_score_retest(
             # ``scored``. The accepted score and exact run below remain the
             # authority for whether this repair is still valid.
             continue
-        elif (
-            ticket.status != TicketStatus.SCORED
-            and not (
-                ticket.status == TicketStatus.EXPIRED
-                and entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
-            )
+        elif ticket.status != TicketStatus.SCORED and not (
+            ticket.status == TicketStatus.EXPIRED
+            and entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
         ):
             stale_reason = "accepted score ticket is no longer reusable"
         elif score is None or score.run_id != entry.payload.get("run_id"):
