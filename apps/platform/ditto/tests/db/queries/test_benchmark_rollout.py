@@ -3252,6 +3252,80 @@ async def _seed_desired_quorum_cohort(
     return agent_ids, rollout
 
 
+async def _append_scoreless_rollout_tail(
+    session: AsyncSession,
+    *,
+    rollout: BenchmarkRollout,
+    now: datetime,
+    suffix: str,
+) -> UUID:
+    agent_id = uuid4()
+    session.add(
+        Agent(
+            agent_id=agent_id,
+            miner_hotkey=f"miner-tail-{suffix}",
+            name=f"tail-{suffix}",
+            sha256="e" * 64,
+            status=AgentStatus.SCORED,
+            screening_policy_version=9,
+            screened_image_sha256="e" * 64,
+            screened_image_size_bytes=1024,
+            screened_image_id="sha256:" + "e" * 64,
+            screened_image_ref=f"ditto-screen/{agent_id}:latest",
+            screened_image_upload_id=uuid4(),
+            screened_image_verified_at=now,
+            created_at=now + timedelta(minutes=rollout.cohort_size),
+        )
+    )
+    rollout.cohort_size += 1
+    assert await append_rollout_member(
+        session,
+        rollout=rollout,
+        member=RolloutSnapshotMember(
+            agent_id,
+            f"miner-tail-{suffix}",
+            0.1,
+        ),
+        dataset=DatasetPin(
+            seed=rollout.cohort_size,
+            sha256="e" * 64,
+            run_size="full",
+        ),
+        now=now,
+    )
+    return agent_id
+
+
+def _add_exhausted_tail_tickets(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    now: datetime,
+    bench_version: int,
+    running_validator: int | None = None,
+) -> None:
+    for validator in range(3):
+        running = validator == running_validator
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                bench_version=bench_version,
+                validator_hotkey=f"tail-validator-{validator}",
+                status=(TicketStatus.ISSUED if running else TicketStatus.EXPIRED),
+                purpose=TicketPurpose.CANONICAL_QUORUM,
+                purpose_revision=2,
+                issued_at=now - timedelta(minutes=10),
+                deadline=now + timedelta(minutes=80) if running else now,
+                attempt_count=2,
+                manual_retry_grants=1,
+                infra_retry_grants=0,
+                failure_reason=None if running else "scoring_error",
+                failed_at=None if running else now,
+                failure_detail=None if running else "agent seed contract failed",
+            )
+        )
+
+
 @pytest.mark.parametrize(
     ("smoke_indices", "held_indices"),
     [((0,), ()), ((), (0,))],
@@ -3418,6 +3492,148 @@ async def test_activation_at_five_ranked_quorums_keeps_a_full_emission_set(
         assert {row.agent_id for row in ledger} == set(agent_ids)
         assert {row.bench_version for row in ledger} == {CANARY_BENCH_VERSION}
         assert all(row.eligible for row in ledger)
+
+
+async def test_activation_suppresses_three_terminal_scoreless_tail_members(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (_agent_ids, rollout)):
+        tail_ids = []
+        for index in range(3):
+            tail_id = await _append_scoreless_rollout_tail(
+                session, rollout=rollout, now=now, suffix=f"terminal-{index}"
+            )
+            tail_ids.append(tail_id)
+            _add_exhausted_tail_tickets(
+                session,
+                agent_id=tail_id,
+                now=now,
+                bench_version=rollout.desired_version,
+            )
+        await session.flush()
+
+        assert await active_bench_version(session) == CANARY_BENCH_VERSION
+        assert await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert rollout.status == "activated"
+        assert await open_rollout(session) is None
+
+        audits = list(
+            await session.scalars(
+                select(BenchmarkRolloutAudit)
+                .where(BenchmarkRolloutAudit.rollout_id == rollout.rollout_id)
+                .order_by(
+                    BenchmarkRolloutAudit.recorded_at, BenchmarkRolloutAudit.audit_id
+                )
+            )
+        )
+        suppression = next(
+            audit for audit in audits if audit.event == "tail_suppressed"
+        )
+        ordered_tail_ids = sorted(str(agent_id) for agent_id in tail_ids)
+        assert suppression.payload == {
+            "agent_ids": ordered_tail_ids,
+            "maximum_agent_count": 3,
+            "reason": "canonical retry budgets exhausted without a score",
+        }
+        activated = next(audit for audit in audits if audit.event == "activated")
+        assert activated.payload["suppressed_tail_agent_ids"] == ordered_tail_ids
+        assert all(
+            activated.payload["score_counts"][str(tail_id)] == 0 for tail_id in tail_ids
+        )
+
+
+async def test_activation_does_not_suppress_a_running_tail_attempt(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (_agent_ids, rollout)):
+        tail_id = await _append_scoreless_rollout_tail(
+            session, rollout=rollout, now=now, suffix="running"
+        )
+        _add_exhausted_tail_tickets(
+            session,
+            agent_id=tail_id,
+            now=now,
+            bench_version=rollout.desired_version,
+            running_validator=0,
+        )
+        await session.flush()
+
+        assert not await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert rollout.status == "collecting"
+
+
+async def test_activation_does_not_suppress_multiple_unfinished_tail_members(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (_agent_ids, rollout)):
+        tail_id = await _append_scoreless_rollout_tail(
+            session, rollout=rollout, now=now, suffix="terminal"
+        )
+        await _append_scoreless_rollout_tail(
+            session, rollout=rollout, now=now, suffix="unfinished"
+        )
+        _add_exhausted_tail_tickets(
+            session,
+            agent_id=tail_id,
+            now=now,
+            bench_version=rollout.desired_version,
+        )
+        await session.flush()
+
+        assert not await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert rollout.status == "collecting"
+
+
+async def test_activation_does_not_suppress_more_than_three_exhausted_tail_members(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (_agent_ids, rollout)):
+        for index in range(4):
+            tail_id = await _append_scoreless_rollout_tail(
+                session, rollout=rollout, now=now, suffix=f"over-limit-{index}"
+            )
+            _add_exhausted_tail_tickets(
+                session,
+                agent_id=tail_id,
+                now=now,
+                bench_version=rollout.desired_version,
+            )
+        await session.flush()
+
+        assert not await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert rollout.status == "collecting"
 
 
 @pytest.mark.parametrize(

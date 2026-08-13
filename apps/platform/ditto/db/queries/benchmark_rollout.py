@@ -99,6 +99,11 @@ DEFAULT_RESCORE_COHORT_SIZE = 10
 # created by an older deployment still finishes without member deletion.
 MAX_PERSISTED_RESCORE_COHORT_SIZE = 25
 SCORING_QUORUM = 3
+# A rollout may close around no more than this many terminal, scoreless members
+# below its frozen priority gate. This is an integrity bound, not live operator
+# policy: changing it mid-rollout would move the completion threshold beneath
+# work validators have already accepted.
+MAX_EXHAUSTED_ROLLOUT_TAIL_MEMBERS = 3
 # Bench v9 requires transcript canonicalization that does not reorder the live
 # per-case attribution slice, shipped in v0.53.10. v0.53.8/v0.53.9 correctly
 # isolate unfinished request tails, but their in-place canonical sort makes the
@@ -1840,6 +1845,62 @@ async def issue_rollout_ticket(
     return ticket
 
 
+async def _terminal_exhausted_rollout_tail(
+    session: AsyncSession,
+    *,
+    rollout: BenchmarkRollout,
+    member_positions: dict[UUID, int],
+    incomplete_ids: set[UUID],
+    counts: dict[UUID, int],
+) -> set[UUID]:
+    """Return the terminal scoreless tail members a rollout may suppress.
+
+    Authority may already belong to the desired benchmark while the wider
+    rescore cohort finishes. Do not leave that rollout open forever when its
+    final non-priority members have failed on every quorum validator despite an
+    audited operator retry. This is deliberately narrower than treating an
+    exhausted ticket as a score: at most three members, all outside the frozen
+    priority gate, each with zero accepted rows and no live or retryable
+    canonical lease.
+    """
+    if not 1 <= len(incomplete_ids) <= MAX_EXHAUSTED_ROLLOUT_TAIL_MEMBERS:
+        return set()
+    if any(
+        member_positions.get(agent_id, 0) <= rollout.priority_cohort_target
+        or counts.get(agent_id, 0) != 0
+        for agent_id in incomplete_ids
+    ):
+        return set()
+
+    tickets = list(
+        await session.scalars(
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id.in_(incomplete_ids),
+                ValidatorTicket.bench_version == rollout.desired_version,
+            )
+        )
+    )
+    tickets_by_agent: dict[UUID, list[ValidatorTicket]] = {
+        agent_id: [] for agent_id in incomplete_ids
+    }
+    for ticket in tickets:
+        tickets_by_agent[ticket.agent_id].append(ticket)
+
+    from ditto.db.queries.tickets import ticket_attempt_cap
+
+    for agent_tickets in tickets_by_agent.values():
+        if len(agent_tickets) < SCORING_QUORUM or any(
+            ticket.purpose != TicketPurpose.CANONICAL_QUORUM
+            or ticket.purpose_revision <= 0
+            or ticket.status != TicketStatus.EXPIRED
+            or ticket.manual_retry_grants <= 0
+            or ticket.attempt_count < ticket_attempt_cap(ticket)
+            for ticket in agent_tickets
+        ):
+            return set()
+    return set(incomplete_ids)
+
+
 async def maybe_activate_rollout(
     session: AsyncSession,
     rollout: BenchmarkRollout,
@@ -1847,7 +1908,7 @@ async def maybe_activate_rollout(
     now: datetime,
     inference_requirements: InferenceActivationRequirements | None = None,
 ) -> bool:
-    """Activate after every frozen cohort member reaches desired quorum."""
+    """Close after the frozen cohort finishes or its terminal tail is suppressed."""
     # A superseded (or already activated) rollout is terminal and must never be
     # revived by a refresh sweep that still holds a stale reference to it.
     if rollout.status not in ("collecting", "blocked_ineligible"):
@@ -1887,8 +1948,23 @@ async def maybe_activate_rollout(
     ):
         return False
     member_ids = {member.agent_id for member, _agent in member_rows}
-    if any(counts.get(agent_id, 0) < SCORING_QUORUM for agent_id in member_ids):
-        return False
+    member_positions = {
+        member.agent_id: member.position for member, _agent in member_rows
+    }
+    incomplete_ids = {
+        agent_id for agent_id in member_ids if counts.get(agent_id, 0) < SCORING_QUORUM
+    }
+    suppressed_tail_ids: set[UUID] = set()
+    if incomplete_ids:
+        suppressed_tail_ids = await _terminal_exhausted_rollout_tail(
+            session,
+            rollout=rollout,
+            member_positions=member_positions,
+            incomplete_ids=incomplete_ids,
+            counts=counts,
+        )
+        if incomplete_ids != suppressed_tail_ids:
+            return False
     # Activation is the LAST point at which the full-emission-set guarantee can
     # be enforced. Before activation, list_eligible_ledger's own threshold holds
     # the ledger on the active version until MIN_DESIRED_AUTHORITY_AGENTS agents
@@ -1922,6 +1998,21 @@ async def maybe_activate_rollout(
     rollout.status = "activated"
     rollout.activated_at = now
     rollout.blocked_reason = None
+    ordered_suppressed_tail_ids = sorted(suppressed_tail_ids, key=str)
+    if suppressed_tail_ids:
+        await _audit(
+            session,
+            rollout,
+            "tail_suppressed",
+            {
+                "agent_ids": [
+                    str(agent_id) for agent_id in ordered_suppressed_tail_ids
+                ],
+                "maximum_agent_count": MAX_EXHAUSTED_ROLLOUT_TAIL_MEMBERS,
+                "reason": "canonical retry budgets exhausted without a score",
+            },
+            now=now,
+        )
     await _audit(
         session,
         rollout,
@@ -1930,6 +2021,9 @@ async def maybe_activate_rollout(
             "bench_version": rollout.desired_version,
             "score_counts": {str(k): v for k, v in counts.items()},
             "ranked_quorum_agents": ranked_cohort_agents,
+            "suppressed_tail_agent_ids": [
+                str(agent_id) for agent_id in ordered_suppressed_tail_ids
+            ],
         },
         now=now,
     )
