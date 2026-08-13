@@ -272,6 +272,73 @@ function VersionSwitch(props: { store: LeaderboardStore }): JSX.Element {
   );
 }
 
+// ── KOTH standing callout ────────────────────────────────────
+// Rendered between the version switch and the board whenever the reigning
+// champion is NOT raw #1 — the one standing that reliably confuses readers
+// ("why is #4 the champion?"). It states the first-seen KOTH rule inline,
+// above the table, on both mounts (the overview hides the emissions strip,
+// so this is the only explanation the compact board carries). Every number
+// is read from the fold; the strip below keeps the full math.
+
+function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
+  const store = props.store;
+  const floor = createMemo(() =>
+    dethroneFloor(store.emissions(), store.champion(), store.settledView()),
+  );
+  const shown = createMemo(() => {
+    if (store.unavailable()) return false;
+    const champ = store.champion();
+    return Boolean(champ && typeof champ.rank === "number" && champ.rank > 1);
+  });
+  const aboveCount = (): number => ((store.champion()?.rank as number) || 1) - 1;
+  const aboveText = (): string => {
+    const n = aboveCount();
+    return n === 1 ? "1 agent scores higher than it" : n + " agents score higher than it";
+  };
+  return (
+    <div
+      class="koth-standing"
+      id="koth-standing"
+      classList={{ show: shown() }}
+      role="note"
+      aria-label="Why the reigning champion is not raw rank 1"
+    >
+      <Show when={shown() ? store.champion() : null}>
+        {(champ) => (
+          <>
+            <span class="koth-standing-crown" aria-hidden="true">
+              ♛
+            </span>
+            <span class="koth-standing-copy" id="koth-standing-copy">
+              <b>
+                <EntityButton
+                  kind="agent"
+                  id={champ().agent_id}
+                  label={agentName(champ().agent_name)}
+                />
+                {" is the reigning champion from raw #" + champ().rank + "."}
+              </b>{" "}
+              {aboveText() +
+                ", but the crown only moves when a challenger beats the first-seen incumbent " +
+                "by more than the dethrone band"}
+              <Show when={floor()}>
+                {(f) => (
+                  <>
+                    {" — "}
+                    <b class="beat">{"beat " + fx(f().floor) + " to contend"}</b>
+                  </>
+                )}
+              </Show>
+              {". Until then the incumbent keeps the champion share of emissions; " +
+                "the dimmed rows outscore it, but not by enough."}
+            </span>
+          </>
+        )}
+      </Show>
+    </div>
+  );
+}
+
 // ── Emissions strip (render() 4934–5009 + renderDethroneFloor) ──
 
 function sharedSeedNote(recipient: { shared_seed_confirmations?: number | null } | null): string {
@@ -854,6 +921,7 @@ export function LeaderboardBlock(props: { mode: "overview" | "page" }): JSX.Elem
         </span>
       </div>
       <VersionSwitch store={store} />
+      <KothStandingCallout store={store} />
       <BoardTable store={store} />
       {/* Post-table context: emissions, rollout, and standing notices sit
           below the board so the table starts at the top of the Leaderboard

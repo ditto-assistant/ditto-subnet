@@ -19,6 +19,7 @@ import {
   shortKey,
 } from "../../lib/format";
 import {
+  dethroneFloor,
   displayComposite,
   chainWeightLabel,
   errBandBounds,
@@ -284,6 +285,10 @@ function BoardRow(props: {
   index: number;
   store: LeaderboardStore;
   chainRegistrationUnknown: boolean;
+  /** The reigning champion's display rank, or null when there is no ranked
+   * champion. Rows ranked above it outscore the incumbent without having
+   * dethroned it — they dim and carry the "outscores · not dethroned" note. */
+  championRank: number | null;
 }): JSX.Element {
   const e = (): BoardEntry => props.entry;
   const v9ConfirmationSuppressed = (): boolean =>
@@ -301,6 +306,30 @@ function BoardRow(props: {
   const chainInfo = (): { weighted: number; champion: number; vectors: number } | null =>
     props.store.chainFold()?.byHotkey[e().miner_hotkey] ?? null;
   const isChamp = (): boolean => emission()?.role === "champion";
+  // A row that outranks the reigning incumbent without having dethroned it:
+  // the exact state that reads as "why isn't raw #1 the champion?". Only
+  // meaningful for ranked, finalized rows while the champion itself sits
+  // below raw #1.
+  const aboveChampion = (): boolean =>
+    finalizedEntry() &&
+    elig() &&
+    !isChamp() &&
+    e().rank != null &&
+    props.championRank != null &&
+    props.championRank > 1 &&
+    (e().rank as number) < props.championRank;
+  const aboveChampionTip = (): string => {
+    const floor = dethroneFloor(
+      props.store.emissions(),
+      props.store.champion(),
+      props.store.settledView(),
+    );
+    return (
+      "Scores above the reigning champion, but not by more than the dethrone band" +
+      (floor ? " — beat " + fx(floor.floor) + " to contend" : "") +
+      ". Until a challenger clears the band, the first-seen incumbent keeps the champion share."
+    );
+  };
   // Rank medals (r1–r3) require live emission eligibility:
   // e.emission_eligible === true, never a looser truthiness.
   const rankCls = (): string =>
@@ -320,6 +349,7 @@ function BoardRow(props: {
     ", composite " +
     fx(displayComposite(e(), props.store.settledView())) +
     (emission() ? ", KOTH " + emission()?.role : "") +
+    (aboveChampion() ? ", outscores the champion but has not cleared the dethrone band" : "") +
     ". Activate for run detail.";
   const familyKey = (): string => String(e().agent_id);
   const familyMembers = () => e().submission_family?.members ?? [];
@@ -340,7 +370,7 @@ function BoardRow(props: {
     <>
       <tr
         data-i={props.index}
-        class={isChamp() ? "champion" : undefined}
+        class={isChamp() ? "champion" : aboveChampion() ? "above-champion" : undefined}
         tabindex="0"
         aria-label={rowLabel()}
         onClick={activate}
@@ -380,6 +410,11 @@ function BoardRow(props: {
                 }
               >
                 <span class={"rank" + rankCls()}>
+                  <Show when={isChamp()}>
+                    <span class="rank-crown" aria-hidden="true">
+                      ♛
+                    </span>
+                  </Show>
                   {finalizedEntry() ? e().rank : "P" + e().rank}
                 </span>
                 <Show when={finalizedEntry()}>
@@ -485,12 +520,17 @@ function BoardRow(props: {
           <Show when={emission()} fallback={<span class="muted">–</span>}>
             {(recipient) => (
               <span class={"emission-badge " + recipient().role}>
-                <span aria-hidden="true">●</span>{" "}
+                <span aria-hidden="true">{recipient().role === "champion" ? "♛" : "●"}</span>{" "}
                 {(recipient().role === "champion" ? "Champion" : "Tail") +
                   " · " +
                   pct(recipient().share_of_miner_pool as number)}
               </span>
             )}
+          </Show>
+          <Show when={aboveChampion()}>
+            <ChipTip class="above-champion-note tip-chip" text={aboveChampionTip()}>
+              outscores · not dethroned
+            </ChipTip>
           </Show>
           <Show when={chainInfo()}>
             {(info) => (
@@ -602,6 +642,12 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
   const chainRegistrationUnknown = createMemo(() => {
     const entries = store.entries();
     return entries.length > 0 && entries.every((e) => e.registered == null);
+  });
+  // The champion's display rank drives the above-the-champion dimming; null
+  // (no fold, suppressed champion, or unranked) turns the treatment off.
+  const championRank = createMemo<number | null>(() => {
+    const champ = store.champion();
+    return champ && typeof champ.rank === "number" ? champ.rank : null;
   });
   createEffect(() => {
     // Rank-movement baseline: rewritten after every successful render so the
@@ -816,6 +862,7 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                       index={entryIndex().get(entry) ?? 0}
                       store={store}
                       chainRegistrationUnknown={chainRegistrationUnknown()}
+                      championRank={championRank()}
                     />
                   )}
                 </For>

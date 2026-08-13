@@ -629,6 +629,9 @@
 .overview-main #board .emission-badge {
   white-space: normal;
 }
+.overview-main #board .above-champion-note {
+  white-space: normal;
+}
 /* No sideways scrolling on the compact board: the fixed layout already
    pins the table to pane width, this clips any rounding remainder. */
 .overview-main .board {
@@ -741,6 +744,16 @@
 .champion-meta b {
   color: var(--text);
   font-weight: 700;
+}
+/* The held-crown note: rendered only while the champion is not raw #1, so
+   the box itself explains the standing readers trip over most. */
+.champion-note {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 /* The overview shows the condensed board: the provisional-standings /

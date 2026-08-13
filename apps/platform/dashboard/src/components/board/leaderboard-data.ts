@@ -60,6 +60,11 @@ export interface LeaderboardStore {
   entries: Accessor<BoardEntry[]>;
   settledView: Accessor<boolean>;
   emissions: Accessor<EmissionsFold | null>;
+  /** The reigning champion's board entry (resolved from the emissions fold's
+   * champion_agent_id), or null when the fold or the entry is absent. The
+   * KOTH incumbent can sit below raw #1, so consumers must read its `rank`
+   * rather than assume the top row. */
+  champion: Accessor<BoardEntry | null>;
   emissionFor: (agentId: string | null | undefined) => EmissionRecipient | null;
   chainWeights: Accessor<WeightsSnapshot | null>;
   chainFold: Accessor<ChainWeightFold | null>;
@@ -102,6 +107,13 @@ function buildStore(): LeaderboardStore {
     return rankEntries((d.entries ?? []) as BoardEntry[], settledView());
   });
   const emissions = createMemo<EmissionsFold | null>(() => payload()?.emissions ?? null);
+  const champion = createMemo<BoardEntry | null>(() => {
+    const fold = emissions();
+    if (!fold || fold.champion_agent_id == null) return null;
+    return (
+      entries().find((entry) => String(entry.agent_id) === String(fold.champion_agent_id)) ?? null
+    );
+  });
   const emissionByAgent = createMemo<Record<string, EmissionRecipient>>(() => {
     const out: Record<string, EmissionRecipient> = {};
     (emissions()?.recipients ?? []).forEach((recipient) => {
@@ -162,6 +174,7 @@ function buildStore(): LeaderboardStore {
     entries,
     settledView,
     emissions,
+    champion,
     emissionFor: (agentId) =>
       agentId == null ? null : (emissionByAgent()[String(agentId)] ?? null),
     chainWeights,

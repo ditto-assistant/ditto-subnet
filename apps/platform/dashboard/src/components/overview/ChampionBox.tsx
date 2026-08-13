@@ -3,7 +3,7 @@
 // headline identity on purpose: box = who reigns at a glance, strip = why.
 // Solid's fine-grained updates replace the lastChampionHtml signature gate —
 // unchanged content never rewrites the aria-live region.
-import { Show, createMemo } from "solid-js";
+import { Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { agentName, fx, pct, relTime, shortKey } from "../../lib/format";
@@ -16,14 +16,7 @@ import type { BoardEntry, LeaderboardStore } from "../board/leaderboard-data";
 export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   const store = props.store;
   const emissions = store.emissions;
-  const championEntry = createMemo<BoardEntry | null>(() => {
-    const e = emissions();
-    if (!e || e.champion_agent_id == null) return null;
-    return (
-      store.entries().find((entry) => String(entry.agent_id) === String(e.champion_agent_id)) ??
-      null
-    );
-  });
+  const championEntry = (): BoardEntry | null => store.champion();
   const hasChampion = (): boolean => emissions()?.champion_agent_id != null;
   const name = (): string => {
     const entry = championEntry();
@@ -119,6 +112,21 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               </span>
             </Show>
           </div>
+          {/* The held-crown note: the champion sitting below raw #1 is the
+              standing that confuses readers most, so the box says why in
+              place instead of leaving it to the strip on the other page. */}
+          <Show when={((championEntry()?.rank as number) || 1) > 1}>
+            <div class="champion-note" id="champion-note">
+              {"Holds the crown from raw #" +
+                championEntry()?.rank +
+                ": " +
+                ((championEntry()?.rank as number) - 1 === 1
+                  ? "1 agent scores higher"
+                  : (championEntry()?.rank as number) - 1 + " agents score higher") +
+                ", but none by more than the dethrone band. The crown — and the champion share — " +
+                "moves only when the first-seen incumbent is decisively beaten."}
+            </div>
+          </Show>
         </Show>
       </div>
     </section>

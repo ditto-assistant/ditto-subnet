@@ -507,6 +507,97 @@ describe("dethrone floor + rollout strip (row 36)", () => {
   });
 });
 
+// ── Held-crown standing clarity ──
+// The fixture's fold holds the crown at raw #2 while raw #1 leads inside the
+// dethrone band — the exact standing that reads as "why isn't #1 the
+// champion?" and floods the operator channels. The board must say so above
+// the table, dim the not-yet-dethroning leaders, and crown the incumbent's
+// row, all from fold-fed numbers.
+describe("held-crown standing clarity", () => {
+  const floor = dethroneFloor(emissions, championEntry) as NonNullable<
+    ReturnType<typeof dethroneFloor>
+  >;
+
+  it("calls out the held crown above the board with the fold-fed floor", async () => {
+    renderPage();
+    await waitForBoard();
+    await waitFor(() => expect(el("koth-standing").classList.contains("show")).toBe(true));
+    const callout = el("koth-standing");
+    expect(callout).toHaveAttribute("role", "note");
+    expect(callout.textContent).toContain(championEntry.agent_name as string);
+    expect(callout.textContent).toContain(
+      "is the reigning champion from raw #" + championEntry.rank,
+    );
+    expect(callout.textContent).toContain("1 agent scores higher than it");
+    // The score to beat is the additive fold floor, never a hardcoded value.
+    expect(callout.textContent).toContain("beat " + fx(floor.floor) + " to contend");
+    expect(callout.textContent).toContain("the dimmed rows outscore it, but not by enough");
+  });
+
+  it("dims every higher-scoring row and notes it outscores without dethroning", async () => {
+    renderPage();
+    await waitForBoard();
+    await waitFor(() =>
+      expect(document.querySelectorAll("tr.above-champion")).toHaveLength(
+        (championEntry.rank as number) - 1,
+      ),
+    );
+    const dimmed = document.querySelector("tr.above-champion") as HTMLElement;
+    // The dimmed leader keeps its tail badge (it still earns tail emissions)
+    // and gains the not-dethroned note with the floor in its tooltip.
+    const note = dimmed.querySelector(".above-champion-note") as HTMLElement;
+    expect(note.textContent).toBe("outscores · not dethroned");
+    expect(note.getAttribute("data-tooltip")).toContain("beat " + fx(floor.floor) + " to contend");
+    expect(note.getAttribute("data-tooltip")).toContain(
+      "the first-seen incumbent keeps the champion share",
+    );
+    expect(dimmed.getAttribute("aria-label")).toContain(
+      "outscores the champion but has not cleared the dethrone band",
+    );
+    // The champion row is never dimmed and wears the crown in its rank chip.
+    const championRow = document.querySelector("tr.champion") as HTMLElement;
+    expect(championRow.classList.contains("above-champion")).toBe(false);
+    expect(championRow.querySelector(".rank .rank-crown")?.textContent).toBe("♛");
+    // Rows ranked below the champion are untouched: the treatment marks the
+    // held-out leaders, not everything that isn't the champion.
+    expect(document.querySelectorAll("#rows tr[data-i]").length).toBeGreaterThan(
+      document.querySelectorAll("tr.above-champion").length + 1,
+    );
+  });
+
+  it("pins the dimming and hover-restore rules in the stylesheet", () => {
+    expect(cssNorm).toContain(
+      "tbody tr.above-champion > td { opacity: 0.55; transition: opacity 0.15s ease; }",
+    );
+    expect(cssNorm).toContain(
+      "tbody tr.above-champion:hover > td, tbody tr.above-champion:focus-visible > td { opacity: 1; }",
+    );
+  });
+
+  it("stands down entirely when the raw leader holds the crown", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        // Same fold with the crown on raw #1: no held-crown standing exists.
+        return {
+          ...payload,
+          emissions: {
+            ...payload.emissions,
+            champion_agent_id: payload.emissions?.raw_leader_agent_id,
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    // The shared store may briefly hold the previous test's board; wait for
+    // the patched fold to land (the callout drops its .show).
+    await waitFor(() => expect(el("koth-standing").classList.contains("show")).toBe(false));
+    expect(document.querySelectorAll("tr.above-champion")).toHaveLength(0);
+    expect(document.querySelector(".above-champion-note")).toBeNull();
+  });
+});
+
 // ── Row 1 (chip vocabulary slice): the composite cell chips ──
 describe("composite cell chips (row 1 slice)", () => {
   it("carries the continual seed-round chip (the dot plot stays retired)", async () => {

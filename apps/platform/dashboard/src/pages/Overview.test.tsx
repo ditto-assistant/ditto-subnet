@@ -319,6 +319,37 @@ describe("overview leaderboard block (row 1 slice)", () => {
     expect(body.textContent).toContain(fx(displayComposite(championEntry)));
   });
 
+  it("explains a held crown in the champion box and keeps the callout on the compact board", async () => {
+    // The fixture's crown sits at raw #2 while raw #1 leads inside the band —
+    // the standing that reliably reads as a bug ("why is #2 the champion?").
+    // The overview must explain it in place: the strips are hidden here, so
+    // the champion-box note and the callout above the board carry the rule.
+    renderOverview();
+    await waitForBoard();
+    await waitFor(() => expect(el("champion-note").textContent).toBeTruthy());
+    const note = el("champion-note");
+    expect(note.textContent).toContain("Holds the crown from raw #" + championEntry.rank);
+    expect(note.textContent).toContain("1 agent scores higher");
+    expect(note.textContent).toContain("dethrone band");
+    // The shared block's held-crown callout renders on this mount too, and
+    // the overview's strip-hiding rules must never swallow it.
+    await waitFor(() => expect(el("koth-standing").classList.contains("show")).toBe(true));
+    expect(cssNorm).not.toContain("koth-standing");
+    // The higher-scoring leaders dim on the compact board as well, with the
+    // note allowed to wrap in the narrow emissions column.
+    expect(document.querySelectorAll("tr.above-champion")).toHaveLength(
+      (championEntry.rank as number) - 1,
+    );
+    const floor = dethroneFloor(emissions, championEntry);
+    expect(floor).not.toBeNull();
+    expect(el("koth-standing").textContent).toContain(
+      "beat " + fx((floor as NonNullable<typeof floor>).floor) + " to contend",
+    );
+    expect(cssNorm).toContain(
+      ".overview-main #board .above-champion-note { white-space: normal; }",
+    );
+  });
+
   it("fills the snapshot ledger from health + operations and drops the retired stats", async () => {
     renderOverview();
     await waitForBoard();

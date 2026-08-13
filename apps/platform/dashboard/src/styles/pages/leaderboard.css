@@ -26,6 +26,47 @@
   color: var(--warn);
 }
 
+/* ── KOTH standing callout ───────────────────────────────────
+   Shown above the board (both mounts) only while the reigning champion is
+   not raw #1: the gold strip that answers "why is #N the champion?" before
+   the reader ever reaches the emissions strip. */
+.koth-standing {
+  display: none;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in oklch, var(--gold) 38%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--gold) 7%, var(--bg-elev));
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.koth-standing.show {
+  display: flex;
+}
+.koth-standing-crown {
+  flex: 0 0 auto;
+  color: var(--gold);
+  font-size: 16px;
+  line-height: 1.25;
+}
+.koth-standing-copy {
+  min-width: 0;
+}
+.koth-standing-copy b {
+  color: var(--text);
+}
+.koth-standing-copy .entity-link {
+  color: inherit;
+}
+.koth-standing-copy .beat {
+  color: var(--gold);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .emissions-strip {
   display: none;
   margin: -2px 0 12px;
@@ -868,9 +909,31 @@ tbody tr:focus-visible {
 }
 tbody tr.champion {
   background: color-mix(in oklch, var(--gold) 8%, var(--bg-elev));
+  /* The crown's location must survive a glance: a gold rule down the row's
+     leading edge, wherever the incumbent ranks. */
+  box-shadow: inset 3px 0 0 var(--gold);
 }
 tbody tr.champion:hover {
   background: color-mix(in oklch, var(--gold) 13%, var(--bg-elev));
+}
+/* Higher-scoring rows that have NOT dethroned the incumbent: dimmed so the
+   crown reads as the winner at a glance ("why is #4 champion?" — the rows
+   above it lead, but not by more than the dethrone band). Hover or focus
+   restores full strength; the per-row note chip states the rule. */
+tbody tr.above-champion > td {
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+tbody tr.above-champion:hover > td,
+tbody tr.above-champion:focus-visible > td {
+  opacity: 1;
+}
+.above-champion-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font: 9.5px/1.35 var(--mono);
+  white-space: nowrap;
 }
 .tip {
   border-color: color-mix(in oklch, var(--text-dim) 55%, transparent);
@@ -881,6 +944,17 @@ tbody tr.champion:hover {
   border-radius: 3px;
   background: var(--bg-elev-2);
   color: var(--text-dim);
+}
+/* The champion row's rank chip goes gold with a crown wherever the
+   incumbent sits — the r1–r3 medals alone made raw #1 look like the
+   winner even when the crown was four rows down. */
+tbody tr.champion .rank {
+  background: color-mix(in oklch, var(--gold) 16%, var(--bg-elev));
+  color: var(--rank-one-text);
+}
+.rank .rank-crown {
+  margin-right: 2px;
+  color: var(--gold);
 }
 .rank.r1 {
   background: color-mix(in oklch, var(--gold) 14%, var(--bg-elev));
