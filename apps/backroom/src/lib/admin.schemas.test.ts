@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import type { output as ZodOutput } from 'zod'
+import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   auditReasonSchema,
@@ -75,6 +75,7 @@ import {
   sourceReviewFindingSchema,
   queueValidatorScoreRetestsInputSchema,
   v9ContractRetestListSchema,
+  publicLeaderboardSchema,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -3335,5 +3336,105 @@ describe('lease revocation reads', () => {
     })
     expect(parsed.total).toBe(0)
     expect(parsed.revocations).toEqual([])
+  })
+})
+
+describe('public leaderboard rows that do not rank', () => {
+  const rankedEntry = (
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    rank: 1,
+    finalized: true,
+    score_count: 3,
+    score_quorum: 3,
+    agent_id: '3f1d6b8a-1c2e-4a5b-8d90-1f2e3a4b5c6d',
+    agent_name: 'champion',
+    miner_hotkey: '5Champion',
+    composite: 0.71,
+    tool_mean: 0.74,
+    memory_mean: 0.68,
+    first_seen: '2026-08-01T00:00:00Z',
+    eligible: true,
+    bench_version: 9,
+    ...overrides,
+  })
+
+  const board = (entries: Record<string, unknown>[]): Record<string, unknown> => ({
+    generated_at: '2026-08-13T00:00:00Z',
+    count: entries.length,
+    current_bench_version: 9,
+    active_bench_version: 9,
+    desired_bench_version: 9,
+    available_bench_versions: [8, 9],
+    selection_mode: 'authoritative',
+    entries,
+  })
+
+  it('reads the whole board when a provisional v9 row carries a null rank', () => {
+    // Reproduced against production on 2026-08-13: 4 of 36 entries came back
+    // with `rank: null` and a required `z.number()` failed the entire response,
+    // so `get_leaderboard` returned NO data at all rather than 32 ranked rows
+    // plus 4 unranked ones. The blast radius is the point of this test: one
+    // unranked row must never cost an operator the other 35.
+    const provisional = ['Forever', 'Bmars_v9', 'unitao', 'warrior-v9'].map(
+      (agent_name, index) =>
+        rankedEntry({
+          rank: null,
+          finalized: false,
+          score_count: 1,
+          agent_id: `3f1d6b8a-1c2e-4a5b-8d90-1f2e3a4b5c6${index}`,
+          agent_name,
+          miner_hotkey: `5Provisional${index}`,
+          eligible: false,
+        }),
+    )
+
+    const parsed = publicLeaderboardSchema.parse(
+      board([rankedEntry(), ...provisional]),
+    )
+
+    expect(parsed.entries).toHaveLength(5)
+    expect(parsed.entries[0].rank).toBe(1)
+    expect(parsed.entries.slice(1).map((entry) => entry.rank)).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ])
+    expect(parsed.entries.slice(1).map((entry) => entry.agent_name)).toEqual([
+      'Forever',
+      'Bmars_v9',
+      'unitao',
+      'warrior-v9',
+    ])
+  })
+
+  it('normalizes an omitted rank to null rather than undefined', () => {
+    // The Platform field carries a default, so it is optional in the OpenAPI
+    // schema even though the serializer emits an explicit null today. Callers
+    // get one shape to branch on either way.
+    const { rank: _omitted, ...withoutRank } = rankedEntry()
+    const parsed = publicLeaderboardSchema.parse(board([withoutRank]))
+
+    expect(parsed.entries[0].rank).toBeNull()
+  })
+
+  it('still rejects a rank that is not a positive integer', () => {
+    // Nullable is not a licence to accept junk: 0 and -1 are contract
+    // violations, not "unranked".
+    for (const rank of [0, -1, 1.5]) {
+      expect(() => publicLeaderboardSchema.parse(board([rankedEntry({ rank })]))).toThrow()
+    }
+  })
+
+  it('accepts every rank the generated Platform type can send', () => {
+    // The drift this guards: Platform declared `rank: int | None` in PR #583
+    // while this schema kept PR #350's required `rank`, and nothing failed
+    // until a real null reached production.
+    expectTypeOf<
+      PlatformComponents['schemas']['PublicLeaderboardEntry']['rank']
+    >().toMatchTypeOf<
+      ZodInput<typeof publicLeaderboardSchema>['entries'][number]['rank']
+    >()
   })
 })

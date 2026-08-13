@@ -4764,7 +4764,15 @@ export const publicCompositeBreakdownSchema = z.object({
 export const publicLeaderboardEntrySchema = z.object({
   // Rank is only meaningful for eligible entries; provisional rows trail the
   // finalized board by construction.
-  rank: z.number().int().positive(),
+  //
+  // Null is a real, routine value rather than a degenerate one: Bench v9
+  // base-only and provisional rows carry `rank: null` in confirmation enforce
+  // mode, because only full-confirmed rows rank. A required `z.number()` here
+  // fails the WHOLE `entries` array, so a single unranked provisional row made
+  // the entire leaderboard unreadable through Backroom rather than costing that
+  // one row its rank. Nullish (not merely nullable) because the Platform field
+  // carries a default and is therefore optional in the OpenAPI schema.
+  rank: z.number().int().positive().nullish().default(null),
   finalized: z.boolean(),
   score_count: z.number().int().nonnegative(),
   score_quorum: z.number().int().positive(),
