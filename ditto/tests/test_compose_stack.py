@@ -345,6 +345,8 @@ def test_dittobench_context_is_the_local_monorepo_service() -> None:
     assert "research/dittobench-datagen" in wrapper
     assert 'export DITTOBENCH_SOURCE_REVISION="$checksum"' in wrapper
     assert 'export DITTOBENCH_SOURCE_IDENTITY="source:$checksum"' in wrapper
+    assert 'export DITTOBENCH_SOFTWARE_VERSION="$software_version"' in wrapper
+    assert '"$ROOT_DIR/pyproject.toml"' in wrapper
     assert "DittoBench source has local changes" in wrapper
     assert "materialize_context=false" in wrapper
 

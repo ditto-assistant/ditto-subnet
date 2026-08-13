@@ -217,6 +217,28 @@ fi
 export DITTO_SOURCE_REVISION="$source_revision"
 export DITTO_SOURCE_IDENTITY="local-source:$source_revision"
 
+# The source wrapper materializes a clean checkout of one tagged monorepo
+# release. Stamp that stable package version into the scorer as well as its
+# exact component SHA. Leaving Compose's local-development ``source-build``
+# fallback in a production source stack made a healthy [8, 9] capability fail
+# Platform's v9 semantic-release floor, so the host both ran v9 leases and was
+# projected as ineligible. Ignore an operator-shell override: source identity
+# is derived from this checkout, not asserted from ambient environment.
+software_version="$(
+  python3 - "$ROOT_DIR/pyproject.toml" 2>/dev/null <<'PY'
+import pathlib
+import re
+import sys
+import tomllib
+
+path = pathlib.Path(sys.argv[1])
+version = tomllib.loads(path.read_text())["project"]["version"]
+if not isinstance(version, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+    raise SystemExit("pyproject project.version must be a stable x.y.z release")
+print(version)
+PY
+)" || die "could not resolve stable scorer software version"
+
 dittobench_context="$ROOT_DIR"
 if [ ! -f "$ROOT_DIR/services/dittobench-api/Dockerfile" ] || \
   [ ! -f "$ROOT_DIR/services/dittobench-api/go.mod" ] || \
@@ -239,9 +261,10 @@ if [[ ! "$checksum" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 export DITTOBENCH_SOURCE_REVISION="$checksum"
 export DITTOBENCH_SOURCE_IDENTITY="source:$checksum"
+export DITTOBENCH_SOFTWARE_VERSION="$software_version"
 export DITTOBENCH_BUILD_CONTEXT="$dittobench_context"
-printf 'using monorepo dittobench-api %s with Docker Compose %s\n' \
-  "$checksum" "$compose_version" >&2
+printf 'using monorepo dittobench-api %s version %s with Docker Compose %s\n' \
+  "$checksum" "$software_version" "$compose_version" >&2
 
 # Compose reuses an already-built scorer image whenever one exists. A stack
 # update therefore recreates dittobench-api with the NEW pinned environment

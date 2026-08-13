@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from ditto import __version__
+
 pytestmark = pytest.mark.integration
 
 ROOT = Path(__file__).parents[2]
@@ -36,6 +38,7 @@ if capture:
         "dittobench_context": os.environ.get("DITTOBENCH_BUILD_CONTEXT"),
         "dittobench_revision": os.environ.get("DITTOBENCH_SOURCE_REVISION"),
         "dittobench_identity": os.environ.get("DITTOBENCH_SOURCE_IDENTITY"),
+        "dittobench_version": os.environ.get("DITTOBENCH_SOFTWARE_VERSION"),
     }
     recorded.setdefault("docker_calls", []).append(entry)
     if args[:1] == ["compose"] and args != ["compose", "version", "--short"]:
@@ -251,10 +254,33 @@ def test_stack_update_rebuilds_and_replaces_a_stale_scorer_image(
     assert captured["dittobench_identity"] == (
         f"source:{env['FAKE_DITTOBENCH_CHECKSUM']}"
     )
+    # Source installs used to leave this as ``source-build``. Platform quite
+    # correctly rejected that free-form label from the v9 semantic-release
+    # floor even while the same scorer's fresh probe advertised [8, 9]. The
+    # wrapper owns both build inputs, so stamp the stable monorepo release too.
+    assert captured["dittobench_version"] == __version__
     assert (
         _built_revision_marker(env).read_text().strip()
         == env["FAKE_DITTOBENCH_CHECKSUM"]
     )
+
+
+def test_source_wrapper_overrides_an_untrusted_scorer_version(tmp_path: Path) -> None:
+    """An operator shell cannot recreate the v9 split-brain identity."""
+    env, capture, _ = _wrapper_env(tmp_path)
+    env["DITTOBENCH_SOFTWARE_VERSION"] = "source-build"
+
+    result = subprocess.run(
+        [str(COMPOSE_WRAPPER), "build", "dittobench-api"],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(capture.read_text())["dittobench_version"] == __version__
 
 
 def test_live_scorer_replacement_drains_and_resumes_validator(tmp_path: Path) -> None:

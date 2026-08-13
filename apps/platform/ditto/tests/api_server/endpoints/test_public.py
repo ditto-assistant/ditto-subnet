@@ -4122,7 +4122,28 @@ class TestActiveBenchCapabilityGate:
         ).validators[0]
 
         assert entry.bench_serviceability == "scorer_unverified"
-        assert entry.health_reasons[0] == "scorer not advertising bench v8"
+        assert entry.health_reasons[0] == (
+            "scorer identity is not eligible for bench v8"
+        )
+
+    def test_a_v9_advertisement_below_the_release_floor_is_named_accurately(
+        self,
+    ) -> None:
+        """Advertising v9 is necessary but not sufficient for v9 eligibility."""
+        now = datetime(2026, 8, 13, 2, 0, tzinfo=UTC)
+        row = _v8_only_capable_row(now, hotkey=_VALIDATOR_C, seen_at=now)
+        scorer = row.capabilities["scorer_benchmarks"]
+        scorer["supported_bench_versions"] = [8, 9]
+        scorer["software_version"] = "source-build"
+        row.stack["components"]["dittobench_api"]["version"] = "source-build"
+
+        entry = self._snapshot([row], version=9, now=now).validators[0]
+
+        assert entry.bench_serviceability == "scorer_unverified"
+        assert entry.health == "critical"
+        assert entry.health_reasons[0] == (
+            "scorer identity is not eligible for bench v9"
+        )
 
 
 class TestPublicFleet:

@@ -1092,7 +1092,7 @@ function ValidatorSummary(props: {
                   label={
                     e().bench_serviceability === "software_obsolete"
                       ? "Cannot serve " + scoredLabel() + " · needs a software upgrade"
-                      : "Scorer is not advertising " + scoredLabel()
+                      : "Scorer identity is not eligible for " + scoredLabel()
                   }
                 />
               }

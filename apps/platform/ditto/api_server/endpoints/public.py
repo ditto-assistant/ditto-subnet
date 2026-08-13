@@ -1168,7 +1168,7 @@ def _bench_serviceability_reason(
             f"(heartbeat protocol {protocol_version})"
         )
     if serviceability == "scorer_unverified":
-        return f"scorer not advertising bench v{version}"
+        return f"scorer identity is not eligible for bench v{version}"
     return None
 
 
