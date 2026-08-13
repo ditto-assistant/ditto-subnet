@@ -659,6 +659,7 @@ func TestNoFaultFailuresOnlyUseCodesTheDeployedFleetAllowlists(t *testing.T) {
 		"sandbox_network_unavailable":    true,
 		"model_relay_unavailable":        true,
 		"embedding_provider_unavailable": true,
+		"seed_store_lock_timeout":        true,
 	}
 	for _, err := range []error{
 		nil,

@@ -2154,6 +2154,34 @@ class TestRunOnce:
         assert reason == "infrastructure"
         chain.put_weights.assert_awaited_once_with({_BURN_HOTKEY: 1.0})
 
+    async def test_seed_store_timeout_hands_back_exact_infrastructure_code(
+        self,
+    ) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=ValidatorInfrastructureError(
+                "seed store lock wait exhausted", code="seed_store_lock_timeout"
+            )
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        outcome = await worker.run_once(set_weights=False)
+
+        assert outcome.queue_depth == 1
+        platform.report_ticket_failed.assert_awaited_once_with(
+            job, "infrastructure", "seed_store_lock_timeout"
+        )
+        assert worker._healthy_slots == set()
+
     async def test_platform_infrastructure_failure_keeps_miner_attempt(self) -> None:
         jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]
         platform = _platform_with_ledger(jobs=jobs, ledger=[])

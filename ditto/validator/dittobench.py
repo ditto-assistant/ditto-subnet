@@ -68,6 +68,7 @@ _FAILED = "failed"
 # Hard bound on the best-effort run cancellation that follows an abort. Small
 # by design: it is spent out of the lease's reporting margin.
 _CANCEL_TIMEOUT_SECONDS = 15.0
+_UNCHANGED_PROGRESS_TIMEOUT_SECONDS = 15 * 60.0
 
 _PROGRESS_STAGE_BY_STATUS: dict[str, BenchmarkProgressStage] = {
     "queued": "preparing",
@@ -81,6 +82,17 @@ _PROGRESS_STAGE_BY_STATUS: dict[str, BenchmarkProgressStage] = {
     "failed": "failed_retrying",
 }
 _STABLE_COUNT_STATUSES = {"running", "waiting_for_relay", "scoring", "done"}
+_PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
+    "preparing": 0,
+    "building_harness": 1,
+    "generating_dataset": 2,
+    "starting_harness": 3,
+    "running_benchmark": 4,
+    "waiting_for_relay": 4,
+    "finalizing": 5,
+    "submitting_result": 6,
+    "failed_retrying": 7,
+}
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 
@@ -136,6 +148,10 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # the platform stored, and a no-fault verdict would re-lease a permanently
     # broken image without bound.
     "screened_image_unavailable",
+    # The scorer could not enter its validator-owned seed store for the full
+    # bounded 600-second lock wait. The harness never ran, so consuming the
+    # miner's attempt would charge them for shared scorer infrastructure.
+    "seed_store_lock_timeout",
 }
 
 
@@ -1130,6 +1146,9 @@ class DittobenchClient:
         # leaving everything before it (artifact fetch, inference grant
         # exchange, submit) chargeable to the lease but not to the cap.
         started = time.monotonic()
+        last_progress_at = started
+        progress_stage = _PROGRESS_STAGE_ORDER["preparing"]
+        progress_completed: int | None = None
         budget = run_budget_seconds(
             self._config.dittobench_timeout_seconds, ticket_deadline
         )
@@ -1267,6 +1286,34 @@ class DittobenchClient:
                             code=infrastructure_detail,
                         )
                     raise DittobenchError(f"run {run_id} failed: {error}")
+                observed_at = time.monotonic()
+                if snapshot is not None:
+                    observed_stage = _PROGRESS_STAGE_ORDER[snapshot.stage]
+                    stage_advanced = observed_stage > progress_stage
+                    count_advanced = (
+                        observed_stage == progress_stage
+                        and snapshot.completed is not None
+                        and (
+                            progress_completed is None
+                            and snapshot.completed > 0
+                            or progress_completed is not None
+                            and snapshot.completed > progress_completed
+                        )
+                    )
+                    if stage_advanced or count_advanced:
+                        last_progress_at = observed_at
+                        progress_stage = observed_stage
+                        progress_completed = snapshot.completed
+                if (
+                    observed_at - last_progress_at
+                    >= _UNCHANGED_PROGRESS_TIMEOUT_SECONDS
+                ):
+                    await self._cancel(run_id)
+                    raise ValidatorInfrastructureError(
+                        f"run {run_id} made no scoring progress for "
+                        f"{_UNCHANGED_PROGRESS_TIMEOUT_SECONDS:.0f}s",
+                        code="scorer_progress_stalled",
+                    )
                 # Never sleep past the budget: the abort must keep the whole
                 # reporting margin, not the margin minus a poll interval.
                 remaining = budget - (time.monotonic() - started)

@@ -1377,6 +1377,7 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
         "model_relay_unavailable",
         "embedding_provider_unavailable",
         "screened_image_unavailable",
+        "seed_store_lock_timeout",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(
@@ -1445,6 +1446,89 @@ async def test_relay_recovery_exhaustion_reaches_failure_detail() -> None:
             )
     assert caught.value.code == ("model_relay_unavailable:provider_recovery_exhausted")
     assert failure_detail(caught.value) == caught.value.code
+
+
+@pytest.mark.asyncio
+async def test_unchanged_progress_watchdog_cancels_despite_heartbeats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+    methods: list[str] = []
+    heartbeats: list[DittobenchProgressSnapshot] = []
+
+    async def advance(_seconds: float) -> None:
+        nonlocal clock
+        clock += 300.0
+
+    async def heartbeat(snapshot: DittobenchProgressSnapshot) -> None:
+        heartbeats.append(snapshot)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "DELETE":
+            return httpx.Response(202)
+        return httpx.Response(
+            200,
+            json={
+                "status": "running",
+                "progress": {"done": 12, "total": 114},
+            },
+        )
+
+    monkeypatch.setattr("ditto.validator.dittobench.time.monotonic", lambda: clock)
+    monkeypatch.setattr("ditto.validator.dittobench.asyncio.sleep", advance)
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=5_000.0,
+        dittobench_poll_seconds=300.0,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await DittobenchClient(cast(Any, config), http)._poll(
+                "stalled-run",
+                expected_bench_version=8,
+                progress_callback=heartbeat,
+            )
+
+    assert caught.value.code == "scorer_progress_stalled"
+    assert len(heartbeats) == 4
+    assert methods == ["GET", "GET", "GET", "GET", "DELETE"]
+
+
+@pytest.mark.asyncio
+async def test_real_count_progress_resets_watchdog_and_done_wins_boundary_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+    methods: list[str] = []
+    payloads = [
+        {"status": "running", "progress": {"done": 0, "total": 114}},
+        {"status": "running", "progress": {"done": 1, "total": 114}},
+        _done_job(),
+    ]
+
+    async def advance(_seconds: float) -> None:
+        nonlocal clock
+        clock += 600.0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return httpx.Response(200, json=payloads.pop(0))
+
+    monkeypatch.setattr("ditto.validator.dittobench.time.monotonic", lambda: clock)
+    monkeypatch.setattr("ditto.validator.dittobench.asyncio.sleep", advance)
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=5_000.0,
+        dittobench_poll_seconds=600.0,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        report = await DittobenchClient(cast(Any, config), http)._poll(
+            "progressing-run", expected_bench_version=8
+        )
+
+    assert report.composite == 0.9
+    assert methods == ["GET", "GET", "GET"]
 
 
 def test_failure_detail_falls_back_to_the_exception_when_uncoded() -> None:

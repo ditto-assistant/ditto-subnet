@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,6 +51,14 @@ const healthTimeout = 10 * time.Second
 // (a Go duration string such as "20m"). Values <= 0 or unparseable fall back to
 // the default.
 var seedTimeout = envDuration("DITTOBENCH_SEED_TIMEOUT", 5*time.Minute)
+
+// ErrSeedStoreLockTimeout is the starter harness's exact bounded failure when
+// /seed could not acquire its shared store lock for 600 seconds. It is typed at
+// the HTTP boundary so arbitrary downstream error prose cannot mint a no-fault
+// validator retry.
+var ErrSeedStoreLockTimeout = errors.New("seed store lock timeout")
+
+const seedStoreLockTimeoutMessage = "seed exceeded 600s, aborted to release the store lock"
 
 // envDuration reads a Go duration from key, returning def when unset, empty,
 // unparseable, or non-positive.
@@ -206,6 +215,14 @@ func SeedForVersion(ctx context.Context, harnessURL string, req protocol.SeedReq
 		return protocol.SeedResponse{}, fmt.Errorf("read /seed body: %w", err)
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		var payload struct {
+			Error string `json:"error"`
+		}
+		if httpResp.StatusCode == http.StatusServiceUnavailable &&
+			json.Unmarshal(body, &payload) == nil &&
+			payload.Error == seedStoreLockTimeoutMessage {
+			return protocol.SeedResponse{}, fmt.Errorf("%w: %s", ErrSeedStoreLockTimeout, payload.Error)
+		}
 		return protocol.SeedResponse{}, fmt.Errorf("/seed returned %d: %s", httpResp.StatusCode, string(body))
 	}
 	var out protocol.SeedResponse

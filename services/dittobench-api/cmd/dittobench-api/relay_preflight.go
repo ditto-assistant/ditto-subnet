@@ -14,6 +14,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-api/internal/efficiency"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
+	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -749,7 +750,18 @@ func trustedEmbeddingInfrastructureFailure(err error) *store.Failure {
 	return nil
 }
 
+func trustedSeedingInfrastructureFailure(err error) *store.Failure {
+	if errors.Is(err, runner.ErrSeedStoreLockTimeout) {
+		return &store.Failure{
+			Kind:      "validator_infrastructure",
+			Code:      "seed_store_lock_timeout",
+			Retryable: true,
+		}
+	}
+	return trustedEmbeddingInfrastructureFailure(err)
+}
+
 func (s *server) failV7Seeding(runID, message string, err error) {
-	failure := trustedEmbeddingInfrastructureFailure(err)
+	failure := trustedSeedingInfrastructureFailure(err)
 	s.store.FailWith(runID, message+err.Error(), failure)
 }

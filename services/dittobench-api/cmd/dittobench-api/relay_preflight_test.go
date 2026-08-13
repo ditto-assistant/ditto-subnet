@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -282,6 +286,34 @@ func TestV7SeedingFailurePersistsStructuredInfrastructureClassification(t *testi
 	if job.Status != store.StatusFailed || job.Failure == nil ||
 		job.Failure.Code != "embedding_provider_unavailable" || !job.Failure.Retryable {
 		t.Fatalf("job = %#v", job)
+	}
+}
+
+func TestSeedStoreLockTimeoutPersistsStructuredInfrastructureClassification(t *testing.T) {
+	s := &server{store: store.New()}
+	s.store.Create("run", "run_size", store.StatusRunning, 1, 8)
+	s.failV7Seeding("run", "seeding failed: ", fmt.Errorf("%w: exact boundary", runner.ErrSeedStoreLockTimeout))
+	job, _ := s.store.Get("run")
+	if job.Status != store.StatusFailed || job.Failure == nil ||
+		job.Failure.Kind != "validator_infrastructure" ||
+		job.Failure.Code != "seed_store_lock_timeout" || !job.Failure.Retryable {
+		t.Fatalf("job = %#v", job)
+	}
+	if got := trustedSeedingInfrastructureFailure(errors.New("seed exceeded 600s, aborted to release the store lock")); got != nil {
+		t.Fatalf("untyped prose minted a retry: %#v", got)
+	}
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source path")
+	}
+	validatorSource, err := os.ReadFile(filepath.Join(
+		filepath.Dir(filename), "../../../../ditto/validator/dittobench.py",
+	))
+	if err != nil {
+		t.Fatalf("read validator classifier: %v", err)
+	}
+	if !strings.Contains(string(validatorSource), `"seed_store_lock_timeout"`) {
+		t.Fatal("Go emitted code is absent from the validator infrastructure allowlist")
 	}
 }
 

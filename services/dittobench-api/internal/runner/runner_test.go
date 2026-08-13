@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -314,6 +315,37 @@ func TestSeedError(t *testing.T) {
 	defer srv.Close()
 	if _, err := Seed(sandboxContext(), srv.URL, protocol.SeedRequest{}); err == nil {
 		t.Fatal("expected error for 500 /seed")
+	}
+}
+
+func TestSeedStoreLockTimeoutIsTypedOnlyForExact503Contract(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		typed  bool
+	}{
+		{"exact", http.StatusServiceUnavailable, `{"error":"seed exceeded 600s, aborted to release the store lock"}`, true},
+		{"wrong status", http.StatusBadGateway, `{"error":"seed exceeded 600s, aborted to release the store lock"}`, false},
+		{"wrong duration", http.StatusServiceUnavailable, `{"error":"seed exceeded 599s, aborted to release the store lock"}`, false},
+		{"prose only", http.StatusServiceUnavailable, `seed exceeded 600s, aborted to release the store lock`, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer srv.Close()
+
+			_, err := SeedForVersion(sandboxContext(), srv.URL, protocol.SeedRequest{}, 8)
+			if err == nil {
+				t.Fatal("expected /seed failure")
+			}
+			if got := errors.Is(err, ErrSeedStoreLockTimeout); got != test.typed {
+				t.Fatalf("errors.Is(store timeout) = %v, want %v: %v", got, test.typed, err)
+			}
+		})
 	}
 }
 
