@@ -74,6 +74,94 @@ export function efficiencyFoldIsApplied(e: { efficiency_fold_applied?: boolean }
   return e.efficiency_fold_applied === true;
 }
 
+export type EfficiencyBoardStatusTone = "applied" | "projected" | "dormant";
+
+export interface EfficiencyBoardStatus {
+  tone: EfficiencyBoardStatusTone;
+  headline: string;
+  detail: string;
+  /** Qualified cohort members, and the minimum before any factor is assigned. */
+  cohortSize: number;
+  nMin: number;
+  /** Neutral reference cost, present only once a cohort actually formed. */
+  referenceTokens: number | null;
+  minimumFactor: number | null;
+  maximumFactor: number | null;
+}
+
+/** Describe the board-level efficiency state in the terms an operator asks in.
+ *
+ * The failure this exists to prevent: with no cohort, an adjustment that is
+ * switched off and one that is switched on both render as an empty column, so
+ * "is it on?" and "is it doing anything?" collapse into the same blank. They
+ * have different fixes — one is a settings flip, the other needs qualifying
+ * evidence — so the copy distinguishes them explicitly. A dormant cohort is
+ * reported as the normal fail-closed outcome it is, never as an error.
+ */
+export function efficiencyBoardStatus(
+  state: {
+    active?: boolean;
+    preview?: boolean;
+    cohort_size?: number | null;
+    n_min?: number | null;
+    reference_p25_tokens?: number | null;
+    minimum_factor?: number | null;
+    maximum_factor?: number | null;
+  } | null,
+): EfficiencyBoardStatus | null {
+  if (!state) return null;
+  const cohortSize = Math.max(0, Number(state.cohort_size) || 0);
+  const nMin = Math.max(0, Number(state.n_min) || 0);
+  const referenceTokens =
+    state.reference_p25_tokens == null ? null : Number(state.reference_p25_tokens);
+  const common = {
+    cohortSize,
+    nMin,
+    referenceTokens: Number.isFinite(referenceTokens as number) ? referenceTokens : null,
+    minimumFactor: state.minimum_factor == null ? null : Number(state.minimum_factor),
+    maximumFactor: state.maximum_factor == null ? null : Number(state.maximum_factor),
+  };
+  if (cohortSize < nMin || cohortSize === 0) {
+    return {
+      ...common,
+      tone: "dormant",
+      headline: "Token efficiency is not adjusting any score",
+      detail:
+        cohortSize === 0
+          ? "No agent has qualified for the cohort yet. Curve v3 costs an agent only on " +
+            "independently confirmed runs, so a submission scored by the quorum alone " +
+            "carries no efficiency evidence and is left untouched rather than guessed at."
+          : cohortSize +
+            " of the " +
+            nMin +
+            " agents required have qualified, so no reference cost is set and every " +
+            "score is passed through unchanged.",
+    };
+  }
+  if (state.active === true) {
+    return {
+      ...common,
+      tone: "applied",
+      headline: "Token efficiency is ranking this board",
+      detail:
+        "Each of the " +
+        cohortSize +
+        " qualified agents is priced against the cohort's 25th-percentile cost. " +
+        "Cheaper than the reference earns headroom, dearer is bounded penalty.",
+    };
+  }
+  return {
+    ...common,
+    tone: "projected",
+    headline: "Token efficiency is switched off — these are projections",
+    detail:
+      "The platform recomputed what the adjustment would do to the " +
+      cohortSize +
+      " qualified agents. Nothing here moves a rank, a crown, or an emission " +
+      "until the fold is switched on.",
+  };
+}
+
 export interface CurveV3ScoreAdjustment {
   quality: number;
   factor: number;

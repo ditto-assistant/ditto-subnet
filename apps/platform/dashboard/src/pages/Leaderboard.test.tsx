@@ -277,11 +277,97 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     expect(el("emissions-col-tip").closest("th")?.hasAttribute("data-sort")).toBe(false);
   });
 
+  it("states why an empty cohort adjusted nothing, instead of rendering blank", async () => {
+    // The 2026-08-13 production shape: the preview ran and qualified nobody.
+    // Per-row chips need a factor to render, so without this strip the board
+    // is silent and a switched-off adjustment is indistinguishable from an
+    // active one that assigned nothing.
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          efficiency: {
+            active: false,
+            preview: true,
+            bench_version: 9,
+            curve_version: 3,
+            cohort_size: 0,
+            n_min: 8,
+            reference_p25_tokens: null,
+            factor_alpha: 0.25,
+            minimum_factor: 0.85,
+            maximum_factor: 1.1,
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    // Wait on the tone, not on the strip: the strip renders for every payload,
+    // so waiting for it to appear would assert against the previous fixture.
+    await waitFor(() =>
+      expect(el("efficiency-strip").querySelector(".efficiency-summary")).toHaveAttribute(
+        "data-tone",
+        "dormant",
+      ),
+    );
+    const strip = el("efficiency-strip");
+    expect(strip).toHaveClass("show");
+    expect(strip.textContent).toContain("not adjusting any score");
+    expect(strip.textContent).toContain("No agent has qualified");
+    expect(strip.textContent).toContain("qualified cohort 0 / 8 required");
+    // No cohort means no reference cost; inventing one would be a fiction.
+    expect(strip.textContent).not.toContain("neutral reference");
+  });
+
+  it("marks a qualified cohort as a projection while the fold is off", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          efficiency: {
+            active: false,
+            preview: true,
+            bench_version: 9,
+            curve_version: 3,
+            cohort_size: 12,
+            n_min: 8,
+            reference_p25_tokens: 1_800_000,
+            factor_alpha: 0.25,
+            minimum_factor: 0.85,
+            maximum_factor: 1.1,
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("efficiency-strip").querySelector(".efficiency-summary")).toHaveAttribute(
+        "data-tone",
+        "projected",
+      ),
+    );
+    const strip = el("efficiency-strip");
+    expect(strip).toHaveClass("show");
+    expect(strip.textContent).toContain("switched off");
+    expect(strip.textContent).toContain("Nothing here moves a rank");
+    expect(strip.textContent).toContain("neutral reference " + num(1_800_000) + " tokens");
+    expect(strip.textContent).toContain("bounded ×" + fx(0.85) + " to ×" + fx(1.1));
+  });
+
   it("keeps the strips as closing context after the board", async () => {
     renderPage();
     await waitForBoard();
     const board = document.querySelector('.board[tabindex="0"]') as HTMLElement;
-    for (const id of ["emissions-strip", "rollout-strip", "leaderboard-notice"]) {
+    for (const id of [
+      "emissions-strip",
+      "efficiency-strip",
+      "rollout-strip",
+      "leaderboard-notice",
+    ]) {
       expect(
         board.compareDocumentPosition(el(id)) & Node.DOCUMENT_POSITION_FOLLOWING,
         id,
@@ -560,7 +646,7 @@ describe("board view controls (row 1 slice)", () => {
     await waitFor(() => expect(costTh).toHaveAttribute("aria-sort", "descending"));
   });
 
-  it("shows API-backed average run cost and its settled sample count", async () => {
+  it("shows API-backed average run cost and its completed-run sample count", async () => {
     renderPage({
       patch: (name, body) => {
         if (name !== "leaderboard") return body;
@@ -579,7 +665,7 @@ describe("board view controls (row 1 slice)", () => {
     await waitFor(() =>
       expect(document.querySelector(".run-cost-cell")?.textContent).toContain("$0.123"),
     );
-    expect(document.querySelector(".run-cost-cell")?.textContent).toContain("7 settled");
+    expect(document.querySelector(".run-cost-cell")?.textContent).toContain("7 completed");
   });
 
   it("opens a row's miner drill-down route on click (plain tabbable tr, no role=button)", async () => {

@@ -21,6 +21,7 @@ import { foldChainWeights, rankEntries, rolloutSettledView } from "../../lib/sco
 import type { ChainWeightFold, ContinualAggregate } from "../../lib/scoring";
 import type {
   ChainWeightsSnapshot,
+  EfficiencyBoardState,
   EmissionRecipient,
   EmissionsFold,
   LeaderboardEntry,
@@ -60,6 +61,9 @@ export interface LeaderboardStore {
   entries: Accessor<BoardEntry[]>;
   settledView: Accessor<boolean>;
   emissions: Accessor<EmissionsFold | null>;
+  /** Board-level relative-efficiency state, or null when the payload omits it
+   * (a benchmark version the adjustment cannot apply to at all). */
+  efficiency: Accessor<EfficiencyBoardState | null>;
   /** The reigning champion's board entry (resolved from the emissions fold's
    * champion_agent_id), or null when the fold or the entry is absent. The
    * KOTH incumbent can sit below raw #1, so consumers must read its `rank`
@@ -107,6 +111,7 @@ function buildStore(): LeaderboardStore {
     return rankEntries((d.entries ?? []) as BoardEntry[], settledView());
   });
   const emissions = createMemo<EmissionsFold | null>(() => payload()?.emissions ?? null);
+  const efficiency = createMemo<EfficiencyBoardState | null>(() => payload()?.efficiency ?? null);
   const champion = createMemo<BoardEntry | null>(() => {
     const fold = emissions();
     if (!fold || fold.champion_agent_id == null) return null;
@@ -174,6 +179,7 @@ function buildStore(): LeaderboardStore {
     entries,
     settledView,
     emissions,
+    efficiency,
     champion,
     emissionFor: (agentId) =>
       agentId == null ? null : (emissionByAgent()[String(agentId)] ?? null),

@@ -223,6 +223,32 @@ export interface V9BaseEvidence {
   };
 }
 
+/** Board-level state of the relative-efficiency adjustment.
+ *
+ * `active` means the frozen factors rank the board. `preview` means the
+ * platform recomputed them read-only because the adjustment is switched off —
+ * numbers to inspect, not numbers that count. Neither says the cohort actually
+ * produced anything: an adjustment can be switched on and still assign no
+ * factor, because curve v3 fails closed and only qualified agents join the
+ * cohort. `cohort_size` against `n_min` is what distinguishes "off" from
+ * "on but nothing qualified", which are otherwise identical on screen.
+ */
+export interface EfficiencyBoardState {
+  active: boolean;
+  preview?: boolean;
+  bench_version: number;
+  curve_version?: number;
+  /** Qualified agents in the frozen cohort. Zero when nothing cleared the gates. */
+  cohort_size?: number | null;
+  /** Minimum qualified agents before a cohort can assign any factor. */
+  n_min?: number | null;
+  /** Neutral reference (factor 1.0): nearest-rank P25 of cohort token costs. */
+  reference_p25_tokens?: number | null;
+  factor_alpha?: number | null;
+  minimum_factor?: number | null;
+  maximum_factor?: number | null;
+}
+
 export interface LeaderboardPayload {
   entries?: LeaderboardEntry[];
   /** Fail-closed marker from the public API; null unless confirmation is authoritative. */
@@ -235,16 +261,7 @@ export interface LeaderboardPayload {
   selection_mode?: string;
   generated_at?: string;
   emissions?: EmissionsFold | null;
-  efficiency?: {
-    active: boolean;
-    preview?: boolean;
-    bench_version: number;
-    curve_version?: number;
-    reference_p25_tokens?: number | null;
-    factor_alpha?: number | null;
-    minimum_factor?: number | null;
-    maximum_factor?: number | null;
-  } | null;
+  efficiency?: EfficiencyBoardState | null;
   count?: number;
 }
 

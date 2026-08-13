@@ -11842,7 +11842,7 @@ export interface components {
             artifact_release?: components["schemas"]["PublicArtifactRelease"] | null;
             /**
              * Average Run Cost Microusd
-             * @description Mean platform-metered chat plus embedding spend for this agent's settled, non-empty validator leases on the displayed benchmark version. Null when the retained run ledger has no settled samples.
+             * @description Mean platform-metered chat plus embedding spend for this agent's completed, non-empty validator leases on the displayed benchmark version. A lease counts only once the validator holding it posted a score, so a run a stalled validator abandoned is excluded rather than averaged in as cheap work. Restricted to the current metering contract, since totals are not comparable across a meter change. Null when the retained run ledger holds no completed samples -- which is normal for an agent whose quorum has not finished scoring yet.
              */
             average_run_cost_microusd?: number | null;
             /**
@@ -11967,7 +11967,7 @@ export interface components {
             history?: number[] | null;
             /**
              * Inference Run Count
-             * @description Settled validator leases included in average_run_cost_microusd.
+             * @description Completed validator leases included in average_run_cost_microusd. Expect single digits: this counts scored leases, not every lease the agent was ever issued.
              * @default 0
              */
             inference_run_count: number;

@@ -47,7 +47,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import ValidationError
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -274,6 +274,7 @@ from ditto.db.queries.heartbeats import (
     live_validator_fleet_supports_protocol,
     live_weight_setter_fleet_supports_protocol,
 )
+from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
 from ditto.db.queries.orphaned_leases import OrphanedLease, list_orphaned_leases
 from ditto.db.queries.queue_order import (
@@ -2674,12 +2675,27 @@ async def leaderboard(
         session,
         agent_ids=[row.agent_id for row in rows if row.bench_version == 9],
     )
-    # The run ledger is append-only for its retention window. A grant can keep
-    # its raw ``active`` status after the validator has finished, so settlement
-    # is derived from the immutable lease deadline (or an explicit terminal
-    # state), not from that advisory status. Exclude empty grants and live
-    # partial work so the displayed average is a completed-run cost, never a
-    # transient progress meter.
+    # The run ledger is append-only for its retention window, and a grant never
+    # records its own outcome: ``status`` tracks budget and revocation, so it is
+    # ``exhausted`` both for a run that finished and for one a stalled validator
+    # abandoned mid-flight. An elapsed ``ticket_deadline`` does not disambiguate
+    # them either -- for a stuck validator the deadline passing is precisely the
+    # evidence the run never completed. Averaging on either signal books partial
+    # work as a whole run and drags the displayed mean down in proportion to how
+    # many leases an agent has had abandoned, which is backwards: the agents the
+    # fleet struggled on look cheapest.
+    #
+    # Completion is only knowable from the ticket that owned the lease, so join
+    # it and take the leases whose validator actually posted a score. Matching
+    # ``ticket_deadline`` to the ticket's current ``deadline`` keeps the lease
+    # that produced the accepted score and drops the earlier abandoned attempts
+    # of a retried ticket, which share the ticket row but not its deadline.
+    #
+    # Restrict to the current metering contract as well: a v1 grant charged the
+    # unsettled tail a byte-length reservation worth roughly 4x the truth, and
+    # ``InferenceGrant.usage_accounting_version`` exists precisely because those
+    # totals cannot be compared across the meter change (there is no backfill --
+    # what those calls really consumed was never recorded).
     run_costs: dict[tuple[UUID, int], tuple[int, int]] = {}
     if rows:
         cost_rows = (
@@ -2693,12 +2709,20 @@ async def leaderboard(
                     ),
                     func.count(),
                 )
+                .join(
+                    ValidatorTicket,
+                    and_(
+                        InferenceGrant.agent_id == ValidatorTicket.agent_id,
+                        InferenceGrant.bench_version == ValidatorTicket.bench_version,
+                        InferenceGrant.validator_hotkey
+                        == ValidatorTicket.validator_hotkey,
+                        InferenceGrant.ticket_deadline == ValidatorTicket.deadline,
+                    ),
+                )
                 .where(
                     InferenceGrant.agent_id.in_([row.agent_id for row in rows]),
-                    or_(
-                        InferenceGrant.ticket_deadline <= now,
-                        InferenceGrant.status.in_(("revoked", "exhausted")),
-                    ),
+                    ValidatorTicket.status == TicketStatus.SCORED,
+                    InferenceGrant.usage_accounting_version == USAGE_ACCOUNTING_VERSION,
                     or_(
                         InferenceGrant.request_count > 0,
                         InferenceGrant.embedding_request_count > 0,

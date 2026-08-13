@@ -18,6 +18,7 @@ import {
   dethroneBandScale,
   dethroneFloor,
   displayComposite,
+  efficiencyBoardStatus,
   isEligible,
   isFinalized,
   rolloutQuorum,
@@ -651,6 +652,71 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
 // version. Both numbers come from /public/bench/rollout so the threshold is
 // never hardcoded here.
 
+// ── Efficiency strip ──────────────────────────────────────────
+//
+// The per-row efficiency chip can only render on a row that HAS a factor, so
+// while the cohort is empty the entire adjustment is invisible: an operator
+// cannot tell a switched-off adjustment from an active one that qualified
+// nobody, and a miner reading a blank column concludes the feature is broken.
+// This strip states the board-level answer once, next to the numbers, and
+// names the parameters the factor is computed from so the arithmetic can be
+// checked against the published policy rather than taken on trust.
+
+function clampText(s: NonNullable<ReturnType<typeof efficiencyBoardStatus>>): string {
+  return s.minimumFactor == null || s.maximumFactor == null
+    ? ""
+    : "bounded ×" + fx(s.minimumFactor) + " to ×" + fx(s.maximumFactor);
+}
+
+function EfficiencyStrip(props: { store: LeaderboardStore }): JSX.Element {
+  const status = createMemo(() => efficiencyBoardStatus(props.store.efficiency()));
+  const shown = createMemo(() => !props.store.unavailable() && status() != null);
+  return (
+    <div
+      class="efficiency-strip"
+      id="efficiency-strip"
+      classList={{ show: shown() }}
+      role="note"
+      aria-label="Relative token-efficiency state"
+    >
+      <Show when={shown() ? status() : null}>
+        {(s) => (
+          <div class="efficiency-summary" data-tone={s().tone}>
+            <div class="efficiency-title">
+              <span class="efficiency-state" data-tone={s().tone}>
+                {s().tone === "applied"
+                  ? "applied"
+                  : s().tone === "projected"
+                    ? "projection"
+                    : "dormant"}
+              </span>
+              <b>{s().headline}</b>
+            </div>
+            <div class="efficiency-detail">{s().detail}</div>
+            <div class="efficiency-params">
+              <span class="efficiency-param">
+                {"qualified cohort " + s().cohortSize + " / " + s().nMin + " required"}
+              </span>
+              {/* `when` must carry the number itself: Show hands the callback
+                  the value it tested, so a boolean guard would render `1`. */}
+              <Show when={s().referenceTokens}>
+                {(tokens) => (
+                  <span class="efficiency-param">
+                    {"neutral reference " + num(Math.round(tokens())) + " tokens"}
+                  </span>
+                )}
+              </Show>
+              <Show when={clampText(s())}>
+                {(text) => <span class="efficiency-param">{text()}</span>}
+              </Show>
+            </div>
+          </div>
+        )}
+      </Show>
+    </div>
+  );
+}
+
 function RolloutStrip(props: { store: LeaderboardStore }): JSX.Element {
   const store = props.store;
   const strip = createMemo(() => rolloutStripState(store.rollout()));
@@ -928,6 +994,7 @@ export function LeaderboardBlock(props: { mode: "overview" | "page" }): JSX.Elem
           page. Hidden entirely on the overview (see .overview-main rules). */}
       <h2 class="visually-hidden lb-context-heading">Emissions, rollout, and standing notices</h2>
       <EmissionsStrip store={store} />
+      <EfficiencyStrip store={store} />
       <RolloutStrip store={store} />
       <LeaderboardNotice store={store} />
     </div>

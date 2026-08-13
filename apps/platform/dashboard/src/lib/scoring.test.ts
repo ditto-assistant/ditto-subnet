@@ -24,6 +24,7 @@ import {
   continualSampleCount,
   continualWaves,
   curveV3ScoreAdjustment,
+  efficiencyBoardStatus,
   dethroneBandScale,
   dethroneFloor,
   displayComposite,
@@ -768,5 +769,61 @@ describe("embargoHours", () => {
     expect(embargoHours(null)).toBe(48);
     expect(embargoHours({ embargo_hours: 0 })).toBe(48); // Number(0) || 48
     expect(embargoHours({ embargo_hours: 72 })).toBe(72);
+  });
+});
+
+describe("efficiencyBoardStatus", () => {
+  const cohort = {
+    n_min: 8,
+    reference_p25_tokens: 1_800_000,
+    minimum_factor: 0.85,
+    maximum_factor: 1.1,
+  };
+
+  it("renders nothing for a board the adjustment cannot apply to", () => {
+    expect(efficiencyBoardStatus(null)).toBeNull();
+  });
+
+  it("separates an empty cohort from a switched-off adjustment", () => {
+    // The production shape on 2026-08-13: preview computed, nothing qualified.
+    // Both render blank per-row, so the distinction has to be stated here.
+    const status = efficiencyBoardStatus({
+      ...cohort,
+      active: false,
+      preview: true,
+      cohort_size: 0,
+      reference_p25_tokens: null,
+    });
+    expect(status?.tone).toBe("dormant");
+    expect(status?.headline).toContain("not adjusting any score");
+    expect(status?.detail).toContain("No agent has qualified");
+    expect(status?.cohortSize).toBe(0);
+    expect(status?.referenceTokens).toBeNull();
+  });
+
+  it("reports a partial cohort as dormant and names the shortfall", () => {
+    const status = efficiencyBoardStatus({ ...cohort, active: true, cohort_size: 5 });
+    expect(status?.tone).toBe("dormant");
+    expect(status?.detail).toContain("5 of the 8 agents required");
+  });
+
+  it("marks a qualified cohort as projection while the fold is off", () => {
+    const status = efficiencyBoardStatus({
+      ...cohort,
+      active: false,
+      preview: true,
+      cohort_size: 12,
+    });
+    expect(status?.tone).toBe("projected");
+    expect(status?.detail).toContain("Nothing here moves a rank");
+    expect(status?.referenceTokens).toBe(1_800_000);
+  });
+
+  it("marks an active cohort as ranking the board", () => {
+    const status = efficiencyBoardStatus({ ...cohort, active: true, cohort_size: 12 });
+    expect(status?.tone).toBe("applied");
+    expect(status?.headline).toContain("ranking this board");
+    expect(status?.minimumFactor).toBe(0.85);
+    expect(status?.maximumFactor).toBe(1.1);
   });
 });

@@ -1669,12 +1669,19 @@ class TestPublicLeaderboard:
         assert body["v9_confirmation_mode"] is None
         assert "shadow" not in json.dumps(body)
 
-    async def test_leaderboard_reports_average_settled_run_cost(
+    async def test_leaderboard_averages_only_completed_run_cost(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
+        """Only leases whose validator posted a score count toward the mean.
+
+        A grant records budget, never outcome, so an abandoned lease is
+        indistinguishable from a finished one by ``status`` or by an elapsed
+        deadline -- and counting it books partial work as a whole run, which is
+        what made the busiest agents display the cheapest runs.
+        """
         agent_id = UUID(
             await _seed_k3(
                 session_maker,
@@ -1685,25 +1692,58 @@ class TestPublicLeaderboard:
         )
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
-            validator = await session.scalar(
-                select(Score.validator_hotkey)
-                .where(Score.agent_id == agent_id)
-                .limit(1)
+            tickets = (
+                await session.execute(
+                    select(
+                        ValidatorTicket.validator_hotkey,
+                        ValidatorTicket.deadline,
+                    )
+                    .where(
+                        ValidatorTicket.agent_id == agent_id,
+                        ValidatorTicket.status == TicketStatus.SCORED,
+                    )
+                    .order_by(ValidatorTicket.deadline)
+                )
+            ).all()
+            assert len(tickets) == 3
+            scored_validator, scored_deadline = tickets[0]
+            other_validator, other_deadline = tickets[1]
+
+            # A fourth validator that took a lease and never posted a score:
+            # the shape a stalled validator leaves behind.
+            expired_validator = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
+            expired_deadline = now - timedelta(hours=3)
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    bench_version=_ERA,
+                    validator_hotkey=expired_validator,
+                    slot_id="slot-0",
+                    status=TicketStatus.EXPIRED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose_revision=1,
+                    issued_at=now - timedelta(hours=5),
+                    deadline=expired_deadline,
+                    attempt_count=1,
+                    manual_retry_grants=0,
+                )
             )
-            assert validator is not None
+            await session.flush()
 
             def grant(
                 *,
+                validator_hotkey: str,
                 deadline: datetime,
                 status: str,
                 chat_cost: int,
                 embedding_cost: int,
+                accounting_version: int = 2,
             ) -> InferenceGrant:
                 return InferenceGrant(
                     grant_id=uuid4(),
                     agent_id=agent_id,
                     bench_version=_ERA,
-                    validator_hotkey=validator,
+                    validator_hotkey=validator_hotkey,
                     slot_id="slot-0",
                     ticket_deadline=deadline,
                     expires_at=deadline,
@@ -1725,33 +1765,54 @@ class TestPublicLeaderboard:
                     embedding_token_budget=5_000_000,
                     embedding_tokens=1000,
                     embedding_cost_microusd=embedding_cost,
-                    usage_accounting_version=2,
+                    usage_accounting_version=accounting_version,
                     created_at=now - timedelta(hours=2),
                     updated_at=now,
                 )
 
             session.add_all(
                 [
-                    # Raw active status is stale after the immutable lease end.
+                    # Two completed runs: these are the whole population.
                     grant(
-                        deadline=now - timedelta(hours=1),
-                        status="active",
-                        chat_cost=100_000,
-                        embedding_cost=10_000,
-                    ),
-                    # A terminal grant is settled even before its original deadline.
-                    grant(
-                        deadline=now + timedelta(hours=1),
+                        validator_hotkey=scored_validator,
+                        deadline=scored_deadline,
                         status="exhausted",
                         chat_cost=300_000,
                         embedding_cost=30_000,
                     ),
-                    # Live partial work must not pull the board average down.
                     grant(
-                        deadline=now + timedelta(hours=2),
+                        validator_hotkey=other_validator,
+                        deadline=other_deadline,
                         status="active",
-                        chat_cost=900_000,
-                        embedding_cost=90_000,
+                        chat_cost=100_000,
+                        embedding_cost=10_000,
+                    ),
+                    # An earlier attempt by a validator that later scored. It
+                    # shares the ticket row but not its deadline, so the retry
+                    # that succeeded is kept and this abandoned one is dropped.
+                    grant(
+                        validator_hotkey=scored_validator,
+                        deadline=scored_deadline - timedelta(hours=1),
+                        status="exhausted",
+                        chat_cost=9_000,
+                        embedding_cost=900,
+                    ),
+                    # A lease held by a validator that never scored at all.
+                    grant(
+                        validator_hotkey=expired_validator,
+                        deadline=expired_deadline,
+                        status="exhausted",
+                        chat_cost=5_000,
+                        embedding_cost=500,
+                    ),
+                    # Metered under the retired contract, so not comparable.
+                    grant(
+                        validator_hotkey=other_validator,
+                        deadline=other_deadline - timedelta(hours=1),
+                        status="exhausted",
+                        chat_cost=800_000,
+                        embedding_cost=80_000,
+                        accounting_version=1,
                     ),
                 ]
             )
@@ -1761,8 +1822,90 @@ class TestPublicLeaderboard:
         body = (await client.get("/api/v1/public/leaderboard")).json()
         entry = next(row for row in body["entries"] if row["agent_id"] == str(agent_id))
 
+        # Mean of the two completed leases: (330_000 + 110_000) / 2.
         assert entry["average_run_cost_microusd"] == 220_000
         assert entry["inference_run_count"] == 2
+
+    async def test_leaderboard_omits_run_cost_until_a_lease_completes(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """An agent whose only leases were abandoned reports no cost at all.
+
+        Null is the honest answer here. Averaging the partial spend of runs
+        that never finished is what understated the column in the first place.
+        """
+        agent_id = UUID(
+            await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.7, 0.71, 0.72],
+                details={"bench_version": _ERA},
+                accepted_tickets=False,
+            )
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            validator = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
+            deadline = now - timedelta(hours=2)
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    bench_version=_ERA,
+                    validator_hotkey=validator,
+                    slot_id="slot-0",
+                    status=TicketStatus.EXPIRED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose_revision=1,
+                    issued_at=now - timedelta(hours=4),
+                    deadline=deadline,
+                    attempt_count=1,
+                    manual_retry_grants=0,
+                )
+            )
+            await session.flush()
+            session.add(
+                InferenceGrant(
+                    grant_id=uuid4(),
+                    agent_id=agent_id,
+                    bench_version=_ERA,
+                    validator_hotkey=validator,
+                    slot_id="slot-0",
+                    ticket_deadline=deadline,
+                    expires_at=deadline,
+                    status="exhausted",
+                    generation=1,
+                    allowed_models=["qwen/qwen3-32b"],
+                    request_budget=8192,
+                    request_count=12,
+                    token_budget=25_000_000,
+                    prompt_tokens=100,
+                    completion_tokens=10,
+                    cost_microusd=4_000,
+                    embedding_model="perplexity/pplx-embed-v1-0.6b",
+                    embedding_profile="dittobench-v8-pplx-embed-v1-0.6b-768-v1",
+                    embedding_provider="Perplexity",
+                    embedding_dimensions=768,
+                    embedding_request_budget=10_000,
+                    embedding_request_count=1,
+                    embedding_token_budget=5_000_000,
+                    embedding_tokens=100,
+                    embedding_cost_microusd=400,
+                    usage_accounting_version=2,
+                    created_at=now - timedelta(hours=3),
+                    updated_at=now,
+                )
+            )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        entry = next(row for row in body["entries"] if row["agent_id"] == str(agent_id))
+
+        assert entry["average_run_cost_microusd"] is None
+        assert entry["inference_run_count"] == 0
 
     async def test_distinguishes_raw_rank_one_from_koth_emissions_champion(
         self,

@@ -180,7 +180,7 @@ const HEADERS: HeaderSpec[] = [
     label: "Avg run cost",
     class: "num",
     width: "120px",
-    tip: "Average platform-metered chat plus embedding spend across settled, non-empty validator runs on this score's benchmark version.",
+    tip: "Average platform-metered chat plus embedding spend across completed, non-empty validator runs on this score's benchmark version. A run counts only once its validator posted a score, so a lease abandoned mid-flight is excluded rather than averaged in as a cheap run.",
   },
   {
     key: "latency",
@@ -590,7 +590,10 @@ function BoardRow(props: {
             fallback={<span class="muted">–</span>}
           >
             <strong>{formatRunCost(e().average_run_cost_microusd)}</strong>
-            <span>{e().inference_run_count} settled</span>
+            {/* "completed", not "settled": the average covers only leases whose
+                validator posted a score, so this count is a handful of runs
+                rather than every lease the agent was issued. */}
+            <span>{e().inference_run_count} completed</span>
           </Show>
         </td>
         <Show when={e().median_ms != null} fallback={<td class="num hide-sm lat muted">–</td>}>
