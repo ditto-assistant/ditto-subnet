@@ -1237,6 +1237,25 @@ class PublicKothEmissions(BaseModel):
         float,
         Field(gt=0.0, description="Exponential high-score band decay rate."),
     ]
+    saturation_min_bench_version: Annotated[
+        int,
+        Field(
+            ge=1,
+            description="First benchmark version capping the band at the ceiling.",
+        ),
+    ]
+    saturation_headroom_fraction: Annotated[
+        float,
+        Field(
+            gt=0.0,
+            le=1.0,
+            description=(
+                "Ceiling on the hysteresis term as a fraction of the incumbent's "
+                "remaining headroom (1 - composite), so a saturated board stays "
+                "contestable."
+            ),
+        ),
+    ]
     champion_share: Annotated[float, Field(gt=0.0, le=1.0)]
     rank_shares: tuple[Annotated[float, Field(gt=0.0, le=1.0)], ...]
     tail_size: Annotated[int, Field(ge=0)]

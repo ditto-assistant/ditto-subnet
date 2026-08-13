@@ -27,6 +27,8 @@ from ditto.validator.config import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
     KOTH_BAND_DECAY_START_COMPOSITE,
+    KOTH_SATURATION_HEADROOM_FRACTION,
+    KOTH_SATURATION_MIN_BENCH_VERSION,
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
 from ditto.validator.crn import confirmation_seeds
@@ -162,12 +164,68 @@ def _dethrone_band_scale(
     comparison_version = min(_entry_version(challenger), _entry_version(champion))
     if comparison_version < KOTH_BAND_DECAY_MIN_BENCH_VERSION:
         return 1.0
-    bounded_champion = min(
-        max(champion_composite, KOTH_BAND_DECAY_START_COMPOSITE), 1.0
-    )
     return math.exp(
-        -KOTH_BAND_DECAY_RATE * (bounded_champion - KOTH_BAND_DECAY_START_COMPOSITE)
+        -KOTH_BAND_DECAY_RATE
+        * (_bounded_champion(champion_composite) - KOTH_BAND_DECAY_START_COMPOSITE)
     )
+
+
+def _bounded_champion(champion_composite: float) -> float:
+    """The incumbent composite clamped to the decay's own operating range.
+
+    Shared by the decay and the saturation cap so the two always speak about the
+    same number, and so out-of-range ledger data cannot drive either of them
+    past its endpoints.
+    """
+    return min(max(champion_composite, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
+
+
+def _dethrone_band(
+    challenger: LedgerEntry,
+    champion: LedgerEntry,
+    champion_composite: float,
+    *,
+    margin: float,
+    statistical: float,
+) -> float:
+    """Return the indifference band a challenger's lead must strictly clear.
+
+    The band has two terms answering two different questions.  The
+    **hysteresis** term (``margin``, shrunk by :func:`_dethrone_band_scale`)
+    asks how much better a challenger must be before churning the crown is
+    worth it.  The **statistical** term asks how much better it must measure
+    before the difference is believable at all.
+
+    Bench v8 and later cap the hysteresis term at
+    ``KOTH_SATURATION_HEADROOM_FRACTION`` of the incumbent's remaining headroom
+    and stop scaling the statistical term along with it.  The exponential decay
+    on its own is a fixed shape, and on a saturated benchmark the score left to
+    win shrinks much faster than that shape does: at an incumbent composite of
+    0.997 the decayed band asks for 0.0032 composite points out of the 0.0030
+    that remain, so the crown cannot be taken by any improvement the benchmark
+    is able to express — the top of the board locks.  Tying the ask to the
+    headroom instead keeps it reachable at every ceiling: close a quarter of
+    what is left, and the crown moves.
+
+    Leaving the statistical term unscaled is the other half of that trade.  With
+    hysteresis this small, the noise band is the only thing standing between a
+    lucky seed draw and the crown, and measurement noise is a fact about the
+    evidence rather than about how hard the benchmark has become — so it keeps
+    its full width exactly where the hysteresis gives up.  A challenger at the
+    ceiling therefore wins on separation it can actually demonstrate, which is
+    what the shared-seed paired comparison exists to measure.
+
+    Comparisons below :data:`KOTH_SATURATION_MIN_BENCH_VERSION` keep the legacy
+    ``max(margin, statistical) * scale`` byte-for-byte, so historical and
+    mixed-version folds are untouched.
+    """
+    scale = _dethrone_band_scale(challenger, champion, champion_composite)
+    comparison_version = min(_entry_version(challenger), _entry_version(champion))
+    if comparison_version < KOTH_SATURATION_MIN_BENCH_VERSION:
+        return max(margin, statistical) * scale
+    headroom = 1.0 - _bounded_champion(champion_composite)
+    hysteresis = min(margin * scale, KOTH_SATURATION_HEADROOM_FRACTION * headroom)
+    return max(hysteresis, statistical)
 
 
 def max_bench_version(entries: Sequence[LedgerEntry]) -> int:
@@ -789,29 +847,42 @@ def _beats(
 
     a two-sample z-test that engages only when BOTH entries carry a
     ``composite_stderr`` and ``dethrone_z > 0``; with no stderr (or z=0) the band
-    is exactly the fixed composite-point margin. Both sides use
+    is exactly the fixed composite-point margin.
+
+    :func:`_dethrone_band` then applies the versioned high-score rules to both
+    terms: the v6+ exponential decay, and from v8 the saturation cap that holds
+    the hysteresis term under a fraction of the incumbent's remaining headroom
+    so a ceiling-bound board stays contestable. Both sides use
     :func:`_effective_composite` (the MEDIAN over confirmation seeds when present,
     else the raw composite). Pure and deterministic (consensus-safe)."""
     paired = _paired_dethrone(challenger, champion, dethrone_z)
     if paired is not None:
         mean_diff, champ_ref, se_diff = paired
-        base_band = max(margin, dethrone_z * se_diff)
-        band = base_band * _dethrone_band_scale(challenger, champion, champ_ref)
+        band = _dethrone_band(
+            challenger,
+            champion,
+            champ_ref,
+            margin=margin,
+            statistical=dethrone_z * se_diff,
+        )
         return champ_ref + mean_diff > champ_ref + band
 
     chall = _effective_composite(challenger)
     champ = _effective_composite(champion)
-    band = margin
+    statistical = 0.0
     if dethrone_z > 0.0:
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)
         if se_c is not None and se_champ is not None:
+            # Stderr is measured on the pre-efficiency quality scale, so it
+            # propagates through the derivative of the frozen curve-v3
+            # transform, not through the multiplier itself.
             se_c *= _efficiency_stderr_scale(challenger)
             se_champ *= _efficiency_stderr_scale(champion)
-            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
-            if stat_band > band:
-                band = stat_band
-    band *= _dethrone_band_scale(challenger, champion, champ)
+            statistical = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
+    band = _dethrone_band(
+        challenger, champion, champ, margin=margin, statistical=statistical
+    )
     # Compare scores against the threshold rather than subtracting first. For
     # decimal wire values such as 0.935 and 0.930, subtraction can round an exact
     # 0.005 boundary infinitesimally upward and incorrectly defeat first-seen.
@@ -882,8 +953,18 @@ def _unpaired_band(
 ) -> float:
     """The unpaired indifference band :func:`_beats` applies to this pair:
     ``max(margin, dethrone_z * sqrt(se_c² + se_champ²))``, the
-    statistical term engaging only when both entries carry a stderr."""
-    band = margin
+    statistical term engaging only when both entries carry a stderr.
+
+    This is a **scheduling** question, not a decision: it selects the pairs whose
+    crown comparison seed luck could still swing, so they get re-scored on shared
+    seeds. It therefore returns the WIDER of the legacy band and the band
+    :func:`_dethrone_band` would actually decide on. The two shapes diverge at
+    v8, where the deciding band keeps the statistical term at full width while
+    the legacy band scaled it down — and a pair that falls between them would
+    otherwise be neither confirmed nor resolved, holding the crown on evidence
+    the fold has already decided is too thin. Below v8 the maximum is the legacy
+    band itself, byte-for-byte."""
+    statistical = 0.0
     if dethrone_z > 0.0:
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)
@@ -895,11 +976,16 @@ def _unpaired_band(
             # with the actual dethrone decision.
             se_c *= _efficiency_stderr_scale(challenger)
             se_champ *= _efficiency_stderr_scale(champion)
-            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
-            if stat_band > band:
-                band = stat_band
-    return band * _dethrone_band_scale(
-        challenger, champion, _effective_composite(champion)
+            statistical = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
+    champ = _effective_composite(champion)
+    legacy = max(margin, statistical) * _dethrone_band_scale(
+        challenger, champion, champ
+    )
+    return max(
+        legacy,
+        _dethrone_band(
+            challenger, champion, champ, margin=margin, statistical=statistical
+        ),
     )
 
 

@@ -38,6 +38,17 @@ KOTH_MARGIN = 0.007  # absolute composite-point dethrone hysteresis
 KOTH_BAND_DECAY_MIN_BENCH_VERSION = 6
 KOTH_BAND_DECAY_START_COMPOSITE = 0.60
 KOTH_BAND_DECAY_RATE = 2.0
+# Bench v8 and later add a saturation cap on top of that decay, because the
+# exponential alone stops being enough once the field reaches the ceiling. It
+# shrinks the band by a fixed *shape* while the score still to be won shrinks
+# far faster: at an incumbent composite of 0.997 the decayed band is 0.0032
+# composite points against 0.0030 of remaining headroom, so no improvement the
+# benchmark can express is large enough to take the crown. The cap ties the
+# hysteresis ask to what is actually left to win -- clear this fraction of the
+# incumbent's headroom and the crown moves, at any ceiling. Below the cap the
+# statistical band, no longer scaled with it, is what keeps seed luck out.
+KOTH_SATURATION_MIN_BENCH_VERSION = 8
+KOTH_SATURATION_HEADROOM_FRACTION = 0.25
 KOTH_TAIL_SIZE = 4  # ranked runners-up after the champion
 KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)

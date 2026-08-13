@@ -4819,6 +4819,11 @@ export const publicKothEmissionsSchema = z.object({
   band_decay_min_bench_version: z.number().int().positive(),
   band_decay_start_composite: z.number().min(0).max(1),
   band_decay_rate: z.number().positive(),
+  // Saturation cap (bench v8+): the hysteresis term is held under this fraction
+  // of the incumbent's remaining headroom, so a ceiling-bound board stays
+  // contestable. Optional because older platform releases omit both fields.
+  saturation_min_bench_version: z.number().int().positive().optional(),
+  saturation_headroom_fraction: z.number().positive().max(1).optional(),
   champion_share: z.number().positive().max(1),
   rank_shares: z.array(z.number().positive().max(1)),
   tail_size: z.number().int().nonnegative(),

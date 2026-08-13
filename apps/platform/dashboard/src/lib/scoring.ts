@@ -128,6 +128,10 @@ export interface BandDecayParams {
   band_decay_min_bench_version?: number | null;
   band_decay_start_composite?: number | null;
   band_decay_rate?: number | null;
+  /** Bench version from which the saturation cap applies (v8+). */
+  saturation_min_bench_version?: number | null;
+  /** Cap on the hysteresis term as a fraction of remaining headroom. */
+  saturation_headroom_fraction?: number | null;
 }
 
 export interface BenchVersioned {
@@ -170,13 +174,54 @@ export function dethroneBandScale(
   return Math.exp(-rate * (boundedChampion - start));
 }
 
+/**
+ * v8+ saturation cap: the ceiling the fold puts on the hysteresis term, as a
+ * fraction of the incumbent's remaining headroom (validator
+ * `weights._dethrone_band`). Null when the fold does not apply it — an older
+ * payload omitting the fields, or a comparison below
+ * `saturation_min_bench_version` — which keeps the pre-v8 floor byte-identical.
+ *
+ * The champion's composite is clamped with the decay's own
+ * `band_decay_start_composite` bound so both rules read the same number.
+ */
+export function saturationCap(
+  emissions: BandDecayParams | null | undefined,
+  championEntry: BenchVersioned | null | undefined,
+  championComposite: number,
+  challengerEntry?: BenchVersioned | null,
+): number | null {
+  const minVersion = Number(emissions && emissions.saturation_min_bench_version);
+  const fraction = Number(emissions && emissions.saturation_headroom_fraction);
+  const start = Number(emissions && emissions.band_decay_start_composite);
+  const championVersion = Number(championEntry && championEntry.bench_version);
+  const challengerVersion = Number(challengerEntry && challengerEntry.bench_version);
+  const version = Number.isFinite(challengerVersion)
+    ? Math.min(championVersion, challengerVersion)
+    : championVersion;
+  if (
+    !Number.isFinite(version) ||
+    !Number.isFinite(minVersion) ||
+    version < minVersion ||
+    !Number.isFinite(fraction) ||
+    fraction <= 0 ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(championComposite)
+  )
+    return null;
+  const boundedChampion = Math.min(Math.max(championComposite, start), 1);
+  return fraction * (1 - boundedChampion);
+}
+
 export interface DethroneFloor {
   /** The champion's displayed composite (the settled one mid-rollout). */
   champComposite: number;
   /** dethroneBandScale result (1 when decay does not apply). */
   scale: number;
-  /** margin × scale — the effective flat hysteresis term. */
+  /** margin × scale, held under the v8+ saturation cap — the effective flat
+   * hysteresis term. */
   effectiveMargin: number;
+  /** True when the saturation cap, not the decay curve, set effectiveMargin. */
+  saturated: boolean;
   /** champComposite + effectiveMargin. A floor, not a guarantee. */
   floor: number;
   /** dethrone_z when finite and > 0, else null (no statistical band copy). */
@@ -197,6 +242,10 @@ export interface DethroneFloor {
  *   var z = emissions.dethrone_z;
  * (never `champComposite * (1 + margin)` — the old regression suite banned
  * that literal from the source).
+ *
+ * From bench v8 the effective margin is additionally held under
+ * `saturationCap`, so on a saturated board the published floor is the small
+ * number the fold actually applies rather than a stale, unreachable one.
  */
 export function dethroneFloor(
   emissions:
@@ -212,13 +261,17 @@ export function dethroneFloor(
   if (!Number.isFinite(champComposite) || typeof margin !== "number" || !Number.isFinite(margin))
     return null;
   const scale = dethroneBandScale(emissions, championEntry, champComposite);
-  const effectiveMargin = margin * scale;
+  const decayedMargin = margin * scale;
+  const cap = saturationCap(emissions, championEntry, champComposite);
+  const saturated = cap != null && cap < decayedMargin;
+  const effectiveMargin = saturated && cap != null ? cap : decayedMargin;
   const floor = champComposite + effectiveMargin;
   const z = emissions.dethrone_z;
   return {
     champComposite,
     scale,
     effectiveMargin,
+    saturated,
     floor,
     z: typeof z === "number" && Number.isFinite(z) && z > 0 ? z : null,
   };

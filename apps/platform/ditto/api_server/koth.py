@@ -25,6 +25,12 @@ KOTH_MARGIN = 0.007
 KOTH_BAND_DECAY_MIN_BENCH_VERSION = 6
 KOTH_BAND_DECAY_START_COMPOSITE = 0.60
 KOTH_BAND_DECAY_RATE = 2.0
+# Bench v8+ caps the hysteresis term at a fraction of the incumbent's remaining
+# headroom, because the exponential decay is a fixed shape and the score left to
+# win is not: at a champion composite of 0.997 the decayed band (0.0032) exceeds
+# the whole 0.0030 of headroom, so the crown stops being winnable at all.
+KOTH_SATURATION_MIN_BENCH_VERSION = 8
+KOTH_SATURATION_HEADROOM_FRACTION = 0.25
 KOTH_TAIL_SIZE = 4
 KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_CHAMPION_SHARE = KOTH_RANK_SHARES[0]
@@ -89,12 +95,44 @@ def _dethrone_band_scale(
     comparison_version = min(challenger.bench_version, champion.bench_version)
     if comparison_version < KOTH_BAND_DECAY_MIN_BENCH_VERSION:
         return 1.0
-    bounded_champion = min(
-        max(champion_composite, KOTH_BAND_DECAY_START_COMPOSITE), 1.0
-    )
     return math.exp(
-        -KOTH_BAND_DECAY_RATE * (bounded_champion - KOTH_BAND_DECAY_START_COMPOSITE)
+        -KOTH_BAND_DECAY_RATE
+        * (_bounded_champion(champion_composite) - KOTH_BAND_DECAY_START_COMPOSITE)
     )
+
+
+def _bounded_champion(champion_composite: float) -> float:
+    """The incumbent composite clamped to the decay's own operating range."""
+    return min(max(champion_composite, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
+
+
+def _dethrone_band(
+    challenger: KothEntry,
+    champion: KothEntry,
+    champion_composite: float,
+    *,
+    margin: float,
+    statistical: float,
+) -> float:
+    """Mirror the validator's full indifference band (``weights._dethrone_band``).
+
+    Hysteresis (``margin``, decayed) says how much better a challenger must be
+    for a crown change to be worth the churn; the statistical term says how much
+    better it must measure to be believed. From
+    :data:`KOTH_SATURATION_MIN_BENCH_VERSION` the hysteresis term is additionally
+    held under :data:`KOTH_SATURATION_HEADROOM_FRACTION` of the incumbent's
+    remaining headroom, and the statistical term is no longer scaled with it --
+    at the ceiling the noise floor is what protects the crown, and noise is a
+    property of the evidence rather than of the benchmark's difficulty. Older
+    comparisons keep ``max(margin, statistical) * scale`` byte-for-byte.
+    """
+    scale = _dethrone_band_scale(challenger, champion, champion_composite)
+    comparison_version = min(challenger.bench_version, champion.bench_version)
+    if comparison_version < KOTH_SATURATION_MIN_BENCH_VERSION:
+        return max(margin, statistical) * scale
+    headroom = 1.0 - _bounded_champion(champion_composite)
+    hysteresis = min(margin * scale, KOTH_SATURATION_HEADROOM_FRACTION * headroom)
+    return max(hysteresis, statistical)
 
 
 def emission_set(projection: KothProjection | None) -> tuple[KothEntry, ...]:
@@ -541,8 +579,12 @@ def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDe
         lead, champion_reference, standard_error = paired
         margin_lead = KOTH_MARGIN
         paired_statistical_lead = KOTH_DETHRONE_Z * standard_error
-        required = max(margin_lead, paired_statistical_lead) * _dethrone_band_scale(
-            challenger, champion, champion_reference
+        required = _dethrone_band(
+            challenger,
+            champion,
+            champion_reference,
+            margin=margin_lead,
+            statistical=paired_statistical_lead,
         )
         return DethroneDecision(
             challenger_lead=lead,
@@ -568,10 +610,13 @@ def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDe
             challenger_stderr**2 + champion_stderr**2
         )
         method = "unpaired"
-    required = max(
-        margin_lead,
-        statistical_lead if statistical_lead is not None else margin_lead,
-    ) * _dethrone_band_scale(challenger, champion, champion_composite)
+    required = _dethrone_band(
+        challenger,
+        champion,
+        champion_composite,
+        margin=margin_lead,
+        statistical=statistical_lead if statistical_lead is not None else 0.0,
+    )
     return DethroneDecision(
         challenger_lead=lead,
         required_lead=required,
