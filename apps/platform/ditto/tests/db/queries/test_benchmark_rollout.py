@@ -743,7 +743,9 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
             ttl=timedelta(minutes=90),
         )
         assert sixth_ticket is not None and sixth_ticket.agent_id == sixth_id
-        assert await active_bench_version(session) == 2
+        # The frozen priority five have quorum, so the target becomes
+        # authoritative while this valid tail lease continues in place.
+        assert await active_bench_version(session) == CANARY_BENCH_VERSION
         assert not await maybe_activate_rollout(session, rollout, now=now)
 
         for validator in range(3):
@@ -3541,12 +3543,17 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
             )
             == MIN_DESIRED_AUTHORITY_AGENTS
         )
-        # Five valid v9 agents are not enough to change the public authority
-        # while even one frozen top-15 member is unfinished.
-        assert await active_bench_version(session) == 2
+        # The frozen top-five gate is complete and a full desired-version
+        # emission set exists, so authority flips without waiting for the
+        # wider background-rescore cohort. The rollout remains open until that
+        # tail finishes; no member is deleted or silently treated as complete.
+        assert await active_bench_version(session) == CANARY_BENCH_VERSION
         collecting_ledger = await list_eligible_ledger(session)
         assert collecting_ledger
-        assert {row.bench_version for row in collecting_ledger if row.eligible} == {2}
+        assert {row.bench_version for row in collecting_ledger} == {
+            CANARY_BENCH_VERSION
+        }
+        assert unfinished_id not in {row.agent_id for row in collecting_ledger}
         assert not await maybe_activate_rollout(
             session,
             rollout,
@@ -3555,7 +3562,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
         )
 
         # Completing the last member with a legitimate semantic failure closes
-        # the frozen-cohort boundary without requiring that failure to rank.
+        # the durable rollout record without requiring that failure to rank.
         for validator in range(3):
             session.add(
                 Score(

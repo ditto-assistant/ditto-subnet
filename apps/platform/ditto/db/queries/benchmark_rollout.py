@@ -639,9 +639,11 @@ async def active_bench_version(session: AsyncSession) -> int:
     if open_transition is not None:
         from ditto.db.queries.scores import count_ranked_quorum_agents
 
-        # The gate width is the target this rollout FROZE at start, not the live
-        # operator setting: re-gating a transition already in flight would move
-        # its finish line underneath the validators scoring it.
+        # Authority and background rescoring are deliberately separate gates.
+        # The operator freezes both widths at rollout start: the priority prefix
+        # must finish before the target may own weights, while the wider rescore
+        # cohort continues through the still-open rollout after that flip.
+        # Re-reading live policy here would move either finish line mid-rollout.
         member_ids = set(
             await session.scalars(
                 select(BenchmarkRolloutMember.agent_id).where(
@@ -649,10 +651,10 @@ async def active_bench_version(session: AsyncSession) -> int:
                 )
             )
         )
-        cohort_complete = await rollout_cohort_score_complete(
+        priority_complete = await rollout_cohort_score_complete(
             session,
             rollout=open_transition,
-            cohort_size=open_transition.cohort_size,
+            cohort_size=open_transition.priority_cohort_target,
         )
         ready = await count_ranked_quorum_agents(
             session,
@@ -663,11 +665,11 @@ async def active_bench_version(session: AsyncSession) -> int:
         # MIN_DESIRED_AUTHORITY_AGENTS stays a constant on purpose. It is the
         # KOTH emission-set size, so it is a consensus quantity, not queue
         # policy: below it the ledger flip would have fewer recipients than the
-        # emission split expects. The full frozen cohort must also finish so the
-        # public leaderboard and durable rollout status share one finish line.
+        # emission split expects. ``maybe_activate_rollout`` separately closes
+        # the durable rollout only after the wider rescore cohort finishes.
         if (
             len(member_ids) == open_transition.cohort_size
-            and cohort_complete
+            and priority_complete
             and ready >= MIN_DESIRED_AUTHORITY_AGENTS
         ):
             if (

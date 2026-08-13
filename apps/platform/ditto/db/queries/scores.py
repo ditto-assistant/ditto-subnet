@@ -1591,13 +1591,13 @@ async def list_eligible_ledger(
             per_agent.c.cnt >= SCORING_QUORUM,
         )
         on_canonical = per_agent.c.bench_version == canonical_version
-        # Every frozen member must FINISH the desired benchmark, but a
-        # legitimate zero is a result, not a permanent rollout veto.
-        # Authority additionally requires a full five-member emission set of
-        # semantic-pass agents anywhere in the frozen cohort. This preserves
-        # the no-mixed-version and no-shadow guarantees without requiring an
-        # agent that v9 correctly rejected to somehow pass v9 before v9 can
-        # become authoritative.
+        # The frozen priority prefix is the authority gate. The wider rescore
+        # cohort remains in this open rollout and continues in the background;
+        # an unfinished tail member must not hold the whole subnet on the old
+        # benchmark. Authority additionally requires a full five-member
+        # emission set of semantic-pass agents anywhere in the frozen cohort.
+        # This preserves the no-mixed-version and no-shadow guarantees without
+        # requiring an agent that v9 correctly rejected to somehow pass v9.
         member_ids = set(
             await session.scalars(
                 select(BenchmarkRolloutMember.agent_id).where(
@@ -1605,10 +1605,10 @@ async def list_eligible_ledger(
                 )
             )
         )
-        cohort_complete = await rollout_cohort_score_complete(
+        priority_complete = await rollout_cohort_score_complete(
             session,
             rollout=rollout,
-            cohort_size=rollout.cohort_size,
+            cohort_size=rollout.priority_cohort_target,
         )
         desired_ready_agents = await count_ranked_quorum_agents(
             session,
@@ -1618,7 +1618,7 @@ async def list_eligible_ledger(
         )
         if (
             len(member_ids) == rollout.cohort_size
-            and cohort_complete
+            and priority_complete
             and desired_ready_agents >= MIN_DESIRED_AUTHORITY_AGENTS
         ):
             # Whole-pool flip: drop every row that is not a desired-version
@@ -1626,10 +1626,10 @@ async def list_eligible_ledger(
             authority_filter = desired_at_quorum
             version_priority = per_agent.c.bench_version
         else:
-            # Before the frozen cohort finishes, desired-only submissions are
-            # rollout progress, not leaderboard authority. Excluding them here
-            # prevents a mixed v8/v9 ledger while the public rollout still says
-            # v8 is active.
+            # Before the frozen priority prefix finishes, desired-only
+            # submissions are rollout progress, not leaderboard authority.
+            # Excluding them prevents a mixed v8/v9 ledger while the public
+            # rollout still says v8 is active.
             authority_filter = on_canonical
             version_priority = per_agent.c.bench_version
     selected_version_stmt = select(
