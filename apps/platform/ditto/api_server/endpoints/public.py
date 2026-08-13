@@ -171,7 +171,10 @@ from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retired
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
-from ditto.api_server.continual_retest_settings import aggregate_is_active
+from ditto.api_server.continual_retest_settings import (
+    aggregate_is_active,
+    tie_weighting_is_active,
+)
 from ditto.api_server.datapipeline import DataPipelineError
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
@@ -200,6 +203,7 @@ from ditto.api_server.koth import (
     KOTH_TAIL_SIZE,
     KothEntry,
     bounded_efficiency_adjusted_quality,
+    emission_allocation,
     project_koth,
 )
 from ditto.api_server.model_use import model_use_factor, model_use_policy
@@ -435,6 +439,7 @@ _DATAGEN_RUN_SIZES = frozenset({"small", "medium", "full"})
 _VALIDATOR_ONLINE_WINDOW = timedelta(minutes=5)
 _VALIDATOR_STALE_WINDOW = timedelta(minutes=15)
 _CONTINUAL_MEAN_PROTOCOL = 14
+_TIE_WEIGHTING_PROTOCOL = 20
 # Grace after a lease is issued before the validator is expected to report (in a
 # heartbeat) that it has picked the agent up. Within this window an assigned-but-
 # not-yet-reported validator reads as "assigning" rather than a mismatch, so the
@@ -2056,6 +2061,7 @@ def _public_koth_emissions(
     anchor_version: int | None = None,
     efficiency_bonuses: dict[UUID, float] | None = None,
     efficiency_factors: dict[UUID, float] | None = None,
+    tie_weighting_active: bool = False,
 ) -> PublicKothEmissions | None:
     """Project the finalized score pool through the validator's pure fold."""
     quorum_values = quorum_by_agent or {}
@@ -2133,33 +2139,31 @@ def _public_koth_emissions(
             )
         )
 
-    projection = project_koth(fold_entries)
+    projection = project_koth(fold_entries, distinct_hotkeys=tie_weighting_active)
     if projection is None:
         return None
-    recipient_shares = KOTH_RANK_SHARES[: 1 + len(projection.tail)]
-    share_total = sum(recipient_shares)
-    normalized_shares = tuple(share / share_total for share in recipient_shares)
+    allocation = emission_allocation(
+        fold_entries, projection, tie_pooling=tie_weighting_active
+    )
+    share_total = sum(allocation.shares)
+    normalized_shares = tuple(share / share_total for share in allocation.shares)
     recipients = [
         PublicEmissionRecipient(
-            role="champion",
-            agent_id=projection.champion.agent_id,
-            miner_hotkey=projection.champion.miner_hotkey,
-            raw_rank=projection.champion.raw_rank,
-            share_of_miner_pool=normalized_shares[0],
-            shared_seed_confirmations=depths.get(projection.champion.agent_id, 0),
-        )
-    ]
-    recipients.extend(
-        PublicEmissionRecipient(
-            role="tail",
+            role=(
+                "joint_champion"
+                if allocation.mode == "score_ceiling_pool"
+                else "champion"
+                if index == 0
+                else "tail"
+            ),
             agent_id=entry.agent_id,
             miner_hotkey=entry.miner_hotkey,
             raw_rank=entry.raw_rank,
             share_of_miner_pool=normalized_shares[index],
             shared_seed_confirmations=depths.get(entry.agent_id, 0),
         )
-        for index, entry in enumerate(projection.tail, start=1)
-    )
+        for index, entry in enumerate(allocation.members)
+    ]
     decision = projection.raw_leader_decision
     return PublicKothEmissions(
         margin=KOTH_MARGIN,
@@ -2169,6 +2173,12 @@ def _public_koth_emissions(
         band_decay_rate=KOTH_BAND_DECAY_RATE,
         champion_share=KOTH_CHAMPION_SHARE,
         rank_shares=KOTH_RANK_SHARES,
+        tie_weighting_active=tie_weighting_active,
+        tie_weighting_required_protocol=_TIE_WEIGHTING_PROTOCOL,
+        allocation_mode=allocation.mode,
+        score_ceiling_pool_size=(
+            len(allocation.members) if allocation.mode == "score_ceiling_pool" else 0
+        ),
         tail_size=KOTH_TAIL_SIZE,
         champion_agent_id=projection.champion.agent_id,
         champion_miner_hotkey=projection.champion.miner_hotkey,
@@ -2182,6 +2192,9 @@ def _public_koth_emissions(
                 statistical_lead=decision.statistical_lead,
                 method=decision.method,
                 dethrones=decision.dethrones,
+                required_score=decision.required_score,
+                score_ceiling=decision.score_ceiling,
+                ceiling_deadlocked=decision.ceiling_deadlocked,
             )
             if decision is not None
             else None
@@ -2492,6 +2505,16 @@ async def leaderboard(
     )
     continual_mean_active = bench_version is None and aggregate_is_active(
         continual_settings, fleet_protocol_ready=fleet_protocol_ready
+    )
+    tie_weighting_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_TIE_WEIGHTING_PROTOCOL,
+        bench_version=active_version,
+        now=now,
+        freshness=_VALIDATOR_STALE_WINDOW,
+    )
+    tie_weighting_active = bench_version is None and tie_weighting_is_active(
+        continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
     )
     efficiency_view: EfficiencyBoardView | None = None
     if finalized_rows:
@@ -2953,6 +2976,7 @@ async def leaderboard(
                 anchor_version=active_version,
                 efficiency_bonuses=efficiency_bonuses,
                 efficiency_factors=efficiency_factors,
+                tie_weighting_active=tie_weighting_active,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),

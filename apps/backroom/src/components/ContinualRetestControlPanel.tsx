@@ -11,6 +11,7 @@ import {
 } from '../server/admin.functions'
 
 type AggregateMode = 'disabled' | 'fleet_ready' | 'enabled'
+type TieWeightingMode = 'disabled' | 'fleet_ready'
 type RolloutStanddown = 'off' | 'capable_validators' | 'all'
 type WaveMembership = 'strict' | 'participants' | 'per_agent'
 type EligibilityMode = 'fixed' | 'statistical'
@@ -30,6 +31,24 @@ const modes: Array<{ value: AggregateMode; label: string; detail: string }> = [
     value: 'disabled',
     label: 'Disabled',
     detail: 'Keep initial quorum scores authoritative while preserving retest audit rows.',
+  },
+]
+
+const tieWeightingModes: Array<{
+  value: TieWeightingMode
+  label: string
+  detail: string
+}> = [
+  {
+    value: 'fleet_ready',
+    label: 'Pool ties + ceiling crown',
+    detail:
+      'Pool occupied rank shares for ordinary evidence ties. If the crown cannot be beaten within the score range, split the full miner pool across the uncapped best-score tie cohort.',
+  },
+  {
+    value: 'disabled',
+    label: 'Fixed rank shares (rollback)',
+    detail: 'Keep 65/14/10/7/4 even when secondary ordering is the only separator.',
   },
 ]
 
@@ -121,6 +140,9 @@ export function ContinualRetestControlPanel({
   const [mode, setMode] = useState<AggregateMode>(
     initialState.effective.settings.aggregate_mode,
   )
+  const [tieWeightingMode, setTieWeightingMode] = useState<TieWeightingMode>(
+    initialState.effective.settings.tie_weighting_mode,
+  )
   const [idleRetests, setIdleRetests] = useState(
     initialState.effective.settings.idle_retests_enabled,
   )
@@ -153,6 +175,7 @@ export function ContinualRetestControlPanel({
   // collect a number the platform will reject along with the rest of the form.
   const cohortSizingSupported = state.field_support.retest_cohort_size
   const membershipSupported = state.field_support.wave_membership
+  const tieWeightingSupported = state.field_support.tie_weighting_mode
   const eligibilitySupported =
     state.field_support.retest_eligibility_mode &&
     state.field_support.retest_eligibility_z &&
@@ -188,6 +211,8 @@ export function ContinualRetestControlPanel({
     parsedCohortSize > effective.eligible_agent_count
   const changed =
     mode !== effective.settings.aggregate_mode ||
+    (tieWeightingSupported &&
+      tieWeightingMode !== effective.settings.tie_weighting_mode) ||
     idleRetests !== effective.settings.idle_retests_enabled ||
     standdown !== effective.settings.rollout_standdown ||
     (cohortSizingSupported &&
@@ -210,6 +235,7 @@ export function ContinualRetestControlPanel({
 
   function reset(next = state) {
     setMode(next.effective.settings.aggregate_mode)
+    setTieWeightingMode(next.effective.settings.tie_weighting_mode)
     setIdleRetests(next.effective.settings.idle_retests_enabled)
     setStanddown(next.effective.settings.rollout_standdown)
     setCohortSize(String(next.effective.settings.retest_cohort_size))
@@ -251,6 +277,7 @@ export function ContinualRetestControlPanel({
           // default, not left alone.
           settings: {
             aggregate_mode: mode,
+            tie_weighting_mode: tieWeightingSupported ? tieWeightingMode : 'disabled',
             idle_retests_enabled: idleRetests,
             rollout_standdown: standdown,
             retest_cohort_size: cohortSizingSupported ? parsedCohortSize : floor,
@@ -288,9 +315,9 @@ export function ContinualRetestControlPanel({
           <div>
             <h2 className="text-sm font-semibold">Current scoring policy</h2>
             <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">
-              Controls how deep the retest lane reaches down the ranking, when completed waves
-              affect rankings, and whether spare validator capacity may advance the next bounded
-              wave.
+              Controls how deep the retest lane reaches, when completed waves affect rankings,
+              whether evidence ties pool their occupied emission slots, and whether spare
+              validator capacity may advance the next bounded wave.
             </p>
           </div>
         </div>
@@ -310,6 +337,7 @@ export function ContinualRetestControlPanel({
           <div><dt className="text-[var(--muted)]">Revision</dt><dd className="mt-1 font-semibold">{effective.revision}</dd></div>
           <div><dt className="text-[var(--muted)]">Fleet gate</dt><dd className="mt-1 font-semibold">{effective.fleet_protocol_ready ? 'Ready' : 'Not ready'}</dd></div>
           <div><dt className="text-[var(--muted)]">Aggregate fold</dt><dd className="mt-1 font-semibold">{effective.aggregate_active ? 'Active' : 'Inactive'}</dd></div>
+          <div><dt className="text-[var(--muted)]">Tie + ceiling payout</dt><dd className="mt-1 font-semibold">{effective.tie_weighting_active ? 'Active' : effective.settings.tie_weighting_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
           <div>
             <dt className="text-[var(--muted)]">Retest lane</dt>
             <dd
@@ -373,6 +401,56 @@ export function ContinualRetestControlPanel({
               </span>
             </button>
           ))}
+        </div>
+
+        <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+          <h3 className="text-xs font-semibold text-[var(--muted-strong)]">
+            How tied emission slots pay
+          </h3>
+          <p className="mt-1 max-w-[76ch] text-[11px] leading-4 text-[var(--muted)]">
+            Pooling keeps the same total miner weight and the same emission-set membership. Exact
+            effective-score ties pool immediately; a non-exact tie needs aligned shared-seed
+            evidence and must remain inside the paired uncertainty band. Missing evidence cannot
+            widen a payout group.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {tieWeightingModes.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                disabled={readOnly || loading || !tieWeightingSupported}
+                onClick={() => setTieWeightingMode(item.value)}
+                className={`min-h-24 rounded-lg border p-4 text-left disabled:opacity-45 ${
+                  tieWeightingMode === item.value
+                    ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
+                    : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
+                }`}
+              >
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-[var(--muted)]">
+                  {item.detail}
+                </span>
+              </button>
+            ))}
+          </div>
+          {!tieWeightingSupported ? (
+            <p className="mt-3 flex gap-2 text-xs leading-5 text-[var(--amber)]">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                The platform serving this page predates tie-aware weights. Fixed rank shares
+                remain in effect until a build carrying <code>tie_weighting_mode</code> is
+                deployed.
+              </span>
+            </p>
+          ) : null}
+          {tieWeightingSupported && tieWeightingMode === 'fleet_ready' &&
+          !effective.tie_weighting_fleet_ready ? (
+            <p className="mt-3 flex gap-2 text-xs leading-5 text-[var(--muted-strong)]">
+              <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--amber)]" />
+              The revision may be saved now, but the ledger remains on fixed shares until every
+              recently-live weight setter reports protocol 20.
+            </p>
+          ) : null}
         </div>
 
         <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">

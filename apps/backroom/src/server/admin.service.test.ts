@@ -1322,6 +1322,7 @@ describe('continual retest administration', () => {
   // yields the platform's own default, while a build old enough to omit
   // wave_membership predates #489 and is folding `strict`.
   const readDefaults = {
+    tie_weighting_mode: 'disabled' as const,
     wave_membership: 'participants',
     retest_cohort_size: 5,
     retest_eligibility_mode: 'fixed',
@@ -1347,6 +1348,8 @@ describe('continual retest administration', () => {
       source: 'default',
       fleet_protocol_ready: false,
       aggregate_active: false,
+      tie_weighting_fleet_ready: false,
+      tie_weighting_active: false,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
       rollout_standdown_active: false,
@@ -1358,6 +1361,7 @@ describe('continual retest administration', () => {
     },
   }
   const supportFor = (carried: boolean) => ({
+    tie_weighting_mode: carried,
     retest_cohort_size: carried,
     wave_membership: carried,
     retest_eligibility_mode: carried,
@@ -1375,10 +1379,14 @@ describe('continual retest administration', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const nextSettings = {
       aggregate_mode: 'enabled',
+      tie_weighting_mode: 'disabled' as const,
       idle_retests_enabled: true,
       rollout_standdown: 'all',
-      ...readDefaults,
+      wave_membership: 'participants',
       retest_cohort_size: 10,
+      retest_eligibility_mode: 'fixed',
+      retest_eligibility_z: 1.64,
+      retest_cohort_max_size: 25,
     }
     const enabled = {
       ...control,

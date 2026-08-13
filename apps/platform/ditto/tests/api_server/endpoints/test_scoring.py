@@ -27,10 +27,17 @@ from sqlalchemy.ext.asyncio import (
 
 import ditto.api_server.endpoints.scoring as scoring_mod
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
 from ditto.chain.models import NeuronInfo
-from ditto.db.models import Agent, BenchmarkRollout, Score, ValidatorHeartbeat
+from ditto.db.models import (
+    Agent,
+    BenchmarkRollout,
+    ContinualRetestSettingsRevision,
+    Score,
+    ValidatorHeartbeat,
+)
 from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
     append_confirmation_scores,
@@ -481,6 +488,60 @@ class TestScoringLedger:
             ready.json()["entries"][0]["continual_aggregate_method"]
             == "mean_after_quorum"
         )
+
+    async def test_tie_weighting_marker_requires_protocol_20_fleet(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        settings = ContinualRetestSettings(tie_weighting_mode="fleet_ready").model_dump(
+            mode="json"
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="activate tie-aware weight pooling",
+                    actor="operator@example.com",
+                )
+            )
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.55.0",
+                    protocol_version=19,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json().get("tie_weighting_mode") is None
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 20
+        app.state.continual_retest_settings.invalidate()
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["tie_weighting_mode"] == "pool"
 
     async def test_empty_ledger(
         self,

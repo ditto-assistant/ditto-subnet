@@ -2371,6 +2371,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     effective,
   })
   const legacySupport = {
+    tie_weighting_mode: false,
     retest_cohort_size: false,
     wave_membership: false,
     retest_eligibility_mode: false,
@@ -2384,6 +2385,7 @@ describe('continual retest cohort sizing against an older platform', () => {
   // extended field at the value that build already behaves as.
   const legacyPolicy = {
     aggregate_mode: 'enabled' as const,
+    tie_weighting_mode: 'disabled' as const,
     idle_retests_enabled: true,
     rollout_standdown: 'all' as const,
     wave_membership: 'strict' as const,
@@ -2482,6 +2484,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     })
 
     expect(continualRetestFieldSupport(partial)).toEqual({
+      tie_weighting_mode: false,
       retest_cohort_size: false,
       wave_membership: true,
       retest_eligibility_mode: false,
@@ -2495,6 +2498,7 @@ describe('continual retest cohort sizing against an older platform', () => {
 describe('continual retest write contract', () => {
   const complete = {
     aggregate_mode: 'fleet_ready' as const,
+    tie_weighting_mode: 'fleet_ready' as const,
     idle_retests_enabled: false,
     rollout_standdown: 'capable_validators' as const,
     wave_membership: 'strict' as const,
@@ -2511,6 +2515,7 @@ describe('continual retest write contract', () => {
     // the platform default over whatever is live — a reverted rollback, a
     // collapsed cohort, a discarded tie band.
     for (const field of [
+      'tie_weighting_mode',
       'wave_membership',
       'retest_cohort_size',
       'retest_eligibility_mode',
@@ -2572,6 +2577,7 @@ describe('continual retest write contract', () => {
       }),
     ).toEqual({
       aggregate_mode: 'fleet_ready',
+      tie_weighting_mode: 'disabled',
       idle_retests_enabled: false,
       rollout_standdown: 'capable_validators',
       wave_membership: 'participants',

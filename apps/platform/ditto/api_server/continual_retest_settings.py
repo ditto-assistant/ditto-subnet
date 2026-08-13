@@ -48,6 +48,18 @@ def aggregate_is_active(
     return fleet_protocol_ready
 
 
+def tie_weighting_is_active(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> bool:
+    """Resolve the consensus-safe tie pooling marker.
+
+    The policy cannot override fleet readiness: exposing a fold-changing ledger
+    field to only part of the fleet would make validators submit different
+    vectors for identical evidence.
+    """
+    return settings.tie_weighting_mode == "fleet_ready" and fleet_protocol_ready
+
+
 def rollout_standdown_reason(
     settings: ContinualRetestSettings,
     *,

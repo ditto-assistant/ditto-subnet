@@ -18,6 +18,9 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   const emissions = store.emissions;
   const championEntry = (): BoardEntry | null => store.champion();
   const hasChampion = (): boolean => emissions()?.champion_agent_id != null;
+  const scoreCeilingPool = (): boolean => emissions()?.allocation_mode === "score_ceiling_pool";
+  const jointChampions = () =>
+    (emissions()?.recipients || []).filter((recipient) => recipient.role === "joint_champion");
   const name = (): string => {
     const entry = championEntry();
     return (
@@ -43,7 +46,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
         <span class="crown" aria-hidden="true">
           ♛
         </span>
-        KOTH · reigning champion
+        {scoreCeilingPool() ? "KOTH · score-ceiling joint crown" : "KOTH · reigning champion"}
       </div>
       <div class="champion-body" id="champion-body" role="status" aria-live="polite">
         <Show
@@ -75,11 +78,16 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
         >
           <div class="champion-row">
             <div class="champion-name">
-              <Show when={championEntry()} fallback={name()}>
-                {(entry) => <EntityButton kind="agent" id={entry().agent_id} label={name()} />}
+              <Show
+                when={!scoreCeilingPool()}
+                fallback={jointChampions().length + " evidence-tied agents"}
+              >
+                <Show when={championEntry()} fallback={name()}>
+                  {(entry) => <EntityButton kind="agent" id={entry().agent_id} label={name()} />}
+                </Show>
               </Show>
             </div>
-            <Show when={composite() != null}>
+            <Show when={!scoreCeilingPool() && composite() != null}>
               <ChipTip
                 tag="div"
                 class="champion-score tip-chip"
@@ -91,22 +99,38 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
             </Show>
           </div>
           <div class="champion-meta">
-            <Show when={championEntry()?.rank}>
+            <Show when={scoreCeilingPool()}>
+              <span>
+                Joint champions <b>{jointChampions().length}</b>
+              </span>
+            </Show>
+            <Show when={!scoreCeilingPool() && championEntry()?.rank}>
               <span>
                 Raw rank <b>{"#" + championEntry()?.rank}</b>
               </span>
             </Show>
-            <Show when={Number.isFinite(share())}>
+            <Show
+              when={Number.isFinite(
+                scoreCeilingPool() ? jointChampions()[0]?.share_of_miner_pool : share(),
+              )}
+            >
               <span>
-                Miner pool <b>{pct(share() as number)}</b>
+                {scoreCeilingPool() ? "Miner pool each " : "Miner pool "}
+                <b>
+                  {pct(
+                    (scoreCeilingPool()
+                      ? jointChampions()[0]?.share_of_miner_pool
+                      : share()) as number,
+                  )}
+                </b>
               </span>
             </Show>
-            <Show when={championEntry()?.first_seen}>
+            <Show when={!scoreCeilingPool() && championEntry()?.first_seen}>
               <span>
                 First seen <b>{relTime(championEntry()?.first_seen)}</b>
               </span>
             </Show>
-            <Show when={championEntry()?.bench_version != null}>
+            <Show when={!scoreCeilingPool() && championEntry()?.bench_version != null}>
               <span>
                 Bench <b>{"v" + championEntry()?.bench_version}</b>
               </span>
@@ -115,7 +139,14 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
           {/* The held-crown note: the champion sitting below raw #1 is the
               standing that confuses readers most, so the box says why in
               place instead of leaving it to the strip on the other page. */}
-          <Show when={((championEntry()?.rank as number) || 1) > 1}>
+          <Show when={scoreCeilingPool()}>
+            <div class="champion-note" id="champion-note">
+              The single-winner dethrone threshold cannot be exceeded within the score range. Every
+              highest evidence-tied agent shares the full miner pool equally, including ties beyond
+              the normal tail cutoff.
+            </div>
+          </Show>
+          <Show when={!scoreCeilingPool() && ((championEntry()?.rank as number) || 1) > 1}>
             <div class="champion-note" id="champion-note">
               {"Holds the crown from raw #" +
                 championEntry()?.rank +

@@ -38,7 +38,10 @@ from ditto.api_models.validator import (
     V9BaseEvidence,
     V9ConfirmationReceipt,
 )
-from ditto.api_server.continual_retest_settings import aggregate_is_active
+from ditto.api_server.continual_retest_settings import (
+    aggregate_is_active,
+    tie_weighting_is_active,
+)
 from ditto.api_server.efficiency import ensure_efficiency_state
 from ditto.api_server.endpoints.validator import (
     ChainDep,
@@ -86,6 +89,7 @@ router = APIRouter(prefix="/scoring", tags=["scoring"])
 _MAX_STALE_SECONDS = 300
 _LEDGER_REQUEST_MAX_AGE = timedelta(minutes=2)
 _CONTINUAL_MEAN_PROTOCOL = 14
+_TIE_WEIGHTING_PROTOCOL = 20
 # The first validator protocol that understands the curve-v3 downside/upside
 # factor.  Older validators ignore the additive field, so exposing it to a
 # mixed active-benchmark fleet would produce different KOTH/weight folds.
@@ -126,6 +130,7 @@ class _LedgerSnapshot:
     lasts. Replaying the last known share is the only answer that does not move
     emissions because of a database problem."""
     v9_confirmation_mode: Literal["enforce"] | None = None
+    tie_weighting_mode: Literal["pool"] | None = None
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -388,6 +393,15 @@ async def scores(
         continual_mean_active = aggregate_is_active(
             continual_settings, fleet_protocol_ready=fleet_protocol_ready
         )
+        tie_weighting_fleet_ready = await live_validator_fleet_supports_protocol(
+            session,
+            minimum_protocol=_TIE_WEIGHTING_PROTOCOL,
+            bench_version=canonical_version,
+            now=auth_now,
+        )
+        tie_weighting_active = tie_weighting_is_active(
+            continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
+        )
         # Frozen relative token-efficiency bonuses (bench_version >= 7) are
         # surfaced to validators only behind the fold flag; with it off the
         # ledger is byte-identical to the pre-bonus wire shape, and the
@@ -497,6 +511,7 @@ async def scores(
             active_bench_version=canonical_version,
             burn_share=burn_settings.burn_share,
             v9_confirmation_mode=v9_confirmation_mode,
+            tie_weighting_mode="pool" if tie_weighting_active else None,
         ),
     )
     logger.info(
@@ -508,6 +523,7 @@ async def scores(
         entries=entries,
         active_bench_version=canonical_version,
         v9_confirmation_mode=v9_confirmation_mode,
+        tie_weighting_mode="pool" if tie_weighting_active else None,
         count=len(entries),
         generated_at=generated_at,
         stale=False,
@@ -589,6 +605,7 @@ def _serve_last_known(
         # infer rollout authority from the highest row while the DB is down.
         active_bench_version=snapshot.active_bench_version,
         v9_confirmation_mode=snapshot.v9_confirmation_mode,
+        tie_weighting_mode=snapshot.tie_weighting_mode,
         count=len(entries),
         generated_at=snapshot.generated_at,
         stale=True,

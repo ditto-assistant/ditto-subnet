@@ -8538,6 +8538,12 @@ export interface components {
              */
             rollout_standdown: "off" | "capable_validators" | "all";
             /**
+             * Tie Weighting Mode
+             * @default disabled
+             * @enum {string}
+             */
+            tie_weighting_mode: "disabled" | "fleet_ready";
+            /**
              * Wave Membership
              * @default participants
              * @enum {string}
@@ -8771,6 +8777,16 @@ export interface components {
              * @enum {string}
              */
             source: "revision" | "default";
+            /**
+             * Tie Weighting Active
+             * @default false
+             */
+            tie_weighting_active: boolean;
+            /**
+             * Tie Weighting Fleet Ready
+             * @default false
+             */
+            tie_weighting_fleet_ready: boolean;
         };
         /**
          * EffectiveEfficiencyBonusSettings
@@ -9774,6 +9790,11 @@ export interface components {
              * @default false
              */
             stale: boolean;
+            /**
+             * Tie Weighting Mode
+             * @description Consensus activation marker for tie-aware rank-share pooling. When set to pool, exact effective-score ties share the slots they occupy; non-exact ties require valid paired shared-seed evidence. Absent keeps the historical fixed rank shares.
+             */
+            tie_weighting_mode?: "pool" | null;
             /**
              * V9 Confirmation Mode
              * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
@@ -11442,6 +11463,8 @@ export interface components {
          * @description The raw leader's comparison against the incumbent KOTH champion.
          */
         PublicDethroneDecision: {
+            /** Ceiling Deadlocked */
+            ceiling_deadlocked: boolean;
             /** Challenger Lead */
             challenger_lead: number;
             /** Dethrones */
@@ -11455,6 +11478,10 @@ export interface components {
             method: "flat" | "unpaired" | "paired";
             /** Required Lead */
             required_lead: number;
+            /** Required Score */
+            required_score: number;
+            /** Score Ceiling */
+            score_ceiling: number;
             /** Statistical Lead */
             statistical_lead?: number | null;
         };
@@ -11675,10 +11702,10 @@ export interface components {
             raw_rank: number;
             /**
              * Role
-             * @description Champion or participation-tail recipient.
+             * @description Champion, score-ceiling joint champion, or tail recipient.
              * @enum {string}
              */
-            role: "champion" | "tail";
+            role: "champion" | "joint_champion" | "tail";
             /**
              * Share Of Miner Pool
              * @description Relative KOTH weight within the miner pool, before the subnet's separate miner-emission cap.
@@ -11686,7 +11713,7 @@ export interface components {
             share_of_miner_pool: number;
             /**
              * Shared Seed Confirmations
-             * @description Shared-seed confirmation depth: distinct champion-anchored CRN seeds this top-5 agent has been re-scored on by the continual top-5 rescore lane. Grows while the agent holds its emission-set spot; a longer-reigning champion accumulates more, and its median band widens accordingly. Zero until the lane has run.
+             * @description Shared-seed confirmation depth: distinct champion-anchored CRN seeds this recipient has been re-scored on by the continual rescore lane. Grows while the agent is in its configured cohort; a longer-reigning champion accumulates more. Zero until the lane has run, including for a joint-crown boundary tie outside the lane.
              * @default 0
              */
             shared_seed_confirmations: number;
@@ -11811,6 +11838,13 @@ export interface components {
          */
         PublicKothEmissions: {
             /**
+             * Allocation Mode
+             * @description Ranked champion-tail schedule, or an uncapped equal split by the best evidence-tied cohort when the crown cannot be beaten within the score domain.
+             * @default ranked
+             * @enum {string}
+             */
+            allocation_mode: "ranked" | "score_ceiling_pool";
+            /**
              * Band Decay Min Bench Version
              * @description First benchmark version using high-score decay.
              */
@@ -11853,8 +11887,25 @@ export interface components {
             raw_leader_miner_hotkey: string;
             /** Recipients */
             recipients?: components["schemas"]["PublicEmissionRecipient"][];
+            /**
+             * Score Ceiling Pool Size
+             * @default 0
+             */
+            score_ceiling_pool_size: number;
             /** Tail Size */
             tail_size: number;
+            /**
+             * Tie Weighting Active
+             * @description Whether the displayed recipient shares pool rank slots across exact or paired-evidence statistical ties.
+             * @default false
+             */
+            tie_weighting_active: boolean;
+            /**
+             * Tie Weighting Required Protocol
+             * @description Minimum fleet heartbeat protocol for tie pooling.
+             * @default 20
+             */
+            tie_weighting_required_protocol: number;
         };
         /**
          * PublicLeaderboardEntry

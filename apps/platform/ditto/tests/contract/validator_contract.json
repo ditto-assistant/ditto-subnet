@@ -3747,6 +3747,18 @@
         "default": false,
         "type": "boolean"
       },
+      "tie_weighting_mode": {
+        "anyOf": [
+          {
+            "const": "pool",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "v9_confirmation_mode": {
         "anyOf": [
           {

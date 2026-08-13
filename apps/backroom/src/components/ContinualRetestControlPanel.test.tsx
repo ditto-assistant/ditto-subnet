@@ -20,6 +20,7 @@ vi.mock('../server/admin.functions', () => ({
 
 const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   aggregate_mode: 'fleet_ready',
+  tie_weighting_mode: 'disabled',
   idle_retests_enabled: false,
   rollout_standdown: 'capable_validators',
   wave_membership: 'participants',
@@ -44,6 +45,8 @@ function control(
       source: 'revision',
       fleet_protocol_ready: true,
       aggregate_active: true,
+      tie_weighting_fleet_ready: true,
+      tie_weighting_active: false,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
       rollout_standdown_active: false,
@@ -55,6 +58,7 @@ function control(
       ...effective,
     },
     field_support: {
+      tie_weighting_mode: true,
       retest_cohort_size: true,
       wave_membership: true,
       retest_eligibility_mode: true,
@@ -262,6 +266,7 @@ describe('ContinualRetestControlPanel', () => {
     // so the server helper can drop them without changing anything.
     expect(updateContinualRetestSettings.mock.calls[0][0].data.settings).toEqual({
       aggregate_mode: 'fleet_ready',
+      tie_weighting_mode: 'disabled',
       idle_retests_enabled: false,
       rollout_standdown: 'all',
       wave_membership: 'strict',

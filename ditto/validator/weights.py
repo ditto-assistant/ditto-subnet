@@ -240,6 +240,7 @@ def compute_weights(
     tail_size: int,
     rank_shares: Sequence[float],
     dethrone_z: float = 0.0,
+    tie_pooling: bool = False,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
@@ -255,10 +256,19 @@ def compute_weights(
     ledger surfaces per-entry ``composite_stderr`` and ``dethrone_z > 0``, the
     statistical band ``dethrone_z * sqrt(se_c² + se_champ²)`` — so a challenger
     inside the measurement noise cannot flip the crown. With no stderr the
-    band is exactly ``margin`` composite points. The
-    The champion and next ``tail_size`` miners receive the corresponding frozen
-    ``rank_shares`` in order. Pylon normalizes a short recipient prefix, so only
-    these ratios matter when fewer than five eligible miners exist.
+    band is exactly ``margin`` composite points. The champion and next
+    ``tail_size`` miners receive the corresponding frozen
+    ``rank_shares`` in order. When ``tie_pooling`` is active, contiguous
+    recipients that the evidence cannot distinguish pool the shares of the slots
+    they occupy and receive the arithmetic mean. If the incumbent's required
+    dethrone score is at or above the challenger's attainable score ceiling, the
+    fixed crown is mathematically deadlocked: every distinct-hotkey member of the
+    highest evidence-tied cohort shares the full miner pool equally, including
+    members beyond the normal tail cutoff. Exact effective-score ties always
+    pool. A non-exact tie requires at least two aligned shared-seed confirmations
+    and must remain inside the paired ``dethrone_z`` band; missing evidence
+    therefore never widens a group. Pylon normalizes a short recipient prefix, so
+    only these ratios matter when fewer than five eligible miners exist.
 
     The platform first selects one authoritative row per agent, then one best
     eligible generation per payment-time coldkey, and the whole ledger
@@ -299,12 +309,138 @@ def compute_weights(
     if not math.isclose(sum(rank_shares), 1.0, rel_tol=0.0, abs_tol=1e-12):
         raise ValueError("rank_shares must sum to 1")
 
-    recipients = [champion, *_tail(scored, champion, tail_size)]
+    ceiling_cohort = (
+        _score_ceiling_cohort(
+            scored,
+            champion,
+            margin=margin,
+            dethrone_z=dethrone_z,
+        )
+        if tie_pooling
+        else []
+    )
+    if ceiling_cohort:
+        recipients = ceiling_cohort
+        recipient_shares = [1.0 / len(recipients)] * len(recipients)
+    else:
+        recipients = [
+            champion,
+            *_tail(
+                scored,
+                champion,
+                tail_size,
+                distinct_hotkeys=tie_pooling,
+            ),
+        ]
+        recipient_shares = list(rank_shares[: len(recipients)])
+    if tie_pooling and not ceiling_cohort:
+        recipient_shares = _pool_tied_rank_shares(
+            recipients, recipient_shares, dethrone_z=dethrone_z
+        )
     weights = {
-        entry.miner_hotkey: rank_shares[index] for index, entry in enumerate(recipients)
+        entry.miner_hotkey: recipient_shares[index]
+        for index, entry in enumerate(recipients)
     }
 
     return weights
+
+
+def _pool_tied_rank_shares(
+    recipients: Sequence[LedgerEntry],
+    shares: Sequence[float],
+    *,
+    dethrone_z: float,
+) -> list[float]:
+    """Average the occupied rank shares inside deterministic tie groups.
+
+    Groups are contiguous in emission order and anchored on their first member;
+    comparing every candidate to that fixed anchor prevents a staircase of
+    individually-close scores from chaining into one broad pool. The caller has
+    already deduplicated owners through the Platform ledger and selected at most
+    one slot per miner hotkey through :func:`_tail`.
+    """
+    pooled = list(shares)
+    if len(recipients) != len(pooled):
+        raise ValueError("recipients and shares must have the same length")
+    start = 0
+    while start < len(recipients):
+        anchor = recipients[start]
+        end = start + 1
+        while end < len(recipients) and _weight_tied(
+            recipients[end], anchor, dethrone_z=dethrone_z
+        ):
+            end += 1
+        if end - start > 1:
+            average = sum(pooled[start:end]) / (end - start)
+            pooled[start:end] = [average] * (end - start)
+        start = end
+    return pooled
+
+
+def _weight_tied(
+    candidate: LedgerEntry, anchor: LedgerEntry, *, dethrone_z: float
+) -> bool:
+    """Whether two occupied slots may share weight without inventing evidence."""
+    if _effective_composite(candidate) == _effective_composite(anchor):
+        return True
+    paired = _paired_dethrone(candidate, anchor, dethrone_z)
+    if paired is None:
+        return False
+    mean_diff, _anchor_ref, se_diff = paired
+    return abs(mean_diff) <= dethrone_z * se_diff
+
+
+def _score_ceiling_cohort(
+    entries: Sequence[LedgerEntry],
+    champion: LedgerEntry,
+    *,
+    margin: float,
+    dethrone_z: float,
+) -> list[LedgerEntry]:
+    """Return the uncapped best-score cohort when KOTH cannot be dethroned.
+
+    The deadlock check uses the highest distinct-hotkey challenger against the
+    folded incumbent. Membership is then anchored on the raw score leader and
+    stops at the first distinguishable score, preventing both arbitrary rank
+    cutoffs and transitive staircase grouping.
+    """
+    ranked = _distinct_ranked(entries)
+    challenger = next(
+        (entry for entry in ranked if entry.miner_hotkey != champion.miner_hotkey),
+        None,
+    )
+    if challenger is None or not _score_ceiling_deadlocked(
+        challenger, champion, margin=margin, dethrone_z=dethrone_z
+    ):
+        return []
+
+    anchor = ranked[0]
+    cohort = [anchor]
+    for entry in ranked[1:]:
+        if not _weight_tied(entry, anchor, dethrone_z=dethrone_z):
+            break
+        cohort.append(entry)
+    return cohort if len(cohort) > 1 else []
+
+
+def _distinct_ranked(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
+    """Rank positive entries and retain one position per destination hotkey."""
+    ranked = sorted(
+        entries,
+        key=lambda entry: (
+            -_effective_composite(entry),
+            entry.first_seen,
+            entry.agent_id,
+        ),
+    )
+    distinct: list[LedgerEntry] = []
+    seen_hotkeys: set[str] = set()
+    for entry in ranked:
+        if entry.miner_hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.miner_hotkey)
+        distinct.append(entry)
+    return distinct
 
 
 def select_champion(
@@ -425,6 +561,14 @@ def _efficiency_adjusted_composite(entry: LedgerEntry, quality: float) -> float:
             return quality * factor
         return quality + (factor - 1.0) * (1.0 - quality)
     return quality * _efficiency_multiplier(entry)
+
+
+def _effective_score_ceiling(entry: LedgerEntry) -> float:
+    """Highest score this entry's frozen efficiency transform can attain."""
+    factor = _bounded_efficiency_factor(entry)
+    if factor is not None:
+        return factor if factor <= 1.0 else 1.0
+    return _efficiency_multiplier(entry)
 
 
 def _efficiency_stderr_scale(entry: LedgerEntry) -> float:
@@ -792,12 +936,22 @@ def _beats(
     is exactly the fixed composite-point margin. Both sides use
     :func:`_effective_composite` (the MEDIAN over confirmation seeds when present,
     else the raw composite). Pure and deterministic (consensus-safe)."""
+    observed_score, required_score = _dethrone_scores(
+        challenger, champion, margin, dethrone_z
+    )
+    return observed_score > required_score
+
+
+def _dethrone_scores(
+    challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
+) -> tuple[float, float]:
+    """Return the observed and strictly-exceeded required challenger scores."""
     paired = _paired_dethrone(challenger, champion, dethrone_z)
     if paired is not None:
         mean_diff, champ_ref, se_diff = paired
         base_band = max(margin, dethrone_z * se_diff)
         band = base_band * _dethrone_band_scale(challenger, champion, champ_ref)
-        return champ_ref + mean_diff > champ_ref + band
+        return champ_ref + mean_diff, champ_ref + band
 
     chall = _effective_composite(challenger)
     champ = _effective_composite(champion)
@@ -815,7 +969,24 @@ def _beats(
     # Compare scores against the threshold rather than subtracting first. For
     # decimal wire values such as 0.935 and 0.930, subtraction can round an exact
     # 0.005 boundary infinitesimally upward and incorrectly defeat first-seen.
-    return chall > champ + band
+    return chall, champ + band
+
+
+def _score_ceiling_deadlocked(
+    challenger: LedgerEntry,
+    champion: LedgerEntry,
+    *,
+    margin: float,
+    dethrone_z: float,
+) -> bool:
+    """Whether even the challenger's maximum score cannot clear the crown."""
+    observed_score, required_score = _dethrone_scores(
+        challenger, champion, margin, dethrone_z
+    )
+    return (
+        observed_score <= required_score
+        and required_score >= _effective_score_ceiling(challenger)
+    )
 
 
 def _champion(
@@ -841,13 +1012,37 @@ def _champion(
 
 
 def _tail(
-    entries: Sequence[LedgerEntry], champion: LedgerEntry, tail_size: int
+    entries: Sequence[LedgerEntry],
+    champion: LedgerEntry,
+    tail_size: int,
+    *,
+    distinct_hotkeys: bool = False,
 ) -> list[LedgerEntry]:
-    """The next ``tail_size`` distinct miners by composite, excluding the champion."""
-    return sorted(
+    """The next ranked entries, optionally limited to distinct hotkeys.
+
+    The historical fold assumes Platform's owner-deduplicated ledger cannot
+    repeat a destination. Tie pooling makes that invariant defensive too, but
+    only behind its activation marker so a protocol-20 rollout is byte-identical
+    until the operator enables the new fold.
+    """
+    if tail_size <= 0:
+        return []
+    ranked = sorted(
         (e for e in entries if e.miner_hotkey != champion.miner_hotkey),
         key=lambda e: (-_effective_composite(e), e.first_seen, e.agent_id),
-    )[:tail_size]
+    )
+    if not distinct_hotkeys:
+        return ranked[:tail_size]
+    distinct: list[LedgerEntry] = []
+    seen_hotkeys = {champion.miner_hotkey}
+    for entry in ranked:
+        if entry.miner_hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.miner_hotkey)
+        distinct.append(entry)
+        if len(distinct) == tail_size:
+            break
+    return distinct
 
 
 def agents_needing_rescore(

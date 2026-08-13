@@ -99,7 +99,8 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
         canonical_composite, submitted_at, representative } ] },
     integrity, tokens } ], emissions: { champion_agent_id, recipients,
     raw_leader_decision, margin, dethrone_z, champion_share, rank_shares,
-    tail_size } }`.
+    tail_size, tie_weighting_active, tie_weighting_required_protocol,
+    allocation_mode, score_ceiling_pool_size } }`.
   Entries are best-per-payment-coldkey and ranked by **`official_composite`,
   not `composite`**. Sorting the board yourself by `composite` reproduces `rank`
   only while every entry is still on the canonical median
@@ -145,7 +146,20 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   public-safe, read-only projection of the validator's frozen first-seen KOTH
   fold over finalized authoritative entries: the fixed 0.007 composite-point
   incumbent hysteresis, the
-  statistical band, and the 65% / 14% / 10% / 7% / 4% ranked distribution. It is
+  statistical band, and the 65% / 14% / 10% / 7% / 4% ranked distribution.
+  When `tie_weighting_active` is true, contiguous evidence-tied recipients pool
+  only the shares of the ranks they occupy and split that pool equally. Exact
+  effective-composite ties qualify directly; non-exact ties require paired
+  shared-seed evidence inside the same statistical band. When the incumbent's
+  required dethrone score reaches the challenger's attainable score ceiling and
+  at least two leaders are evidence-tied,
+  `allocation_mode: score_ceiling_pool` instead exposes every member of the
+  uncapped best-score evidence-tie cohort as `joint_champion`; they split the
+  full miner pool equally, including members beyond the normal tail cutoff. The
+  marker cannot turn
+  on until every live weight setter reports
+  `tie_weighting_required_protocol`, and the operator can return immediately to
+  fixed shares by disabling the policy. It is
   `null` when no eligible entry exists. Validators still compute and submit their
   own authoritative weight vectors. The provenance block (`models` =
   generator/judge/judge_audit/harness, `bench_version`, `dataset_sha256`,

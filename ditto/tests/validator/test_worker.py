@@ -46,6 +46,7 @@ from ditto.api_models.validator_capabilities import (
 )
 from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
+from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 from ditto.validator.dittobench import (
     DittobenchProgressSnapshot,
     InferenceBrokerSession,
@@ -144,6 +145,9 @@ def _entry(
     agent_id: UUID | None = None,
     n: int = 128,
     bench_version: int | None = None,
+    composite_stderr: float | None = None,
+    confirmation_composites: list[float] | None = None,
+    confirmation_seeds: list[int] | None = None,
 ) -> LedgerEntry:
     return LedgerEntry(
         miner_hotkey=miner,
@@ -157,6 +161,9 @@ def _entry(
         seed=1,
         validator_hotkey=_VALIDATOR_HOTKEY,
         bench_version=bench_version,
+        composite_stderr=composite_stderr,
+        confirmation_composites=confirmation_composites,
+        confirmation_seeds=confirmation_seeds,
         signature="ab" * 64,
         score_proofs=[],
         status=AgentStatus.SCORED,
@@ -230,6 +237,116 @@ class TestComputeWeights:
         ]
         assert compute_weights(entries, **_KOTH) == pytest.approx(
             {"m0": 0.65, "m1": 0.14, "m2": 0.10, "m3": 0.07, "m4": 0.04}
+        )
+
+    def test_ceiling_deadlock_pays_the_full_uncapped_best_score_cohort(self) -> None:
+        entries = [
+            _entry("champ", 0.996348, first_seen=_T0),
+            *[
+                _entry(
+                    f"tied-{index}",
+                    0.997012,
+                    first_seen=_T0 + timedelta(minutes=index + 1),
+                )
+                for index in range(5)
+            ],
+        ]
+
+        weights = compute_weights(entries, **_KOTH, tie_pooling=True)
+
+        assert "champ" not in weights
+        assert weights == pytest.approx({f"tied-{index}": 0.20 for index in range(5)})
+
+    def test_attainable_crown_keeps_ranked_slot_pooling(self) -> None:
+        entries = [
+            _entry("champ", 0.90, first_seen=_T0),
+            *[
+                _entry(
+                    f"tied-{index}",
+                    0.905,
+                    first_seen=_T0 + timedelta(minutes=index + 1),
+                )
+                for index in range(4)
+            ],
+        ]
+
+        weights = compute_weights(entries, **_KOTH, tie_pooling=True)
+
+        assert weights["champ"] == pytest.approx(0.65)
+        for index in range(4):
+            assert weights[f"tied-{index}"] == pytest.approx(0.0875)
+
+    def test_exact_tie_with_champion_pools_every_occupied_slot(self) -> None:
+        entries = [
+            _entry(f"m{index}", 0.997012, first_seen=_T0 + timedelta(minutes=index))
+            for index in range(5)
+        ]
+
+        assert compute_weights(entries, **_KOTH, tie_pooling=True) == pytest.approx(
+            {f"m{index}": 0.20 for index in range(5)}
+        )
+
+    def test_non_exact_tie_requires_shared_seed_evidence(self) -> None:
+        entries = [
+            _entry("champ", 0.900, first_seen=_T0, composite_stderr=0.2),
+            _entry(
+                "challenger",
+                0.905,
+                first_seen=_T0 + timedelta(minutes=1),
+                composite_stderr=0.2,
+            ),
+        ]
+
+        weights = compute_weights(entries, **_KOTH, dethrone_z=1.64, tie_pooling=True)
+
+        assert weights == pytest.approx({"champ": 0.65, "challenger": 0.14})
+
+    def test_shared_seed_statistical_tie_pools_non_exact_scores(self) -> None:
+        entries = [
+            _entry(
+                "champ",
+                0.900,
+                first_seen=_T0,
+                confirmation_seeds=[1, 2, 3],
+                confirmation_composites=[0.88, 0.90, 0.92],
+            ),
+            _entry(
+                "challenger",
+                0.905,
+                first_seen=_T0 + timedelta(minutes=1),
+                confirmation_seeds=[1, 2, 3],
+                confirmation_composites=[0.89, 0.895, 0.93],
+            ),
+        ]
+
+        weights = compute_weights(entries, **_KOTH, dethrone_z=1.64, tie_pooling=True)
+
+        assert weights == pytest.approx({"champ": 0.395, "challenger": 0.395})
+
+    def test_tie_groups_do_not_chain_from_one_neighbor_to_the_next(self) -> None:
+        entries = [
+            _entry("champ", 0.90, first_seen=_T0),
+            _entry("a", 0.80, first_seen=_T0 + timedelta(minutes=1)),
+            _entry("b", 0.80, first_seen=_T0 + timedelta(minutes=2)),
+            _entry("c", 0.79, first_seen=_T0 + timedelta(minutes=3)),
+        ]
+
+        weights = compute_weights(entries, **_KOTH, tie_pooling=True)
+
+        assert weights == pytest.approx(
+            {"champ": 0.65, "a": 0.12, "b": 0.12, "c": 0.07}
+        )
+
+    def test_duplicate_hotkey_cannot_claim_multiple_tail_slots(self) -> None:
+        entries = [
+            _entry("champ", 0.90, first_seen=_T0),
+            _entry("same", 0.80, first_seen=_T0 + timedelta(minutes=1)),
+            _entry("same", 0.79, first_seen=_T0 + timedelta(minutes=2)),
+            _entry("next", 0.70, first_seen=_T0 + timedelta(minutes=3)),
+        ]
+
+        assert compute_weights(entries, **_KOTH, tie_pooling=True) == pytest.approx(
+            {"champ": 0.65, "same": 0.14, "next": 0.10}
         )
 
     @pytest.mark.parametrize(
@@ -1682,7 +1799,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 19
+        assert heartbeat.protocol_version == HEARTBEAT_PROTOCOL_VERSION
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
@@ -2442,7 +2559,7 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 19
+        assert heartbeat.protocol_version == HEARTBEAT_PROTOCOL_VERSION
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
@@ -2464,7 +2581,7 @@ class TestRunOnce:
 
         assert await worker._report_heartbeat("idle") is True
         heartbeat = platform.submit_heartbeat.await_args.args[0]
-        assert heartbeat.protocol_version == 19
+        assert heartbeat.protocol_version == HEARTBEAT_PROTOCOL_VERSION
         assert heartbeat.capabilities is not None
         scorer = heartbeat.capabilities.scorer_benchmarks
         assert scorer is not None and scorer.probe is not None

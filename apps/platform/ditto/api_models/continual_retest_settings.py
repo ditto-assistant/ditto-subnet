@@ -49,6 +49,16 @@ class ContinualRetestSettings(BaseModel):
 
     aggregate_mode: Literal["disabled", "fleet_ready", "enabled"] = "fleet_ready"
 
+    tie_weighting_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether statistically tied emission slots pool their rank shares.
+
+    ``disabled`` is the historical fixed ``65/14/10/7/4`` fold and the exact
+    rollback. ``fleet_ready`` activates only after every recently-live
+    weight-setting validator reports the protocol that understands the ledger
+    marker. There is deliberately no unconditional override: unlike background
+    retest planning, a mixed weight fold is a consensus split.
+    """
+
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP
     """Whose retests have to land before a seed counts toward the aggregate.
 
@@ -214,6 +224,8 @@ class EffectiveContinualRetestSettings(BaseModel):
     source: Literal["revision", "default"]
     fleet_protocol_ready: bool
     aggregate_active: bool
+    tie_weighting_fleet_ready: bool = False
+    tie_weighting_active: bool = False
     max_age_seconds: float
     open_rollout_desired_version: int | None = None
     rollout_standdown_active: bool = False

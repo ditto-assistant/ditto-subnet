@@ -234,7 +234,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "19"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "20"
     restart: unless-stopped
     stop_grace_period: 80m
     environment:

@@ -25,6 +25,7 @@ from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     rollout_standdown_reason,
     settings_from_row,
+    tie_weighting_is_active,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -44,6 +45,7 @@ router = APIRouter(prefix="/admin/continual-retest-settings", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 _REQUIRED_PROTOCOL = 14
+_TIE_WEIGHTING_PROTOCOL = 20
 _FRESHNESS = timedelta(minutes=15)
 
 
@@ -82,6 +84,17 @@ async def _fleet_ready(session: AsyncSession) -> bool:
     return await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_REQUIRED_PROTOCOL,
+        bench_version=bench_version,
+        now=datetime.now(UTC),
+        freshness=_FRESHNESS,
+    )
+
+
+async def _tie_weighting_fleet_ready(session: AsyncSession) -> bool:
+    bench_version = await active_bench_version(session)
+    return await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_TIE_WEIGHTING_PROTOCOL,
         bench_version=bench_version,
         now=datetime.now(UTC),
         freshness=_FRESHNESS,
@@ -141,6 +154,7 @@ async def get_settings(
     history = await list_continual_retest_settings_revisions(session)
     settings = settings_from_row(latest)
     fleet_ready = await _fleet_ready(session)
+    tie_fleet_ready = await _tie_weighting_fleet_ready(session)
     rollout = await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else None
     # Reported for the fleet, so the operator sees the stand-down that a
@@ -166,6 +180,10 @@ async def get_settings(
             fleet_protocol_ready=fleet_ready,
             aggregate_active=aggregate_is_active(
                 settings, fleet_protocol_ready=fleet_ready
+            ),
+            tie_weighting_fleet_ready=tie_fleet_ready,
+            tie_weighting_active=tie_weighting_is_active(
+                settings, fleet_protocol_ready=tie_fleet_ready
             ),
             max_age_seconds=resolver.ttl_seconds,
             open_rollout_desired_version=desired_version,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -19,7 +20,9 @@ from ditto.api_server.koth import (
     _efficiency_stderr_scale,
     _paired_statistic,
     effective_composite,
+    emission_allocation,
     emission_set,
+    emission_shares,
     indistinguishable_from,
     project_koth,
     retest_cohort,
@@ -327,6 +330,99 @@ def test_a_tied_incumbent_does_not_lose_the_crown_by_resubmitting() -> None:
     flipped = project_koth([anchored_on_the_upload, rival_at_1600])
     assert flipped is not None
     assert flipped.champion == rival_at_1600
+
+
+def test_exact_tied_tail_slots_pool_without_moving_the_champion() -> None:
+    entries = [
+        _entry(1, 0.996348, minutes=0),
+        *[_entry(marker, 0.997012, minutes=marker) for marker in range(2, 6)],
+    ]
+    projection = project_koth(entries)
+
+    assert projection is not None
+    assert emission_shares(projection) == (0.65, 0.14, 0.10, 0.07, 0.04)
+    assert emission_shares(projection, tie_pooling=True) == pytest.approx(
+        (0.65, 0.0875, 0.0875, 0.0875, 0.0875)
+    )
+
+
+def test_ceiling_deadlock_pays_every_best_score_tie_beyond_tail_cutoff() -> None:
+    entries = [
+        _entry(1, 0.996348, minutes=0),
+        *[_entry(marker, 0.997012, minutes=marker) for marker in range(2, 7)],
+    ]
+    projection = project_koth(entries, distinct_hotkeys=True)
+
+    allocation = emission_allocation(entries, projection, tie_pooling=True)
+
+    assert allocation.mode == "score_ceiling_pool"
+    assert [entry.agent_id.int for entry in allocation.members] == [2, 3, 4, 5, 6]
+    assert allocation.shares == pytest.approx((0.20,) * 5)
+
+
+def test_attainable_threshold_keeps_ranked_tie_pooling() -> None:
+    entries = [
+        _entry(1, 0.90, minutes=0),
+        *[_entry(marker, 0.905, minutes=marker) for marker in range(2, 6)],
+    ]
+    projection = project_koth(entries, distinct_hotkeys=True)
+
+    allocation = emission_allocation(entries, projection, tie_pooling=True)
+
+    assert allocation.mode == "ranked"
+    assert allocation.shares == pytest.approx((0.65, 0.0875, 0.0875, 0.0875, 0.0875))
+
+
+def test_paired_statistical_tie_pools_but_unpaired_stderr_does_not() -> None:
+    incumbent = _entry(
+        1,
+        0.900,
+        minutes=0,
+        stderr=0.2,
+        confirmations=(0.88, 0.90, 0.92),
+        seeds=(1, 2, 3),
+    )
+    challenger = _entry(
+        2,
+        0.905,
+        minutes=1,
+        stderr=0.2,
+        confirmations=(0.89, 0.895, 0.93),
+        seeds=(1, 2, 3),
+    )
+    projection = project_koth([incumbent, challenger])
+
+    assert projection is not None
+    assert emission_shares(projection, tie_pooling=True) == pytest.approx(
+        (0.395, 0.395)
+    )
+
+    without_pairs = project_koth(
+        [
+            _entry(1, 0.900, minutes=0, stderr=0.2),
+            _entry(2, 0.905, minutes=1, stderr=0.2),
+        ]
+    )
+    assert without_pairs is not None
+    assert emission_shares(without_pairs, tie_pooling=True) == (0.65, 0.14)
+
+
+def test_tie_aware_projection_deduplicates_hotkey_destinations() -> None:
+    incumbent = _entry(1, 0.90, minutes=0)
+    first = _entry(2, 0.80, minutes=1)
+    duplicate = replace(_entry(3, 0.79, minutes=2), miner_hotkey=first.miner_hotkey)
+    next_distinct = _entry(4, 0.70, minutes=3)
+
+    projection = project_koth(
+        [incumbent, first, duplicate, next_distinct], distinct_hotkeys=True
+    )
+
+    assert projection is not None
+    assert [entry.miner_hotkey for entry in emission_set(projection)] == [
+        incumbent.miner_hotkey,
+        first.miner_hotkey,
+        next_distinct.miner_hotkey,
+    ]
 
 
 def test_statistical_band_matches_validator_unpaired_rule() -> None:

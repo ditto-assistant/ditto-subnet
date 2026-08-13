@@ -1440,6 +1440,19 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    tie_weighting_mode: Annotated[
+        Literal["pool"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Consensus activation marker for tie-aware rank-share pooling. "
+                "When set to pool, exact effective-score ties share the slots "
+                "they occupy; non-exact ties require valid paired shared-seed "
+                "evidence. Absent keeps the historical fixed rank shares."
+            ),
+        ),
+    ] = None
     count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
     generated_at: Annotated[
         datetime | None,

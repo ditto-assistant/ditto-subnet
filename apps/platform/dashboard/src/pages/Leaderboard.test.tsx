@@ -855,6 +855,43 @@ describe("held-crown standing clarity", () => {
     expect(document.querySelectorAll("tr.above-champion")).toHaveLength(0);
     expect(document.querySelector(".above-champion-note")).toBeNull();
   });
+
+  it("shows a joint crown instead of an impossible single-winner threshold", async () => {
+    const joint = ranked.slice(0, 2);
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          emissions: {
+            ...payload.emissions,
+            allocation_mode: "score_ceiling_pool",
+            score_ceiling_pool_size: joint.length,
+            recipients: joint.map((entry) => ({
+              role: "joint_champion",
+              agent_id: entry.agent_id,
+              miner_hotkey: entry.miner_hotkey,
+              share_of_miner_pool: 1 / joint.length,
+            })),
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("koth-standing-copy").textContent).toContain("Score-ceiling joint crown"),
+    );
+    expect(el("koth-standing-copy").textContent).toContain(
+      "2 highest evidence-tied agents split the full miner pool equally",
+    );
+    expect(el("emissions-title").textContent).toContain(
+      "2 evidence-tied agents each receive 50.0%",
+    );
+    expect(el("emissions-threshold").classList.contains("show")).toBe(false);
+    expect(document.querySelectorAll("tr.joint-champion")).toHaveLength(2);
+    expect(document.querySelectorAll("tr.above-champion")).toHaveLength(0);
+  });
 });
 
 // ── Row 1 (chip vocabulary slice): the composite cell chips ──

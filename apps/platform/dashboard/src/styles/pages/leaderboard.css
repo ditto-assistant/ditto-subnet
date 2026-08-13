@@ -152,6 +152,9 @@
 .emission-badge.champion {
   color: var(--gold);
 }
+.emission-badge.joint_champion {
+  color: var(--gold);
+}
 .emission-badge.tail {
   color: var(--accent-2);
 }
@@ -950,6 +953,9 @@ tbody tr.champion {
 }
 tbody tr.champion:hover {
   background: color-mix(in oklch, var(--gold) 13%, var(--bg-elev));
+}
+tbody tr.joint-champion > td {
+  background: color-mix(in srgb, var(--gold) 5%, transparent);
 }
 /* Higher-scoring rows that have NOT dethroned the incumbent: dimmed so the
    crown reads as the winner at a glance ("why is #4 champion?" — the rows

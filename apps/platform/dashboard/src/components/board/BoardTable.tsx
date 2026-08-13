@@ -217,6 +217,11 @@ function emissionsColTip(store: LeaderboardStore): string {
   const rankedCopy = rankShares.length
     ? " Ranked shares: " + rankShares.map(pct).join(" / ") + "."
     : "";
+  const tieCopy = emissions.tie_weighting_active
+    ? emissions.allocation_mode === "score_ceiling_pool"
+      ? " The dethrone threshold is outside the attainable score range, so every best-score evidence tie shares the full miner pool equally, even beyond the normal tail cutoff."
+      : " Evidence-tied recipients pool only the ranked shares of the slots they occupy."
+    : "";
   return (
     "Current KOTH role. The base ranked schedule gives the incumbent " +
     pct(share) +
@@ -228,7 +233,8 @@ function emissionsColTip(store: LeaderboardStore): string {
         " participation-tail recipients receive descending shares of the remaining " +
         pct(1 - share) +
         ".") +
-    rankedCopy
+    rankedCopy +
+    tieCopy
   );
 }
 
@@ -342,6 +348,7 @@ function BoardRow(props: {
   const chainInfo = (): { weighted: number; champion: number; vectors: number } | null =>
     props.store.chainFold()?.byHotkey[e().miner_hotkey] ?? null;
   const isChamp = (): boolean => emission()?.role === "champion";
+  const isJointChamp = (): boolean => emission()?.role === "joint_champion";
   // A row that outranks the reigning incumbent without having dethroned it:
   // the exact state that reads as "why isn't raw #1 the champion?". Only
   // meaningful for ranked, finalized rows while the champion itself sits
@@ -350,6 +357,7 @@ function BoardRow(props: {
     finalizedEntry() &&
     elig() &&
     !isChamp() &&
+    !isJointChamp() &&
     e().rank != null &&
     props.championRank != null &&
     props.championRank > 1 &&
@@ -406,7 +414,15 @@ function BoardRow(props: {
     <>
       <tr
         data-i={props.index}
-        class={isChamp() ? "champion" : aboveChampion() ? "above-champion" : undefined}
+        class={
+          isChamp()
+            ? "champion"
+            : isJointChamp()
+              ? "joint-champion"
+              : aboveChampion()
+                ? "above-champion"
+                : undefined
+        }
         tabindex="0"
         aria-label={rowLabel()}
         onClick={activate}
@@ -556,8 +572,16 @@ function BoardRow(props: {
           <Show when={emission()} fallback={<span class="muted">–</span>}>
             {(recipient) => (
               <span class={"emission-badge " + recipient().role}>
-                <span aria-hidden="true">{recipient().role === "champion" ? "♛" : "●"}</span>{" "}
-                {(recipient().role === "champion" ? "Champion" : "Tail") +
+                <span aria-hidden="true">
+                  {recipient().role === "champion" || recipient().role === "joint_champion"
+                    ? "♛"
+                    : "●"}
+                </span>{" "}
+                {(recipient().role === "champion"
+                  ? "Champion"
+                  : recipient().role === "joint_champion"
+                    ? "Joint crown"
+                    : "Tail") +
                   " · " +
                   pct(recipient().share_of_miner_pool as number)}
               </span>

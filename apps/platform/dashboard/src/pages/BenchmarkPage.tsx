@@ -219,7 +219,10 @@ export function BenchmarkPage(): JSX.Element {
                   </span>
                   . Only finalized, full-benchmark, currently-registered entries with a positive
                   composite are eligible. The live values are shown on the leaderboard's emissions
-                  strip.
+                  strip. When the required dethrone score reaches the attainable score ceiling, the
+                  single-winner schedule yields to an uncapped joint crown: every highest
+                  evidence-tied agent splits the full miner pool equally, including ties beyond the
+                  normal tail cutoff.
                 </li>
                 <li>
                   <b>How the crown changes hands.</b> The fold runs in <b>first-seen</b> order, so

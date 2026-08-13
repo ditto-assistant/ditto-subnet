@@ -218,6 +218,7 @@ describe('Backroom MCP tools', () => {
     expect(retestSettings?.required).toEqual(
       expect.arrayContaining([
         'aggregate_mode',
+        'tie_weighting_mode',
         'idle_retests_enabled',
         'wave_membership',
         'retest_cohort_size',

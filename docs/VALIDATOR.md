@@ -550,3 +550,39 @@ Validators do not query current coldkey ownership or perform a second collapse.
 They fold the platform's identical, payment-time snapshot so hotkey rotation or
 a later ownership change cannot make validators disagree. A held, banned, or
 otherwise ineligible newer generation cannot shadow an older eligible winner.
+
+### Evidence-tied emission shares
+
+Protocol 20 adds an operator-gated alternative to the fixed
+`65% / 14% / 10% / 7% / 4%` KOTH shares. When the ledger carries
+`tie_weighting_mode: pool`, validators group contiguous recipients that are
+evidence-tied, pool only the rank shares those recipients occupy, and divide
+that pool equally. Four tied tail recipients therefore receive `8.75%` each;
+five tied recipients including the champion receive `20%` each. Untied slots
+keep their configured shares, and the final vector is normalized as before.
+
+There is one ceiling rule. If the score the best challenger must strictly beat
+is at or above that challenger's attainable score ceiling, a single-winner
+crown is mathematically unwinnable. When at least two leaders are evidence-tied,
+the highest evidence-tied score cohort then
+becomes a joint crown and splits the full miner pool equally. This cohort is not
+capped at the four tail slots: five tied leaders above an older incumbent receive
+`20%` each, and ten receive `10%` each. The historical first-seen incumbent
+remains in the fold audit but receives no reserved share unless it is itself in
+the best-score evidence-tie cohort.
+
+An exact effective-composite tie is sufficient. A non-exact tie is admitted
+only when the two recipients have shared-seed paired confirmation evidence and
+their paired mean difference is inside the existing `KOTH_DETHRONE_Z` standard
+error band. Missing standard errors, missing shared seeds, or unpaired evidence
+cannot widen a group. Groups are anchored to their first recipient rather than
+linked transitively, so a staircase of individually close scores cannot merge
+distant endpoints. While the policy is active, duplicate hotkeys occupy only
+one emission position; the Platform's payment-owner collapse remains the
+primary linked-submission defense in every mode.
+
+The shipped operator policy is `tie_weighting_mode: disabled`, which is also
+the exact rollback to fixed shares. `fleet_ready` exposes the ledger marker only
+after every recently live weight-setting validator advertises protocol 20;
+there is no force override because a mixed fold would split consensus. A merge
+or validator rollout alone therefore does not activate tie pooling.

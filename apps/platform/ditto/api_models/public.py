@@ -1156,8 +1156,8 @@ class PublicEmissionRecipient(BaseModel):
     """One miner projected to receive a non-zero share of the KOTH miner pool."""
 
     role: Annotated[
-        Literal["champion", "tail"],
-        Field(description="Champion or participation-tail recipient."),
+        Literal["champion", "joint_champion", "tail"],
+        Field(description="Champion, score-ceiling joint champion, or tail recipient."),
     ]
     agent_id: Annotated[UUID, Field(description="The recipient's folded agent id.")]
     miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
@@ -1194,10 +1194,10 @@ class PublicEmissionRecipient(BaseModel):
             ge=0,
             description=(
                 "Shared-seed confirmation depth: distinct champion-anchored CRN "
-                "seeds this top-5 agent has been re-scored on by the continual "
-                "top-5 rescore lane. Grows while the agent holds its emission-set "
-                "spot; a longer-reigning champion accumulates more, and its median "
-                "band widens accordingly. Zero until the lane has run."
+                "seeds this recipient has been re-scored on by the continual "
+                "rescore lane. Grows while the agent is in its configured cohort; "
+                "a longer-reigning champion accumulates more. Zero until the lane "
+                "has run, including for a joint-crown boundary tie outside the lane."
             ),
         ),
     ] = 0
@@ -1212,6 +1212,9 @@ class PublicDethroneDecision(BaseModel):
     statistical_lead: Annotated[float | None, Field(default=None, ge=0.0)]
     method: Literal["flat", "unpaired", "paired"]
     dethrones: bool
+    required_score: float
+    score_ceiling: Annotated[float, Field(gt=0.0)]
+    ceiling_deadlocked: bool
 
 
 class PublicKothEmissions(BaseModel):
@@ -1246,6 +1249,36 @@ class PublicKothEmissions(BaseModel):
     ]
     champion_share: Annotated[float, Field(gt=0.0, le=1.0)]
     rank_shares: tuple[Annotated[float, Field(gt=0.0, le=1.0)], ...]
+    tie_weighting_active: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether the displayed recipient shares pool rank slots across "
+                "exact or paired-evidence statistical ties."
+            ),
+        ),
+    ] = False
+    tie_weighting_required_protocol: Annotated[
+        int,
+        Field(
+            default=20,
+            ge=1,
+            description="Minimum fleet heartbeat protocol for tie pooling.",
+        ),
+    ] = 20
+    allocation_mode: Annotated[
+        Literal["ranked", "score_ceiling_pool"],
+        Field(
+            default="ranked",
+            description=(
+                "Ranked champion-tail schedule, or an uncapped equal split by "
+                "the best evidence-tied cohort when the crown cannot be beaten "
+                "within the score domain."
+            ),
+        ),
+    ] = "ranked"
+    score_ceiling_pool_size: Annotated[int, Field(default=0, ge=0)] = 0
     tail_size: Annotated[int, Field(ge=0)]
     champion_agent_id: UUID
     champion_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]

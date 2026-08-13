@@ -1959,6 +1959,10 @@ class TestPublicLeaderboard:
         assert body["emissions"]["rank_shares"] == pytest.approx(
             [0.65, 0.14, 0.10, 0.07, 0.04]
         )
+        assert body["emissions"]["tie_weighting_active"] is False
+        assert body["emissions"]["tie_weighting_required_protocol"] == 20
+        assert body["emissions"]["allocation_mode"] == "ranked"
+        assert body["emissions"]["score_ceiling_pool_size"] == 0
         decision = body["emissions"]["raw_leader_decision"]
         assert decision["challenger_lead"] == pytest.approx(0.05)
         assert decision["required_lead"] == pytest.approx(
@@ -1966,6 +1970,11 @@ class TestPublicLeaderboard:
         )
         assert decision["method"] == "unpaired"
         assert decision["dethrones"] is False
+        assert decision["required_score"] == pytest.approx(
+            0.50 + decision["required_lead"]
+        )
+        assert decision["score_ceiling"] == pytest.approx(1.0)
+        assert decision["ceiling_deadlocked"] is False
         assert body["emissions"]["recipients"] == [
             {
                 "role": "champion",

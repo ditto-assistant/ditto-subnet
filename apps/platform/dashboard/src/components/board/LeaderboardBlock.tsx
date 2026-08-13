@@ -288,6 +288,7 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
   );
   const shown = createMemo(() => {
     if (store.unavailable()) return false;
+    if (store.emissions()?.allocation_mode === "score_ceiling_pool") return true;
     const champ = store.champion();
     return Boolean(champ && typeof champ.rank === "number" && champ.rank > 1);
   });
@@ -302,7 +303,7 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
       id="koth-standing"
       classList={{ show: shown() }}
       role="note"
-      aria-label="Why the reigning champion is not raw rank 1"
+      aria-label="How the current KOTH emissions are allocated"
     >
       <Show when={shown() ? store.champion() : null}>
         {(champ) => (
@@ -311,27 +312,38 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
               ♛
             </span>
             <span class="koth-standing-copy" id="koth-standing-copy">
-              <b>
-                <EntityButton
-                  kind="agent"
-                  id={champ().agent_id}
-                  label={agentName(champ().agent_name)}
-                />
-                {" is the reigning champion from raw #" + champ().rank + "."}
-              </b>{" "}
-              {aboveText() +
-                ", but the crown only moves when a challenger beats the first-seen incumbent " +
-                "by more than the dethrone band"}
-              <Show when={floor()}>
-                {(f) => (
+              <Show
+                when={store.emissions()?.allocation_mode === "score_ceiling_pool"}
+                fallback={
                   <>
-                    {" — "}
-                    <b class="beat">{"beat " + fx(f().floor) + " to contend"}</b>
+                    <b>
+                      <EntityButton
+                        kind="agent"
+                        id={champ().agent_id}
+                        label={agentName(champ().agent_name)}
+                      />
+                      {" is the reigning champion from raw #" + champ().rank + "."}
+                    </b>{" "}
+                    {aboveText() +
+                      ", but the crown only moves when a challenger beats the first-seen incumbent " +
+                      "by more than the dethrone band"}
+                    <Show when={floor()}>
+                      {(f) => (
+                        <>
+                          {" — "}
+                          <b class="beat">{"beat " + fx(f().floor) + " to contend"}</b>
+                        </>
+                      )}
+                    </Show>
+                    {". Until then the incumbent keeps the champion share of emissions; " +
+                      "the dimmed rows outscore it, but not by enough."}
                   </>
-                )}
+                }
+              >
+                <b>Score-ceiling joint crown.</b>{" "}
+                {(store.emissions()?.score_ceiling_pool_size || 0) +
+                  " highest evidence-tied agents split the full miner pool equally because the incumbent's required dethrone score cannot be exceeded within the score range. The historical incumbent no longer reserves a separate champion share."}
               </Show>
-              {". Until then the incumbent keeps the champion share of emissions; " +
-                "the dimmed rows outscore it, but not by enough."}
             </span>
           </>
         )}
@@ -374,7 +386,11 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
   const championRecipient = createMemo(
     () => (emissions()?.recipients || []).find((r) => r.role === "champion") ?? null,
   );
+  const jointChampions = createMemo(() =>
+    (emissions()?.recipients || []).filter((r) => r.role === "joint_champion"),
+  );
   const tails = createMemo(() => (emissions()?.recipients || []).filter((r) => r.role === "tail"));
+  const scoreCeilingPool = (): boolean => emissions()?.allocation_mode === "score_ceiling_pool";
 
   const championName = (): string => {
     const entry = championEntry();
@@ -400,6 +416,15 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
   const reasonText = (): string => {
     const e = emissions();
     if (!e) return "";
+    if (e.allocation_mode === "score_ceiling_pool") {
+      const n = e.score_ceiling_pool_size || jointChampions().length;
+      return (
+        "The incumbent's required dethrone score is at or above the best challenger's attainable score ceiling. " +
+        "A single-winner crown would therefore be impossible to win. The fold instead pays the highest evidence-tied cohort, anchored on raw #1, and includes every tied destination beyond the normal tail cutoff. " +
+        n +
+        " joint champions split the full miner pool equally; missing paired evidence cannot widen the cohort."
+      );
+    }
     const champion = championEntry();
     const rawLeader = rawLeaderEntry();
     const marginLabel = marginText(e.margin);
@@ -419,6 +444,9 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
           pct(bandScale) +
           " of its base width."
         : "";
+    const tiePoolingNote = e.tie_weighting_active
+      ? " Recipients whose exact effective scores tie, or whose paired shared-seed evidence remains statistically indistinguishable, pool only the ranked shares of the slots they occupy. Missing paired evidence cannot widen a group."
+      : "";
     const decision = e.raw_leader_decision;
     if (decision && rawLeader) {
       const method =
@@ -445,20 +473,24 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
         method +
         ", then applies the versioned band curve." +
         effectiveBandNote +
-        contestNote
+        contestNote +
+        tiePoolingNote
       );
     }
     return (
       "The raw score leader also wins the first-seen KOTH fold after the " +
       marginLabel +
-      " protection margin, statistical band, and versioned high-score curve are applied."
+      " protection margin, statistical band, and versioned high-score curve are applied." +
+      tiePoolingNote
     );
   };
 
   // "Beat this to contend." Published as a floor, explicitly, and never as a
   // sufficient number: only the margin term is knowable before a challenger
   // is scored (lib/scoring.dethroneFloor — never inline math).
-  const floor = createMemo(() => dethroneFloor(emissions(), championEntry(), store.settledView()));
+  const floor = createMemo(() =>
+    scoreCeilingPool() ? null : dethroneFloor(emissions(), championEntry(), store.settledView()),
+  );
   const floorText = (): string => {
     const f = floor();
     if (!f) return "";
@@ -500,7 +532,7 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
     const revealedLabel = revealedEntry
       ? agentName(revealedEntry.agent_name)
       : shortKey(revealedLeader);
-    const projectedHotkey = emissions()?.champion_miner_hotkey;
+    const projectedHotkey = scoreCeilingPool() ? null : emissions()?.champion_miner_hotkey;
     const projectedEntry = projectedHotkey ? entriesByHotkey().get(projectedHotkey) : undefined;
     const projectedLabel = projectedEntry
       ? agentName(projectedEntry.agent_name)
@@ -553,27 +585,41 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
       <div class="emissions-summary">
         <div class="emissions-title" id="emissions-title">
           <Show when={emissions()}>
-            <span class="emission-badge champion">
-              <span aria-hidden="true">●</span> KOTH champion
-            </span>
-            {" · "}
-            <Show when={championEntry()} fallback={championName()}>
-              {(entry) => (
-                <EntityButton kind="agent" id={entry().agent_id} label={championName()} />
-              )}
-            </Show>
-            {" (" + championRank() + ") receives "}
-            {pct(championShare() as number)}
-            {" of the miner pool."}
-            <Show when={sharedSeedNote(championRecipient())}>
-              {(note) => (
+            <Show
+              when={scoreCeilingPool()}
+              fallback={
                 <>
-                  {" "}
-                  <Tip text="Distinct champion-anchored seeds scored by the continual top-five lane.">
-                    {"· " + note()}
-                  </Tip>
+                  <span class="emission-badge champion">
+                    <span aria-hidden="true">●</span> KOTH champion
+                  </span>
+                  {" · "}
+                  <Show when={championEntry()} fallback={championName()}>
+                    {(entry) => (
+                      <EntityButton kind="agent" id={entry().agent_id} label={championName()} />
+                    )}
+                  </Show>
+                  {" (" + championRank() + ") receives "}
+                  {pct(championShare() as number)}
+                  {" of the miner pool."}
+                  <Show when={sharedSeedNote(championRecipient())}>
+                    {(note) => (
+                      <>
+                        {" "}
+                        <Tip text="Distinct champion-anchored seeds scored by the continual top-five lane.">
+                          {"· " + note()}
+                        </Tip>
+                      </>
+                    )}
+                  </Show>
                 </>
-              )}
+              }
+            >
+              <span class="emission-badge joint_champion">
+                <span aria-hidden="true">♛</span> Score-ceiling joint crown
+              </span>
+              {" · " + jointChampions().length + " evidence-tied agents each receive "}
+              {pct(jointChampions()[0]?.share_of_miner_pool as number)}
+              {" of the miner pool."}
             </Show>
           </Show>
         </div>
@@ -604,12 +650,14 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
       <div class="emissions-recipients" id="emissions-recipients">
         <Show when={emissions()}>
           <Show
-            when={tails().length}
+            when={scoreCeilingPool() ? jointChampions().length : tails().length}
             fallback={<>No participation-tail recipients in the current pool.</>}
           >
-            <span class="emission-badge tail">Participation tail</span>
+            <span class={"emission-badge " + (scoreCeilingPool() ? "joint_champion" : "tail")}>
+              {scoreCeilingPool() ? "Joint crown" : "Participation tail"}
+            </span>
             {" · "}
-            <For each={tails()}>
+            <For each={scoreCeilingPool() ? jointChampions() : tails()}>
               {(recipient, index) => {
                 const entry = (): BoardEntry | undefined =>
                   entriesByAgent().get(String(recipient.agent_id));

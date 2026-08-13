@@ -93,7 +93,10 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
     memoryFieldRevision();
     const data = lastData();
     const rollout = store.rollout();
-    const championHotkey = store.emissions()?.champion_miner_hotkey ?? null;
+    const championHotkey =
+      store.emissions()?.allocation_mode === "score_ceiling_pool"
+        ? null
+        : (store.emissions()?.champion_miner_hotkey ?? null);
     const isFailed = failed();
     const target = chart;
     if (!target) return;

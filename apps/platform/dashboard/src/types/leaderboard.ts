@@ -17,7 +17,7 @@ export interface ChainWeightInfo {
 export interface EmissionRecipient {
   agent_id?: string | null;
   miner_hotkey?: string | null;
-  /** "champion" | "tail" */
+  /** "champion" | "joint_champion" | "tail" */
   role?: string;
   share_of_miner_pool?: number;
   shared_seed_confirmations?: number | null;
@@ -38,10 +38,14 @@ export interface EmissionsFold {
   champion_share?: number;
   tail_size?: number | null;
   rank_shares?: number[];
+  tie_weighting_active?: boolean;
+  tie_weighting_required_protocol?: number;
   champion_miner_hotkey?: string | null;
   champion_agent_id?: string | null;
   raw_leader_agent_id?: string | null;
   raw_leader_decision?: RawLeaderDecision | null;
+  allocation_mode?: "ranked" | "score_ceiling_pool";
+  score_ceiling_pool_size?: number;
   recipients?: EmissionRecipient[];
 }
 

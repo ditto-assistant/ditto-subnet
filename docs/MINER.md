@@ -240,7 +240,11 @@ result.
   contestable as scores approach the benchmark ceiling. A near-miss is settled
   by re-scoring both agents on shared seeds rather than dataset luck.
 - Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
-  and next four distinct miners, respectively. The competitive vector receives
+  and next four distinct miners, respectively. Evidence-tied occupied positions
+  pool their shares. If at least two highest-scoring miners are evidence-tied and
+  the dethrone threshold cannot be exceeded within the score range, they form an
+  uncapped joint crown and split the full competitive pool equally, including
+  ties beyond the normal top five. The competitive vector receives
   100% of available miner emission by default — nothing is burned while eligible
   miners exist. With no eligible miners, 100% is burned. The subnet owner can
   publish a non-zero burn share, which scales the whole competitive vector

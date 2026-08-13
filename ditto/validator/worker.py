@@ -1572,6 +1572,7 @@ class ValidatorWorker:
             tail_size=self._config.koth_tail_size,
             rank_shares=self._config.koth_rank_shares,
             dethrone_z=self._config.koth_dethrone_z,
+            tie_pooling=ledger.tie_weighting_mode == "pool",
         )
         # The burn is operator policy served on the ledger, not a compiled-in
         # constant; the config value is the fallback for a platform that does not

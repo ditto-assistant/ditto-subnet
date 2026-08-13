@@ -50,7 +50,13 @@ from ditto import __version__
 # reports v19+, regardless of scorer capability, because an older validator
 # still consumes the ledger and would otherwise disagree on KOTH and weights.
 # Historical ``efficiency_bonus`` behavior is unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 19
+#
+# v20 consumes ``LedgerResponse.tie_weighting_mode=pool`` and averages the
+# frozen rank shares occupied by statistically tied recipients. The heartbeat
+# signing bytes remain on the v11 domain. Platform must not expose the marker
+# until every recently-live weight setter reports v20+, because a v19 validator
+# ignores the additive field and would keep submitting the fixed rank vector.
+HEARTBEAT_PROTOCOL_VERSION = 20
 
 
 @dataclass(frozen=True)

@@ -263,6 +263,27 @@ describe("overview leaderboard block (row 1 slice)", () => {
     );
   });
 
+  it("explains active tie pooling from the fold instead of implying fixed slots", async () => {
+    renderOverview({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = structuredClone(body) as LeaderboardPayload;
+        if (payload.emissions) payload.emissions.tie_weighting_active = true;
+        return payload;
+      },
+    });
+    await waitForBoard();
+
+    await waitFor(() =>
+      expect(el("emissions-reason").textContent).toContain(
+        "pool only the ranked shares of the slots they occupy",
+      ),
+    );
+    expect(el("emissions-reason").textContent).toContain(
+      "Missing paired evidence cannot widen a group",
+    );
+  });
+
   it("summarizes the revealed chain weights (validator top choice · c/v)", async () => {
     renderOverview();
     await waitForBoard();

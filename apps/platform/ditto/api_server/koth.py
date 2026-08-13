@@ -72,6 +72,9 @@ class DethroneDecision:
     statistical_lead: float | None
     method: Literal["flat", "unpaired", "paired"]
     dethrones: bool
+    required_score: float
+    score_ceiling: float
+    ceiling_deadlocked: bool
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,15 @@ class KothProjection:
     tail: tuple[KothEntry, ...]
     raw_leader: KothEntry
     raw_leader_decision: DethroneDecision | None
+
+
+@dataclass(frozen=True)
+class EmissionAllocation:
+    """Projected recipients and shares for one active validator fold."""
+
+    mode: Literal["ranked", "score_ceiling_pool"]
+    members: tuple[KothEntry, ...]
+    shares: tuple[float, ...]
 
 
 def _dethrone_band_scale(
@@ -121,6 +133,101 @@ def emission_set(projection: KothProjection | None) -> tuple[KothEntry, ...]:
         seen.add(entry.agent_id)
         members.append(entry)
     return tuple(members)
+
+
+def emission_shares(
+    projection: KothProjection | None, *, tie_pooling: bool = False
+) -> tuple[float, ...]:
+    """Return occupied rank shares, optionally pooled across evidence ties."""
+    members = emission_set(projection)
+    shares = list(KOTH_RANK_SHARES[: len(members)])
+    if not tie_pooling:
+        return tuple(shares)
+    start = 0
+    while start < len(members):
+        anchor = members[start]
+        end = start + 1
+        while end < len(members) and _weight_tied(members[end], anchor):
+            end += 1
+        if end - start > 1:
+            average = sum(shares[start:end]) / (end - start)
+            shares[start:end] = [average] * (end - start)
+        start = end
+    return tuple(shares)
+
+
+def emission_allocation(
+    entries: Sequence[KothEntry],
+    projection: KothProjection | None,
+    *,
+    tie_pooling: bool = False,
+) -> EmissionAllocation:
+    """Return the exact validator payout mode, membership, and shares.
+
+    Normal operation uses the historical champion-plus-tail schedule, with
+    evidence-tied occupied slots pooled when enabled. If the best challenger
+    cannot mathematically clear the incumbent before reaching its frozen score
+    ceiling, the highest evidence-tied cohort becomes an uncapped joint crown
+    and splits the full miner pool equally.
+    """
+    if projection is None:
+        return EmissionAllocation(mode="ranked", members=(), shares=())
+    if tie_pooling:
+        ceiling_cohort = _score_ceiling_cohort(entries, projection)
+        if ceiling_cohort:
+            share = 1.0 / len(ceiling_cohort)
+            return EmissionAllocation(
+                mode="score_ceiling_pool",
+                members=ceiling_cohort,
+                shares=(share,) * len(ceiling_cohort),
+            )
+    return EmissionAllocation(
+        mode="ranked",
+        members=emission_set(projection),
+        shares=emission_shares(projection, tie_pooling=tie_pooling),
+    )
+
+
+def _score_ceiling_cohort(
+    entries: Sequence[KothEntry], projection: KothProjection
+) -> tuple[KothEntry, ...]:
+    ranked = _distinct_ranked(entries)
+    challenger = next(
+        (
+            entry
+            for entry in ranked
+            if entry.miner_hotkey != projection.champion.miner_hotkey
+        ),
+        None,
+    )
+    if challenger is None:
+        return ()
+    decision = _dethrone_decision(challenger, projection.champion)
+    if not decision.ceiling_deadlocked:
+        return ()
+
+    anchor = ranked[0]
+    cohort = [anchor]
+    for entry in ranked[1:]:
+        if not _weight_tied(entry, anchor):
+            break
+        cohort.append(entry)
+    return tuple(cohort) if len(cohort) > 1 else ()
+
+
+def _distinct_ranked(entries: Sequence[KothEntry]) -> tuple[KothEntry, ...]:
+    official = _official_scores(entries)
+    ranked = rank_submissions(
+        (entry for entry in entries if entry.composite > 0.0), scores=official
+    )
+    distinct: list[KothEntry] = []
+    seen_hotkeys: set[str] = set()
+    for entry in ranked:
+        if entry.miner_hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.miner_hotkey)
+        distinct.append(entry)
+    return tuple(distinct)
 
 
 def indistinguishable_from(
@@ -294,7 +401,9 @@ def _official_scores(entries: Iterable[KothEntry]) -> dict[UUID, float]:
     return {entry.agent_id: effective_composite(entry) for entry in entries}
 
 
-def project_koth(entries: Sequence[KothEntry]) -> KothProjection | None:
+def project_koth(
+    entries: Sequence[KothEntry], *, distinct_hotkeys: bool = False
+) -> KothProjection | None:
     """Return the champion and participation tail for an eligible score pool.
 
     The fold makes the earliest ``first_seen`` the provisional champion and asks
@@ -317,12 +426,23 @@ def project_koth(entries: Sequence[KothEntry]) -> KothProjection | None:
             champion = challenger
 
     official = _official_scores(scored)
-    tail = tuple(
-        rank_submissions(
-            (entry for entry in scored if entry.miner_hotkey != champion.miner_hotkey),
-            scores=official,
-        )[:KOTH_TAIL_SIZE]
+    ranked_tail = rank_submissions(
+        (entry for entry in scored if entry.miner_hotkey != champion.miner_hotkey),
+        scores=official,
     )
+    if distinct_hotkeys:
+        tail_members: list[KothEntry] = []
+        seen_hotkeys = {champion.miner_hotkey}
+        for entry in ranked_tail:
+            if entry.miner_hotkey in seen_hotkeys:
+                continue
+            seen_hotkeys.add(entry.miner_hotkey)
+            tail_members.append(entry)
+            if len(tail_members) == KOTH_TAIL_SIZE:
+                break
+        tail = tuple(tail_members)
+    else:
+        tail = tuple(ranked_tail[:KOTH_TAIL_SIZE])
     raw_leader = rank_submissions(scored, scores=official)[0]
     decision = (
         None
@@ -438,6 +558,14 @@ def _efficiency_adjusted_composite(entry: KothEntry, quality: float) -> float:
     return quality * _efficiency_multiplier(entry)
 
 
+def _effective_score_ceiling(entry: KothEntry) -> float:
+    """Highest score this entry's frozen efficiency transform can attain."""
+    factor = _bounded_efficiency_factor(entry)
+    if factor is not None:
+        return factor if factor <= 1.0 else 1.0
+    return _efficiency_multiplier(entry)
+
+
 def continual_composite(entry: KothEntry) -> float:
     """Return the continual aggregate before relative efficiency is applied.
 
@@ -535,7 +663,19 @@ def _paired_statistic(
     return mean_difference, champion_reference, math.sqrt(variance / len(differences))
 
 
+def _weight_tied(candidate: KothEntry, anchor: KothEntry) -> bool:
+    """Mirror the validator's fail-closed tie grouping rule."""
+    if effective_composite(candidate) == effective_composite(anchor):
+        return True
+    paired = _paired_statistic(candidate, anchor)
+    if paired is None:
+        return False
+    mean_difference, _anchor_reference, standard_error = paired
+    return abs(mean_difference) <= KOTH_DETHRONE_Z * standard_error
+
+
 def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDecision:
+    score_ceiling = _effective_score_ceiling(challenger)
     paired = _paired_statistic(challenger, champion)
     if paired is not None:
         lead, champion_reference, standard_error = paired
@@ -544,13 +684,19 @@ def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDe
         required = max(margin_lead, paired_statistical_lead) * _dethrone_band_scale(
             challenger, champion, champion_reference
         )
+        observed_score = champion_reference + lead
+        required_score = champion_reference + required
+        dethrones = observed_score > required_score
         return DethroneDecision(
             challenger_lead=lead,
             required_lead=required,
             margin_lead=margin_lead,
             statistical_lead=paired_statistical_lead,
             method="paired",
-            dethrones=(champion_reference + lead > champion_reference + required),
+            dethrones=dethrones,
+            required_score=required_score,
+            score_ceiling=score_ceiling,
+            ceiling_deadlocked=(not dethrones and required_score >= score_ceiling),
         )
 
     challenger_composite = _effective_composite(challenger)
@@ -572,6 +718,8 @@ def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDe
         margin_lead,
         statistical_lead if statistical_lead is not None else margin_lead,
     ) * _dethrone_band_scale(challenger, champion, champion_composite)
+    required_score = champion_composite + required
+    dethrones = challenger_composite > required_score
     return DethroneDecision(
         challenger_lead=lead,
         required_lead=required,
@@ -580,5 +728,8 @@ def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDe
         method=method,
         # Mirror the validator's threshold comparison. Subtracting first can
         # round an exact decimal boundary infinitesimally upward.
-        dethrones=challenger_composite > champion_composite + required,
+        dethrones=dethrones,
+        required_score=required_score,
+        score_ceiling=score_ceiling,
+        ceiling_deadlocked=(not dethrones and required_score >= score_ceiling),
     )

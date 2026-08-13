@@ -820,6 +820,7 @@ const checkCohortCeiling = (
 // that build actually does.
 const continualRetestSettingsBaseSchema = z.object({
   aggregate_mode: z.enum(['disabled', 'fleet_ready', 'enabled']),
+  tie_weighting_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
   idle_retests_enabled: z.boolean(),
   rollout_standdown: z
     .enum(['off', 'capable_validators', 'all'])
@@ -872,6 +873,7 @@ export const continualRetestSettingsSchema =
 // overwrite keys on a schema that already carries refinements.
 export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSchema
   .extend({
+    tie_weighting_mode: z.enum(['disabled', 'fleet_ready']),
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
     retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
     retest_eligibility_mode: z.enum(['fixed', 'statistical']),
@@ -903,6 +905,8 @@ export const effectiveContinualRetestSettingsSchema = z.object({
   source: z.enum(['revision', 'default']),
   fleet_protocol_ready: z.boolean(),
   aggregate_active: z.boolean(),
+  tie_weighting_fleet_ready: z.boolean().default(false),
+  tie_weighting_active: z.boolean().default(false),
   max_age_seconds: z.number().nonnegative(),
   open_rollout_desired_version: z.number().int().positive().nullable().default(null),
   rollout_standdown_active: z.boolean().default(false),
@@ -959,6 +963,12 @@ type ContinualRetestExtendedFieldSpec = {
 }
 
 export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExtendedFieldSpec> = [
+  {
+    field: 'tie_weighting_mode',
+    label: 'a tie-aware weight policy',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () => 'fixed KOTH rank shares remain in effect',
+  },
   {
     field: 'retest_cohort_size',
     label: 'a retest cohort size',
