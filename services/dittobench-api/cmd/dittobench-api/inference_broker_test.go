@@ -542,6 +542,7 @@ func TestEmbeddingBrokerCapacityOneForwardsOnlyLockedOperation(t *testing.T) {
 
 func TestV7EmbeddingBrokerUsesSignedLockedPlatformRoute(t *testing.T) {
 	vector := make([]float64, embeddingDimensions)
+	inputs := []string{"first hosted text", "second hosted text"}
 	var calls atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -560,10 +561,16 @@ func TestV7EmbeddingBrokerUsesSignedLockedPlatformRoute(t *testing.T) {
 		if len(payload) != 4 || payload["model"] != hostedEmbeddingModel || payload["dimensions"] != float64(embeddingDimensions) || payload["encoding_format"] != "float" {
 			t.Fatalf("unlocked hosted embedding payload: %#v", payload)
 		}
+		if !reflect.DeepEqual(payload["input"], []any{inputs[0], inputs[1]}) {
+			t.Fatalf("hosted embedding input=%#v, want %#v", payload["input"], inputs)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"object": "list", "model": hostedEmbeddingModel,
-			"data":  []map[string]any{{"object": "embedding", "index": 0, "embedding": vector}},
-			"usage": map[string]int{"prompt_tokens": 4, "total_tokens": 4},
+			"data": []map[string]any{
+				{"object": "embedding", "index": 0, "embedding": vector},
+				{"object": "embedding", "index": 1, "embedding": vector},
+			},
+			"usage": map[string]int{"prompt_tokens": 8, "total_tokens": 8},
 		})
 	}))
 	defer upstream.Close()
@@ -577,12 +584,26 @@ func TestV7EmbeddingBrokerUsesSignedLockedPlatformRoute(t *testing.T) {
 		t.Fatal("failed to admit v7 embedding phase")
 	}
 	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
-	response := callEmbedding(broker, "192.0.2.70", "hosted text")
+	body, err := json.Marshal(embeddingRequest{Model: embeddingModel, Input: inputs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, embeddingAPIPath, bytes.NewReader(body))
+	request.RemoteAddr = "192.0.2.70:4321"
+	response := httptest.NewRecorder()
+	broker.handleEmbedding(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("hosted embedding status=%d body=%s", response.Code, response.Body.String())
 	}
+	var decoded embeddingResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Embeddings) != len(inputs) || decoded.PromptEvalCount != 8 {
+		t.Fatalf("hosted embedding response=%+v, want %d ordered vectors", decoded, len(inputs))
+	}
 	if calls.Load() != 1 {
-		t.Fatalf("hosted embedding calls=%d, want 1", calls.Load())
+		t.Fatalf("hosted embedding calls=%d, want one batched call", calls.Load())
 	}
 }
 

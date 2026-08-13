@@ -2,7 +2,8 @@
 //!
 //! It wires together the four pieces of a Ditto agent:
 //!   1. a local Turso `Store` (embedded SQLite-family DB with native vectors),
-//!   2. an `Embedder` (Ollama `embeddinggemma` by default, 768 dims),
+//!   2. an `Embedder` (an Ollama-compatible client, pointed at the trusted
+//!      ticket broker during scored evaluation),
 //!   3. a chat `Model` (OpenRouter or local Ollama/vLLM),
 //!   4. a `chat::Harness` that prepares memory context, exposes memory tools,
 //!      runs the agent loop, and (optionally) saves the turn.
@@ -60,6 +61,7 @@ use ditto_harness::types::{
 use serde_json::{json, Value};
 
 use crate::protocol;
+use crate::seed::SeedBatchEmbedder;
 
 // This is a starter-harness safety boundary, not a benchmark scoring limit.
 // Outcome-driven agents may legitimately use more than fifteen tool calls;
@@ -754,6 +756,7 @@ pub struct Baseline {
     model: Arc<dyn Model>,
     model_name: String,
     store: Arc<Store>,
+    seed_embedder: Arc<SeedBatchEmbedder>,
     include_memory_tools: bool,
     /// Shared outbound HTTP client (observed-execution tool-endpoint calls). One client
     /// per Baseline so connections are pooled across cases.
@@ -771,32 +774,43 @@ impl Baseline {
     pub async fn from_env() -> anyhow::Result<Baseline> {
         let db_path =
             std::env::var("DITTOBENCH_DB").unwrap_or_else(|_| DEFAULT_DB_PATH.to_string());
-        let store = Self::open_store(&db_path).await?;
+        let (store, seed_embedder) = Self::open_store_components(&db_path).await?;
         let provider = ModelProvider::from_env();
         let model = Self::build_model(&provider)?;
         Ok(Baseline {
             model,
             model_name: provider.model_id().to_string(),
             store,
+            seed_embedder,
             include_memory_tools: true,
             http: reqwest::Client::new(),
         })
     }
 
-    /// Opens (creating if needed) the local Turso store with the Ollama
-    /// embedder, the production weight-predictor MLP, and the production
-    /// cross-encoder reranker — mirroring the production retrieval stack 1:1.
+    /// Opens (creating if needed) the local Turso store with the embedding
+    /// client, production weight-predictor MLP, and production cross-encoder
+    /// reranker. Scored evaluation points the client at the trusted broker.
     pub async fn open_store(db_path: &str) -> anyhow::Result<Arc<Store>> {
+        let (store, _) = Self::open_store_components(db_path).await?;
+        Ok(store)
+    }
+
+    async fn open_store_components(
+        db_path: &str,
+    ) -> anyhow::Result<(Arc<Store>, Arc<SeedBatchEmbedder>)> {
         let db = Db::open(db_path)
             .await
             .with_context(|| format!("open turso db {db_path}"))?;
-        let embedder: Arc<dyn Embedder> = Arc::new(Self::build_embedder());
-        Ok(Arc::new(Store::new(StoreOptions {
+        let inner: Arc<dyn Embedder> = Arc::new(Self::build_embedder());
+        let seed_embedder = Arc::new(SeedBatchEmbedder::new(inner));
+        let embedder: Arc<dyn Embedder> = seed_embedder.clone();
+        let store = Arc::new(Store::new(StoreOptions {
             db: Arc::new(db),
             embedder,
             predictor: Some(Self::build_predictor()?),
             reranker: Some(Self::build_reranker()?),
-        })))
+        }));
+        Ok((store, seed_embedder))
     }
 
     /// The weight-predictor MLP (production `model.bin`, shipped in the kit).
@@ -819,8 +833,9 @@ impl Baseline {
         Ok(Arc::new(ce))
     }
 
-    /// The embedder (Ollama `embeddinggemma`, 768 dims). EXTENSION POINT: swap
-    /// for another embedder implementing `ditto_harness::types::Embedder`.
+    /// The 768-dimensional Ollama-compatible embedding client. Local practice
+    /// may use Ollama; scored evaluation injects the trusted broker base URL.
+    /// EXTENSION POINT: swap for another `ditto_harness::types::Embedder`.
     pub fn build_embedder() -> OllamaEmbedder {
         let base_url = std::env::var("OLLAMA_BASE_URL")
             .unwrap_or_else(|_| DEFAULT_OLLAMA_BASE_URL.to_string());
@@ -864,6 +879,11 @@ impl Baseline {
     /// Direct access to the underlying store (for seeding memory fixtures).
     pub fn store(&self) -> &Arc<Store> {
         &self.store
+    }
+
+    /// Embedder wrapper used to batch the known inputs for one seed wave.
+    pub fn seed_embedder(&self) -> &Arc<SeedBatchEmbedder> {
+        &self.seed_embedder
     }
 
     /// Shared handle to the chat model (for the playground to build its own

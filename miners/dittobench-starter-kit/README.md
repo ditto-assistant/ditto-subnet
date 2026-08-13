@@ -597,21 +597,29 @@ both are scored on every run and the stock kit leaves them on the table.
 
 ### Embedder note
 
-The kit defaults to local Ollama `embeddinggemma` (768-dim) for a free,
-self-contained loop. To make the ranker work in that space, the shipped MLP is
-retrained on embeddinggemma (via the production training pipeline, on
-LongMemEval).
+For local-only development, the kit can use Ollama `embeddinggemma` (768-dim)
+as a free, self-contained backend. This is not the scored inference path. To
+make local retrieval representative, the shipped MLP is retrained on
+embeddinggemma (via the production training pipeline, on LongMemEval).
 On the bundled seed user this lifts retrieval from hit@10 0.90 → 0.96 vs the
 Vertex-trained weights. The cross-encoder rerank is embedder-independent (it
 scores raw text), so it is identical to production.
 
-DittoBench v9 keeps this exact 768-dimensional `OllamaEmbedder` interface, but
-the trusted validator gateway serves it with the reviewed OpenRouter profile
-`dittobench-v7-openrouter-pplx-embed-v1-0.6b-768-v1`
-(`perplexity/pplx-embed-v1-0.6b`, Perplexity only, no fallback). The harness
-does not receive an OpenRouter key and cannot select a sibling model or
-provider. Local practice and historical benchmark versions continue to use
-`embeddinggemma`.
+DittoBench v9 keeps the starter's Ollama-compatible `/api/embed` client as a
+wire adapter, but the validator overwrites its base URL with the source-bound
+ticket broker. That broker serves the frozen profile
+`dittobench-v7-openrouter-pplx-embed-v1-0.6b-768-v1`. It calls Perplexity's
+`pplx-embed-v1-0.6b` API directly first, then can fall back through OpenRouter
+with its provider route pinned to Perplexity. The harness receives neither
+provider key and cannot select a sibling model or provider. No local Ollama
+process serves embeddings during scored evaluation.
+
+The reference `/seed` path pre-embeds each wave's exact pair and linked-subject
+inputs in batches of at most 256, then serves those vectors through a
+short-lived read-through cache while the normal `Store::save_memory` upserts
+run. The cache is cleared before `/seed` returns. This removes the sequential
+embedding round trips from seeding without retaining benchmark text, changing
+query behavior, or mixing provider usage between evaluation tickets.
 
 The v9 contract intentionally retains this embedding profile (whose
 immutable revision name includes `v7`) and the existing MLP weights. A model or
@@ -744,12 +752,12 @@ once; the scorer loads that exact image, starts it, and injects runtime model co
 for a trusted local broker plus a fresh `DITTOBENCH_DB` path. No validator or
 provider credential is placed in the harness container. The broker supplies
 only ticket-scoped v8 inference and locks `DITTOBENCH_MODEL` to GPT-OSS-20B.
-The Docker host gateway is mapped so the default `OLLAMA_BASE_URL` resolves to
-the scoring host's Ollama, which serves the reference `embeddinggemma`
-embedder. If you use a different local embedder, bundle it in your image. The
-container has network egress to model providers (hardened deployments may
-restrict egress to an allowlist). Your harness must read all model config from
-env. `Baseline::from_env` already does this, so keep that property if you rewrite it.
+The scorer overwrites `OLLAMA_BASE_URL` with the source-bound ticket broker.
+That name is retained only for compatibility with the starter's `/api/embed`
+client: the broker forwards embeddings through the signed Platform relay, not
+to a scoring-host Ollama process. The harness receives no provider credential.
+Your harness must read all model configuration from env.
+`Baseline::from_env` already does this, so keep that property if you rewrite it.
 
 4. Timeouts. 10 s for `/health` to come up, 60 s per `/run` call (a case
 that misses it scores 0), 5 minutes per `/seed` wave. The table is in
@@ -831,9 +839,10 @@ crate and renaming its symbols does not earn. Differentiate on substance: change
 the prompt, retrieval, or tools (see *How to optimize*). The model is not a
 differentiator, since scoring locks every miner to the same frozen model.
 
-11. Hardware. The reference stack runs on CPU: Ollama `embeddinggemma`
-(~1 GB), the TinyBERT ONNX reranker, embedded SQLite. 8 GB RAM is
-sufficient. No GPU is required unless you bundle a local LLM.
+11. Hardware. The scored reference harness runs its TinyBERT ONNX reranker and
+embedded SQLite locally on CPU; model and embedding inference use the trusted
+ticket broker. 8 GB RAM is sufficient. No GPU is required unless you bundle
+your own local inference backend for development.
 
 12. Support. Open a GitHub issue on `ditto-assistant/ditto-subnet`.
 
