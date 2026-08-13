@@ -1819,6 +1819,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inference/confirmation/chat/completions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proxy Confirmation Chat Completions
+         * @description Serve one reader or judge call under its ticket-purpose capability.
+         */
+        post: operations["proxy_confirmation_chat_completions_api_v1_inference_confirmation_chat_completions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inference/confirmation/embeddings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proxy Confirmation Embeddings
+         * @description Serve the frozen LongMem embedding space under a separate capability.
+         */
+        post: operations["proxy_confirmation_embeddings_api_v1_inference_confirmation_embeddings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/embeddings": {
         parameters: {
             query?: never;
@@ -8165,6 +8205,36 @@ export interface components {
          */
         ConfirmationEligibilityMode: "rank" | "score_threshold";
         /**
+         * ConfirmationEmbeddingLaneProfile
+         * @description Frozen retrieval embedding route for the LongMem lane.
+         *
+         *     Embeddings are intentionally not a third LongMem judge/reader provider
+         *     receipt.  They have their own purpose-bound Platform capability and budget,
+         *     so a credential minted for retrieval cannot be replayed against either
+         *     chat model.
+         */
+        ConfirmationEmbeddingLaneProfile: {
+            /** Dimensions */
+            dimensions: number;
+            /**
+             * Lane
+             * @constant
+             */
+            lane: "embedding";
+            /** Max Cost Usd Micros */
+            max_cost_usd_micros: number;
+            /** Max Input Tokens */
+            max_input_tokens: number;
+            /** Max Requests */
+            max_requests: number;
+            /** Model */
+            model: string;
+            /** Profile Revision */
+            profile_revision: string;
+            /** Provider */
+            provider: string;
+        };
+        /**
          * ConfirmationEvidenceRoot
          * @description Server-rebuilt shared bundle evidence; never owns subject quality.
          */
@@ -8221,6 +8291,7 @@ export interface components {
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
             embedding_ablation: components["schemas"]["ConfirmationAblationProfile"];
+            embedding_lane: components["schemas"]["ConfirmationEmbeddingLaneProfile"];
             inference_ablation: components["schemas"]["ConfirmationAblationProfile"];
             /** Longmem Cases Per Capability */
             longmem_cases_per_capability: number;
@@ -8253,6 +8324,49 @@ export interface components {
              */
             schema_version: 1;
         };
+        /**
+         * ConfirmationInferenceGrantOffer
+         * @description One ticket-scoped, lane-specific Platform inference capability.
+         */
+        ConfirmationInferenceGrantOffer: {
+            /** Bearer */
+            bearer: string;
+            /** Cost Budget Microusd */
+            cost_budget_microusd: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /**
+             * Lane
+             * @enum {string}
+             */
+            lane: "reader" | "judge" | "embedding";
+            /** Model */
+            model: string;
+            /** Profile Revision */
+            profile_revision: string;
+            /** Provider */
+            provider: string;
+            /** Proxy Url */
+            proxy_url: string;
+            /** Receipt Provider */
+            receipt_provider: string;
+            /** Request Budget */
+            request_budget: number;
+            /** Route Provider */
+            route_provider: string;
+            /** Token Budget */
+            token_budget: number;
+        };
         /** ConfirmationProviderLaneProfile */
         ConfirmationProviderLaneProfile: {
             /** Lane */
@@ -8273,6 +8387,10 @@ export interface components {
             profile_revision: string;
             /** Provider */
             provider: string;
+            /** Receipt Provider */
+            receipt_provider: string;
+            /** Route Provider */
+            route_provider: string;
         };
         /**
          * ConfirmationResultStatus
@@ -15848,6 +15966,8 @@ export interface components {
         };
         /** V9ConfirmationClaimRequest */
         V9ConfirmationClaimRequest: {
+            /** Broker Public Key */
+            broker_public_key: string;
             /**
              * Nonce
              * Format: uuid
@@ -16011,6 +16131,8 @@ export interface components {
              */
             deadline: string;
             execution_profile: components["schemas"]["ConfirmationExecutionProfile"];
+            /** Inference Grants */
+            inference_grants: components["schemas"]["ConfirmationInferenceGrantOffer"][];
             mode: components["schemas"]["ConfirmationBundleMode"];
             /** Per Bundle Request Cap */
             per_bundle_request_cap: number;
@@ -20022,6 +20144,78 @@ export interface operations {
         };
     };
     proxy_chat_completions_api_v1_inference_chat_completions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-ditto-grant"?: string | null;
+                "x-ditto-generation"?: number | null;
+                "x-ditto-nonce"?: string | null;
+                "x-ditto-requested-at"?: string | null;
+                "x-ditto-proof"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_confirmation_chat_completions_api_v1_inference_confirmation_chat_completions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-ditto-grant"?: string | null;
+                "x-ditto-generation"?: number | null;
+                "x-ditto-nonce"?: string | null;
+                "x-ditto-requested-at"?: string | null;
+                "x-ditto-proof"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_confirmation_embeddings_api_v1_inference_confirmation_embeddings_post: {
         parameters: {
             query?: never;
             header?: {
