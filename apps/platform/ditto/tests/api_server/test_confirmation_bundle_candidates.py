@@ -6,6 +6,7 @@ import pytest
 
 from ditto.api_server.confirmation_bundles import (
     ConfirmationCandidate,
+    ConfirmationEligibilityMode,
     ConfirmationMode,
     ConfirmationPolicyError,
     ConfirmationState,
@@ -346,6 +347,66 @@ class TestOwnerGrouping:
 
 
 class TestCandidateSelection:
+    def test_score_threshold_selects_every_owner_at_or_above_fixed_score(self) -> None:
+        rows = [
+            candidate(1, 0.99),
+            candidate(2, 0.95),
+            candidate(3, 0.949999),
+            candidate(4, 0.20),
+        ]
+        selection = select_confirmation_candidates(
+            rows,
+            eligibility_mode=ConfirmationEligibilityMode.SCORE_THRESHOLD,
+            min_base_score_micros=950_000,
+        )
+        assert ids(selection.selected) == ["agent-01", "agent-02"]
+        assert selection.threshold_agent_ids == frozenset({"agent-01", "agent-02"})
+        assert selection.top_n_agent_ids == frozenset()
+        assert selection.challenger_agent_ids == frozenset()
+        assert selection.cutoff_source == "score_threshold"
+
+    def test_score_threshold_applies_after_owner_grouping(self) -> None:
+        rows = [
+            candidate(1, 0.96, owner="same"),
+            candidate(2, 0.99, owner="same"),
+            candidate(3, 0.951, owner="other"),
+        ]
+        selection = select_confirmation_candidates(
+            rows,
+            eligibility_mode=ConfirmationEligibilityMode.SCORE_THRESHOLD,
+            min_base_score_micros=950_000,
+        )
+        assert ids(selection.selected) == ["agent-02", "agent-03"]
+
+    def test_score_threshold_can_select_more_than_legacy_top_n_cap(self) -> None:
+        rows = [candidate(i, 0.99 - (i / 10_000)) for i in range(1, 20)]
+        selection = select_confirmation_candidates(
+            rows,
+            top_n=1,
+            eligibility_mode=ConfirmationEligibilityMode.SCORE_THRESHOLD,
+            min_base_score_micros=950_000,
+        )
+        assert len(selection.selected) == 19
+
+    @pytest.mark.parametrize("threshold", [-1, 1_000_001, True, 0.95])
+    def test_rejects_invalid_score_threshold(self, threshold: object) -> None:
+        with pytest.raises(ConfirmationPolicyError, match="min_base_score_micros"):
+            select_confirmation_candidates(
+                [candidate(1, 0.99)],
+                eligibility_mode=ConfirmationEligibilityMode.SCORE_THRESHOLD,
+                min_base_score_micros=threshold,  # type: ignore[arg-type]
+            )
+
+    @pytest.mark.parametrize("mode", ["rank", "score_threshold", None, True])
+    def test_rejects_untyped_eligibility_mode(self, mode: object) -> None:
+        with pytest.raises(
+            ConfirmationPolicyError, match="ConfirmationEligibilityMode"
+        ):
+            select_confirmation_candidates(
+                [candidate(1, 0.99)],
+                eligibility_mode=mode,  # type: ignore[arg-type]
+            )
+
     def test_empty_pool_has_no_frontier(self) -> None:
         selection = select_confirmation_candidates([], top_n=5)
         assert selection.base_board == ()

@@ -443,7 +443,9 @@ function confirmationSettings(mode: 'off' | 'shadow' | 'enforce' = 'off') {
   const active = mode !== 'off'
   return {
     mode,
+    eligibility_mode: 'rank' as const,
     top_n: 5,
+    min_base_score_micros: 950_000,
     daily_bundle_cap: active ? 20 : 0,
     daily_dollar_cap_microusd: active ? 2_000_000 : 0,
     per_bundle_request_cap: active ? 500 : 0,

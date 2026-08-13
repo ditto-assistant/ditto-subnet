@@ -401,11 +401,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_continual_retest_settings:
     'Read effective continual-retest policy, fleet readiness, compatibility field_support, defaults, and optionally paged newest-first revision history. historyLimit defaults to 0.',
   get_agent_scores:
-    'Read accepted validator scores for one agent and benchmark version, including exact seed strings and aggregate statistics. Defaults to the agent current applicable benchmark when benchVersion is omitted.',
+    'Read accepted validator scores for one agent and benchmark version, with exact seeds and aggregates. Defaults to the current applicable benchmark.',
   get_validator_slot_settings:
     'Read effective validator slot and disk policy plus optional newest-first revision history. A validator advertising more slots than the cap is not an underutilized host. historyLimit defaults to 0.',
   get_miner_owner_footprint:
-    'Trace payment-record links for one miner hotkey or coldkey. Payment provenance is one common-control signal, never an ownership determination; confirm metagraph ownership separately. Bound traversal with depth and agentsPerHotkey.',
+    'Trace payment-record links for one miner hotkey or coldkey. Payment provenance is a common-control signal, not ownership; confirm metagraph ownership separately.',
   get_inference_concurrency_settings:
     'Read effective hosted-inference budgets and embedding limits plus optional newest-first revision history. historyLimit defaults to 0; chat token and request budgets are reported separately.',
   set_source_release_policy:
@@ -435,7 +435,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   set_confirmation_bundle_settings:
     'Apply a complete bounded confirmation policy with revision guard, reason, and exact mode phrase. Does not activate v9 or rewards.',
   list_confirmation_bundles:
-    'Page shared v9 confirmation evidence and spend, preserving LongMem lanes, binary ablations, and per-subject projections.',
+    'Page v9 LongMem evidence, spend, ablations, and subject projections.',
   get_confirmation_bundle:
     'Read one complete v9 confirmation root, signature, typed evidence, tickets, and subject projections.',
   authorize_confirmation_bundle_retest:
@@ -1324,7 +1324,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get Bench v9 confirmation settings',
       description:
-        'Read the complete platform-owned qualification policy for Bench v9 confirmation bundles. Returns the mode, bounded daily and per-bundle spend caps, top-N challenger cohort, frozen confirmation profile identity, effective revision/checksum/source, and optional newest-first append-only history. Mode off issues no work. Shadow records signed evidence and derived previews but must leave every subject provisional. Enforce may mark a subject full-confirmed only when the shared evidence is qualified. This setting does not change the active benchmark, canonical score ledger, emissions, or rewards. Requires backroom:read and changes nothing.',
+        'Read the Bench v9 LongMem policy, eligibility, caps, profile, revision, and optional history. Off issues no work; shadow is evidence-only. This never changes base scores, emissions, or rewards. Requires backroom:read.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -1346,7 +1346,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set Bench v9 confirmation settings',
       description:
-        'Apply one complete append-only Bench v9 confirmation issuance revision. Supply every setting, expectedRevision from get_confirmation_bundle_settings, an audit reason, and the exact phrase "APPLY V9 CONFIRMATION MODE OFF", "... SHADOW", or "... ENFORCE" matching settings.mode. Active modes require a frozen profile revision/checksum and positive daily/per-bundle caps. Off is the issuance kill switch; it does not revoke an existing lease. Shadow is evidence-only and cannot full-confirm. Enforce changes only the isolated v9 qualification status; this tool cannot activate Bench v9, canonical scoring, emissions, or rewards. Requires backroom:write.',
+        'Append a complete Bench v9 LongMem policy with expectedRevision, reason, exact mode phrase, frozen profile, and positive caps. Off stops issuance; shadow is evidence-only. It cannot alter base scores, emissions, or rewards. Requires backroom:write.',
       inputSchema: setConfirmationBundleSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -1359,7 +1359,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List Bench v9 confirmation bundles',
       description:
-        'Read newest-first shared Bench v9 qualification evidence, the current UTC budget ledger, and stored-row-derived shadow calibration: measured base and average bundle cost, promotion rate, projected daily spend, and explicit epoch availability. Filter by lifecycle state and bound the result. Completed rows expose exact root/settings/profile provenance, one validator signature, typed LongMem provider lanes and receipts, provider-free binary ablations, tickets, and separately derived per-subject base/full quality and gates. Shadow subjects remain provisional even when their preview is populated. Requires backroom:read and changes nothing.',
+        'List newest-first Bench v9 LongMem bundles with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. Filter by state and page bounds. Requires backroom:read.',
       inputSchema: {
         state: confirmationBundleStateSchema.optional(),
         limit: z.number().int().min(1).max(200).default(20),

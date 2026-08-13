@@ -177,7 +177,22 @@ export function ConfirmationBundleControlPanel({
                 <option value="enforce">Enforce</option>
               </select>
             </Field>
-            <NumberField label="Top N" value={draft.top_n} disabled={readOnly || busy} onChange={(value) => numeric('top_n', value)} />
+            <Field label="Eligibility">
+              <select
+                aria-label="Eligibility"
+                value={draft.eligibility_mode}
+                disabled={readOnly || busy}
+                onChange={(event) => setDraft((current) => ({ ...current, eligibility_mode: event.target.value as ConfirmationBundleSettings['eligibility_mode'] }))}
+              >
+                <option value="rank">Rank + challenger band</option>
+                <option value="score_threshold">Fixed base score</option>
+              </select>
+            </Field>
+            {draft.eligibility_mode === 'rank' ? (
+              <NumberField label="Top N" value={draft.top_n} disabled={readOnly || busy} onChange={(value) => numeric('top_n', value)} />
+            ) : (
+              <NumberField label="Minimum base score (μ)" value={draft.min_base_score_micros} disabled={readOnly || busy} onChange={(value) => numeric('min_base_score_micros', value)} />
+            )}
             <NumberField label="Daily bundles" value={draft.daily_bundle_cap} disabled={readOnly || busy} onChange={(value) => numeric('daily_bundle_cap', value)} />
             <NumberField label="Daily μUSD" value={draft.daily_dollar_cap_microusd} disabled={readOnly || busy} onChange={(value) => numeric('daily_dollar_cap_microusd', value)} />
             <NumberField label="Requests / bundle" value={draft.per_bundle_request_cap} disabled={readOnly || busy} onChange={(value) => numeric('per_bundle_request_cap', value)} />

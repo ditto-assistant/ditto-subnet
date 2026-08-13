@@ -25,6 +25,7 @@ from ditto.api_models.confirmation_bundles import (
 from ditto.api_models.validator import V9BaseEvidence
 from ditto.api_server.confirmation_bundles import (
     ConfirmationCandidate,
+    ConfirmationEligibilityMode,
     ConfirmationState,
     select_confirmation_candidates,
 )
@@ -383,6 +384,8 @@ async def reconcile_v9_confirmation_candidates(
         candidates,
         top_n=settings.top_n,
         challenger_z=settings.challenger_z,
+        eligibility_mode=ConfirmationEligibilityMode(settings.eligibility_mode),
+        min_base_score_micros=settings.min_base_score_micros,
     )
     if not issuance_active or settings_row is None or profile is None:
         return ConfirmationReconciliation(

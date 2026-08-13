@@ -347,7 +347,9 @@ describe('Backroom MCP tools', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const settings = {
       mode: 'shadow',
+      eligibility_mode: 'rank',
       top_n: 5,
+      min_base_score_micros: 950_000,
       daily_bundle_cap: 10,
       daily_dollar_cap_microusd: 1_000_000,
       per_bundle_request_cap: 100,
@@ -426,7 +428,9 @@ describe('Backroom MCP tools', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const settings = {
       mode: 'enforce',
+      eligibility_mode: 'rank',
       top_n: 5,
+      min_base_score_micros: 950_000,
       daily_bundle_cap: 10,
       daily_dollar_cap_microusd: 1_000_000,
       per_bundle_request_cap: 100,

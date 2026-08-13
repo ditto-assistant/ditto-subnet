@@ -49,6 +49,13 @@ class ConfirmationBundleMode(StrEnum):
     ENFORCE = "enforce"
 
 
+class ConfirmationEligibilityMode(StrEnum):
+    """How base-v9 subjects enter the bounded LongMem confirmation lane."""
+
+    RANK = "rank"
+    SCORE_THRESHOLD = "score_threshold"
+
+
 class ConfirmationProviderLaneProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -300,6 +307,7 @@ __all__ = [
     "ConfirmationAblationCoordinatorProfile",
     "ConfirmationAblationProfile",
     "ConfirmationBundleMode",
+    "ConfirmationEligibilityMode",
     "ConfirmationCompositeProfile",
     "ConfirmationExecutionProfile",
     "ConfirmationProviderLaneProfile",

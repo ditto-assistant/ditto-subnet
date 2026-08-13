@@ -35,7 +35,9 @@ const SHA = {
 
 const SETTINGS = {
   mode: 'shadow' as const,
+  eligibility_mode: 'rank' as const,
   top_n: 5,
+  min_base_score_micros: 950_000,
   daily_bundle_cap: 10,
   daily_dollar_cap_microusd: 1_000_000,
   per_bundle_request_cap: 100,

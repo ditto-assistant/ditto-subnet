@@ -12,6 +12,7 @@ from ditto.api_server.confirmation_bundles import (
     ConfirmationBundleKey,
     ConfirmationBundleSettings,
     ConfirmationCandidate,
+    ConfirmationEligibilityMode,
     ConfirmationMode,
     ConfirmationPolicyError,
     ConfirmationProfileRef,
@@ -29,7 +30,9 @@ _T0 = datetime(2026, 8, 8, 12, tzinfo=UTC)
 def settings(**overrides: object) -> ConfirmationBundleSettings:
     values: dict[str, object] = {
         "mode": ConfirmationMode.SHADOW,
+        "eligibility_mode": ConfirmationEligibilityMode.RANK,
         "top_n": 5,
+        "min_base_score_micros": 950_000,
         "daily_bundle_cap": 20,
         "daily_dollar_cap_microusd": 5_000_000,
         "per_bundle_request_cap": 100,
@@ -85,7 +88,9 @@ class TestSettingsValidation:
     def test_valid_shadow_settings(self) -> None:
         value = settings()
         assert value.mode == ConfirmationMode.SHADOW
+        assert value.eligibility_mode == ConfirmationEligibilityMode.RANK
         assert value.top_n == 5
+        assert value.min_base_score_micros == 950_000
 
     def test_valid_enforce_settings(self) -> None:
         value = settings(mode=ConfirmationMode.ENFORCE)
@@ -123,6 +128,31 @@ class TestSettingsValidation:
     def test_rejects_top_n_outside_hard_bounds(self, top_n: object) -> None:
         with pytest.raises(ConfirmationPolicyError, match="top_n"):
             settings(top_n=top_n)
+
+    @pytest.mark.parametrize(
+        "mode",
+        [ConfirmationEligibilityMode.RANK, ConfirmationEligibilityMode.SCORE_THRESHOLD],
+    )
+    def test_accepts_eligibility_modes(self, mode: ConfirmationEligibilityMode) -> None:
+        assert settings(eligibility_mode=mode).eligibility_mode == mode
+
+    @pytest.mark.parametrize("mode", ["rank", "score_threshold", None, True])
+    def test_requires_eligibility_mode_enum(self, mode: object) -> None:
+        with pytest.raises(
+            ConfirmationPolicyError, match="ConfirmationEligibilityMode"
+        ):
+            settings(eligibility_mode=mode)
+
+    @pytest.mark.parametrize("threshold", [0, 950_000, 1_000_000])
+    def test_accepts_min_base_score_bounds(self, threshold: int) -> None:
+        assert (
+            settings(min_base_score_micros=threshold).min_base_score_micros == threshold
+        )
+
+    @pytest.mark.parametrize("threshold", [-1, 1_000_001, True, 0.95])
+    def test_rejects_min_base_score_outside_bounds(self, threshold: object) -> None:
+        with pytest.raises(ConfirmationPolicyError, match="min_base_score_micros"):
+            settings(min_base_score_micros=threshold)
 
     @pytest.mark.parametrize("cap", [1, 20, 1_000])
     def test_accepts_daily_bundle_cap_bounds(self, cap: int) -> None:
@@ -193,7 +223,9 @@ class TestSettingsChecksum:
         "field,value",
         [
             ("mode", ConfirmationMode.ENFORCE),
+            ("eligibility_mode", ConfirmationEligibilityMode.SCORE_THRESHOLD),
             ("top_n", 6),
+            ("min_base_score_micros", 900_000),
             ("daily_bundle_cap", 21),
             ("daily_dollar_cap_microusd", 5_000_001),
             ("per_bundle_request_cap", 101),

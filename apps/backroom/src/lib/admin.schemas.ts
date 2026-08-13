@@ -1621,7 +1621,9 @@ const confirmationTimestampSchema = z.string().datetime({ offset: true })
 export const confirmationBundleSettingsSchema = z
   .strictObject({
     mode: confirmationBundleModeSchema,
+    eligibility_mode: z.enum(['rank', 'score_threshold']),
     top_n: z.number().int().min(1).max(10),
+    min_base_score_micros: confirmationScoreMicrosSchema,
     daily_bundle_cap: z.number().int().min(0).max(1_000),
     daily_dollar_cap_microusd: z.number().int().min(0).max(1_000_000_000),
     per_bundle_request_cap: z.number().int().min(0).max(100_000),

@@ -27,8 +27,13 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Literal
 
+from ditto_screening_protocol.confirmation_transport import (
+    ConfirmationEligibilityMode,
+)
+
 DEFAULT_TOP_N = 5
 MAX_TOP_N = 10
+DEFAULT_MIN_BASE_SCORE_MICROS = 950_000
 MAX_DAILY_BUNDLE_CAP = 1_000
 MAX_DAILY_DOLLAR_MICROUSD = 1_000_000_000
 MAX_BUNDLE_REQUEST_CAP = 100_000
@@ -93,7 +98,9 @@ class ConfirmationBundleSettings:
     """Complete operator policy for issuing expensive confirmation attempts."""
 
     mode: ConfirmationMode = ConfirmationMode.OFF
+    eligibility_mode: ConfirmationEligibilityMode = ConfirmationEligibilityMode.RANK
     top_n: int = DEFAULT_TOP_N
+    min_base_score_micros: int = DEFAULT_MIN_BASE_SCORE_MICROS
     daily_bundle_cap: int = 0
     daily_dollar_cap_microusd: int = 0
     per_bundle_request_cap: int = 1
@@ -109,7 +116,14 @@ class ConfirmationBundleSettings:
     def __post_init__(self) -> None:
         if not isinstance(self.mode, ConfirmationMode):
             raise ConfirmationPolicyError("mode must be a ConfirmationMode")
+        if not isinstance(self.eligibility_mode, ConfirmationEligibilityMode):
+            raise ConfirmationPolicyError(
+                "eligibility_mode must be a ConfirmationEligibilityMode"
+            )
         _require_int_between("top_n", self.top_n, 1, MAX_TOP_N)
+        _require_int_between(
+            "min_base_score_micros", self.min_base_score_micros, 0, 1_000_000
+        )
         _require_int_between(
             "daily_bundle_cap", self.daily_bundle_cap, 0, MAX_DAILY_BUNDLE_CAP
         )
@@ -210,9 +224,12 @@ class CandidateSelection:
     selected: tuple[ConfirmationCandidate, ...]
     top_n_agent_ids: frozenset[str]
     challenger_agent_ids: frozenset[str]
+    threshold_agent_ids: frozenset[str]
     missing_uncertainty_agent_ids: frozenset[str]
     cutoff: ConfirmationCandidate | None
-    cutoff_source: Literal["confirmed_frontier", "base_frontier", "none"]
+    cutoff_source: Literal[
+        "confirmed_frontier", "base_frontier", "score_threshold", "none"
+    ]
 
     @property
     def pending(self) -> tuple[ConfirmationCandidate, ...]:
@@ -352,6 +369,8 @@ def select_confirmation_candidates(
     *,
     top_n: int = DEFAULT_TOP_N,
     challenger_z: float = DEFAULT_CHALLENGER_Z,
+    eligibility_mode: ConfirmationEligibilityMode = ConfirmationEligibilityMode.RANK,
+    min_base_score_micros: int = DEFAULT_MIN_BASE_SCORE_MICROS,
 ) -> CandidateSelection:
     """Select owner-grouped base leaders and uncertainty-bound challengers.
 
@@ -362,6 +381,11 @@ def select_confirmation_candidates(
     tiebreak.
     """
     _require_int_between("top_n", top_n, 1, MAX_TOP_N)
+    if not isinstance(eligibility_mode, ConfirmationEligibilityMode):
+        raise ConfirmationPolicyError(
+            "eligibility_mode must be a ConfirmationEligibilityMode"
+        )
+    _require_int_between("min_base_score_micros", min_base_score_micros, 0, 1_000_000)
     _require_finite_between("challenger_z", challenger_z, minimum=0.0, maximum=3.0)
     rows = tuple(candidates)
     versions = {row.bench_version for row in rows}
@@ -374,6 +398,24 @@ def select_confirmation_candidates(
     confirmed_board = _group_best(
         (row for row in rows if full_confirmation_eligible(row)), score_axis="full"
     )
+    if eligibility_mode == ConfirmationEligibilityMode.SCORE_THRESHOLD:
+        selected = tuple(
+            row
+            for row in base_board
+            if round(row.base_composite * 1_000_000) >= min_base_score_micros
+        )
+        selected_ids = frozenset(row.agent_id for row in selected)
+        return CandidateSelection(
+            base_board=base_board,
+            confirmed_board=confirmed_board,
+            selected=selected,
+            top_n_agent_ids=frozenset(),
+            challenger_agent_ids=frozenset(),
+            threshold_agent_ids=selected_ids,
+            missing_uncertainty_agent_ids=frozenset(),
+            cutoff=None,
+            cutoff_source="score_threshold",
+        )
     top = base_board[:top_n]
     top_ids = frozenset(row.agent_id for row in top)
 
@@ -408,6 +450,7 @@ def select_confirmation_candidates(
         selected=selected,
         top_n_agent_ids=top_ids,
         challenger_agent_ids=frozenset(row.agent_id for row in challengers),
+        threshold_agent_ids=frozenset(),
         missing_uncertainty_agent_ids=frozenset(missing_uncertainty),
         cutoff=cutoff,
         cutoff_source=cutoff_source,
@@ -643,6 +686,7 @@ __all__ = [
     "ConfirmationBundleKey",
     "ConfirmationBundleSettings",
     "ConfirmationCandidate",
+    "ConfirmationEligibilityMode",
     "ConfirmationMode",
     "ConfirmationPolicyError",
     "ConfirmationProfileRef",

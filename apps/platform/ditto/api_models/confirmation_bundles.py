@@ -70,10 +70,12 @@ from ditto_screening_protocol.confirmation_transport import (
     MAX_BUNDLE_REQUEST_CAP,
     MAX_BUNDLE_TOKEN_CAP,
     ConfirmationBundleMode,
+    ConfirmationEligibilityMode,
 )
 
 DEFAULT_CONFIRMATION_TOP_N = 5
 MAX_CONFIRMATION_TOP_N = 10
+DEFAULT_CONFIRMATION_MIN_BASE_SCORE_MICROS = 950_000
 MAX_DAILY_BUNDLE_CAP = 1_000
 MAX_DAILY_DOLLAR_MICROUSD = 1_000_000_000
 
@@ -124,8 +126,12 @@ class ConfirmationBundleSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     mode: ConfirmationBundleMode = ConfirmationBundleMode.OFF
+    eligibility_mode: ConfirmationEligibilityMode = ConfirmationEligibilityMode.RANK
     top_n: Annotated[int, Field(ge=1, le=MAX_CONFIRMATION_TOP_N)] = (
         DEFAULT_CONFIRMATION_TOP_N
+    )
+    min_base_score_micros: Annotated[int, Field(ge=0, le=1_000_000)] = (
+        DEFAULT_CONFIRMATION_MIN_BASE_SCORE_MICROS
     )
     daily_bundle_cap: Annotated[int, Field(ge=0, le=MAX_DAILY_BUNDLE_CAP)] = 0
     daily_dollar_cap_microusd: Annotated[
@@ -143,6 +149,11 @@ class ConfirmationBundleSettings(BaseModel):
         # FastAPI hands Pydantic an already-decoded dict, so strict mode would
         # otherwise demand a Python enum instance that no JSON client can send.
         return ConfirmationBundleMode(value) if isinstance(value, str) else value
+
+    @field_validator("eligibility_mode", mode="before")
+    @classmethod
+    def _parse_wire_eligibility_mode(cls, value: object) -> object:
+        return ConfirmationEligibilityMode(value) if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _require_complete_active_policy(self) -> ConfirmationBundleSettings:

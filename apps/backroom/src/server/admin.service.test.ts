@@ -180,7 +180,9 @@ describe('Bench v9 confirmation bundle administration', () => {
   const actor = 'operator@example.com'
   const settings = {
     mode: 'shadow',
+    eligibility_mode: 'rank',
     top_n: 5,
+    min_base_score_micros: 950_000,
     daily_bundle_cap: 20,
     daily_dollar_cap_microusd: 2_000_000,
     per_bundle_request_cap: 500,
@@ -191,7 +193,9 @@ describe('Bench v9 confirmation bundle administration', () => {
   }
   const offSettings = {
     mode: 'off',
+    eligibility_mode: 'rank',
     top_n: 5,
+    min_base_score_micros: 950_000,
     daily_bundle_cap: 0,
     daily_dollar_cap_microusd: 0,
     per_bundle_request_cap: 0,

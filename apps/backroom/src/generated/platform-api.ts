@@ -7839,6 +7839,13 @@ export interface components {
              * @default 0
              */
             daily_dollar_cap_microusd: number;
+            /** @default rank */
+            eligibility_mode: components["schemas"]["ConfirmationEligibilityMode"];
+            /**
+             * Min Base Score Micros
+             * @default 950000
+             */
+            min_base_score_micros: number;
             /** @default off */
             mode: components["schemas"]["ConfirmationBundleMode"];
             /**
@@ -8151,6 +8158,12 @@ export interface components {
             /** Synthetic */
             synthetic: boolean;
         };
+        /**
+         * ConfirmationEligibilityMode
+         * @description How base-v9 subjects enter the bounded LongMem confirmation lane.
+         * @enum {string}
+         */
+        ConfirmationEligibilityMode: "rank" | "score_threshold";
         /**
          * ConfirmationEvidenceRoot
          * @description Server-rebuilt shared bundle evidence; never owns subject quality.
