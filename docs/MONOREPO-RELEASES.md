@@ -41,6 +41,13 @@ failed pre-tag runs carry their changes into the next attempt. Once semantic
 release has published a tag, that tag becomes the next planning baseline even
 if a downstream deploy fails. Recover that release by re-running its failed
 jobs; do not rely on a later source push to select already-tagged components.
+After exact-source verification, the release job refreshes `origin/main` before
+making any version, tag, or release mutation. If the verified merge is no
+longer current, the run reports itself as superseded and exits successfully
+without releasing or deploying; GitHub's latest queued `main` run then carries
+every change since the last published tag. Python Semantic Release retains its
+own upstream check as the final fail-closed guard for a push in the remaining
+race window.
 Semantic release writes the monorepo version into datagen's Go provenance,
 publishes the source-SHA tag once, and attaches that same monorepo release tag
 to the exact digest so a partial rerun converges without overwriting immutable

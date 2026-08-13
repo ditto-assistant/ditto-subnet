@@ -197,6 +197,36 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
         assert _step(verify_steps, name)["if"] == condition
 
 
+def test_superseded_verified_source_skips_release_mutations() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    release = workflow["jobs"]["release"]
+    steps = release["steps"]
+    release_head = _step(steps, "Classify a superseded release attempt")
+
+    assert release["needs"] == ["plan", "verify-source"]
+    assert release_head["id"] == "release-head"
+    assert "+refs/heads/main:refs/remotes/origin/main" in release_head["run"]
+    assert (
+        "upstream_sha=$(git rev-parse refs/remotes/origin/main)" in release_head["run"]
+    )
+    assert '[[ "$upstream_sha" != "${{ github.sha }}" ]]' in release_head["run"]
+    assert 'echo "current=false" >> "$GITHUB_OUTPUT"' in release_head["run"]
+    assert 'echo "superseded=true" >> "$GITHUB_OUTPUT"' in release_head["run"]
+    assert "No version, tag, release, or deployment" in release_head["run"]
+
+    release_head_index = steps.index(release_head)
+    semantic_release = _step(steps, "Version, tag, and create the GitHub release")
+    assert release_head_index < steps.index(semantic_release)
+    for name in (
+        "Configure the release committer",
+        "Bootstrap the existing v0.1.0 baseline",
+        "Version, tag, and create the GitHub release",
+    ):
+        assert _step(steps, name)["if"] == (
+            "steps.release-head.outputs.current == 'true'"
+        )
+
+
 def test_release_uses_the_root_projects_minimum_python() -> None:
     project = tomllib.loads(PYPROJECT_PATH.read_text())["project"]
     assert project["requires-python"] == ">=3.12,<3.14"
