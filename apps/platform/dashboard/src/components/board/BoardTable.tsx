@@ -98,7 +98,43 @@ const BOARD_SORTS: Record<BoardSortKey, (e: BoardEntry, settledView: boolean) =>
   first_seen: (e) => (e.first_seen ? Date.parse(e.first_seen) : null),
 };
 
+const BOARD_SORT_LABELS: Record<BoardSortKey, string> = {
+  rank: "Rank",
+  composite: "Score",
+  cost: "Average run cost",
+  latency: "Latency",
+  first_seen: "First seen",
+};
+
+function defaultBoardSort(): boolean {
+  return boardSort() === "rank" && boardDir() === 1;
+}
+
+function boardSortDirection(): string {
+  if (boardSort() === "rank") return boardDir() === 1 ? "best first" : "lowest first";
+  if (boardSort() === "first_seen") return boardDir() === 1 ? "oldest first" : "newest first";
+  return boardDir() === 1 ? "low to high" : "high to low";
+}
+
+function restoreBoardRankOrder(): void {
+  setBoardSort("rank");
+  setBoardDir(1);
+  setBoardPage(1);
+  writeBoardPage(false);
+}
+
 function boardCompare(a: BoardEntry, b: BoardEntry, settledView: boolean): number {
+  // Alternate metric sorts never erase the board's authority boundaries.
+  // Finalized entries stay above provisional feedback, and rank-eligible
+  // entries stay above zero-score/smoke runs. Without these buckets, sorting
+  // cost low-to-high promotes $0 unranked rows above the actual standings.
+  const af = isFinalized(a);
+  const bf = isFinalized(b);
+  if (af !== bf) return af ? -1 : 1;
+  const ae = isEligible(a);
+  const be = isEligible(b);
+  if (ae !== be) return ae ? -1 : 1;
+
   const get = BOARD_SORTS[boardSort()] || BOARD_SORTS.rank;
   const av = get(a, settledView) as number | string | null | undefined;
   const bv = get(b, settledView) as number | string | null | undefined;
@@ -725,6 +761,17 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
             )}
           </For>
         </div>
+        <Show when={!defaultBoardSort()}>
+          <div class="board-sort-state" role="status" aria-live="polite">
+            <span>
+              Sorted by <strong>{BOARD_SORT_LABELS[boardSort()]}</strong> · {boardSortDirection()}.
+              Canonical ranks stay fixed.
+            </span>
+            <button class="board-sort-reset" type="button" onClick={restoreBoardRankOrder}>
+              Restore rank order
+            </button>
+          </div>
+        </Show>
         <div class="board-search" id="board-search" classList={{ "has-query": !!boardQuery() }}>
           <label class="visually-hidden" for="board-filter">
             Filter the leaderboard
@@ -822,7 +869,7 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                   </ChipTip>
                   <Show when={header.key}>
                     <span class="sarrow" aria-hidden="true">
-                      {boardSort() === header.key && boardDir() === -1 ? "▼" : "▲"}
+                      {boardSort() === header.key ? (boardDir() === -1 ? "▼" : "▲") : "↕"}
                     </span>
                   </Show>
                 </th>

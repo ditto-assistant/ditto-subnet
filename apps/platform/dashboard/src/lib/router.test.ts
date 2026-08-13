@@ -39,14 +39,14 @@ beforeEach(() => {
 });
 
 describe("PAGES registry", () => {
-  it("keeps the original titles and subtitles verbatim", () => {
+  it("keeps page titles and wayfinding subtitles explicit", () => {
     expect(PAGES.overview).toEqual({
       title: "Overview",
       sub: "Subnet snapshot and the full leaderboard · ranked by composite",
     });
     expect(PAGES.leaderboard).toEqual({
       title: "Leaderboard",
-      sub: "Every scored miner · all columns · ranked by composite",
+      sub: "Every scored miner · canonical ranks · sortable by any metric",
     });
     expect(PAGES.operations).toEqual({
       title: "Network operations",

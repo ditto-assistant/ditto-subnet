@@ -26,7 +26,7 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   },
   leaderboard: {
     title: "Leaderboard",
-    sub: "Every scored miner · all columns · ranked by composite",
+    sub: "Every scored miner · canonical ranks · sortable by any metric",
   },
   operations: {
     title: "Network operations",

@@ -489,6 +489,67 @@ describe("board view controls (row 1 slice)", () => {
     expect(first.textContent).toContain(fx(comps[0] as number));
   });
 
+  it("keeps ranked standings above zero-score rows under alternate sorts", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  agent_name: "ranked-costly",
+                  eligible: true,
+                  finalized: true,
+                  average_run_cost_microusd: 10_000,
+                }
+              : index === 1
+                ? {
+                    ...entry,
+                    agent_name: "unranked-free",
+                    eligible: false,
+                    finalized: true,
+                    average_run_cost_microusd: 0,
+                  }
+                : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.body.textContent).toContain("ranked-costly"));
+    const costTh = document.querySelector('th[data-sort="cost"]') as HTMLElement;
+    fireEvent.click(costTh);
+    fireEvent.click(costTh);
+    await waitFor(() => expect(costTh).toHaveAttribute("aria-sort", "ascending"));
+
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("#rows tr[data-i]"));
+    const rankedRow = rows.findIndex((row) => row.textContent?.includes("ranked-costly"));
+    const unrankedRow = rows.findIndex((row) => row.textContent?.includes("unranked-free"));
+    expect(rankedRow).toBeGreaterThanOrEqual(0);
+    expect(unrankedRow).toBeGreaterThan(rankedRow);
+  });
+
+  it("explains alternate ordering and restores canonical rank order", async () => {
+    renderPage();
+    await waitForBoard();
+    const costTh = document.querySelector('th[data-sort="cost"]') as HTMLElement;
+    const rankTh = document.querySelector('th[data-sort="rank"]') as HTMLElement;
+
+    fireEvent.click(costTh);
+    await waitFor(() => expect(costTh).toHaveAttribute("aria-sort", "descending"));
+    expect(document.querySelector(".board-sort-state")?.textContent).toContain(
+      "Sorted by Average run cost · high to low. Canonical ranks stay fixed.",
+    );
+    expect(rankTh.querySelector(".sarrow")?.textContent).toBe("↕");
+
+    fireEvent.click(document.querySelector(".board-sort-reset") as HTMLElement);
+    await waitFor(() => expect(rankTh).toHaveAttribute("aria-sort", "ascending"));
+    expect(document.querySelector(".board-sort-state")).toBeNull();
+  });
+
   it("keeps the header's tooltip term as the keyboard sort control", async () => {
     renderPage();
     await waitForBoard();

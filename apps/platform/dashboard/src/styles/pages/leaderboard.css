@@ -282,6 +282,32 @@
 .board-tabs {
   justify-content: center;
 }
+.board-sort-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.board-sort-state strong {
+  color: var(--text);
+}
+.board-sort-reset {
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: transparent;
+  font: 700 11px/1.3 var(--sans);
+  cursor: pointer;
+}
+.board-sort-reset:hover,
+.board-sort-reset:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 /* Narrowing the board in place is a different job from the shell's global
    search, which jumps to one record; this keeps the whole table honest to
    the filter, so the pager and counts describe the narrowed set. */
@@ -303,6 +329,10 @@
   .board-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+  .board-sort-state {
+    align-items: flex-start;
+    justify-content: space-between;
   }
   .board-search {
     flex: 1 1 auto;
