@@ -1334,6 +1334,139 @@ async def v9_confirmation_enforcement_active(session: AsyncSession) -> bool:
     return await _v9_confirmation_enforcement_settings(session) is not None
 
 
+async def list_anti_copy_history(
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    before: datetime,
+) -> list[LedgerRow]:
+    """Every finalized generation uploaded before ``before``, not owner-reduced.
+
+    :func:`list_eligible_ledger` keeps one representative row per attested
+    payment owner, which is right for ranking and weights and wrong for copy
+    attribution. Owner reduction discards exactly the rows that answer "who had
+    this code first": an owner's earlier generations, and the originator's early
+    submissions when a later recipient outscores them. Reading the ledger alone,
+    the anti-copy gate held red-dragon v18 as a duplicate of an owner whose
+    entire history was two submissions, because red-dragon's own v17 — which had
+    carried the shared module set for two days — was not in the view.
+
+    So this returns the same per-agent median row on the same ``scored``
+    population, with **no** owner reduction and no ranking. The gate consumes it
+    as ``eligible_history``, purely to attribute a hold and to admit an owner's
+    own history as an alibi; no copy rule triggers on it (see
+    :func:`ditto.api_server.scoring_gate.evaluate_duplicate_signals`), so a wider
+    row set here can only ever withdraw or re-point a hold, never create one.
+
+    Deliberately narrow, because this runs on the score-finalization path:
+
+    * ``before`` bounds the read to rows the candidate could possibly have
+      copied. Every consumer of this data compares against upload chronology, so
+      later rows are dead weight.
+    * only moderation columns are selected. The score ``details`` blob and the
+      code-embedding vector are the large ones and neither is read here; loading
+      them per generation rather than per owner is what would make this
+      expensive.
+    * ``eligible`` / ``official_composite`` / ``crown_first_seen`` /
+      ``family_members`` are left at their defaults. They are ranking concepts,
+      and nothing about ranking belongs in a copy-attribution answer.
+
+    Unlike the ledger this takes an explicit ``bench_version`` and never resolves
+    rollout authority: the caller is finalizing one ticket at one version and
+    must compare within that era.
+    """
+    agent_best = (
+        select(
+            Score.agent_id.label("agent_id"),
+            Score.composite.label("composite"),
+            Score.tool_mean.label("tool_mean"),
+            Score.memory_mean.label("memory_mean"),
+            Score.run_id.label("run_id"),
+            Score.seed.label("seed"),
+            Score.validator_hotkey.label("validator_hotkey"),
+            Score.signature.label("signature"),
+            Score.bench_version.label("bench_version"),
+            Score.median_ms.label("median_ms"),
+            Score.n.label("n"),
+            func.count(Score.agent_id).over(partition_by=Score.agent_id).label("cnt"),
+            func.row_number()
+            .over(
+                partition_by=Score.agent_id,
+                order_by=(Score.composite.asc(), Score.validator_hotkey.asc()),
+            )
+            .label("srn"),
+        )
+        .where(Score.bench_version == bench_version)
+        .subquery()
+    )
+    rows = (
+        await session.execute(
+            select(
+                Agent.agent_id,
+                Agent.miner_hotkey,
+                Agent.created_at,
+                Agent.status,
+                Agent.sha256,
+                Agent.size_bytes,
+                Agent.normalized_source_hash,
+                Agent.content_fingerprint,
+                Agent.structural_fingerprint,
+                Agent.prompt_fingerprint,
+                EvaluationPayment.miner_coldkey,
+                agent_best.c.composite,
+                agent_best.c.tool_mean,
+                agent_best.c.memory_mean,
+                agent_best.c.run_id,
+                agent_best.c.seed,
+                agent_best.c.validator_hotkey,
+                agent_best.c.signature,
+                agent_best.c.bench_version,
+                agent_best.c.median_ms,
+                agent_best.c.n,
+            )
+            .join(agent_best, agent_best.c.agent_id == Agent.agent_id)
+            .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
+            .where(
+                Agent.status == AgentStatus.SCORED,
+                Agent.created_at <= before,
+                # Same integer-arithmetic median as the ledger: exact, and
+                # portable across Postgres and the SQLite unit-test path.
+                or_(
+                    agent_best.c.srn * 2 == agent_best.c.cnt,
+                    agent_best.c.srn * 2 == agent_best.c.cnt + 1,
+                ),
+            )
+            .order_by(Agent.created_at.asc(), Agent.agent_id.asc())
+        )
+    ).all()
+    return [
+        LedgerRow(
+            miner_hotkey=row.miner_hotkey,
+            agent_id=row.agent_id,
+            composite=row.composite,
+            tool_mean=row.tool_mean,
+            memory_mean=row.memory_mean,
+            first_seen=row.created_at,
+            sha256=row.sha256,
+            size_bytes=row.size_bytes,
+            run_id=row.run_id,
+            seed=row.seed,
+            validator_hotkey=row.validator_hotkey,
+            signature=row.signature,
+            status=AgentStatus(row.status),
+            miner_coldkey=row.miner_coldkey,
+            bench_version=row.bench_version,
+            content_fingerprint=row.content_fingerprint,
+            structural_fingerprint=row.structural_fingerprint,
+            normalized_source_hash=row.normalized_source_hash,
+            prompt_fingerprint=row.prompt_fingerprint,
+            median_ms=row.median_ms,
+            n=row.n,
+        )
+        for row in rows
+    ]
+
+
 async def list_eligible_ledger(
     session: AsyncSession,
     *,

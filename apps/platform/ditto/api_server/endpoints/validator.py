@@ -256,6 +256,7 @@ from ditto.db.queries.score_retests import (
 from ditto.db.queries.scores import (
     SCORING_QUORUM,
     get_score_for_validator,
+    list_anti_copy_history,
     list_eligible_ledger,
     list_scores_for_agent,
     quorum_composites,
@@ -5398,6 +5399,18 @@ async def submit_score(
                 miner_coldkey = await get_miner_coldkey_for_agent(
                     session, agent_id=agent_id
                 )
+                # The ledger above is one row per attested payment owner, which
+                # is the right pool to *detect* a copy against and the wrong one
+                # to *attribute* it with: owner reduction discards an owner's own
+                # earlier generations and the originator's early submissions.
+                # This is the unreduced history, used only to name the earliest
+                # artifact carrying a match and to admit this owner's own prior
+                # work as an alibi. No copy rule triggers on it.
+                eligible_history = await list_anti_copy_history(
+                    session,
+                    bench_version=ticket.bench_version,
+                    before=agent.created_at,
+                )
                 # Hotkeys cryptographically proven to be this same operator. A
                 # rotated miner is not a copier of their own earlier work; the
                 # coldkey exemption above cannot see that, because rotating is
@@ -5451,6 +5464,7 @@ async def submit_score(
                     structural_fingerprint=agent.structural_fingerprint,
                     prompt_fingerprint=agent.prompt_fingerprint,
                     eligible=eligible,
+                    eligible_history=eligible_history,
                 )
                 if decision.held:
                     reference_provenance = reference_corpus_provenance()
