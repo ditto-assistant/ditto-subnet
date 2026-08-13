@@ -1,7 +1,7 @@
 """add purpose-bound confirmation inference grants
 
 Revision ID: c8a6d1e4f903
-Revises: e8a4c91d7f20
+Revises: c6e2f93a8b10
 Create Date: 2026-08-13
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c8a6d1e4f903"
-down_revision: str | Sequence[str] | None = "e8a4c91d7f20"
+down_revision: str | Sequence[str] | None = "c6e2f93a8b10"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
