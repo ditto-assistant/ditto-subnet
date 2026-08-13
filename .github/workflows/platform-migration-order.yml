@@ -36,6 +36,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # GitHub forces GITHUB_TOKEN to read-only on a pull_request run from a
+          # fork, whatever this job declares above, so the status POST below is
+          # rejected with 403. Detect that case rather than reporting a passing
+          # migration check as a failed job.
+          FORK_PULL_REQUEST: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set +e
           output="$(python3 apps/platform/scripts/check_migration_order.py origin/main 2>&1)"
@@ -50,13 +55,24 @@ jobs:
             description="Platform migration order conflicts with main"
           fi
 
-          gh api \
-            --method POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
-            -f state="$state" \
-            -f context="migration-order/merge-result" \
-            -f description="$description" \
-            -f target_url="$RUN_URL"
+          # A fork PR cannot publish migration-order/merge-result itself. The
+          # push-triggered main sweep below owns that context for every open PR,
+          # so skipping here leaves the required check pending (never falsely
+          # green) instead of failing a job whose actual check just passed.
+          if [[ "$FORK_PULL_REQUEST" == "true" ]]; then
+            echo "::notice::fork pull request: skipping the commit-status" \
+              "publish (read-only token). The main sweep owns" \
+              "migration-order/merge-result; this job still fails when the" \
+              "migration check itself fails."
+          else
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+              -f state="$state" \
+              -f context="migration-order/merge-result" \
+              -f description="$description" \
+              -f target_url="$RUN_URL"
+          fi
           exit "$exit_code"
 
   recheck-open-prs:
