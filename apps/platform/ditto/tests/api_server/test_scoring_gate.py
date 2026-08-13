@@ -2039,3 +2039,88 @@ class TestEarliestSourceAttribution:
         assert withdrawal.kind == "self_origin"
         assert withdrawal.matched_agent_id == reference.agent_id
         assert withdrawal.source_agent_id == own_first.agent_id
+
+    def test_exact_byte_hold_names_the_earliest_carrier(self) -> None:
+        """Equality signals attribute by chronology too.
+
+        Byte-identical artifacts form a cluster like any other. Naming the
+        nearest member of it is the same inversion; the earliest is the only one
+        that can be the source.
+        """
+        first = _entry(
+            agent_id=_id("2a2a2a2a"),
+            composite=0.90,
+            miner="5First",
+            coldkey="5FirstCold",
+            sha256="ff" * 32,
+            size_bytes=500000,
+            first_seen=datetime(2026, 7, 5, 8, 0, 0, tzinfo=UTC),
+        )
+        relay = _entry(
+            agent_id=_id("2b2b2b2b"),
+            composite=0.91,
+            miner="5Relay",
+            coldkey="5RelayCold",
+            sha256="ff" * 32,
+            size_bytes=500000,
+            first_seen=datetime(2026, 8, 5, 8, 0, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("2c2c2c2c"),
+            miner_hotkey="5Copier",
+            miner_coldkey="5CopierCold",
+            sha256="ff" * 32,
+            composite=0.92,
+            size_bytes=500000,
+            eligible=[relay],
+            eligible_history=[first, relay],
+            submitted_at=datetime(2026, 8, 12, 8, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == first.agent_id
+
+    def test_owner_holding_the_earliest_identical_bytes_is_withdrawn(self) -> None:
+        """A deliberate widening of #670's equality rule, pinned as intentional.
+
+        `_withdraw_equality` offers no same-owner alibi, because an exact-hash
+        match with another owner survives every innocent explanation it knows how
+        to check. Being earlier than *every* visible artifact carrying those
+        bytes is a different argument, and a sound one: this operator shipped
+        them before anyone else in the pool, so no one in the pool is their
+        source.
+        """
+        own_first = _entry(
+            agent_id=_id("3a3a3a3a"),
+            composite=0.90,
+            miner="5Owner",
+            coldkey="5OwnerCold",
+            sha256="ee" * 32,
+            size_bytes=500000,
+            first_seen=datetime(2026, 7, 5, 8, 0, 0, tzinfo=UTC),
+        )
+        later_other = _entry(
+            agent_id=_id("3b3b3b3b"),
+            composite=0.91,
+            miner="5Other",
+            coldkey="5OtherCold",
+            sha256="ee" * 32,
+            size_bytes=500000,
+            first_seen=datetime(2026, 8, 5, 8, 0, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("3c3c3c3c"),
+            miner_hotkey="5Owner",
+            miner_coldkey="5OwnerCold",
+            sha256="ee" * 32,
+            composite=0.92,
+            size_bytes=500000,
+            eligible=[later_other],
+            eligible_history=[own_first, later_other],
+            submitted_at=datetime(2026, 8, 12, 8, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is False
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.kind == "self_origin"
+        assert withdrawal.signal == "exact_byte"
+        assert withdrawal.source_agent_id == own_first.agent_id

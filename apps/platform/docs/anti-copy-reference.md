@@ -100,8 +100,28 @@ have downloaded.
 often the newest recipient rather than the originator. An owner row that
 predates the reference and accounts for the shared content is proof the surface
 was already in that owner's hands, which no copy of the reference could produce.
-Only the owner's representative row appears in the eligible ledger, so this
-covers the common case rather than every case.
+This reads the owner's *full* generation history (`list_anti_copy_history`), not
+the single representative row that survives owner reduction in the eligible
+ledger.
+
+**Own origin.** The pairwise test above requires the owner's earlier row to
+resemble the candidate at least as much as the reference does. An owner whose
+codebase has since moved on can fail that bar against a nearer reference while
+still holding the earliest artifact in the whole matching cluster. Being earlier
+than everything that matches is the stronger argument — it rules out every
+member of the cluster at once rather than one pair — so that case withdraws as
+`self_origin`.
+
+Owner linkage for both is the same three facts the copy rules use to drop a row
+from the *suspect* set: identical hotkey, identical payment-time coldkey, or a
+cryptographically attested key rotation. Payment coldkeys are evidence of common
+control and not proof of it (`ditto.db.queries.ownership`), and this path uses
+them anyway: it is the same evidence already used to exclude a same-coldkey row
+from being accused, and here linkage can only ever *withdraw* a hold, which is
+still written to the audit chain rather than discarded. Over-linking costs a
+recorded non-accusation; under-linking costs a public false accusation against
+the miner who shipped first. Linkage is one hop and is never chained through a
+third party's coldkey.
 
 Both are gated on a threshold-normalized strength scalar (`max(jaccard/0.75,
 containment/0.95)`, so `>= 1.0` means "would trigger"), and a candidate row
@@ -118,6 +138,36 @@ empty; a match closer to an embargoed artifact than to any published one; and
 the rule-2 inconclusive branch, which fires on the *absence* of a comparison and
 so has no match for a published artifact to account for.
 
+## Earliest-source attribution
+
+A signal that survives every withdrawal is a real finding that still has to name
+the right party. The eligible ledger holds one representative row per attested
+payment owner, so the reference a rule fires on is the nearest *visible* earlier
+artifact — on a spreading codebase, routinely an intermediate recipient. Naming
+it converts a true finding into a false accusation against whoever is merely
+closest in the ledger: red-dragon v18 was held as a duplicate of astrion-v9 v1,
+an owner with two submissions total, while red-dragon's own v17 had carried the
+complete shared module set two days before astrion existed.
+
+Before a surviving hold is returned, `duplicate_of` is therefore re-pointed at
+the **earliest** artifact in the matching cluster, and the reason records the
+nearest earlier match it replaced. If that earliest member belongs to the
+candidate's own owner, no member of the cluster can be the source and the signal
+withdraws as `self_origin` instead of opening a hold.
+
+Cluster membership is about one shared surface, not about resembling the
+candidate: a member must match the candidate *and* cover the reference's own
+surface at least as well as the candidate does — the same second test the
+withdrawal ranking applies, for the same reason. Without it, a candidate that
+absorbed both a published and an embargoed codebase would have its embargoed
+finding re-pointed at the earlier published artifact, which shares nothing with
+it, laundering the finding into a lawful one.
+
+The unreduced history is an attribution and alibi surface only. No copy rule
+triggers on it, so widening what the gate can see never widens what it accuses;
+a caller that passes only the eligible ledger gets exactly the previous
+behaviour.
+
 Withdrawal never writes `duplicate_of` or `review_reason` — those are the hold
 record and the public board renders them as an accusation. The match is appended
 to the hash-chained public audit log as `anti_copy_no_opportunity`, carrying the
@@ -125,10 +175,12 @@ matched agent, the accounting artifact, its publication time, the disclosure
 policy and the same aggregate similarity scalars a hold reason already
 publishes.
 
-The read-only pair adapter does not apply the withdrawal: it needs the published
-set and the owner's other generations, which a two-row comparison cannot see
-without a database dependency. A withdrawn pair therefore still reports
-`triggered` there and stays bulk-ineligible, which is the safe direction.
+The read-only pair adapter applies neither the withdrawal nor earliest-source
+attribution: both need the published set and the full generation history, which
+a two-row comparison cannot see without a database dependency. A withdrawn pair
+therefore still reports `triggered` there and stays bulk-ineligible, and the
+adapter's answer remains the narrow one it is built for — do these two artifacts
+match — rather than who originated the surface. That is the safe direction.
 
 ## Read-only comparison adapter
 
