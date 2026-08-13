@@ -129,16 +129,27 @@ async def list_public_source_releases(
     if not agent_ids or not policy.releases_publicly:
         return {}
 
-    quorums = await list_first_score_quorums(
-        session, agent_ids=agent_ids, quorum=quorum
-    )
-    if not quorums:
-        return {}
-    reveals = await get_king_reveal(session, agent_ids=list(quorums))
+    # Kings first. `agent_kingship` is tiny and indexed on the primary key,
+    # whereas the quorum lookup windows over every score row of every id it is
+    # given -- and this runs on the score-finalization path with the whole
+    # eligible ledger as input. Narrowing to confirmed kings before asking about
+    # quorums keeps the expensive query proportional to the ~30 artifacts that
+    # have ever been published rather than to the ledger.
+    reveals = await get_king_reveal(session, agent_ids=list(agent_ids))
     confirmed = {
         agent_id: reveal.weight_confirmed_at
         for agent_id, reveal in reveals.items()
         if reveal.weight_confirmed_at is not None
+    }
+    if not confirmed:
+        return {}
+    quorums = await list_first_score_quorums(
+        session, agent_ids=list(confirmed), quorum=quorum
+    )
+    confirmed = {
+        agent_id: weight_confirmed_at
+        for agent_id, weight_confirmed_at in confirmed.items()
+        if agent_id in quorums
     }
     if not confirmed:
         return {}
