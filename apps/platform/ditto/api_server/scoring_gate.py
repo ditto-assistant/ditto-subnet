@@ -139,9 +139,19 @@ class NoCopyOpportunity:
     """
 
     kind: str
-    """``public_release`` (the content was already published by the subnet) or
-    ``self_lineage`` (the shared surface predates the reference in this owner's
-    own history)."""
+    """Why the signal carries no accusation:
+
+    ``public_release``
+        the content was already published by the subnet before this upload;
+    ``self_lineage``
+        the shared surface predates *the matched reference* in this owner's own
+        history, so this owner held it before the reference existed;
+    ``self_origin``
+        this owner holds the **earliest** artifact in the whole matching
+        cluster, so no member of that cluster can be where the surface came
+        from. Strictly stronger than ``self_lineage``: it is an argument about
+        the entire cluster rather than about one pair.
+    """
 
     matched_agent_id: UUID
     """The earlier submission the hold would have named as ``duplicate_of``."""
@@ -152,7 +162,7 @@ class NoCopyOpportunity:
 
     source_available_at: datetime | None
     """When ``source_agent_id`` became publicly downloadable (``public_release``
-    only; ``None`` for ``self_lineage``)."""
+    only; ``None`` for the two owner-history kinds)."""
 
     signal: str
     """Which copy rule fired: ``exact_byte``, ``normalized_source``, ``lexical``
@@ -343,6 +353,7 @@ def evaluate_duplicate_signals(
     composite: float,
     size_bytes: int | None,
     eligible: Sequence[LedgerRow],
+    eligible_history: Sequence[LedgerRow] = (),
     normalized_source_hash: str | None = None,
     content_fingerprint: dict | None = None,
     structural_fingerprint: dict | None = None,
@@ -447,15 +458,44 @@ def evaluate_duplicate_signals(
       artifact more closely than any published one, or that shares with the
       reference something no published artifact contains, took something that
       was never published, and is still held.
-    * the candidate's own earlier eligible generation — when a published
+    * the candidate's own earlier generation — when a published
       codebase spreads, the *nearest* earlier match is frequently the newest
       recipient rather than the originator, so the originator's next
       generation gets held against its own downstream copy. An owner row that
       predates the reference and matches at least as strongly is proof the
       shared surface was in this owner's hands before the reference existed,
-      which no copy of the reference could produce. Only the owner's
-      representative ledger row is visible here, so this catches the common
-      case, not every case (see the PR for the full-history variant).
+      which no copy of the reference could produce.
+
+    **Earliest-source attribution.** A signal that survives every withdrawal is
+    a real finding, but it still has to name the right party. ``eligible`` holds
+    one representative row per owner, so the reference a rule fires on is the
+    nearest *visible* earlier artifact — which, on a codebase that has spread,
+    is routinely an intermediate recipient rather than the source. Naming it
+    turns a true finding into a false accusation against whoever is merely
+    closest in the ledger. red-dragon v18 was held as a duplicate of astrion-v9
+    v1, an owner with two submissions total, while red-dragon's own v17 had
+    carried the complete shared module set two days before astrion existed.
+
+    ``eligible_history`` closes that gap. It carries the *full* set of earlier
+    finalized generations — every owner's, not just each owner's representative
+    row — and is used for attribution and alibi **only**:
+
+    * no rule triggers on it, so this parameter can never open a hold that
+      ``eligible`` alone would not have opened;
+    * ``self_lineage`` withdrawal sees the owner's whole history rather than the
+      single representative row that survived owner reduction, which is what
+      makes the alibi work for an owner whose best generation is not its
+      earliest;
+    * before a surviving hold is returned, ``duplicate_of`` is re-pointed at the
+      **earliest** artifact in the matching cluster — the members of which are
+      scored against the *candidate* on the same threshold-normalized scale the
+      rule triggered on. If that earliest member belongs to this owner, nothing
+      in the cluster can be the source and the signal is withdrawn as
+      ``self_origin`` instead.
+
+    Callers that pass only ``eligible`` get exactly the pre-existing behaviour:
+    the cluster is then the representative rows alone, whose earliest member is
+    the row the rule already selected.
 
     A withdrawal never suppresses evidence: the decision carries
     :class:`NoCopyOpportunity` so the caller records the match on the immutable
@@ -511,25 +551,54 @@ def evaluate_duplicate_signals(
         ),
         key=lambda e: (released_at[e.agent_id], e.agent_id.int),
     )
-    # This owner's earlier eligible generations. These are the rows the copy
-    # rules exclude from `other_miners` — same hotkey, same payment coldkey, or a
-    # cryptographically attested key rotation. Excluded as *suspects*, they are
-    # still admissible as *alibis*: content this owner already shipped cannot
-    # have been taken from a submission that did not exist yet.
-    own_earlier = sorted(
-        (
-            e
-            for e in eligible
-            if e.agent_id != agent_id
-            and (_utc(e.first_seen), e.agent_id.int) < submitted_key
-            and (
-                e.miner_hotkey == miner_hotkey
-                or (miner_coldkey is not None and e.miner_coldkey == miner_coldkey)
-                or e.miner_hotkey in linked_owner_hotkeys
-            )
-        ),
-        key=lambda e: (_utc(e.first_seen), e.agent_id.int),
+    # Every earlier finalized generation the caller could show us, deduplicated
+    # by agent id: the owner-reduced ledger plus, when the caller loaded it, the
+    # full per-generation history. Attribution and alibi read this; no rule
+    # triggers on it, so a caller that passes no history keeps today's decisions
+    # exactly.
+    history_by_id: dict[UUID, LedgerRow] = {}
+    for row in (*eligible, *eligible_history):
+        if row.agent_id == agent_id:
+            continue
+        if (_utc(row.first_seen), row.agent_id.int) >= submitted_key:
+            continue
+        history_by_id.setdefault(row.agent_id, row)
+    earlier_history = sorted(
+        history_by_id.values(), key=lambda e: (_utc(e.first_seen), e.agent_id.int)
     )
+
+    def _same_owner(e: LedgerRow) -> bool:
+        """Whether ``e`` belongs to the operator that submitted the candidate.
+
+        The same three linkage facts the copy rules use to drop a row from the
+        *suspect* set — identical hotkey, identical payment-time coldkey, or a
+        cryptographically attested key rotation. Payment-coldkey equality is the
+        weak one: ``ditto.db.queries.ownership`` is explicit that a shared
+        payment coldkey is evidence of common control and not proof of it. It is
+        used here anyway, for two reasons. It is the same evidence, read the same
+        way, that already excludes a same-coldkey row from being *accused* — so
+        declining it here would mean one linkage standard for suspicion and a
+        stricter one for exculpation, applied against the same operator. And it
+        is fail-open by construction: on this path the only thing owner linkage
+        can do is withdraw a hold, and a withdrawal is still written to the
+        public audit chain as :class:`NoCopyOpportunity` rather than discarded.
+        Over-linking therefore costs a recorded non-accusation; under-linking
+        costs a public false accusation against a miner who shipped the code
+        first. Linkage is deliberately one hop and never chained through a third
+        party's coldkey (see ``MAX_DEPTH`` in that module for why walking further
+        over-links).
+        """
+        return (
+            e.miner_hotkey == miner_hotkey
+            or (miner_coldkey is not None and e.miner_coldkey == miner_coldkey)
+            or e.miner_hotkey in linked_owner_hotkeys
+        )
+
+    # This owner's earlier generations. These are the rows the copy rules
+    # exclude from `other_miners`. Excluded as *suspects*, they are still
+    # admissible as *alibis*: content this owner already shipped cannot have been
+    # taken from a submission that did not exist yet.
+    own_earlier = [e for e in earlier_history if _same_owner(e)]
     # The first withdrawn signal, returned only if no other reference holds.
     withdrawn: NoCopyOpportunity | None = None
 
@@ -652,6 +721,112 @@ def evaluate_duplicate_signals(
             )
         return None
 
+    def _attribute(
+        e: LedgerRow,
+        *,
+        signal: str,
+        in_cluster: Callable[[LedgerRow], bool],
+        reason_for: Callable[[LedgerRow], str],
+    ) -> ReviewDecision | NoCopyOpportunity:
+        """Point a surviving hold at the earliest artifact that carries the match.
+
+        ``e`` is the row the rule fired on: the nearest earlier match among the
+        one-row-per-owner ledger. That is an artifact of what the caller could
+        see, not a finding about who originated anything — on a codebase that has
+        spread it is usually an intermediate recipient. ``in_cluster`` re-runs the
+        rule's own trigger test over the full history, so the cluster is every
+        earlier artifact carrying this match, and the earliest of them is the
+        only member that could be the source.
+
+        Cluster membership is deliberately about **one** shared surface, not
+        about resembling the candidate: a member must match the candidate *and*
+        cover the reference's own surface at least as well as the candidate does
+        — the same second test :func:`_withdraw_ranked` applies, and for the same
+        reason. A candidate that absorbed two codebases, one published and one
+        still embargoed, matches each of them completely; without that test the
+        embargoed finding would be re-pointed at the earlier published artifact,
+        which shares nothing with it. That would both accuse the wrong operator
+        and launder the finding into a lawful one.
+
+        Returns the hold naming that earliest member, or — when the earliest
+        member is this owner's own — a ``self_origin`` withdrawal: if nobody in
+        the cluster predates this operator, no member of it can be where the
+        operator got the code.
+        """
+        earliest = e
+        for row in earlier_history:
+            if row.agent_id == e.agent_id or in_cluster(row):
+                earliest = row
+                break
+        if _same_owner(earliest):
+            return NoCopyOpportunity(
+                kind="self_origin",
+                matched_agent_id=e.agent_id,
+                source_agent_id=earliest.agent_id,
+                source_available_at=None,
+                signal=signal,
+                detail=(
+                    f"matched agent {e.agent_id}, but this owner's own agent "
+                    f"{earliest.agent_id} is the earliest artifact carrying the "
+                    "shared content, so no earlier submission by another owner "
+                    "can be its source"
+                ),
+            )
+        reason = reason_for(earliest)
+        if earliest.agent_id != e.agent_id:
+            reason += (
+                f"; earliest artifact in the matching cluster "
+                f"(nearest earlier match was agent {e.agent_id})"
+            )
+        return ReviewDecision(held=True, duplicate_of=earliest.agent_id, reason=reason)
+
+    def _lexical_cluster_for(
+        reference: LedgerRow, *, reference_strength: float
+    ) -> Callable[[LedgerRow], bool]:
+        """Bind one reference, testing membership of *its* lexical cluster.
+
+        A factory rather than an inline closure for the reason
+        :func:`_lexical_scorer` is one: the bound reference changes per iteration
+        of the rule loop.
+        """
+
+        def member(row: LedgerRow) -> bool:
+            if _fingerprint_corpora_incompatible(
+                content_fingerprint, row.content_fingerprint
+            ) or _fingerprint_versions_incompatible(
+                content_fingerprint, row.content_fingerprint
+            ):
+                return False
+            j, c = content_similarity(content_fingerprint, row.content_fingerprint)
+            if j < jaccard_tol and c < containment_tol:
+                return False
+            return (
+                _lexical_strength(
+                    reference.content_fingerprint,
+                    row.content_fingerprint,
+                    jaccard_tol=jaccard_tol,
+                    containment_tol=containment_tol,
+                )
+                >= reference_strength
+            )
+
+        return member
+
+    def _lexical_reason(target: LedgerRow) -> str:
+        j, c = content_similarity(content_fingerprint, target.content_fingerprint)
+        return (
+            f"content near-duplicate of agent {target.agent_id}: "
+            f"composite delta {abs(composite - target.composite):.4f}, "
+            f"jaccard {j:.3f}, containment {c:.3f}"
+            + _structural_note(
+                structural_fingerprint,
+                target,
+                jaccard_tol=structural_jaccard_tol,
+                containment_tol=structural_containment_tol,
+            )
+            + _prompt_note(prompt_fingerprint, target)
+        )
+
     # 1. Exact byte-identical copy of another miner's eligible artifact.
     # This is a defense-in-depth mirror of the separate admission-time exact-byte
     # guard. It uses the same upload chronology so a later-finalized row can never
@@ -662,11 +837,15 @@ def evaluate_duplicate_signals(
                 e, signal="exact_byte", matches="exact sha256 match"
             )
             if released is None:
-                return ReviewDecision(
-                    held=True,
-                    duplicate_of=e.agent_id,
-                    reason=f"exact sha256 match of agent {e.agent_id}",
+                outcome = _attribute(
+                    e,
+                    signal="exact_byte",
+                    in_cluster=lambda row: row.sha256 == sha256,
+                    reason_for=lambda t: f"exact sha256 match of agent {t.agent_id}",
                 )
+                if isinstance(outcome, ReviewDecision):
+                    return outcome
+                released = outcome
             withdrawn = withdrawn or released
 
     # 1b. Exact-repack copy: same canonicalized source (comments/whitespace
@@ -682,13 +861,19 @@ def evaluate_duplicate_signals(
                     matches="normalized-source (repack) match",
                 )
                 if released is None:
-                    return ReviewDecision(
-                        held=True,
-                        duplicate_of=e.agent_id,
-                        reason=(
-                            f"normalized-source (repack) match of agent {e.agent_id}"
+                    outcome = _attribute(
+                        e,
+                        signal="normalized_source",
+                        in_cluster=lambda row: (
+                            row.normalized_source_hash == normalized_source_hash
+                        ),
+                        reason_for=lambda t: (
+                            f"normalized-source (repack) match of agent {t.agent_id}"
                         ),
                     )
+                    if isinstance(outcome, ReviewDecision):
+                        return outcome
+                    released = outcome
                 withdrawn = withdrawn or released
 
     # 2. Near-dup fingerprint: a matching lexical sketch, on its own.
@@ -754,38 +939,66 @@ def evaluate_duplicate_signals(
             if released is not None:
                 withdrawn = withdrawn or released
                 continue
-            return ReviewDecision(
-                held=True,
-                duplicate_of=e.agent_id,
-                reason=(
-                    f"content near-duplicate of agent {e.agent_id}: "
-                    f"composite delta {abs(composite - e.composite):.4f}, "
-                    f"jaccard {lex_j:.3f}, containment {lex_c:.3f}"
-                    + _structural_note(
-                        structural_fingerprint,
-                        e,
-                        jaccard_tol=structural_jaccard_tol,
-                        containment_tol=structural_containment_tol,
-                    )
-                    + _prompt_note(prompt_fingerprint, e)
+            outcome = _attribute(
+                e,
+                signal="lexical",
+                in_cluster=_lexical_cluster_for(
+                    e,
+                    reference_strength=max(
+                        lex_j / jaccard_tol, lex_c / containment_tol
+                    ),
                 ),
+                reason_for=_lexical_reason,
             )
+            if isinstance(outcome, ReviewDecision):
+                return outcome
+            withdrawn = withdrawn or outcome
 
     # 3. Size near-dup of another miner: a legacy fallback only when both rows
     #    predate every lexical/structural fingerprint. A versioned empty sketch is
     #    affirmative evidence that reference subtraction found too little custom
     #    surface; cross-version sketches likewise must fail open during backfill.
     if size_bytes is not None:
-        for e in earlier_unattested:
-            if (
-                e.size_bytes is not None
-                and abs(composite - e.composite) <= score_tol
-                and abs(size_bytes - e.size_bytes) <= size_tol
+        candidate_size = size_bytes
+
+        def _size_cluster(row: LedgerRow) -> bool:
+            """Whether ``row`` trips the same legacy size test as the trigger."""
+            return (
+                row.size_bytes is not None
+                and abs(composite - row.composite) <= score_tol
+                and abs(candidate_size - row.size_bytes) <= size_tol
                 and content_fingerprint is None
-                and e.content_fingerprint is None
+                and row.content_fingerprint is None
                 and structural_fingerprint is None
-                and e.structural_fingerprint is None
-            ):
+                and row.structural_fingerprint is None
+            )
+
+        def _size_cluster_for(
+            reference: LedgerRow, *, reference_strength: float
+        ) -> Callable[[LedgerRow], bool]:
+            """Bind one reference, testing membership of *its* size cluster."""
+
+            def member(row: LedgerRow) -> bool:
+                return (
+                    _size_cluster(row)
+                    and _size_proximity(
+                        reference.size_bytes, row.size_bytes, size_tol=size_tol
+                    )
+                    >= reference_strength
+                )
+
+            return member
+
+        def _size_reason(target: LedgerRow) -> str:
+            delta = abs(candidate_size - (target.size_bytes or 0))
+            return (
+                f"near-duplicate of agent {target.agent_id}: "
+                f"composite delta {abs(composite - target.composite):.4f}, "
+                f"size delta {delta}B" + _prompt_note(prompt_fingerprint, target)
+            )
+
+        for e in earlier_unattested:
+            if _size_cluster(e):
                 released = _withdraw_ranked(
                     e,
                     signal="size_fallback",
@@ -798,16 +1011,20 @@ def evaluate_duplicate_signals(
                 if released is not None:
                     withdrawn = withdrawn or released
                     continue
-                return ReviewDecision(
-                    held=True,
-                    duplicate_of=e.agent_id,
-                    reason=(
-                        f"near-duplicate of agent {e.agent_id}: "
-                        f"composite delta {abs(composite - e.composite):.4f}, "
-                        f"size delta {abs(size_bytes - e.size_bytes)}B"
-                        + _prompt_note(prompt_fingerprint, e)
+                outcome = _attribute(
+                    e,
+                    signal="size_fallback",
+                    in_cluster=_size_cluster_for(
+                        e,
+                        reference_strength=_size_proximity(
+                            candidate_size, e.size_bytes, size_tol=size_tol
+                        ),
                     ),
+                    reason_for=_size_reason,
                 )
+                if isinstance(outcome, ReviewDecision):
+                    return outcome
+                withdrawn = withdrawn or outcome
 
     if withdrawn is not None:
         return ReviewDecision(held=False, no_copy_opportunity=withdrawn)

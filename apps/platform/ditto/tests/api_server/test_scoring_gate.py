@@ -1550,3 +1550,492 @@ class TestSelfLineagePrecedence:
         )
         assert decision.held is True
         assert decision.duplicate_of == stranger.agent_id
+
+
+def _id(prefix: str) -> UUID:
+    """A stable UUID carrying a production agent id's real 8-hex prefix.
+
+    The four inversion cases below and the pinned true positive are real
+    production adjudications. Only the first octet of each agent id was recorded
+    in the incident write-up, so the remainder is deterministic padding; the
+    prefix is what ties a fixture to the artifact it reproduces.
+    """
+    return UUID(f"{prefix}-0000-4000-8000-000000000000")
+
+
+class TestEarliestSourceAttribution:
+    """A surviving hold must name the earliest artifact carrying the match.
+
+    Four production holds were adjudicated by hand because the gate named the
+    wrong party. All four share one mechanism: ``list_eligible_ledger`` returns
+    one representative row per payment coldkey, so the nearest *visible* earlier
+    match is routinely an intermediate recipient of a spreading codebase rather
+    than its source — and the owner's own earlier generations, which prove they
+    had the surface first, are not in that view at all.
+
+    Every case below therefore puts the owner's real history in
+    ``eligible_history`` and only the representative rows in ``eligible``, which
+    is what the score path actually sees.
+    """
+
+    # Shared custom module set: the surface these submissions have in common.
+    ENGINE = {f"engine{i:010x}" for i in range(40)}
+
+    def test_red_dragon_v18_is_not_a_duplicate_of_astrion_v1(self) -> None:
+        """Case 1: a 14-day developer held as a copy of a two-day-old newcomer.
+
+        red-dragon v18 (``69bf2cc5``) was held naming astrion-v9 v1
+        (``516f2a9b``) — an owner whose entire history is two submissions, the
+        first of which postdates red-dragon v17 by two days. red-dragon's own
+        v17 (``dd8bd390``) already carried the complete shared module set, and
+        the same coldkey had been shipping it as ``kingbear-mem-v1`` since
+        2026-07-25. The owner's representative row is a *later* generation, so
+        the per-pair self-lineage test cannot see the alibi; only the full
+        history can.
+        """
+        kingbear = _entry(
+            agent_id=_id("6b17b3a4"),
+            composite=0.91,
+            miner="5KingbearHk",
+            coldkey="5HgisASb3W",
+            sha256="1a" * 32,
+            size_bytes=498000,
+            content_fingerprint=_sk(self.ENGINE),
+            first_seen=datetime(2026, 7, 25, 9, 12, 0, tzinfo=UTC),
+        )
+        red_dragon_v17 = _entry(
+            agent_id=_id("dd8bd390"),
+            composite=0.93,
+            miner="5DcpbvmTro",
+            coldkey="5HgisASb3W",
+            sha256="17" * 32,
+            size_bytes=505000,
+            content_fingerprint=_sk(self.ENGINE | {f"v17{i:013x}" for i in range(3)}),
+            first_seen=datetime(2026, 8, 9, 15, 49, 16, tzinfo=UTC),
+        )
+        astrion_v1 = _entry(
+            agent_id=_id("516f2a9b"),
+            composite=0.94,
+            miner="5CkuRmNC5R",
+            coldkey="5AstrionCold",
+            sha256="a9" * 32,
+            size_bytes=507000,
+            content_fingerprint=_sk(self.ENGINE | {f"as{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 17, 37, 48, tzinfo=UTC),
+        )
+        # What owner reduction actually leaves visible for red-dragon's coldkey:
+        # its best generation, which postdates astrion v1.
+        red_dragon_rep = _entry(
+            agent_id=_id("aa11bb22"),
+            composite=0.945,
+            miner="5DcpbvmTro",
+            coldkey="5HgisASb3W",
+            sha256="2b" * 32,
+            size_bytes=508000,
+            content_fingerprint=_sk(self.ENGINE | {f"rep{i:013x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 20, 5, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("69bf2cc5"),
+            miner_hotkey="5DcpbvmTro",
+            miner_coldkey="5HgisASb3W",
+            sha256="18" * 32,
+            composite=0.95,
+            size_bytes=509000,
+            content_fingerprint=_sk(self.ENGINE | {f"v18{i:013x}" for i in range(2)}),
+            eligible=[astrion_v1, red_dragon_rep],
+            eligible_history=[kingbear, red_dragon_v17, astrion_v1, red_dragon_rep],
+            submitted_at=datetime(2026, 8, 12, 10, 40, 3, tzinfo=UTC),
+        )
+        assert decision.held is False
+        assert decision.duplicate_of is None
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.kind == "self_lineage"
+        assert withdrawal.matched_agent_id == astrion_v1.agent_id
+        # The earliest artifact carrying the shared engine is this owner's own,
+        # reached across two hotkeys on one payment coldkey. red-dragon v17 would
+        # alibi it alone; kingbear is named because it is older still.
+        assert withdrawal.source_agent_id == kingbear.agent_id
+        assert red_dragon_v17.agent_id != withdrawal.source_agent_id
+
+    def test_red_dragon_case_still_inverts_without_full_history(self) -> None:
+        """The same inputs minus the history are exactly the production bug.
+
+        Pinned so a regression that stops threading ``eligible_history`` fails
+        loudly here rather than silently re-accusing the originator.
+        """
+        astrion_v1 = _entry(
+            agent_id=_id("516f2a9b"),
+            composite=0.94,
+            miner="5CkuRmNC5R",
+            coldkey="5AstrionCold",
+            content_fingerprint=_sk(self.ENGINE | {f"as{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 17, 37, 48, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("69bf2cc5"),
+            miner_hotkey="5DcpbvmTro",
+            miner_coldkey="5HgisASb3W",
+            sha256="18" * 32,
+            composite=0.95,
+            size_bytes=509000,
+            content_fingerprint=_sk(self.ENGINE | {f"v18{i:013x}" for i in range(2)}),
+            eligible=[astrion_v1],
+            submitted_at=datetime(2026, 8, 12, 10, 40, 3, tzinfo=UTC),
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == astrion_v1.agent_id
+
+    def test_kaelith_v3_is_not_a_duplicate_of_banblackycat_v7(self) -> None:
+        """Case 2: held against a reference its own v1 predates by 4h52m.
+
+        Kaelith-ditto-miner v3 (``14fa4404``) was held naming banblackycat v7
+        (``98d56bdf``, 2026-08-11T19:05). Kaelith's own v1 (``6fd58c8d``,
+        2026-08-11T14:13) already carried the whole codebase. banblackycat v6 is
+        in the history and is older still, but it is not in ``eligible`` and
+        history is never a trigger surface, so it must not become a replacement
+        accusation.
+        """
+        banblackycat_v6 = _entry(
+            agent_id=_id("9603b036"),
+            composite=0.88,
+            miner="5Dvj3htj",
+            coldkey="5BanColdkey",
+            sha256="b6" * 32,
+            size_bytes=494000,
+            content_fingerprint=_sk(self.ENGINE),
+            first_seen=datetime(2026, 8, 9, 3, 10, 0, tzinfo=UTC),
+        )
+        kaelith_v1 = _entry(
+            agent_id=_id("6fd58c8d"),
+            composite=0.90,
+            miner="5EnPyord",
+            coldkey="5KaelithCold",
+            sha256="3c" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(self.ENGINE | {f"ka{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 14, 13, 0, tzinfo=UTC),
+        )
+        banblackycat_v7 = _entry(
+            agent_id=_id("98d56bdf"),
+            composite=0.92,
+            miner="5Dvj3htj",
+            coldkey="5BanColdkey",
+            sha256="b7" * 32,
+            size_bytes=503000,
+            content_fingerprint=_sk(self.ENGINE | {f"bb{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 19, 5, 0, tzinfo=UTC),
+        )
+        kaelith_v2 = _entry(
+            agent_id=_id("cc33dd44"),
+            composite=0.925,
+            miner="5EnPyord",
+            coldkey="5KaelithCold",
+            sha256="4d" * 32,
+            size_bytes=504000,
+            content_fingerprint=_sk(self.ENGINE | {f"k2{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 21, 0, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("14fa4404"),
+            miner_hotkey="5EnPyord",
+            miner_coldkey="5KaelithCold",
+            sha256="5e" * 32,
+            composite=0.93,
+            size_bytes=506000,
+            content_fingerprint=_sk(self.ENGINE | {f"k3{i:014x}" for i in range(2)}),
+            # Owner reduction leaves the *later* v2 as Kaelith's representative.
+            eligible=[banblackycat_v7, kaelith_v2],
+            eligible_history=[
+                banblackycat_v6,
+                kaelith_v1,
+                banblackycat_v7,
+                kaelith_v2,
+            ],
+            submitted_at=datetime(2026, 8, 12, 8, 30, 0, tzinfo=UTC),
+        )
+        assert decision.held is False
+        assert decision.duplicate_of is None
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.matched_agent_id == banblackycat_v7.agent_id
+        assert withdrawal.source_agent_id == kaelith_v1.agent_id
+
+    def test_whitycatboss_v3_is_not_a_duplicate_of_kaelith_v1(self) -> None:
+        """Case 3: the other half of a bidirectional pair.
+
+        whitycatboss v3 (``0dbb3d4e``, hotkey ``5Dvj3htj``) was held naming
+        Kaelith v1. That same hotkey's banblackycat v6 (``9603b036``,
+        2026-08-09T03:10) predates the reference by 2.5 days. Cases 2 and 3
+        together are two operators developing a common ancestor in parallel,
+        each accused of copying the other; both accusations must be withdrawn.
+        """
+        banblackycat_v6 = _entry(
+            agent_id=_id("9603b036"),
+            composite=0.88,
+            miner="5Dvj3htj",
+            coldkey="5BanColdkey",
+            sha256="b6" * 32,
+            size_bytes=494000,
+            content_fingerprint=_sk(self.ENGINE),
+            first_seen=datetime(2026, 8, 9, 3, 10, 0, tzinfo=UTC),
+        )
+        kaelith_v1 = _entry(
+            agent_id=_id("6fd58c8d"),
+            composite=0.90,
+            miner="5EnPyord",
+            coldkey="5KaelithCold",
+            sha256="3c" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(self.ENGINE | {f"ka{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 14, 13, 0, tzinfo=UTC),
+        )
+        whity_rep = _entry(
+            agent_id=_id("ee55ff66"),
+            composite=0.925,
+            miner="5Dvj3htj",
+            coldkey="5BanColdkey",
+            sha256="6f" * 32,
+            size_bytes=505000,
+            content_fingerprint=_sk(self.ENGINE | {f"w2{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 22, 0, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("0dbb3d4e"),
+            miner_hotkey="5Dvj3htj",
+            miner_coldkey="5BanColdkey",
+            sha256="7a" * 32,
+            composite=0.93,
+            size_bytes=507000,
+            content_fingerprint=_sk(self.ENGINE | {f"w3{i:014x}" for i in range(2)}),
+            eligible=[kaelith_v1, whity_rep],
+            eligible_history=[banblackycat_v6, kaelith_v1, whity_rep],
+            submitted_at=datetime(2026, 8, 12, 9, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is False
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.matched_agent_id == kaelith_v1.agent_id
+        assert withdrawal.source_agent_id == banblackycat_v6.agent_id
+
+    def test_kaelith_v2_earlier_pair_is_not_held(self) -> None:
+        """Case 4: the same inversion one generation earlier.
+
+        Kaelith v2 held against a banblackycat generation that postdates
+        Kaelith's own v1. Same shape, same withdrawal.
+        """
+        kaelith_v1 = _entry(
+            agent_id=_id("6fd58c8d"),
+            composite=0.90,
+            miner="5EnPyord",
+            coldkey="5KaelithCold",
+            sha256="3c" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(self.ENGINE | {f"ka{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 14, 13, 0, tzinfo=UTC),
+        )
+        banblackycat_v7 = _entry(
+            agent_id=_id("98d56bdf"),
+            composite=0.92,
+            miner="5Dvj3htj",
+            coldkey="5BanColdkey",
+            sha256="b7" * 32,
+            size_bytes=503000,
+            content_fingerprint=_sk(self.ENGINE | {f"bb{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 19, 5, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("cc33dd44"),
+            miner_hotkey="5EnPyord",
+            miner_coldkey="5KaelithCold",
+            sha256="4d" * 32,
+            composite=0.925,
+            size_bytes=504000,
+            content_fingerprint=_sk(self.ENGINE | {f"k2{i:014x}" for i in range(2)}),
+            # Kaelith's representative is the held v2 itself, so nothing of this
+            # owner's own history survives owner reduction into `eligible`.
+            eligible=[banblackycat_v7],
+            eligible_history=[kaelith_v1, banblackycat_v7],
+            submitted_at=datetime(2026, 8, 11, 21, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is False
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.source_agent_id == kaelith_v1.agent_id
+
+    def test_beking_v1_copy_of_gggggggg_v3_is_still_held(self) -> None:
+        """The pinned true positive: this must keep firing.
+
+        beking-v1 (``16eddfaf``) uploaded 67 minutes after gggggggg v3
+        (``81266c17``) under a different coldkey, with ``src/baseline.rs`` at
+        0.9943 similarity — +6/-10 of 1,408 lines. That figure is the file-level
+        diff measurement; the gate compares 256-member bottom-k sketches, which
+        at this edit distance agree completely, so the reason prints 1.000. The
+        shingle counts below keep the production scale. beking has no prior
+        submission, so no owner history can excuse it.
+        """
+        shared = {f"baseline{i:012x}" for i in range(1398)}
+        gggggggg_v3 = _entry(
+            agent_id=_id("81266c17"),
+            composite=0.8871,
+            miner="5Gggggggg",
+            coldkey="5GgggColdkey",
+            sha256="8b" * 32,
+            size_bytes=511000,
+            content_fingerprint=_sk(shared | {f"gonly{i:011x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 10, 11, 2, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("16eddfaf"),
+            miner_hotkey="5Beking",
+            miner_coldkey="5BekingColdkey",
+            sha256="9c" * 32,
+            composite=0.8904,
+            size_bytes=511400,
+            content_fingerprint=_sk(shared | {f"bonly{i:011x}" for i in range(6)}),
+            eligible=[gggggggg_v3],
+            eligible_history=[gggggggg_v3],
+            submitted_at=datetime(2026, 8, 10, 12, 9, 0, tzinfo=UTC),
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == gggggggg_v3.agent_id
+        assert decision.no_copy_opportunity is None
+        assert "content near-duplicate" in (decision.reason or "")
+
+    def test_hold_retargets_to_the_originator_not_the_intermediate(self) -> None:
+        """The positive half of earliest-source selection.
+
+        A genuine copier with no owner history still gets held — but named
+        against the *earliest* artifact carrying the surface, not the
+        intermediate recipient that happened to be nearest in the ledger. This
+        is the harm case 1 describes, with the copier's alibi removed.
+        """
+        originator = _entry(
+            agent_id=_id("0a0a0a0a"),
+            composite=0.90,
+            miner="5Originator",
+            coldkey="5OriginCold",
+            sha256="0a" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(self.ENGINE),
+            first_seen=datetime(2026, 7, 20, 8, 0, 0, tzinfo=UTC),
+        )
+        intermediate = _entry(
+            agent_id=_id("0b0b0b0b"),
+            composite=0.93,
+            miner="5Intermediate",
+            coldkey="5InterCold",
+            sha256="0b" * 32,
+            size_bytes=502000,
+            content_fingerprint=_sk(self.ENGINE | {f"im{i:014x}" for i in range(2)}),
+            first_seen=datetime(2026, 8, 11, 8, 0, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("0c0c0c0c"),
+            miner_hotkey="5Newcomer",
+            miner_coldkey="5NewcomerCold",
+            sha256="0c" * 32,
+            composite=0.94,
+            size_bytes=503000,
+            content_fingerprint=_sk(self.ENGINE | {f"nc{i:014x}" for i in range(2)}),
+            # Only the intermediate survives owner reduction as a visible match.
+            eligible=[intermediate],
+            eligible_history=[originator, intermediate],
+            submitted_at=datetime(2026, 8, 12, 8, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == originator.agent_id
+        assert "earliest artifact in the matching cluster" in (decision.reason or "")
+
+    def test_history_alone_never_opens_a_new_hold(self) -> None:
+        """History is an attribution and alibi surface, never a trigger surface.
+
+        An artifact that matches only a *history* row — one owner reduction hid
+        from the pool — must not be held. Widening what the gate can see must
+        never widen what it accuses.
+        """
+        hidden = _entry(
+            agent_id=_id("0d0d0d0d"),
+            composite=0.90,
+            miner="5Hidden",
+            coldkey="5HiddenCold",
+            sha256="0d" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(self.ENGINE),
+            first_seen=datetime(2026, 8, 1, 8, 0, 0, tzinfo=UTC),
+        )
+        unrelated = _entry(
+            agent_id=_id("0e0e0e0e"),
+            composite=0.60,
+            miner="5Unrelated",
+            coldkey="5UnrelatedCold",
+            sha256="0e" * 32,
+            size_bytes=300000,
+            content_fingerprint=_sk({f"other{i:011x}" for i in range(40)}),
+            first_seen=datetime(2026, 8, 2, 8, 0, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("0f0f0f0f"),
+            miner_hotkey="5Candidate",
+            miner_coldkey="5CandidateCold",
+            sha256="0f" * 32,
+            composite=0.91,
+            size_bytes=501000,
+            content_fingerprint=_sk(self.ENGINE),
+            eligible=[unrelated],
+            eligible_history=[hidden, unrelated],
+            submitted_at=datetime(2026, 8, 12, 8, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is False
+        assert decision.no_copy_opportunity is None
+
+    def test_owner_holding_the_earliest_cluster_member_is_withdrawn(self) -> None:
+        """``self_origin``: the backstop when pairwise ranking is too strict.
+
+        The per-pair alibi requires this owner's earlier row to resemble the
+        candidate *at least as much as the reference does*. An owner whose
+        codebase has since moved on fails that bar against a nearer reference
+        while still holding the earliest artifact in the cluster — and being
+        earliest than everything that matches is the stronger argument, because
+        it rules out every member of the cluster at once rather than one pair.
+        """
+        base = {f"shared{i:012x}" for i in range(100)}
+        own_first = _entry(
+            agent_id=_id("1a1a1a1a"),
+            composite=0.80,
+            miner="5Owner",
+            coldkey="5OwnerCold",
+            sha256="1a" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(base | {f"own{i:013x}" for i in range(10)}),
+            first_seen=datetime(2026, 7, 1, 8, 0, 0, tzinfo=UTC),
+        )
+        reference = _entry(
+            agent_id=_id("1b1b1b1b"),
+            composite=0.92,
+            miner="5Other",
+            coldkey="5OtherCold",
+            sha256="1b" * 32,
+            size_bytes=502000,
+            content_fingerprint=_sk(base | {f"ref{i:013x}" for i in range(7)}),
+            first_seen=datetime(2026, 8, 1, 8, 0, 0, tzinfo=UTC),
+        )
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("1c1c1c1c"),
+            miner_hotkey="5Owner",
+            miner_coldkey="5OwnerCold",
+            sha256="1c" * 32,
+            composite=0.93,
+            size_bytes=503000,
+            content_fingerprint=_sk(base | {f"cand{i:012x}" for i in range(18)}),
+            eligible=[reference],
+            eligible_history=[own_first, reference],
+            submitted_at=datetime(2026, 8, 12, 8, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is False
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.kind == "self_origin"
+        assert withdrawal.matched_agent_id == reference.agent_id
+        assert withdrawal.source_agent_id == own_first.agent_id
