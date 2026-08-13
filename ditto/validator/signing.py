@@ -1017,6 +1017,7 @@ def heartbeat_signing_message(
     stack: ValidatorStackIdentity | None = None,
     stack_health: ValidatorStackHealth | None = None,
     benchmark_capacity: BenchmarkCapacity | None = None,
+    last_fleet_update_operation_id: UUID | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
@@ -1033,7 +1034,18 @@ def heartbeat_signing_message(
             raise ValueError("heartbeat protocol v10+ requires scorer capabilities")
         if benchmark_capacity is None:
             raise ValueError("heartbeat protocol v10+ requires benchmark capacity")
-        signing_revision = "v11" if protocol_version >= 11 else "v10"
+        if last_fleet_update_operation_id is not None and protocol_version < 19:
+            raise ValueError("fleet update acknowledgement requires heartbeat v19")
+        signing_revision = (
+            "v19"
+            if protocol_version >= 19
+            else "v11"
+            if protocol_version >= 11
+            else "v10"
+        )
+        fleet_update_token = (
+            f":{last_fleet_update_operation_id or ''}" if protocol_version >= 19 else ""
+        )
         return (
             f"ditto-validator-heartbeat:{signing_revision}:"
             f"{validator_hotkey}:{software_version}:{protocol_version}:"
@@ -1042,7 +1054,8 @@ def heartbeat_signing_message(
             f"{benchmark_progress_signing_token(benchmark_progress)}:"
             f"{validator_identity_signing_token(capabilities, stack)}:"
             f"{validator_stack_health_signing_token(stack_health)}:"
-            f"{benchmark_capacity_signing_token(benchmark_capacity)}:{timestamp}"
+            f"{benchmark_capacity_signing_token(benchmark_capacity)}"
+            f"{fleet_update_token}:{timestamp}"
         ).encode()
     if protocol_version >= 9:
         if capabilities is None or stack is None:
@@ -1132,6 +1145,7 @@ def sign_heartbeat(
     stack: ValidatorStackIdentity | None = None,
     stack_health: ValidatorStackHealth | None = None,
     benchmark_capacity: BenchmarkCapacity | None = None,
+    last_fleet_update_operation_id: UUID | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -1148,6 +1162,7 @@ def sign_heartbeat(
         stack=stack,
         stack_health=stack_health,
         benchmark_capacity=benchmark_capacity,
+        last_fleet_update_operation_id=last_fleet_update_operation_id,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

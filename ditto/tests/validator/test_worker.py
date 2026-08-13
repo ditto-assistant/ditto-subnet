@@ -36,6 +36,7 @@ from ditto.api_models.validator import (
     LedgerResponse,
     ScoreReport,
     SubmitScoreResponse,
+    ValidatorFleetUpdateCommand,
     ValidatorHeartbeatResponse,
 )
 from ditto.api_models.validator_capabilities import (
@@ -1682,7 +1683,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 18
+        assert heartbeat.protocol_version == 19
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
@@ -2341,6 +2342,46 @@ class TestRunOnce:
         assert await worker._report_heartbeat("idle") is False
         assert worker._platform_accepted is False
 
+    def test_fleet_update_command_cancels_work_and_enters_managed_drain(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        operation_id = uuid4()
+        drain = asyncio.Event()
+        worker._drain_requested = drain
+        request = MagicMock()
+        state = MagicMock()
+        monkeypatch.setattr(worker_mod, "fleet_update_operation_id", lambda: None)
+        monkeypatch.setattr(worker_mod, "request_fleet_update", request)
+        monkeypatch.setattr(worker_mod, "write_update_state", state)
+
+        worker._apply_fleet_update_command(
+            ValidatorHeartbeatResponse(
+                accepted=True,
+                seen_at=datetime.now(UTC),
+                fleet_update=ValidatorFleetUpdateCommand(
+                    operation_id=operation_id,
+                    requested_at=datetime.now(UTC),
+                ),
+            ),
+            capabilities=MagicMock(stack_updater=True),
+            stack=MagicMock(mode="managed"),
+        )
+
+        request.assert_called_once_with(operation_id)
+        assert worker._force_cancel_requested.is_set()
+        assert drain.is_set()
+        state.assert_called_once_with(
+            "working", platform_accepted=worker._platform_accepted
+        )
+
     async def test_heartbeat_carries_collected_stack_health(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
         collected = fallback_stack_health().model_copy(
@@ -2414,7 +2455,7 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 18
+        assert heartbeat.protocol_version == 19
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
@@ -2436,7 +2477,7 @@ class TestRunOnce:
 
         assert await worker._report_heartbeat("idle") is True
         heartbeat = platform.submit_heartbeat.await_args.args[0]
-        assert heartbeat.protocol_version == 18
+        assert heartbeat.protocol_version == 19
         assert heartbeat.capabilities is not None
         scorer = heartbeat.capabilities.scorer_benchmarks
         assert scorer is not None and scorer.probe is not None

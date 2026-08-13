@@ -125,6 +125,9 @@ import {
   setQueuePolicySettingsInputSchema,
   validatorSlotSettingsControlSchema,
   setValidatorSlotSettingsInputSchema,
+  forceValidatorFleetUpdateInputSchema,
+  validatorFleetUpdatePreviewSchema,
+  validatorFleetUpdateResponseSchema,
   validatorFleetSchema,
   artifactReleaseControlSchema,
   submissionSettingsControlSchema,
@@ -767,6 +770,41 @@ export async function setValidatorSlotSettings(rawInput: unknown, actor: string)
   // the `effective` block, which is where hard_slot_ceiling, disk_restricted_slots
   // and the TTL live, and which is what the dispatch path will resolve.
   return fetchValidatorSlotSettings()
+}
+
+const VALIDATOR_FLEET_UPDATE_PATH = '/api/v1/admin/validator-fleet-update'
+
+export async function fetchValidatorFleetUpdate() {
+  const payload = await platformAdminRequest(VALIDATOR_FLEET_UPDATE_PATH)
+  return validatorFleetUpdatePreviewSchema.parse(payload)
+}
+
+function validatorFleetUpdateRefusal(cause: unknown) {
+  if (!(cause instanceof PlatformAdminError)) return null
+  if (cause.status !== 409 && cause.status !== 422) return null
+  return new Error(
+    `${cause.message}. Nothing was forced: re-read get_validator_fleet_update and resubmit its current snapshot.`,
+  )
+}
+
+export async function forceValidatorFleetUpdate(rawInput: unknown, actor: string) {
+  const input = forceValidatorFleetUpdateInputSchema.parse(rawInput)
+  try {
+    const payload = await platformAdminRequest(VALIDATOR_FLEET_UPDATE_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        request_id: input.requestId,
+        expected_snapshot: input.expectedSnapshot,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+    return validatorFleetUpdateResponseSchema.parse(payload)
+  } catch (cause) {
+    throw validatorFleetUpdateRefusal(cause) ?? cause
+  }
 }
 
 // The platform's existing public heartbeat view. It is the only place the two

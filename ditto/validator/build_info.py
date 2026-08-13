@@ -37,7 +37,12 @@ from ditto import __version__
 # not forbid extras, a v17 validator against a pre-v17 platform simply parses
 # ``leases`` as absent -- "not answered" -- and cancels nothing. So this side
 # can ship first, and the platform half can land whenever it is ready.
-HEARTBEAT_PROTOCOL_VERSION = 18
+# v19 binds the last received fleet-update operation into the signed heartbeat.
+# The Platform returns a command only to a managed stack that has not yet
+# acknowledged it; the acknowledgement makes delivery auditable and prevents a
+# replacement container from re-entering the same drain after the updater has
+# already completed it.
+HEARTBEAT_PROTOCOL_VERSION = 19
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,7 @@ import {
   setQueuePolicySettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
+  forceValidatorFleetUpdateInputSchema,
   inferenceRouteCalibrationInputSchema,
   inferenceRoutingPolicyInputSchema,
   setConfirmationBundleSettingsInputSchema,
@@ -117,6 +118,8 @@ import {
   fetchInferenceConcurrencySettings,
   fetchValidatorSlotSettings,
   fetchValidatorFleet,
+  fetchValidatorFleetUpdate,
+  forceValidatorFleetUpdate as forceValidatorFleetUpdateService,
   setInferenceConcurrencySettings as setInferenceConcurrencySettingsService,
   setValidatorSlotSettings as setValidatorSlotSettingsService,
   fetchConfirmationBundleSettings,
@@ -370,6 +373,23 @@ export const updateValidatorSlotSettings = createServerFn({ method: 'POST' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return setValidatorSlotSettingsService(data, context.session.email)
+  })
+
+export const getValidatorFleetUpdate = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchValidatorFleetUpdate()
+  })
+
+export const forceValidatorFleetUpdate = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(forceValidatorFleetUpdateInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return forceValidatorFleetUpdateService(data, context.session.email)
   })
 
 export const getInferenceConcurrencySettings = createServerFn({ method: 'GET' })

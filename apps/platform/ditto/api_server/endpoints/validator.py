@@ -96,7 +96,12 @@ from ditto.api_models.system_health import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.upload import _SS58_PATTERN
-from ditto.api_models.validator import ConfirmationDatasetPin, HeldLease, V9BaseEvidence
+from ditto.api_models.validator import (
+    ConfirmationDatasetPin,
+    HeldLease,
+    V9BaseEvidence,
+    ValidatorFleetUpdateCommand,
+)
 from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
@@ -183,6 +188,7 @@ from ditto.db.models import (
     Score,
     ScreeningAttempt,
     ScreeningQuarantine,
+    ValidatorFleetUpdateOperation,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
@@ -281,6 +287,7 @@ from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
 )
+from ditto.db.queries.validator_fleet_updates import pending_fleet_update_command
 from ditto.metrics import (
     VALIDATOR_DISPATCH_DECLINED,
     VALIDATOR_HEARTBEAT_PAYLOAD_DEGRADED,
@@ -1911,6 +1918,7 @@ def _heartbeat_signing_message(
     stack: ValidatorStackIdentity | None = None,
     stack_health: ValidatorStackHealth | None = None,
     benchmark_capacity: BenchmarkCapacity | None = None,
+    last_fleet_update_operation_id: UUID | None = None,
 ) -> bytes:
     """Canonical heartbeat payload, mirrored by ``ditto-subnet``."""
     if stack_health is not None and protocol_version < 9:
@@ -1925,7 +1933,18 @@ def _heartbeat_signing_message(
         if benchmark_capacity is None:
             raise ValueError("heartbeat protocol v10 requires benchmark capacity")
         active = str(active_agent_id) if active_agent_id is not None else ""
-        signing_revision = "v11" if protocol_version >= 11 else "v10"
+        if last_fleet_update_operation_id is not None and protocol_version < 19:
+            raise ValueError("fleet update acknowledgement requires heartbeat v19")
+        signing_revision = (
+            "v19"
+            if protocol_version >= 19
+            else "v11"
+            if protocol_version >= 11
+            else "v10"
+        )
+        fleet_update_token = (
+            f":{last_fleet_update_operation_id or ''}" if protocol_version >= 19 else ""
+        )
         return (
             f"ditto-validator-heartbeat:{signing_revision}:"
             f"{validator_hotkey}:{software_version}:{protocol_version}:"
@@ -1934,7 +1953,8 @@ def _heartbeat_signing_message(
             f"{benchmark_progress_signing_token(benchmark_progress)}:"
             f"{validator_identity_signing_token(capabilities, stack)}:"
             f"{validator_stack_health_signing_token(stack_health)}:"
-            f"{benchmark_capacity_signing_token(benchmark_capacity)}:{timestamp}"
+            f"{benchmark_capacity_signing_token(benchmark_capacity)}"
+            f"{fleet_update_token}:{timestamp}"
         ).encode()
     if protocol_version >= 9:
         if capabilities is None or stack is None:
@@ -2392,12 +2412,25 @@ async def heartbeat(
         stack=request_body.stack,
         stack_health=request_body.stack_health,
         benchmark_capacity=request_body.benchmark_capacity,
+        last_fleet_update_operation_id=(request_body.last_fleet_update_operation_id),
     )
     if not _verify_signature(validator_hotkey, payload, request_body.signature):
         raise ValidatorAuthError("heartbeat signature verification failed")
 
     reported_at = datetime.fromtimestamp(request_body.timestamp, tz=UTC)
     async with session.begin():
+        if request_body.last_fleet_update_operation_id is not None:
+            acknowledged = await session.get(
+                ValidatorFleetUpdateOperation,
+                request_body.last_fleet_update_operation_id,
+            )
+            if (
+                acknowledged is None
+                or validator_hotkey not in acknowledged.target_validator_hotkeys
+            ):
+                raise ValidatorAuthError(
+                    "fleet update acknowledgement was not issued to this validator"
+                )
         try:
             # SAVEPOINT, not a bare try: a database-level failure while deriving
             # the optional work payload would otherwise poison the surrounding
@@ -2481,6 +2514,9 @@ async def heartbeat(
             reported_at=reported_at,
             seen_at=now,
             signature=request_body.signature,
+            last_fleet_update_operation_id=(
+                request_body.last_fleet_update_operation_id
+            ),
         )
         # Read after the upsert and inside the same transaction, so the roster
         # the reporter acts on is consistent with the heartbeat just stored.
@@ -2490,10 +2526,31 @@ async def heartbeat(
             protocol_version=request_body.protocol_version,
             now=now,
         )
+        pending_update = (
+            await pending_fleet_update_command(
+                session,
+                validator_hotkey=validator_hotkey,
+                acknowledged_operation_id=(request_body.last_fleet_update_operation_id),
+            )
+            if request_body.protocol_version >= 19
+            else None
+        )
     seen_at = row.seen_at
     if seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
-    return ValidatorHeartbeatResponse(accepted=accepted, seen_at=seen_at, leases=leases)
+    return ValidatorHeartbeatResponse(
+        accepted=accepted,
+        seen_at=seen_at,
+        leases=leases,
+        fleet_update=(
+            ValidatorFleetUpdateCommand(
+                operation_id=pending_update.operation_id,
+                requested_at=_as_utc_deadline(pending_update.created_at),
+            )
+            if pending_update is not None
+            else None
+        ),
+    )
 
 
 @router.post(

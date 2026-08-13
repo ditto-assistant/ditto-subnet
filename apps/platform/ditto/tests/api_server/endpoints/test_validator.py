@@ -106,6 +106,7 @@ from ditto.db.models import (
     Score,
     ScoreAuditEntry,
     ScreenerHeartbeat,
+    ValidatorFleetUpdateOperation,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
     ValidatorTicket,
@@ -572,6 +573,7 @@ def _heartbeat_payload(
     stack: dict[str, object] | None = None,
     stack_health: dict[str, object] | None = None,
     benchmark_capacity: dict[str, object] | None = None,
+    last_fleet_update_operation_id: UUID | None = None,
 ) -> dict[str, object]:
     ts = timestamp if timestamp is not None else int(datetime.now(UTC).timestamp())
     hotkey = keypair.ss58_address
@@ -600,7 +602,18 @@ def _heartbeat_payload(
             typed_capacity = BenchmarkCapacity.model_validate_json(
                 json.dumps(benchmark_capacity)
             )
-            domain = "v11" if protocol_version >= 11 else "v10"
+            domain = (
+                "v19"
+                if protocol_version >= 19
+                else "v11"
+                if protocol_version >= 11
+                else "v10"
+            )
+            fleet_update_token = (
+                f":{last_fleet_update_operation_id or ''}"
+                if protocol_version >= 19
+                else ""
+            )
             message = (
                 f"ditto-validator-heartbeat:{domain}:{hotkey}:0.1.0:{protocol_version}:"
                 f"{code_digest}:{state}:{active_agent_id or ''}:"
@@ -608,7 +621,8 @@ def _heartbeat_payload(
                 f"{benchmark_progress_signing_token(progress)}:"
                 f"{identity_token}:"
                 f"{validator_stack_health_signing_token(typed_health)}:"
-                f"{benchmark_capacity_signing_token(typed_capacity)}:{ts}"
+                f"{benchmark_capacity_signing_token(typed_capacity)}"
+                f"{fleet_update_token}:{ts}"
             )
         elif protocol_version >= 9:
             typed_health = ValidatorStackHealth.model_validate_json(
@@ -692,6 +706,8 @@ def _heartbeat_payload(
         payload["stack_health"] = stack_health
     if benchmark_capacity is not None:
         payload["benchmark_capacity"] = benchmark_capacity
+    if last_fleet_update_operation_id is not None:
+        payload["last_fleet_update_operation_id"] = str(last_fleet_update_operation_id)
     return payload
 
 
@@ -1485,6 +1501,65 @@ def _screener_heartbeat_payload(
 
 
 class TestHeartbeat:
+    async def test_v19_delivers_and_records_signed_fleet_update_acknowledgement(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        operation_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorFleetUpdateOperation(
+                    operation_id=operation_id,
+                    expected_snapshot="a" * 64,
+                    target_validator_hotkeys=[_VALIDATOR_HOTKEY],
+                    target_stack_revisions={_VALIDATOR_HOTKEY: "b" * 40},
+                    revoked_lease_count=0,
+                    actor="operator@example.com",
+                    reason="emergency scorer repair across the managed fleet",
+                    created_at=now,
+                )
+            )
+
+        first = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(
+                timestamp=int(now.timestamp()),
+                protocol_version=19,
+                capabilities=_quorum_capabilities(),
+                stack=_V7_STACK,
+                stack_health=_V9_STACK_HEALTH,
+                benchmark_capacity=_IDLE_CAPACITY,
+            ),
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["fleet_update"]["operation_id"] == str(operation_id)
+
+        acknowledged = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(
+                timestamp=int(now.timestamp()) + 1,
+                protocol_version=19,
+                capabilities=_quorum_capabilities(),
+                stack=_V7_STACK,
+                stack_health=_V9_STACK_HEALTH,
+                benchmark_capacity=_IDLE_CAPACITY,
+                last_fleet_update_operation_id=operation_id,
+            ),
+        )
+        assert acknowledged.status_code == 200, acknowledged.text
+        assert acknowledged.json()["fleet_update"] is None
+        async with session_maker() as session:
+            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+        assert row is not None
+        assert row.last_fleet_update_operation_id == operation_id
+
     async def test_v8_requires_signed_scorer_capability_and_v7_rejects_it(
         self,
         app: FastAPI,

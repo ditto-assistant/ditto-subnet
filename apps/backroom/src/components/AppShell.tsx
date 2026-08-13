@@ -65,7 +65,7 @@ const navigation = [
   },
   {
     to: '/validator-slots' as const,
-    label: 'Validator slots',
+    label: 'Validator fleet',
     description: 'Concurrent benchmark cap',
     icon: Layers,
   },

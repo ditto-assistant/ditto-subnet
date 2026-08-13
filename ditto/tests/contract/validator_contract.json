@@ -5275,6 +5275,18 @@
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
       },
+      "last_fleet_update_operation_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "protocol_version": {
         "maximum": 2147483647,
         "minimum": 1,
@@ -5381,11 +5393,40 @@
           "deadline"
         ],
         "type": "object"
+      },
+      "ValidatorFleetUpdateCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "requested_at"
+        ],
+        "type": "object"
       }
     },
     "properties": {
       "accepted": {
         "type": "boolean"
+      },
+      "fleet_update": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ValidatorFleetUpdateCommand"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "leases": {
         "anyOf": [

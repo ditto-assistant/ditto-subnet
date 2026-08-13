@@ -582,6 +582,13 @@ class ValidatorHeartbeatRequest(BaseModel):
             ),
         ),
     ] = None
+    last_fleet_update_operation_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description="Latest forced fleet update command received under v19.",
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -686,6 +693,11 @@ class ValidatorHeartbeatRequest(BaseModel):
             and self.capabilities.scorer_benchmarks.probe is not None
         ):
             raise ValueError("scorer liveness probe requires heartbeat protocol v15")
+        if (
+            self.last_fleet_update_operation_id is not None
+            and self.protocol_version < 19
+        ):
+            raise ValueError("fleet update acknowledgement requires heartbeat v19")
         return self
 
 
@@ -713,6 +725,15 @@ class HeldLease(BaseModel):
     deadline: Annotated[
         datetime, Field(description="UTC instant after which the lease lapses.")
     ]
+
+
+class ValidatorFleetUpdateCommand(BaseModel):
+    """One Platform-issued request to stop active work and run the host updater."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation_id: UUID
+    requested_at: datetime
 
 
 class ValidatorHeartbeatResponse(BaseModel):
@@ -750,6 +771,7 @@ class ValidatorHeartbeatResponse(BaseModel):
             ),
         ),
     ] = None
+    fleet_update: ValidatorFleetUpdateCommand | None = None
 
 
 class CaseScore(BaseModel):
